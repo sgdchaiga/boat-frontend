@@ -1,0 +1,50 @@
+// BOAT API — Prisma schema (bootstrap). After pointing DATABASE_URL at your Postgres, run:
+//   npx prisma db pull
+// to replace/extend this with your full database. Keep migrations in `supabase/migrations`
+// as the source of truth until you switch to Prisma Migrate.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Organization {
+  id                 String   @id @default(uuid()) @db.Uuid
+  name               String
+  slug               String?  @unique
+  businessType       String   @default("hotel") @map("business_type")
+  enableFrontDesk    Boolean  @default(true) @map("enable_front_desk")
+  enableBilling      Boolean  @default(true) @map("enable_billing")
+  enablePos          Boolean  @default(true) @map("enable_pos")
+  enableInventory    Boolean  @default(true) @map("enable_inventory")
+  enablePurchases    Boolean  @default(true) @map("enable_purchases")
+  enableAccounting   Boolean  @default(true) @map("enable_accounting")
+  enableReports      Boolean  @default(true) @map("enable_reports")
+  enableAdmin        Boolean  @default(true) @map("enable_admin")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  staff Staff[]
+
+  @@map("organizations")
+}
+
+/// Staff user id matches your auth user id (legacy: auth.users).
+model Staff {
+  id             String    @id @db.Uuid
+  fullName       String    @map("full_name")
+  email          String    @unique
+  role           String
+  phone          String?
+  isActive       Boolean?  @default(true) @map("is_active")
+  organizationId String?   @map("organization_id") @db.Uuid
+  createdAt      DateTime? @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("staff")
+}

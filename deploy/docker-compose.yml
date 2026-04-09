@@ -1,0 +1,42 @@
+# Postgres + boat-server (Fastify). From repo root:
+#   copy deploy\compose.env.example deploy\compose.env   (edit passwords)
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/compose.env up -d
+#
+# DATABASE_URL for the API container uses the internal hostname `postgres`.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-boat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-boat}
+      POSTGRES_DB: ${POSTGRES_DB:-boat}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - boat_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-boat} -d ${POSTGRES_DB:-boat}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ../server
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-3001}:3001"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3001
+      DATABASE_URL: postgresql://${POSTGRES_USER:-boat}:${POSTGRES_PASSWORD:-boat}@postgres:5432/${POSTGRES_DB:-boat}?schema=public
+
+volumes:
+  boat_pgdata:

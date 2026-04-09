@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Design tokens — use these classes for consistent colour coding app-wide */
+@layer components {
+  .app-page {
+    @apply min-h-screen bg-gradient-to-br from-surface-page via-slate-100/80 to-brand-50/30;
+  }
+
+  .app-card {
+    @apply bg-white rounded-xl border border-slate-200/90 shadow-card;
+  }
+
+  .app-card-interactive {
+    @apply app-card transition-shadow duration-200 hover:shadow-card-hover;
+  }
+
+  /** Primary actions (Save, Add, Record, etc.) — teal brand */
+  .app-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand-700 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-brand-800 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 disabled:pointer-events-none disabled:opacity-50;
+  }
+
+  .app-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2;
+  }
+
+  .app-alert-error {
+    @apply rounded-lg border border-semantic-danger-border bg-semantic-danger-soft px-4 py-3 text-sm text-semantic-danger-text;
+  }
+
+  .app-alert-warning {
+    @apply rounded-lg border border-semantic-warning-border bg-semantic-warning-soft px-4 py-3 text-sm text-semantic-warning-text;
+  }
+
+  .app-alert-success {
+    @apply rounded-lg border border-semantic-success-border bg-semantic-success-soft px-4 py-3 text-sm text-semantic-success-text;
+  }
+
+  .app-alert-info {
+    @apply rounded-lg border border-semantic-info-border bg-semantic-info-soft px-4 py-3 text-sm text-semantic-info-text;
+  }
+
+  .app-badge-success {
+    @apply inline-flex items-center rounded-md bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800;
+  }
+
+  .app-badge-warning {
+    @apply inline-flex items-center rounded-md bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900;
+  }
+
+  .app-badge-danger {
+    @apply inline-flex items-center rounded-md bg-red-100 px-2 py-0.5 text-xs font-medium text-red-800;
+  }
+
+  .app-badge-info {
+    @apply inline-flex items-center rounded-md bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800;
+  }
+
+  .app-badge-neutral {
+    @apply inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700;
+  }
+}

@@ -1,0 +1,85 @@
+﻿
+> vite-react-typescript-starter@0.0.0 typecheck
+> tsc --noEmit -p tsconfig.app.json
+
+src/components/accounting/CashflowPage.tsx(130,11): error TS6133: 'entriesMap' is declared but its value is never read.
+src/components/ActiveStaysPage.tsx(145,38): error TS2339: Property 'check_in_time' does not exist on type 'Stay'.
+src/components/ActiveStaysPage.tsx(150,85): error TS2339: Property 'check_in_time' does not exist on type 'Stay'.
+src/components/admin/AdminProductsPage.tsx(2,10): error TS6133: 'Package' is declared but its value is never read.
+src/components/admin/AdminRoomsPage.tsx(2,10): error TS6133: 'BedDouble' is declared but its value is never read.
+src/components/admin/AdminStockAdjustmentsPage.tsx(73,9): error TS6133: 'updateRow' is declared but its value is never read.
+src/components/BarOrdersPage.tsx(9,48): error TS2339: Property 'departments' does not exist on type '{ staff: { Row: { id: string; full_name: string; email: string; role: "admin" | "manager" | "receptionist" | "housekeeping"; phone: string | null; is_active: boolean; created_at: string; }; Insert: { ...; }; Update: { ...; }; }; ... 11 more ...; retail_invoice_lines: { ...; }; }'.
+src/components/CheckInPage.tsx(188,26): error TS2304: Cannot find name 'staff'.
+src/components/copies/CheckInPage - Copy.tsx(2,26): error TS2307: Cannot find module '../lib/supabase' or its corresponding type declarations.
+src/components/copies/CheckInPage - Copy.tsx(3,25): error TS2307: Cannot find module '../contexts/AuthContext' or its corresponding type declarations.
+src/components/copies/CheckInPage - Copy.tsx(4,31): error TS2307: Cannot find module '../lib/database.types' or its corresponding type declarations.
+src/components/copies/RoomsPage - Copy.tsx(3,26): error TS2307: Cannot find module '../lib/supabase' or its corresponding type declarations.
+src/components/copies/RoomsPage - Copy.tsx(4,31): error TS2307: Cannot find module '../lib/database.types' or its corresponding type declarations.
+src/components/copies/RoomsPage - Copy.tsx(59,13): error TS6133: 'data' is declared but its value is never read.
+src/components/Dashboard.tsx(2,82): error TS6133: 'TrendingDown' is declared but its value is never read.
+src/components/inventory/StoreRequisitionsPage.tsx(103,13): error TS2339: Property 'data' does not exist on type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { request_date: any; from_location: any; to_location: any; note: any; }, false>; }'.
+src/components/inventory/StoreRequisitionsPage.tsx(104,7): error TS2345: Argument of type 'PostgrestBuilder<any, { request_date: any; from_location: any; to_location: any; note: any; }, false>' is not assignable to parameter of type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { request_date: any; from_location: any; to_location: any; note: any; }, false>; }'.
+  Property 'eq' is missing in type 'PostgrestBuilder<any, { request_date: any; from_location: any; to_location: any; note: any; }, false>' but required in type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { request_date: any; from_location: any; to_location: any; note: any; }, false>; }'.
+src/components/inventory/StoreRequisitionsPage.tsx(217,15): error TS2339: Property 'data' does not exist on type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { from_location: any; to_location: any; }, false>; }'.
+src/components/inventory/StoreRequisitionsPage.tsx(217,29): error TS2339: Property 'error' does not exist on type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { from_location: any; to_location: any; }, false>; }'.
+src/components/inventory/StoreRequisitionsPage.tsx(218,9): error TS2345: Argument of type 'PostgrestBuilder<any, { from_location: any; to_location: any; }, false>' is not assignable to parameter of type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { from_location: any; to_location: any; }, false>; }'.
+  Property 'eq' is missing in type 'PostgrestBuilder<any, { from_location: any; to_location: any; }, false>' but required in type '{ eq: (column: string, value: string) => PostgrestBuilder<any, { from_location: any; to_location: any; }, false>; }'.
+src/components/KitchenDisplayPage.tsx(75,13): error TS6133: 'productIds' is declared but its value is never read.
+src/components/KitchenDisplayPage.tsx(93,54): error TS7031: Binding element 'department_id' implicitly has an 'any' type.
+src/components/KitchenOrdersPage.tsx(9,48): error TS2339: Property 'departments' does not exist on type '{ staff: { Row: { id: string; full_name: string; email: string; role: "admin" | "manager" | "receptionist" | "housekeeping"; phone: string | null; is_active: boolean; created_at: string; }; Insert: { ...; }; Update: { ...; }; }; ... 11 more ...; retail_invoice_lines: { ...; }; }'.
+src/components/Layout.tsx(296,59): error TS2339: Property 'page' does not exist on type 'NavItem'.
+  Property 'page' does not exist on type '{ name: string; icon: LucideIcon; children: { name: string; page: string; }[]; }'.
+src/components/Layout.tsx(298,37): error TS2339: Property 'page' does not exist on type 'NavItem'.
+  Property 'page' does not exist on type '{ name: string; icon: LucideIcon; children: { name: string; page: string; }[]; }'.
+src/components/Layout.tsx(302,45): error TS2339: Property 'page' does not exist on type 'NavItem'.
+  Property 'page' does not exist on type '{ name: string; icon: LucideIcon; children: { name: string; page: string; }[]; }'.
+src/components/LoginPage.tsx(3,3): error TS6133: 'Hotel' is declared but its value is never read.
+src/components/LoginPage.tsx(4,3): error TS6133: 'X' is declared but its value is never read.
+src/components/LoginPage.tsx(9,3): error TS6133: 'Shield' is declared but its value is never read.
+src/components/LoginPage.tsx(18,7): error TS6133: 'ROLE_LABELS' is declared but its value is never read.
+src/components/LoginPage.tsx(84,7): error TS2345: Argument of type 'UserRole' is not assignable to parameter of type 'import("C:/Projects/guestpro/src/contexts/AuthContext").UserRole'.
+  Type '"barman"' is not assignable to type 'UserRole'.
+src/components/POSPage.tsx(2,40): error TS6133: 'DollarSign' is declared but its value is never read.
+src/components/POSPage.tsx(2,52): error TS6133: 'Send' is declared but its value is never read.
+src/components/POSPage.tsx(11,48): error TS2339: Property 'departments' does not exist on type '{ staff: { Row: { id: string; full_name: string; email: string; role: "admin" | "manager" | "receptionist" | "housekeeping"; phone: string | null; is_active: boolean; created_at: string; }; Insert: { ...; }; Update: { ...; }; }; ... 11 more ...; retail_invoice_lines: { ...; }; }'.
+src/components/POSPage.tsx(147,11): error TS2589: Type instantiation is excessively deep and possibly infinite.
+src/components/ProductsPage.tsx(7,45): error TS2339: Property 'products' does not exist on type '{ staff: { Row: { id: string; full_name: string; email: string; role: "admin" | "manager" | "receptionist" | "housekeeping"; phone: string | null; is_active: boolean; created_at: string; }; Insert: { ...; }; Update: { ...; }; }; ... 11 more ...; retail_invoice_lines: { ...; }; }'.
+src/components/ProductsPage.tsx(8,47): error TS2339: Property 'gl_accounts' does not exist on type '{ staff: { Row: { id: string; full_name: string; email: string; role: "admin" | "manager" | "receptionist" | "housekeeping"; phone: string | null; is_active: boolean; created_at: string; }; Insert: { ...; }; Update: { ...; }; }; ... 11 more ...; retail_invoice_lines: { ...; }; }'.
+src/components/ProductsPage.tsx(9,48): error TS2339: Property 'departments' does not exist on type '{ staff: { Row: { id: string; full_name: string; email: string; role: "admin" | "manager" | "receptionist" | "housekeeping"; phone: string | null; is_active: boolean; created_at: string; }; Insert: { ...; }; Update: { ...; }; }; ... 11 more ...; retail_invoice_lines: { ...; }; }'.
+src/components/purchases/BillsPage.tsx(351,7): error TS2322: Type 'PostgrestFilterBuilder<any, any, any, { id: any; amount: any; credit_date: any; }[], "vendor_credits", unknown, "GET"> | Promise<{ data: never[]; }>' is not assignable to type 'Promise<unknown>'.
+  Type 'PostgrestFilterBuilder<any, any, any, { id: any; amount: any; credit_date: any; }[], "vendor_credits", unknown, "GET">' is missing the following properties from type 'Promise<unknown>': catch, finally, [Symbol.toStringTag]
+src/components/purchases/BillsPage.tsx(355,9): error TS2345: Argument of type 'PostgrestFilterBuilder<any, any, any, { description: any; cost_price: any; quantity: any; }[], "purchase_order_items", unknown, "GET">' is not assignable to parameter of type 'Promise<unknown>'.
+  Type 'PostgrestFilterBuilder<any, any, any, { description: any; cost_price: any; quantity: any; }[], "purchase_order_items", unknown, "GET">' is missing the following properties from type 'Promise<unknown>': catch, finally, [Symbol.toStringTag]
+src/components/purchases/ExpensesPage.tsx(196,19): error TS2352: Conversion of type 'GenericStringError[]' to type '{ id: string; vendor_id: string | null; amount: number; description: string | null; expense_date: string | null; source_documents?: unknown; }[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ error: true; } & String' is missing the following properties from type '{ id: string; vendor_id: string | null; amount: number; description: string | null; expense_date: string | null; source_documents?: unknown; }': id, vendor_id, amount, description, expense_date
+src/components/purchases/PurchaseOrdersPage.tsx(2,10): error TS6133: 'ShoppingCart' is declared but its value is never read.
+src/components/purchases/PurchaseOrdersPage.tsx(55,59): error TS2741: Property 'product_id' is missing in type '{ description: string; cost_price: number; quantity: number; }' but required in type 'LineItem'.
+src/components/purchases/PurchaseOrdersPage.tsx(107,6): error TS2352: Conversion of type 'LineItem' to type 'Record<string, string | number>' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Index signature for type 'string' is missing in type 'LineItem'.
+src/components/purchases/VendorCreditsPage.tsx(2,10): error TS6133: 'Gift' is declared but its value is never read.
+src/components/purchases/VendorPaymentsPage.tsx(103,20): error TS2352: Conversion of type '{ id: any; amount: any; due_date: any; bill_date: any; description: any; approved_at: any; status: any; vendors: { name: any; }[]; }[]' to type '{ id: string; amount: number; due_date: string | null; bill_date: string | null; description: string | null; approved_at: string | null; status: string | null; vendors?: { name: string; } | null | undefined; }[]' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type '{ id: any; amount: any; due_date: any; bill_date: any; description: any; approved_at: any; status: any; vendors: { name: any; }[]; }' is not comparable to type '{ id: string; amount: number; due_date: string | null; bill_date: string | null; description: string | null; approved_at: string | null; status: string | null; vendors?: { name: string; } | null | undefined; }'.
+    Types of property 'vendors' are incompatible.
+      Property 'name' is missing in type '{ name: any; }[]' but required in type '{ name: string; }'.
+src/components/purchases/VendorPaymentsPage.tsx(120,9): error TS2322: Type 'PostgrestSingleResponse<{ bill_id: any; amount: any; }[]>' is not assignable to type 'PostgrestSingleResponse<{ bill_id: any; amount: any; bill_allocations: any; }[]>'.
+  Type 'PostgrestResponseSuccess<{ bill_id: any; amount: any; }[]>' is not assignable to type 'PostgrestSingleResponse<{ bill_id: any; amount: any; bill_allocations: any; }[]>'.
+    Type 'PostgrestResponseSuccess<{ bill_id: any; amount: any; }[]>' is not assignable to type 'PostgrestResponseSuccess<{ bill_id: any; amount: any; bill_allocations: any; }[]>'.
+      Type '{ bill_id: any; amount: any; }[]' is not assignable to type '{ bill_id: any; amount: any; bill_allocations: any; }[]'.
+        Property 'bill_allocations' is missing in type '{ bill_id: any; amount: any; }' but required in type '{ bill_id: any; amount: any; bill_allocations: any; }'.
+src/components/purchases/VendorPaymentsPage.tsx(802,17): error TS2322: Type 'boolean | ""' is not assignable to type 'boolean | undefined'.
+  Type '""' is not assignable to type 'boolean | undefined'.
+src/components/purchases/VendorsPage.tsx(2,10): error TS6133: 'Building2' is declared but its value is never read.
+src/components/reports/StockMovementReportPage.tsx(37,10): error TS6133: 'departments' is declared but its value is never read.
+src/components/reports/StockMovementReportPage.tsx(38,30): error TS6133: 'setSelectedDepartment' is declared but its value is never read.
+src/components/ReservationsPage.tsx(138,7): error TS2322: Type 'string | null' is not assignable to type 'string'.
+  Type 'null' is not assignable to type 'string'.
+src/components/ReservationsPage.tsx(139,7): error TS2322: Type 'string | null' is not assignable to type 'string'.
+  Type 'null' is not assignable to type 'string'.
+src/components/RetailCreditSalesReportPage.tsx(39,3): error TS6133: 'readOnly' is declared but its value is never read.
+src/components/RetailCreditSalesReportPage.tsx(45,21): error TS6133: 'setDateRange' is declared but its value is never read.
+src/components/RetailCreditSalesReportPage.tsx(46,22): error TS6133: 'setCustomFrom' is declared but its value is never read.
+src/components/RetailCreditSalesReportPage.tsx(47,20): error TS6133: 'setCustomTo' is declared but its value is never read.
+src/components/RetailDashboard.tsx(4,39): error TS6133: 'DateRangeKey' is declared but its value is never read.
+src/components/RoomsPage.tsx(86,13): error TS6133: 'data' is declared but its value is never read.
+src/components/TransactionsPage.tsx(2,19): error TS6133: 'DollarSign' is declared but its value is never read.
+src/lib/timezone.ts(155,13): error TS6133: 'yr' is declared but its value is never read.

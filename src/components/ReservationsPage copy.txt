@@ -1,0 +1,417 @@
+import { useEffect, useState } from "react";
+import { Edit, LogIn, Plus } from "lucide-react";
+import { supabase } from "../lib/supabase";
+import { useAuth } from "../contexts/AuthContext";
+import type { Database } from "../lib/database.types";
+
+type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
+  guests: { id: string; first_name: string; last_name: string } | null;
+  rooms: { id: string; room_number: string } | null;
+};
+
+type Guest = {
+  id: string;
+  first_name: string;
+  last_name: string;
+};
+
+type Room = {
+  id: string;
+  room_number: string;
+  status?: string;
+};
+
+export function ReservationsPage() {
+
+  const { staff } = useAuth();
+
+  const [reservations, setReservations] = useState<Reservation[]>([]);
+  const [guests, setGuests] = useState<Guest[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+
+  const [loading, setLoading] = useState(true);
+
+  const [showForm, setShowForm] = useState(false);
+  const [editingReservation, setEditingReservation] = useState<Reservation | null>(null);
+
+  const [form, setForm] = useState({
+    property_customer_id: "",
+    room_id: "",
+    check_in_date: "",
+    check_out_date: "",
+    status: "confirmed"
+  });
+
+  const [processingId, setProcessingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchReservations();
+    fetchGuests();
+    fetchRooms();
+  }, []);
+
+  /* -------------------- */
+  /* LOAD DATA */
+  /* -------------------- */
+
+  const fetchReservations = async () => {
+
+    const { data, error } = await supabase
+      .from("reservations")
+      .select(`
+        *,
+        guests(id, first_name, last_name),
+        rooms(id, room_number)
+      `)
+      .order("check_in_date", { ascending: true });
+
+    if (!error) setReservations(data || []);
+    setLoading(false);
+  };
+
+  const fetchGuests = async () => {
+
+    const { data } = await supabase
+      .from("guests")
+      .select("id,first_name,last_name")
+      .order("first_name");
+
+    setGuests(data || []);
+  };
+
+  const fetchRooms = async () => {
+
+    const { data, error } = await supabase
+      .from("rooms")
+      .select("id,room_number, status")
+      .eq("status", "available")
+      .order("room_number");
+      
+    if (error) {
+      console.error("Rooms load error:", error);
+      return;
+  }
+
+    setRooms(data || []);
+  };
+
+  /* -------------------- */
+  /* ADD RESERVATION */
+  /* -------------------- */
+
+  const openNewReservation = async () => {
+
+     await fetchRooms();
+
+    setEditingReservation(null);
+
+    setForm({
+      property_customer_id: "",
+      room_id: "",
+      check_in_date: "",
+      check_out_date: "",
+      status: "confirmed"
+    });
+
+    setShowForm(true);
+  };
+
+  /* -------------------- */
+  /* EDIT RESERVATION */
+  /* -------------------- */
+
+  const handleEdit = (reservation: Reservation) => {
+
+    setEditingReservation(reservation);
+
+    setForm({
+      property_customer_id: reservation.property_customer_id,
+      room_id: reservation.room_id,
+      check_in_date: reservation.check_in_date,
+      check_out_date: reservation.check_out_date,
+      status: reservation.status
+    });
+
+    setShowForm(true);
+  };
+
+  /* -------------------- */
+  /* SAVE RESERVATION */
+  /* -------------------- */
+
+  const saveReservation = async () => {
+
+    if (!form.property_customer_id || !form.room_id) {
+      alert("Select guest and room");
+      return;
+    }
+
+    try {
+
+      if (editingReservation) {
+
+        await supabase
+          .from("reservations")
+          .update(form)
+          .eq("id", editingReservation.id);
+
+      } else {
+
+        await supabase
+          .from("reservations")
+          .insert(form);
+
+      }
+
+      setShowForm(false);
+      fetchReservations();
+
+    } catch (err) {
+
+      console.error(err);
+      alert("Failed to save reservation");
+
+    }
+
+  };
+
+  /* -------------------- */
+  /* CHECK IN */
+  /* -------------------- */
+
+  const handleCheckIn = async (reservation: Reservation) => {
+
+    if (!staff?.id || !reservation.property_customer_id || !reservation.room_id) {
+      alert("Reservation missing guest or room");
+      return;
+    }
+
+    setProcessingId(reservation.id);
+
+    try {
+
+      const { error } = await supabase
+        .from("stays")
+        .insert({
+          reservation_id: reservation.id,
+          property_customer_id: reservation.property_customer_id,
+          room_id: reservation.room.id,
+          check_in_time: new Date().toISOString(),
+          checked_in_by: staff.id
+        });
+
+      if (error) throw error;
+
+      await supabase
+        .from("reservations")
+        .update({ status: "checked_in" })
+        .eq("id", reservation.id);
+
+      await supabase
+        .from("rooms")
+        .update({ status: "occupied" })
+        .eq("id", reservation.rooms.id);
+
+      fetchReservations();
+
+    } catch (err) {
+
+      console.error(err);
+      alert("Check-in failed");
+
+    } finally {
+
+      setProcessingId(null);
+
+    }
+
+  };
+
+  /* -------------------- */
+
+  if (loading) return <div className="p-6">Loading...</div>;
+
+  return (
+
+    <div className="p-6 md:p-8">
+
+      {/* HEADER */}
+
+      <div className="flex justify-between mb-6">
+
+        <div>
+          <h1 className="text-3xl font-bold">Reservations</h1>
+          <p className="text-slate-600">Manage guest bookings</p>
+        </div>
+
+        <button
+          onClick={openNewReservation}
+          className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+        >
+          <Plus size={18} />
+          New Reservation
+        </button>
+
+      </div>
+
+      {/* RESERVATIONS LIST */}
+
+      <div className="space-y-4">
+
+        {reservations.map((reservation) => (
+
+          <div
+            key={reservation.id}
+            className="bg-white border rounded-xl p-6 flex justify-between items-center"
+          >
+
+            <div>
+
+              <h3 className="font-bold text-lg">
+                {reservation.guests
+                  ? `${reservation.guests.first_name} ${reservation.guests.last_name}`
+                  : "Guest"}
+              </h3>
+
+              <p className="text-sm text-slate-500">
+                Room {reservation.rooms?.room_number}
+              </p>
+
+              <p className="text-sm text-slate-500">
+                {reservation.check_in_date} → {reservation.check_out_date}
+              </p>
+
+              <p className="text-sm text-slate-500">
+                Status: {reservation.status}
+              </p>
+
+            </div>
+
+            <div className="flex gap-3">
+
+              <button
+                onClick={() => handleEdit(reservation)}
+                className="bg-slate-200 px-4 py-2 rounded-lg flex items-center gap-2"
+              >
+                <Edit size={16} />
+                Edit
+              </button>
+
+              {reservation.status === "confirmed" && (
+
+                <button
+                  onClick={() => handleCheckIn(reservation)}
+                  disabled={processingId === reservation.id}
+                  className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+                >
+                  <LogIn size={16} />
+                  {processingId === reservation.id ? "Processing..." : "Check In"}
+                </button>
+
+              )}
+
+            </div>
+
+          </div>
+
+        ))}
+
+      </div>
+
+      {/* RESERVATION FORM */}
+
+      {showForm && (
+
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center">
+
+          <div className="bg-white p-6 rounded-xl w-[400px] space-y-4">
+
+            <h2 className="text-xl font-bold">
+              {editingReservation ? "Edit Reservation" : "New Reservation"}
+            </h2>
+
+            {/* GUEST */}
+
+            <select
+              value={form.property_customer_id}
+              onChange={(e) =>
+                setForm({ ...form, property_customer_id: e.target.value })
+              }
+              className="w-full border p-2 rounded"
+            >
+              <option value="">Select Guest</option>
+              {guests.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.first_name} {g.last_name}
+                </option>
+              ))}
+            </select>
+
+            {/* ROOM */}
+
+            <select
+              value={form.room_id}
+              onChange={(e) =>
+                setForm({ ...form, room_id: e.target.value })
+              }
+              className="w-full border p-2 rounded"
+            >
+              <option value="">Select Room</option>
+              {rooms.map((r) => (
+                <option key={r.id} value={r.id}>
+                  Room {r.room_number}
+                </option>
+              ))}
+            </select>
+
+            {/* DATES */}
+
+            <input
+              type="date"
+              value={form.check_in_date}
+              onChange={(e) => {
+                setForm({ ...form, check_in_date: e.target.value })
+	fetchRooms()
+              }}
+              className="w-full border p-2 rounded"
+            />
+
+            <input
+              type="date"
+              value={form.check_out_date}
+              onChange={(e) =>
+                setForm({ ...form, check_out_date: e.target.value })
+              }
+              className="w-full border p-2 rounded"
+            />
+
+            {/* BUTTONS */}
+
+            <div className="flex justify-end gap-3">
+
+              <button
+                onClick={() => setShowForm(false)}
+                className="px-4 py-2 border rounded"
+              >
+                Cancel
+              </button>
+
+              <button
+                onClick={saveReservation}
+                className="bg-blue-600 text-white px-4 py-2 rounded"
+              >
+                Save
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+
+      )}
+
+    </div>
+
+  );
+}
