@@ -4,13 +4,39 @@ import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { downloadCsv, exportAccountingPdf } from "@/lib/accountingReportExport";
+import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
 
-type Member = { id: string; full_name: string };
+type Member = { id: string; full_name: string; member_number: string | null };
 type Meeting = { id: string; meeting_date: string };
-type ShareTxn = { id: string; member_id: string; meeting_id: string | null; total_value: number | null; created_at: string };
-type Loan = { id: string; member_id: string; principal_amount: number | null; status: string; applied_at: string };
-type Repayment = { id: string; loan_id: string; principal_paid: number | null; interest_paid: number | null; penalty_paid: number | null; created_at: string };
-type Fine = { id: string; member_id: string; fine_type: string; amount: number | null; created_at: string };
+type ShareTxn = {
+  id: string;
+  member_id: string;
+  meeting_id: string | null;
+  total_value: number | null;
+  created_at: string;
+};
+type Loan = {
+  id: string;
+  member_id: string;
+  principal_amount: number | null;
+  status: string;
+  applied_at: string;
+};
+type Repayment = {
+  id: string;
+  loan_id: string;
+  principal_paid: number | null;
+  interest_paid: number | null;
+  penalty_paid: number | null;
+  created_at: string;
+};
+type Fine = {
+  id: string;
+  member_id: string;
+  fine_type: string;
+  amount: number | null;
+  created_at: string;
+};
 
 type StatementRow = {
   id: string;
@@ -22,7 +48,11 @@ type StatementRow = {
 type SortColumn = "date" | "type" | "amount" | "note";
 type SortDirection = "asc" | "desc";
 
-export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boolean }) {
+export function VslaMemberStatementPage({
+  readOnly = false,
+}: {
+  readOnly?: boolean;
+}) {
   const { user, isSuperAdmin } = useAuth();
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!isSuperAdmin;
@@ -52,7 +82,12 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
     const qp = new URLSearchParams(window.location.search);
     const sortCol = qp.get("vslaStatementSort");
     const sortDir = qp.get("vslaStatementDir");
-    if (sortCol === "date" || sortCol === "type" || sortCol === "amount" || sortCol === "note") {
+    if (
+      sortCol === "date" ||
+      sortCol === "type" ||
+      sortCol === "amount" ||
+      sortCol === "note"
+    ) {
       setSortColumn(sortCol);
     }
     if (sortDir === "asc" || sortDir === "desc") {
@@ -72,18 +107,68 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
     setLoading(true);
     setError(null);
     const orgPromise = orgId
-      ? supabase.from("organizations").select("name").eq("id", orgId).maybeSingle()
-      : Promise.resolve({ data: null, error: null } as { data: { name?: string | null } | null; error: { message?: string } | null });
+      ? supabase
+          .from("organizations")
+          .select("name")
+          .eq("id", orgId)
+          .maybeSingle()
+      : Promise.resolve({ data: null, error: null } as {
+          data: { name?: string | null } | null;
+          error: { message?: string } | null;
+        });
     const [mRes, mtRes, sRes, lRes, rRes, fRes, orgRes] = await Promise.all([
-      filterByOrganizationId(supabase.from("vsla_members").select("id,full_name").order("full_name"), orgId, superAdmin),
-      filterByOrganizationId(supabase.from("vsla_meetings").select("id,meeting_date"), orgId, superAdmin),
-      filterByOrganizationId(supabase.from("vsla_share_transactions").select("id,member_id,meeting_id,total_value,created_at"), orgId, superAdmin),
-      filterByOrganizationId(supabase.from("vsla_loans").select("id,member_id,principal_amount,status,applied_at"), orgId, superAdmin),
-      filterByOrganizationId(supabase.from("vsla_loan_repayments").select("id,loan_id,principal_paid,interest_paid,penalty_paid,created_at"), orgId, superAdmin),
-      filterByOrganizationId(supabase.from("vsla_fines").select("id,member_id,fine_type,amount,created_at"), orgId, superAdmin),
+      filterByOrganizationId(
+        supabase
+          .from("vsla_members")
+          .select("id,full_name,member_number")
+          .order("full_name"),
+        orgId,
+        superAdmin,
+      ),
+      filterByOrganizationId(
+        supabase.from("vsla_meetings").select("id,meeting_date"),
+        orgId,
+        superAdmin,
+      ),
+      filterByOrganizationId(
+        supabase
+          .from("vsla_share_transactions")
+          .select("id,member_id,meeting_id,total_value,created_at"),
+        orgId,
+        superAdmin,
+      ),
+      filterByOrganizationId(
+        supabase
+          .from("vsla_loans")
+          .select("id,member_id,principal_amount,status,applied_at"),
+        orgId,
+        superAdmin,
+      ),
+      filterByOrganizationId(
+        supabase
+          .from("vsla_loan_repayments")
+          .select(
+            "id,loan_id,principal_paid,interest_paid,penalty_paid,created_at",
+          ),
+        orgId,
+        superAdmin,
+      ),
+      filterByOrganizationId(
+        supabase
+          .from("vsla_fines")
+          .select("id,member_id,fine_type,amount,created_at"),
+        orgId,
+        superAdmin,
+      ),
       orgPromise,
     ]);
-    const anyError = mRes.error || mtRes.error || sRes.error || lRes.error || rRes.error || fRes.error;
+    const anyError =
+      mRes.error ||
+      mtRes.error ||
+      sRes.error ||
+      lRes.error ||
+      rRes.error ||
+      fRes.error;
     if (anyError) {
       setError(anyError.message || "Failed to load statement data.");
       setMembers([]);
@@ -126,7 +211,9 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
     if (includeSavings) {
       for (const s of shares) {
         if (s.member_id !== memberId) continue;
-        const date = (s.meeting_id ? meetingDateById.get(s.meeting_id) : null) ?? String(s.created_at).slice(0, 10);
+        const date =
+          (s.meeting_id ? meetingDateById.get(s.meeting_id) : null) ??
+          String(s.created_at).slice(0, 10);
         out.push({
           id: `s-${s.id}`,
           date,
@@ -152,7 +239,10 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
       for (const r of repayments) {
         const repaymentMemberId = loanMemberByLoanId.get(r.loan_id);
         if (repaymentMemberId !== memberId) continue;
-        const amount = Number(r.principal_paid || 0) + Number(r.interest_paid || 0) + Number(r.penalty_paid || 0);
+        const amount =
+          Number(r.principal_paid || 0) +
+          Number(r.interest_paid || 0) +
+          Number(r.penalty_paid || 0);
         out.push({
           id: `r-${r.id}`,
           date: String(r.created_at).slice(0, 10),
@@ -174,8 +264,24 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
         });
       }
     }
-    return out.filter((r) => (fromDate ? r.date >= fromDate : true)).filter((r) => (toDate ? r.date <= toDate : true));
-  }, [fines, fromDate, includeFines, includeLoans, includeRepayments, includeSavings, loanMemberByLoanId, loans, meetingDateById, memberId, repayments, shares, toDate]);
+    return out
+      .filter((r) => (fromDate ? r.date >= fromDate : true))
+      .filter((r) => (toDate ? r.date <= toDate : true));
+  }, [
+    fines,
+    fromDate,
+    includeFines,
+    includeLoans,
+    includeRepayments,
+    includeSavings,
+    loanMemberByLoanId,
+    loans,
+    meetingDateById,
+    memberId,
+    repayments,
+    shares,
+    toDate,
+  ]);
 
   const sortedRows = useMemo(() => {
     const data = [...rows];
@@ -205,7 +311,8 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
   }, [sortedRows]);
 
   const selectedMemberName = useMemo(() => {
-    return members.find((m) => m.id === memberId)?.full_name ?? "Member";
+    const found = members.find((m) => m.id === memberId);
+    return found ? formatVslaMemberLabel(found) : "Member";
   }, [memberId, members]);
 
   const onSort = (column: SortColumn) => {
@@ -268,12 +375,24 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
         {
           title: "Transactions",
           head: ["Date", "Type", "Amount", "Details"],
-          body: sortedRows.map((r) => [r.date, r.type, r.amount.toLocaleString(), r.note]),
+          body: sortedRows.map((r) => [
+            r.date,
+            r.type,
+            r.amount.toLocaleString(),
+            r.note,
+          ]),
         },
         {
           title: "Totals",
           head: ["Savings", "Loans", "Repayments", "Fines"],
-          body: [[totals.savings.toLocaleString(), totals.loans.toLocaleString(), totals.repayments.toLocaleString(), totals.fines.toLocaleString()]],
+          body: [
+            [
+              totals.savings.toLocaleString(),
+              totals.loans.toLocaleString(),
+              totals.repayments.toLocaleString(),
+              totals.fines.toLocaleString(),
+            ],
+          ],
         },
       ],
     });
@@ -283,7 +402,7 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
     const tableRows = sortedRows
       .map(
         (r) =>
-          `<tr><td>${r.date}</td><td style="text-transform:capitalize;">${r.type}</td><td>${r.amount.toLocaleString()}</td><td>${r.note}</td></tr>`
+          `<tr><td>${r.date}</td><td style="text-transform:capitalize;">${r.type}</td><td>${r.amount.toLocaleString()}</td><td>${r.note}</td></tr>`,
       )
       .join("");
     const html = `<!doctype html>
@@ -339,15 +458,30 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Member Statement</h1>
         <p className="text-sm text-slate-600 mt-1">VSLA: {vslaName}</p>
-        <p className="text-sm text-slate-600 mt-1">View member history with filters for date, savings, loans, repayments, and fines.</p>
+        <p className="text-sm text-slate-600 mt-1">
+          View member history with filters for date, savings, loans, repayments,
+          and fines.
+        </p>
         <div className="mt-3 flex flex-wrap gap-2">
-          <button type="button" onClick={exportExcel} className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-xs">
+          <button
+            type="button"
+            onClick={exportExcel}
+            className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-xs"
+          >
             Export Excel
           </button>
-          <button type="button" onClick={exportPdf} className="px-3 py-2 rounded-lg bg-indigo-700 text-white text-xs">
+          <button
+            type="button"
+            onClick={exportPdf}
+            className="px-3 py-2 rounded-lg bg-indigo-700 text-white text-xs"
+          >
             Export PDF
           </button>
-          <button type="button" onClick={printStatement} className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs">
+          <button
+            type="button"
+            onClick={printStatement}
+            className="px-3 py-2 rounded-lg bg-slate-700 text-white text-xs"
+          >
             Print Statement
           </button>
         </div>
@@ -357,34 +491,84 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
       <div className="bg-white rounded-xl border border-slate-200 p-4 grid grid-cols-1 md:grid-cols-6 gap-3">
         <label className="text-xs text-slate-600 md:col-span-2">
           Member
-          <select value={memberId} onChange={(e) => setMemberId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select
+            value={memberId}
+            onChange={(e) => setMemberId(e.target.value)}
+            className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          >
             <option value="">Select member</option>
             {members.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.full_name}
+                {formatVslaMemberLabel(m)}
               </option>
             ))}
           </select>
         </label>
         <label className="text-xs text-slate-600">
           From
-          <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input
+            type="date"
+            value={fromDate}
+            onChange={(e) => setFromDate(e.target.value)}
+            className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          />
         </label>
         <label className="text-xs text-slate-600">
           To
-          <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input
+            type="date"
+            value={toDate}
+            onChange={(e) => setToDate(e.target.value)}
+            className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          />
         </label>
-        <label className="text-xs text-slate-700 flex items-end gap-2"><input type="checkbox" checked={includeSavings} onChange={(e) => setIncludeSavings(e.target.checked)} />Savings</label>
-        <label className="text-xs text-slate-700 flex items-end gap-2"><input type="checkbox" checked={includeLoans} onChange={(e) => setIncludeLoans(e.target.checked)} />Loans</label>
-        <label className="text-xs text-slate-700 flex items-end gap-2"><input type="checkbox" checked={includeRepayments} onChange={(e) => setIncludeRepayments(e.target.checked)} />Repayments</label>
-        <label className="text-xs text-slate-700 flex items-end gap-2"><input type="checkbox" checked={includeFines} onChange={(e) => setIncludeFines(e.target.checked)} />Fines</label>
+        <label className="text-xs text-slate-700 flex items-end gap-2">
+          <input
+            type="checkbox"
+            checked={includeSavings}
+            onChange={(e) => setIncludeSavings(e.target.checked)}
+          />
+          Savings
+        </label>
+        <label className="text-xs text-slate-700 flex items-end gap-2">
+          <input
+            type="checkbox"
+            checked={includeLoans}
+            onChange={(e) => setIncludeLoans(e.target.checked)}
+          />
+          Loans
+        </label>
+        <label className="text-xs text-slate-700 flex items-end gap-2">
+          <input
+            type="checkbox"
+            checked={includeRepayments}
+            onChange={(e) => setIncludeRepayments(e.target.checked)}
+          />
+          Repayments
+        </label>
+        <label className="text-xs text-slate-700 flex items-end gap-2">
+          <input
+            type="checkbox"
+            checked={includeFines}
+            onChange={(e) => setIncludeFines(e.target.checked)}
+          />
+          Fines
+        </label>
       </div>
 
       <div className="grid md:grid-cols-4 gap-3">
-        <div className="p-3 rounded-lg bg-slate-100 text-sm">Savings: <strong>{totals.savings.toLocaleString()}</strong></div>
-        <div className="p-3 rounded-lg bg-slate-100 text-sm">Loans: <strong>{totals.loans.toLocaleString()}</strong></div>
-        <div className="p-3 rounded-lg bg-slate-100 text-sm">Repayments: <strong>{totals.repayments.toLocaleString()}</strong></div>
-        <div className="p-3 rounded-lg bg-slate-100 text-sm">Fines: <strong>{totals.fines.toLocaleString()}</strong></div>
+        <div className="p-3 rounded-lg bg-slate-100 text-sm">
+          Savings: <strong>{totals.savings.toLocaleString()}</strong>
+        </div>
+        <div className="p-3 rounded-lg bg-slate-100 text-sm">
+          Loans: <strong>{totals.loans.toLocaleString()}</strong>
+        </div>
+        <div className="p-3 rounded-lg bg-slate-100 text-sm">
+          Repayments: <strong>{totals.repayments.toLocaleString()}</strong>
+        </div>
+        <div className="p-3 rounded-lg bg-slate-100 text-sm">
+          Fines: <strong>{totals.fines.toLocaleString()}</strong>
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -392,22 +576,38 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="p-3 text-left">
-                <button type="button" onClick={() => onSort("date")} className="font-semibold text-left">
+                <button
+                  type="button"
+                  onClick={() => onSort("date")}
+                  className="font-semibold text-left"
+                >
                   Date{sortMark("date")}
                 </button>
               </th>
               <th className="p-3 text-left">
-                <button type="button" onClick={() => onSort("type")} className="font-semibold text-left">
+                <button
+                  type="button"
+                  onClick={() => onSort("type")}
+                  className="font-semibold text-left"
+                >
                   Type{sortMark("type")}
                 </button>
               </th>
               <th className="p-3 text-left">
-                <button type="button" onClick={() => onSort("amount")} className="font-semibold text-left">
+                <button
+                  type="button"
+                  onClick={() => onSort("amount")}
+                  className="font-semibold text-left"
+                >
                   Amount{sortMark("amount")}
                 </button>
               </th>
               <th className="p-3 text-left">
-                <button type="button" onClick={() => onSort("note")} className="font-semibold text-left">
+                <button
+                  type="button"
+                  onClick={() => onSort("note")}
+                  className="font-semibold text-left"
+                >
                   Details{sortMark("note")}
                 </button>
               </th>
@@ -415,15 +615,25 @@ export function VslaMemberStatementPage({ readOnly = false }: { readOnly?: boole
           </thead>
           <tbody>
             {loading ? (
-              <tr><td className="p-4 text-slate-500" colSpan={4}>Loading statement...</td></tr>
+              <tr>
+                <td className="p-4 text-slate-500" colSpan={4}>
+                  Loading statement...
+                </td>
+              </tr>
             ) : sortedRows.length === 0 ? (
-              <tr><td className="p-4 text-slate-500" colSpan={4}>No statement entries for selected filters.</td></tr>
+              <tr>
+                <td className="p-4 text-slate-500" colSpan={4}>
+                  No statement entries for selected filters.
+                </td>
+              </tr>
             ) : (
               sortedRows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100">
                   <td className="p-3 text-slate-700">{r.date}</td>
                   <td className="p-3 text-slate-700 capitalize">{r.type}</td>
-                  <td className="p-3 text-slate-700">{r.amount.toLocaleString()}</td>
+                  <td className="p-3 text-slate-700">
+                    {r.amount.toLocaleString()}
+                  </td>
                   <td className="p-3 text-slate-600">{r.note}</td>
                 </tr>
               ))

@@ -2,6 +2,20 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Touch / small screens: readable inputs and comfortable tap targets */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  @media (max-width: 639.98px) {
+    input,
+    select,
+    textarea {
+      font-size: 1rem;
+    }
+  }
+}
+
 /* Design tokens — use these classes for consistent colour coding app-wide */
 @layer components {
   .app-page {

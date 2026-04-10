@@ -658,7 +658,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           <button
             type="button"
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="p-2 rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition"
+            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition touch-manipulation"
             aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
           >
             {sidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}

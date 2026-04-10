@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
+import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
 
 type MemberStatus = "active" | "exited" | "suspended";
 type MemberRole = "member" | "chairperson" | "treasurer" | "secretary";
@@ -23,6 +24,7 @@ type MemberRow = {
   is_key_holder: boolean;
   group_id: string | null;
   household_id: string | null;
+  member_number: string | null;
   guarantor_member_id: string | null;
 };
 
@@ -46,7 +48,7 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
   const [role, setRole] = useState<MemberRole>("member");
   const [isKeyHolder, setIsKeyHolder] = useState(false);
   const [groupId, setGroupId] = useState("");
-  const [householdId, setHouseholdId] = useState("");
+  const [memberNumber, setMemberNumber] = useState("");
   const [guarantorMemberId, setGuarantorMemberId] = useState("");
   const [editingMemberId, setEditingMemberId] = useState<string | null>(null);
   const [editFullName, setEditFullName] = useState("");
@@ -62,16 +64,26 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
     const gq = filterByOrganizationId(
       supabase.from("vsla_groups").select("id,name").order("name"),
       orgId,
-      superAdmin
+      superAdmin,
     );
     const mq = filterByOrganizationId(
-      supabase.from("vsla_members").select("id,full_name,national_id,phone,photo_url,status,role,is_key_holder,group_id,household_id,guarantor_member_id").order("full_name"),
+      supabase
+        .from("vsla_members")
+        .select(
+          "id,full_name,national_id,phone,photo_url,status,role,is_key_holder,group_id,household_id,member_number,guarantor_member_id",
+        )
+        .order("full_name"),
       orgId,
-      superAdmin
+      superAdmin,
     );
-    const [{ data: groupsData, error: gErr }, { data: membersData, error: mErr }] = await Promise.all([gq, mq]);
+    const [
+      { data: groupsData, error: gErr },
+      { data: membersData, error: mErr },
+    ] = await Promise.all([gq, mq]);
     if (gErr || mErr) {
-      setError(gErr?.message ?? mErr?.message ?? "Failed to load VSLA members.");
+      setError(
+        gErr?.message ?? mErr?.message ?? "Failed to load VSLA members.",
+      );
       setGroups([]);
       setMembers([]);
     } else {
@@ -123,7 +135,8 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
       role,
       is_key_holder: isKeyHolder,
       group_id: groupId || null,
-      household_id: householdId.trim() || null,
+      household_id: null,
+      member_number: memberNumber.trim() || null,
       guarantor_member_id: guarantorMemberId || null,
     });
     if (e) {
@@ -139,7 +152,7 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
     setRole("member");
     setIsKeyHolder(false);
     setGroupId("");
-    setHouseholdId("");
+    setMemberNumber("");
     setGuarantorMemberId("");
     setSaving(false);
     await load();
@@ -192,8 +205,13 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
     <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {readOnly && <ReadOnlyNotice />}
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">VSLA Member Management</h1>
-        <p className="text-sm text-slate-600 mt-1">Members, group assignment, roles, key holders, and optional household/guarantor linking.</p>
+        <h1 className="text-2xl font-bold text-slate-900">
+          VSLA Member Management
+        </h1>
+        <p className="text-sm text-slate-600 mt-1">
+          Members, group assignment, roles, key holders, and optional
+          household/guarantor linking.
+        </p>
       </div>
 
       {error && <p className="text-sm text-red-600">{error}</p>}
@@ -201,66 +219,140 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <label className="text-xs text-slate-600">
           New Group Name
-          <input value={groupName} onChange={(e) => setGroupName(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <input
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          />
         </label>
         <div className="md:col-span-2 flex items-end">
-          <button type="button" onClick={() => void addGroup()} disabled={readOnly || saving} className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-50">
+          <button
+            type="button"
+            onClick={() => void addGroup()}
+            disabled={readOnly || saving}
+            className="px-4 py-2 rounded-lg bg-slate-900 text-white text-sm disabled:opacity-50"
+          >
             Add Group
           </button>
         </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">Register Member</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
+          Register Member
+        </p>
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-          <label className="text-xs text-slate-600">Name
-            <input value={fullName} onChange={(e) => setFullName(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <label className="text-xs text-slate-600">
+            Name
+            <input
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
           </label>
-          <label className="text-xs text-slate-600">National ID
-            <input value={nationalId} onChange={(e) => setNationalId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <label className="text-xs text-slate-600">
+            National ID
+            <input
+              value={nationalId}
+              onChange={(e) => setNationalId(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
           </label>
-          <label className="text-xs text-slate-600">Phone
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <label className="text-xs text-slate-600">
+            Phone
+            <input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
           </label>
-          <label className="text-xs text-slate-600">Photo URL
-            <input value={photoUrl} onChange={(e) => setPhotoUrl(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <label className="text-xs text-slate-600">
+            Photo URL
+            <input
+              value={photoUrl}
+              onChange={(e) => setPhotoUrl(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
           </label>
-          <label className="text-xs text-slate-600">Role
-            <select value={role} onChange={(e) => setRole(e.target.value as MemberRole)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <label className="text-xs text-slate-600">
+            Role
+            <select
+              value={role}
+              onChange={(e) => setRole(e.target.value as MemberRole)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            >
               <option value="member">Member</option>
               <option value="chairperson">Chairperson</option>
               <option value="treasurer">Treasurer</option>
               <option value="secretary">Secretary</option>
             </select>
           </label>
-          <label className="text-xs text-slate-600">Status
-            <select value={status} onChange={(e) => setStatus(e.target.value as MemberStatus)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <label className="text-xs text-slate-600">
+            Status
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as MemberStatus)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            >
               <option value="active">Active</option>
               <option value="suspended">Suspended</option>
               <option value="exited">Exited</option>
             </select>
           </label>
-          <label className="text-xs text-slate-600">Group
-            <select value={groupId} onChange={(e) => setGroupId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <label className="text-xs text-slate-600">
+            Group
+            <select
+              value={groupId}
+              onChange={(e) => setGroupId(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            >
               <option value="">Unassigned</option>
-              {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+              {groups.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
             </select>
           </label>
-          <label className="text-xs text-slate-600">Guarantor
-            <select value={guarantorMemberId} onChange={(e) => setGuarantorMemberId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <label className="text-xs text-slate-600">
+            Guarantor
+            <select
+              value={guarantorMemberId}
+              onChange={(e) => setGuarantorMemberId(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            >
               <option value="">None</option>
-              {members.map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {formatVslaMemberLabel(m)}
+                </option>
+              ))}
             </select>
           </label>
-          <label className="text-xs text-slate-600">Household ID
-            <input value={householdId} onChange={(e) => setHouseholdId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. HH-001" />
+          <label className="text-xs text-slate-600">
+            Member Number
+            <input
+              value={memberNumber}
+              onChange={(e) => setMemberNumber(e.target.value)}
+              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              placeholder="e.g. MBR-001"
+            />
           </label>
           <label className="text-xs text-slate-600 flex items-end gap-2">
-            <input type="checkbox" checked={isKeyHolder} onChange={(e) => setIsKeyHolder(e.target.checked)} />
+            <input
+              type="checkbox"
+              checked={isKeyHolder}
+              onChange={(e) => setIsKeyHolder(e.target.checked)}
+            />
             Key holder
           </label>
           <div className="md:col-span-2 flex items-end">
-            <button type="button" onClick={() => void saveMember()} disabled={readOnly || saving} className="px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50">
+            <button
+              type="button"
+              onClick={() => void saveMember()}
+              disabled={readOnly || saving}
+              className="px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50"
+            >
               Save Member
             </button>
           </div>
@@ -282,29 +374,51 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
           </thead>
           <tbody>
             {loading ? (
-              <tr><td className="p-4 text-slate-500" colSpan={7}>Loading members...</td></tr>
+              <tr>
+                <td className="p-4 text-slate-500" colSpan={7}>
+                  Loading members...
+                </td>
+              </tr>
             ) : members.length === 0 ? (
-              <tr><td className="p-4 text-slate-500" colSpan={7}>No members yet.</td></tr>
+              <tr>
+                <td className="p-4 text-slate-500" colSpan={7}>
+                  No members yet.
+                </td>
+              </tr>
             ) : (
               members.map((m) => (
                 <tr key={m.id} className="border-b border-slate-100">
                   <td className="p-3 font-medium text-slate-900">
                     {editingMemberId === m.id ? (
-                      <input value={editFullName} onChange={(e) => setEditFullName(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs" />
+                      <input
+                        value={editFullName}
+                        onChange={(e) => setEditFullName(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs"
+                      />
                     ) : (
-                      m.full_name
+                      formatVslaMemberLabel(m)
                     )}
                   </td>
                   <td className="p-3 text-slate-600">
                     {editingMemberId === m.id ? (
-                      <input value={editPhone} onChange={(e) => setEditPhone(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs" />
+                      <input
+                        value={editPhone}
+                        onChange={(e) => setEditPhone(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs"
+                      />
                     ) : (
                       m.phone || "-"
                     )}
                   </td>
                   <td className="p-3 text-slate-600 capitalize">
                     {editingMemberId === m.id ? (
-                      <select value={editRole} onChange={(e) => setEditRole(e.target.value as MemberRole)} className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs">
+                      <select
+                        value={editRole}
+                        onChange={(e) =>
+                          setEditRole(e.target.value as MemberRole)
+                        }
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs"
+                      >
                         <option value="member">Member</option>
                         <option value="chairperson">Chairperson</option>
                         <option value="treasurer">Treasurer</option>
@@ -316,7 +430,13 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
                   </td>
                   <td className="p-3 text-slate-600 capitalize">
                     {editingMemberId === m.id ? (
-                      <select value={editStatus} onChange={(e) => setEditStatus(e.target.value as MemberStatus)} className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs">
+                      <select
+                        value={editStatus}
+                        onChange={(e) =>
+                          setEditStatus(e.target.value as MemberStatus)
+                        }
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs"
+                      >
                         <option value="active">Active</option>
                         <option value="suspended">Suspended</option>
                         <option value="exited">Exited</option>
@@ -327,29 +447,68 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
                   </td>
                   <td className="p-3 text-slate-600">
                     {editingMemberId === m.id ? (
-                      <select value={editGroupId} onChange={(e) => setEditGroupId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs">
+                      <select
+                        value={editGroupId}
+                        onChange={(e) => setEditGroupId(e.target.value)}
+                        className="w-full border border-slate-300 rounded-lg px-2 py-1 text-xs"
+                      >
                         <option value="">Unassigned</option>
-                        {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+                        {groups.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.name}
+                          </option>
+                        ))}
                       </select>
+                    ) : m.group_id ? (
+                      (groupLabel.get(m.group_id) ?? "Unknown")
                     ) : (
-                      m.group_id ? (groupLabel.get(m.group_id) ?? "Unknown") : "-"
+                      "-"
                     )}
                   </td>
                   <td className="p-3 text-slate-600">
                     {editingMemberId === m.id ? (
-                      <label className="text-xs flex items-center gap-1"><input type="checkbox" checked={editIsKeyHolder} onChange={(e) => setEditIsKeyHolder(e.target.checked)} />Yes</label>
+                      <label className="text-xs flex items-center gap-1">
+                        <input
+                          type="checkbox"
+                          checked={editIsKeyHolder}
+                          onChange={(e) => setEditIsKeyHolder(e.target.checked)}
+                        />
+                        Yes
+                      </label>
+                    ) : m.is_key_holder ? (
+                      "Yes"
                     ) : (
-                      m.is_key_holder ? "Yes" : "No"
+                      "No"
                     )}
                   </td>
                   <td className="p-3 text-slate-600">
                     {editingMemberId === m.id ? (
                       <div className="flex gap-2">
-                        <button type="button" onClick={() => void saveEdit()} disabled={readOnly || saving} className="text-xs text-indigo-700 disabled:opacity-50">Save</button>
-                        <button type="button" onClick={cancelEdit} className="text-xs text-slate-700">Cancel</button>
+                        <button
+                          type="button"
+                          onClick={() => void saveEdit()}
+                          disabled={readOnly || saving}
+                          className="text-xs text-indigo-700 disabled:opacity-50"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={cancelEdit}
+                          className="text-xs text-slate-700"
+                        >
+                          Cancel
+                        </button>
                       </div>
                     ) : (
-                      <button type="button" onClick={() => startEdit(m)} disabled={readOnly || saving} className="text-xs text-indigo-700 disabled:opacity-50">Edit</button>
+                      <button
+                        type="button"
+                        onClick={() => startEdit(m)}
+                        disabled={readOnly || saving}
+                        className="text-xs text-indigo-700 disabled:opacity-50"
+                      >
+                        Edit
+                      </button>
                     )}
                   </td>
                 </tr>
