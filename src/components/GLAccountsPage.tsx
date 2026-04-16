@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { canApprove } from "../lib/approvalRights";
 import { PageNotes } from "./common/PageNotes";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 type GLAccount = {
   id: string;
@@ -38,6 +39,8 @@ const CATEGORY_OPTIONS: { value: string; label: string }[] = [
 
 export function GLAccountsPage() {
   const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const canManageChartOfAccounts = canApprove("chart_of_accounts", user?.role);
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,10 +63,12 @@ export function GLAccountsPage() {
 
   const fetchAccounts = async () => {
     setLoading(true);
-    const { data, error } = await supabase
+    let q = supabase
       .from("gl_accounts")
       .select("*")
       .order("account_code");
+    q = filterByOrganizationId(q, orgId, superAdmin);
+    const { data, error } = await q;
 
     if (error) {
       console.error("Error loading gl_accounts:", error);
@@ -134,7 +139,10 @@ export function GLAccountsPage() {
         return;
       }
     } else {
-      const { error } = await supabase.from("gl_accounts").insert(payload);
+      const { error } = await supabase.from("gl_accounts").insert({
+        ...payload,
+        organization_id: orgId ?? null,
+      });
       if (error) {
         console.error(error);
         alert(error.message);

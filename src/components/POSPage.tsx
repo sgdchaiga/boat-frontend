@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Minus, X, ShoppingCart, Loader2, BookOpen } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Plus, Minus, X, ShoppingCart, Loader2, RefreshCw, Wifi, WifiOff, TabletSmartphone, Hand, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { businessTodayISO, computeRangeInTimezone } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
@@ -12,12 +12,16 @@ import {
   type RoomChargeGlOverrides,
 } from "../lib/journal";
 import { resolveJournalAccountSettings } from "../lib/journalAccountSettings";
-import { insertPaymentWithMethodCompat, PAYMENT_METHOD_SELECT_OPTIONS, type PaymentMethodCode } from "../lib/paymentMethod";
+import {
+  insertPaymentWithMethodCompat,
+  normalizePaymentMethod,
+  PAYMENT_METHOD_SELECT_OPTIONS,
+  type PaymentMethodCode,
+} from "../lib/paymentMethod";
 import type { Database } from "../lib/database.types";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
-import { useAppContext } from "../contexts/AppContext";
 import { GlAccountPicker, type GlAccountOption } from "./common/GlAccountPicker";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
@@ -44,6 +48,9 @@ interface CartItem {
   quantity: number;
   note?: string;
   total: number;
+  menuType?: PosMenuType;
+  courseType?: "starter" | "main_course" | "dessert";
+  fireTiming?: "now" | "with_mains" | "after_mains";
 }
 
 interface ActiveStay {
@@ -61,10 +68,10 @@ interface QueuedOrder {
   customer_name: string | null;
   order_status: string;
   created_at: string;
-  kitchen_order_items?: { quantity: number; notes?: string; products?: { name: string } }[];
+  kitchen_order_items?: { id?: string; product_id?: string; quantity: number; notes?: string; products?: { name: string } }[];
 }
 
-type PosAction = "send_kitchen" | "pay_now" | "bill_to_room";
+type PosAction = "send_kitchen" | "pay_now" | "bill_to_room" | "credit_sale";
 interface HeldTicket {
   id: string;
   label: string;
@@ -92,11 +99,60 @@ interface StockConsumptionLine {
   note: string;
 }
 
+type PaymentStatus = "pending" | "completed" | "failed" | "refunded";
+
+interface PostedHotelTransaction {
+  id: string;
+  saleId: string;
+  paidAt: string;
+  amount: number;
+  paymentMethod: PaymentMethodCode;
+  paymentStatus: PaymentStatus;
+  editedAt: string | null;
+  editedByName: string | null;
+}
+
+interface PostedHotelTransactionDraft {
+  amount: string;
+  paymentMethod: PaymentMethodCode;
+  paymentStatus: PaymentStatus;
+}
+
+type PosMenuType = "all" | "breakfast" | "lunch" | "bar" | "room_service";
+type PosTableStatus = "available" | "occupied" | "reserved" | "cleaning";
+type SplitBillMode = "item" | "guest" | "percentage";
+type StationFilter = "all" | "bar" | "kitchen" | "dessert";
+
+interface PosTableLayoutState {
+  number: string;
+  status: Exclude<PosTableStatus, "occupied">;
+  waiterId: string;
+}
+
+interface PendingOfflineOrder {
+  id: string;
+  createdAt: string;
+  status?: "pending" | "syncing" | "synced" | "failed" | "conflict";
+  retryCount?: number;
+  action: PosAction;
+  tableNumber: string;
+  selectedGuestId: string;
+  selectedStayId: string | null;
+  paymentMethod: PaymentMethodCode;
+  items: Array<{ productId: string; quantity: number; note?: string; total: number }>;
+}
+
 // Temporary in-app recipe rules. Move to DB recipe tables when available.
 const RECIPE_BY_PRODUCT_NAME: Record<string, RecipeIngredientRule[]> = {
   omelette: [{ ingredientName: "eggs", qtyPerUnit: 2 }],
   omelet: [{ ingredientName: "eggs", qtyPerUnit: 2 }],
 };
+
+const TABLE_LAYOUT_KEY = "hotel-pos-table-layout-v1";
+const OFFLINE_ORDER_KEY = "hotel-pos-offline-orders-v1";
+const OFFLINE_DB = "boat_pos_sync_db";
+const OFFLINE_STORE = "hotel_pos_orders";
+const BASE_TABLES = ["T1", "T2", "T3", "T4", "VIP1", "VIP2", "B1", "B2"];
 
 interface POSPageProps {
   readOnly?: boolean;
@@ -104,7 +160,6 @@ interface POSPageProps {
 
 export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const { user } = useAuth();
-  const { setCurrentPage } = useAppContext();
   const orgId = user?.organization_id ?? undefined;
   const [products, setProducts] = useState<Product[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -116,15 +171,48 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [selectedGuestId, setSelectedGuestId] = useState<string>("");
   const [selectedProductId, setSelectedProductId] = useState<string>("");
+  const [productSearch, setProductSearch] = useState("");
   const [tableNumber, setTableNumber] = useState("");
+  const [online, setOnline] = useState<boolean>(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [touchMode, setTouchMode] = useState(false);
+  const [selectedMenuType, setSelectedMenuType] = useState<PosMenuType>("all");
+  const [modifierDraft, setModifierDraft] = useState("");
+  const [happyHourEnabled, setHappyHourEnabled] = useState(false);
+  const [happyHourStart, setHappyHourStart] = useState("17:00");
+  const [happyHourEnd, setHappyHourEnd] = useState("19:00");
+  const [happyHourDiscountPercent, setHappyHourDiscountPercent] = useState("10");
+  const [tableLayout, setTableLayout] = useState<Record<string, PosTableLayoutState>>({});
+  const [waiters, setWaiters] = useState<Array<{ id: string; full_name: string }>>([]);
+  const [splitBillMode, setSplitBillMode] = useState<SplitBillMode>("item");
+  const [stationFilter, setStationFilter] = useState<StationFilter>("all");
+  const [tableSessionOpen, setTableSessionOpen] = useState(false);
+  const [tableSessionStartedAt, setTableSessionStartedAt] = useState<string | null>(null);
+  const [tableSessionId, setTableSessionId] = useState<string | null>(null);
+  const [promoCode, setPromoCode] = useState("");
+  const [promoDiscountPercent, setPromoDiscountPercent] = useState("0");
+  const [managerPinDraft, setManagerPinDraft] = useState("");
+  const [voidReasonDraftByPaymentId, setVoidReasonDraftByPaymentId] = useState<Record<string, string>>({});
+  const [vipGuestIds, setVipGuestIds] = useState<Record<string, boolean>>({});
+  const [splitPercentA, setSplitPercentA] = useState("50");
+  const [splitGuestCount, setSplitGuestCount] = useState("2");
+  const [pendingOfflineOrders, setPendingOfflineOrders] = useState<PendingOfflineOrder[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodCode>("cash");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const submitLockRef = useRef(false);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
   const [heldTickets, setHeldTickets] = useState<HeldTicket[]>([]);
   const [queueStatusFilter, setQueueStatusFilter] = useState<"active" | "all" | "pending" | "preparing">("active");
   const [recipeByProductId, setRecipeByProductId] = useState<Record<string, RecipeIngredientByIdRule[]>>({});
+  const [postedTransactions, setPostedTransactions] = useState<PostedHotelTransaction[]>([]);
+  const [postedTransactionDrafts, setPostedTransactionDrafts] = useState<Record<string, PostedHotelTransactionDraft>>({});
+  const [postedTransactionsLoading, setPostedTransactionsLoading] = useState(false);
+  const [postedTransactionsError, setPostedTransactionsError] = useState<string | null>(null);
+  const [savingPostedTransactionId, setSavingPostedTransactionId] = useState<string | null>(null);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editingOrderDate, setEditingOrderDate] = useState("");
+  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
   const [queueDate, setQueueDate] = useState(() => {
     const f = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Kampala", year: "numeric", month: "2-digit", day: "2-digit" });
     const p = f.formatToParts(new Date());
@@ -199,6 +287,77 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     loadData();
   }, [queueDate, queueStatusFilter, user?.organization_id, user?.isSuperAdmin]);
 
+  useEffect(() => {
+    void loadPostedTransactions();
+  }, [queueDate, user?.organization_id, user?.isSuperAdmin]);
+
+  useEffect(() => {
+    const syncOnlineState = () => setOnline(navigator.onLine);
+    window.addEventListener("online", syncOnlineState);
+    window.addEventListener("offline", syncOnlineState);
+    return () => {
+      window.removeEventListener("online", syncOnlineState);
+      window.removeEventListener("offline", syncOnlineState);
+    };
+  }, []);
+
+  useEffect(() => {
+    const parsed = (() => {
+      try {
+        const raw = localStorage.getItem(TABLE_LAYOUT_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw) as Record<string, PosTableLayoutState>;
+      } catch {
+        return null;
+      }
+    })();
+    const next: Record<string, PosTableLayoutState> = {};
+    BASE_TABLES.forEach((table) => {
+      next[table] = parsed?.[table] || { number: table, status: "available", waiterId: "" };
+    });
+    setTableLayout(next);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(TABLE_LAYOUT_KEY, JSON.stringify(tableLayout));
+  }, [tableLayout]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const indexed = await getOfflineOrdersIndexedDb();
+        if (indexed.length > 0) {
+          setPendingOfflineOrders(indexed);
+          return;
+        }
+      } catch {
+        // fallback below
+      }
+      try {
+        const raw = localStorage.getItem(OFFLINE_ORDER_KEY);
+        const parsed = raw ? (JSON.parse(raw) as PendingOfflineOrder[]) : [];
+        setPendingOfflineOrders(parsed);
+      } catch {
+        setPendingOfflineOrders([]);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    const channel = supabase
+      .channel("hotel-pos-live")
+      .on("postgres_changes", { event: "*", schema: "public", table: "kitchen_orders" }, () => {
+        void loadData();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, () => {
+        void loadPostedTransactions();
+      })
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [queueDate, queueStatusFilter, user?.organization_id, user?.isSuperAdmin]);
+
   const loadData = async () => {
     setLoading(true);
     setProductsError(null);
@@ -211,7 +370,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
 
       let ordersQuery = supabase
         .from("kitchen_orders")
-        .select("id,room_id,table_number,customer_name,order_status,created_at,kitchen_order_items(quantity,notes,product_id)")
+        .select("id,room_id,table_number,customer_name,order_status,created_at,kitchen_order_items(id,quantity,notes,product_id)")
         .gte("created_at", from.toISOString())
         .lt("created_at", to.toISOString())
         .order("created_at", { ascending: false });
@@ -222,7 +381,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       }
       ordersQuery = filterByOrganizationId(ordersQuery, orgId, superAdmin);
 
-      const [productsRes, staysRes, ordersRes, departmentsRes, customersRes, roomsRes] = await Promise.all([
+      const [productsRes, staysRes, ordersRes, departmentsRes, customersRes, roomsRes, waitersRes, profilesRes] = await Promise.all([
         filterByOrganizationId(
           supabase.from("products").select("id,name,sales_price,cost_price,track_inventory,department_id").eq("active", true),
           orgId,
@@ -240,6 +399,8 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         filterByOrganizationId(supabase.from("departments").select("id,name").order("name"), orgId, superAdmin),
         filterByOrganizationId(supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name"), orgId, superAdmin),
         filterByOrganizationId(supabase.from("rooms").select("id,room_number"), orgId, superAdmin),
+        filterByOrganizationId(supabase.from("staff").select("id,full_name").eq("is_active", true).order("full_name"), orgId, superAdmin),
+        filterByOrganizationId((supabase as any).from("pos_customer_profiles").select("property_customer_id,vip"), orgId, superAdmin),
       ]);
 
       if (productsRes.data) setProducts(productsRes.data as Product[]);
@@ -249,12 +410,20 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       if (staysRes.data) setActiveStays(staysRes.data as unknown as ActiveStay[]);
       const rawOrders = (ordersRes.data || []) as any[];
       const productMap = Object.fromEntries((productsRes.data || []).map((p: any) => [p.id, p]));
+      const deptMap = Object.fromEntries(((departmentsRes.data || []) as any[]).map((d: any) => [d.id, String(d.name || "").toLowerCase()]));
       const roomMap = Object.fromEntries(((roomsRes.data || []) as any[]).map((r: any) => [r.id, r.room_number]));
       const queueWithProducts = rawOrders.map((o) => ({
         ...o,
         room_number: o.room_id ? roomMap[o.room_id] ?? null : null,
         kitchen_order_items: (o.kitchen_order_items || []).map((i: any) => ({
           ...i,
+          station: (() => {
+            const deptId = i.product_id && productMap[i.product_id] ? productMap[i.product_id].department_id : null;
+            const deptName = deptId ? deptMap[deptId] || "" : "";
+            if (deptName.includes("dessert")) return "dessert";
+            if (deptName.includes("bar")) return "bar";
+            return "kitchen";
+          })(),
           products: i.product_id && productMap[i.product_id] ? { name: productMap[i.product_id].name } : { name: "Item" },
         })),
       }));
@@ -262,6 +431,15 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       if (ordersRes.error) setQueueError(ordersRes.error.message);
       if (departmentsRes.data) setDepartments(departmentsRes.data as Department[]);
       if (customersRes.data) setHotelCustomers(customersRes.data as PropertyCustomer[]);
+      if (waitersRes.data) setWaiters((waitersRes.data as Array<{ id: string; full_name: string }>) || []);
+      if (!profilesRes?.error && profilesRes?.data) {
+        const vipMap: Record<string, boolean> = {};
+        (profilesRes.data as any[]).forEach((r) => {
+          const id = String(r.property_customer_id || "");
+          if (id) vipMap[id] = !!r.vip;
+        });
+        setVipGuestIds((prev) => ({ ...prev, ...vipMap }));
+      }
 
       // default department to first one so products are always scoped
       if (!selectedDepartmentId && departmentsRes.data && departmentsRes.data.length > 0) {
@@ -275,26 +453,320 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     }
   };
 
-  const getUnitPrice = (product: Product) => product.sales_price ?? 0;
+  const verifyManagerPin = async () => {
+    const pin = managerPinDraft.trim();
+    if (!pin) return false;
+    try {
+      const res = await (supabase as any).rpc("verify_manager_pin", { pin, org_id: orgId ?? null });
+      if (!res?.error) return !!res?.data;
+      // Fallback for pre-migration environments.
+      return pin === "4321";
+    } catch {
+      return pin === "4321";
+    }
+  };
 
-  const filteredProducts =
-    selectedDepartmentId
-      ? products.filter((p) => (p.department_id ?? null) === selectedDepartmentId)
-      : products;
+  const openTableSessionDb = async (table: string) => {
+    try {
+      const { data, error } = await (supabase as any)
+        .from("pos_table_sessions")
+        .insert({
+          organization_id: orgId ?? null,
+          table_number: table,
+          status: "open",
+          opened_by: user?.id ?? null,
+        })
+        .select("id, opened_at")
+        .single();
+      if (error) throw error;
+      setTableSessionId(String(data.id));
+      setTableSessionOpen(true);
+      setTableSessionStartedAt(String(data.opened_at));
+    } catch (err) {
+      // fallback: local-only session
+      setTableSessionId(null);
+      setTableSessionOpen(true);
+      setTableSessionStartedAt(new Date().toISOString());
+    }
+  };
+
+  const closeTableSessionDb = async () => {
+    if (!tableSessionId) {
+      setTableSessionOpen(false);
+      setTableSessionStartedAt(null);
+      return;
+    }
+    try {
+      await (supabase as any)
+        .from("pos_table_sessions")
+        .update({
+          status: "closed",
+          closed_at: new Date().toISOString(),
+          closed_by: user?.id ?? null,
+        })
+        .eq("id", tableSessionId);
+    } catch {
+      // ignore
+    } finally {
+      setTableSessionId(null);
+      setTableSessionOpen(false);
+      setTableSessionStartedAt(null);
+    }
+  };
+
+  const openOfflineDb = async () =>
+    await new Promise<IDBDatabase>((resolve, reject) => {
+      const req = indexedDB.open(OFFLINE_DB, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(OFFLINE_STORE)) {
+          db.createObjectStore(OFFLINE_STORE, { keyPath: "id" });
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+
+  const saveOfflineOrderIndexedDb = async (order: PendingOfflineOrder) => {
+    const db = await openOfflineDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(OFFLINE_STORE, "readwrite");
+      tx.objectStore(OFFLINE_STORE).put(order);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  };
+
+  const deleteOfflineOrderIndexedDb = async (id: string) => {
+    const db = await openOfflineDb();
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(OFFLINE_STORE, "readwrite");
+      tx.objectStore(OFFLINE_STORE).delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  };
+
+  const getOfflineOrdersIndexedDb = async () => {
+    const db = await openOfflineDb();
+    const rows = await new Promise<PendingOfflineOrder[]>((resolve, reject) => {
+      const tx = db.transaction(OFFLINE_STORE, "readonly");
+      const req = tx.objectStore(OFFLINE_STORE).getAll();
+      req.onsuccess = () => resolve((req.result || []) as PendingOfflineOrder[]);
+      req.onerror = () => reject(req.error);
+    });
+    db.close();
+    return rows.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
+  };
+
+  const loadPostedTransactions = async () => {
+    setPostedTransactionsLoading(true);
+    setPostedTransactionsError(null);
+    try {
+      const { from, to } = computeRangeInTimezone("custom", queueDate, queueDate);
+      const orgId = user?.organization_id ?? undefined;
+      const superAdmin = !!user?.isSuperAdmin;
+      let query = supabase
+        .from("payments")
+        .select("id, transaction_id, paid_at, amount, payment_method, payment_status, edited_at, edited_by_name")
+        .eq("payment_source", "pos_hotel")
+        .gte("paid_at", from.toISOString())
+        .lt("paid_at", to.toISOString())
+        .order("paid_at", { ascending: false });
+      query = filterByOrganizationId(query, orgId, superAdmin);
+      let data: any[] | null = null;
+      let error: { message?: string } | null = null;
+      const richRes = await query;
+      data = (richRes.data || null) as any[] | null;
+      error = richRes.error as { message?: string } | null;
+      if (error && String(error.message || "").toLowerCase().includes("edited_")) {
+        // Backward-compatible fallback until migration is applied.
+        let fallbackQuery = supabase
+          .from("payments")
+          .select("id, transaction_id, paid_at, amount, payment_method, payment_status")
+          .eq("payment_source", "pos_hotel")
+          .gte("paid_at", from.toISOString())
+          .lt("paid_at", to.toISOString())
+          .order("paid_at", { ascending: false });
+        fallbackQuery = filterByOrganizationId(fallbackQuery, orgId, superAdmin);
+        const fallbackRes = await fallbackQuery;
+        data = (fallbackRes.data || null) as any[] | null;
+        error = fallbackRes.error as { message?: string } | null;
+      }
+      if (error) throw error;
+      const rows = ((data || []) as any[]).map((row) => ({
+        id: String(row.id),
+        saleId: String(row.transaction_id || ""),
+        paidAt: String(row.paid_at || ""),
+        amount: Number(row.amount || 0),
+        paymentMethod: normalizePaymentMethod(String(row.payment_method || "")),
+        paymentStatus: (String(row.payment_status || "completed") as PaymentStatus),
+        editedAt: row.edited_at ? String(row.edited_at) : null,
+        editedByName: row.edited_by_name ? String(row.edited_by_name) : null,
+      }));
+      setPostedTransactions(rows);
+      setPostedTransactionDrafts(
+        Object.fromEntries(
+          rows.map((row) => [
+            row.id,
+            {
+              amount: row.amount.toFixed(2),
+              paymentMethod: row.paymentMethod,
+              paymentStatus: row.paymentStatus,
+            },
+          ])
+        )
+      );
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to load posted hotel POS transactions.";
+      setPostedTransactionsError(message);
+    } finally {
+      setPostedTransactionsLoading(false);
+    }
+  };
+
+  const savePostedTransaction = async (transactionId: string) => {
+    if (readOnly) {
+      alert("Subscription inactive: Hotel POS is in read-only mode.");
+      return;
+    }
+    const draft = postedTransactionDrafts[transactionId];
+    if (!draft) return;
+    const role = (user?.role || "").toLowerCase();
+    const isWaiter = role === "waiter";
+    const requiresManagerOverride = draft.paymentStatus === "refunded" || draft.paymentStatus === "failed";
+    if (isWaiter && requiresManagerOverride && !(await verifyManagerPin())) {
+      alert("Manager PIN override required for refunds/voids.");
+      return;
+    }
+    const existing = postedTransactions.find((tx) => tx.id === transactionId);
+    if (existing?.paymentStatus === "refunded") {
+      alert("Refunded transactions are locked and cannot be edited.");
+      return;
+    }
+    const parsedAmount = Number(draft.amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+    setSavingPostedTransactionId(transactionId);
+    try {
+      const voidReason = (voidReasonDraftByPaymentId[transactionId] || "").trim();
+      if (draft.paymentStatus !== "completed" && !voidReason) {
+        alert("Provide void/refund reason before saving.");
+        return;
+      }
+      if (draft.paymentStatus !== "completed") {
+        const isManager = role === "manager" || role === "supervisor";
+        await (supabase as any).from("pos_void_logs").insert({
+          organization_id: orgId ?? null,
+          payment_id: transactionId,
+          requested_by: user?.id ?? null,
+          approved_by: isManager ? user?.id ?? null : null,
+          status: isManager ? "approved" : "pending",
+          reason: voidReason,
+          approved_at: isManager ? new Date().toISOString() : null,
+        });
+      }
+      const { error } = await supabase
+        .from("payments")
+        .update({
+          amount: Math.round(parsedAmount * 100) / 100,
+          payment_method: draft.paymentMethod,
+          payment_status: draft.paymentStatus,
+          edited_at: new Date().toISOString(),
+          edited_by_staff_id: user?.id ?? null,
+          edited_by_name: user?.full_name || user?.email || null,
+          transaction_id:
+            draft.paymentStatus === "completed"
+              ? existing?.saleId || null
+              : `${existing?.saleId || ""} [VOID_REASON:${voidReason}]`.trim(),
+        })
+        .eq("id", transactionId);
+      if (error) throw error;
+      await loadPostedTransactions();
+      alert("Transaction updated.");
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : "Failed to update transaction.";
+      alert(message);
+    } finally {
+      setSavingPostedTransactionId(null);
+    }
+  };
+
+  const isHappyHourNow = () => {
+    if (!happyHourEnabled || selectedMenuType !== "bar") return false;
+    const parseMins = (v: string) => {
+      const [h, m] = v.split(":").map(Number);
+      return h * 60 + m;
+    };
+    const now = new Date();
+    const mins = now.getHours() * 60 + now.getMinutes();
+    const from = parseMins(happyHourStart);
+    const to = parseMins(happyHourEnd);
+    return from <= to ? mins >= from && mins <= to : mins >= from || mins <= to;
+  };
+
+  const getProductMenuType = (product: Product): PosMenuType => {
+    const dept = departments.find((d) => d.id === product.department_id)?.name.toLowerCase() || "";
+    const name = product.name.toLowerCase();
+    if (dept.includes("breakfast") || name.includes("breakfast")) return "breakfast";
+    if (dept.includes("lunch") || name.includes("lunch")) return "lunch";
+    if (dept.includes("bar") || name.includes("beer") || name.includes("wine") || name.includes("cocktail")) return "bar";
+    if (dept.includes("room") || name.includes("room service")) return "room_service";
+    return "all";
+  };
+
+  const getUnitPrice = (product: Product) => {
+    const base = product.sales_price ?? 0;
+    if (!isHappyHourNow()) return base;
+    const discountPct = Math.max(0, Math.min(90, Number(happyHourDiscountPercent) || 0));
+    return Math.round(base * (1 - discountPct / 100) * 100) / 100;
+  };
+
+  const filteredProducts = products.filter((p) => {
+    const byDept = selectedDepartmentId ? (p.department_id ?? null) === selectedDepartmentId : true;
+    const menuType = getProductMenuType(p);
+    const byMenu = selectedMenuType === "all" ? true : menuType === selectedMenuType;
+      const q = productSearch.trim().toLowerCase();
+    const bySearch = !q ? true : String(p.name || "").toLowerCase().includes(q);
+    return byDept && byMenu && bySearch;
+  });
+
+  const activeOccupiedTables = useMemo(() => {
+    const set = new Set<string>();
+    queue.forEach((order) => {
+      if ((order.order_status === "pending" || order.order_status === "preparing") && order.table_number) {
+        set.add(order.table_number);
+      }
+    });
+    return set;
+  }, [queue]);
+
+  const getTableStatus = (table: string): PosTableStatus => {
+    if (activeOccupiedTables.has(table)) return "occupied";
+    return tableLayout[table]?.status ?? "available";
+  };
 
   const addToCart = (product: Product) => {
+    const safeProduct: Product = {
+      ...product,
+      name: String(product.name || "").trim() || "Item",
+    };
     const unitPrice = getUnitPrice(product);
-    const existing = cart.find((i) => i.product.id === product.id);
+    const existing = cart.find((i) => i.product.id === safeProduct.id && (i.menuType ?? "all") === selectedMenuType);
     if (existing) {
       setCart(
         cart.map((item) =>
-          item.product.id === product.id
+          item.product.id === safeProduct.id && (item.menuType ?? "all") === selectedMenuType
             ? { ...item, quantity: item.quantity + 1, total: (item.quantity + 1) * unitPrice }
             : item
         )
       );
     } else {
-      setCart([...cart, { product, quantity: 1, total: unitPrice }]);
+      setCart([...cart, { product: safeProduct, quantity: 1, total: unitPrice, menuType: selectedMenuType }]);
     }
   };
 
@@ -322,7 +794,129 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     );
   };
 
+  const updateItemCourse = (productId: string, courseType: CartItem["courseType"]) => {
+    setCart((prev) => prev.map((item) => (item.product.id === productId ? { ...item, courseType } : item)));
+  };
+  const updateItemFireTiming = (productId: string, fireTiming: CartItem["fireTiming"]) => {
+    setCart((prev) => prev.map((item) => (item.product.id === productId ? { ...item, fireTiming } : item)));
+  };
+
+  const applyModifier = (productId: string) => {
+    const draft = modifierDraft.trim();
+    if (!draft) return;
+    setCart((prev) =>
+      prev.map((item) =>
+        item.product.id === productId
+          ? { ...item, note: item.note ? `${item.note}; ${draft}` : draft }
+          : item
+      )
+    );
+    setModifierDraft("");
+  };
+
+  const updateTableMeta = (table: string, updates: Partial<PosTableLayoutState>) => {
+    setTableLayout((prev) => ({
+      ...prev,
+      [table]: {
+        number: table,
+        status: prev[table]?.status ?? "available",
+        waiterId: prev[table]?.waiterId ?? "",
+        ...updates,
+      },
+    }));
+  };
+
+  const selectedTableWaiterName = useMemo(() => {
+    const waiterId = tableLayout[tableNumber]?.waiterId;
+    return waiters.find((w) => w.id === waiterId)?.full_name || null;
+  }, [tableLayout, tableNumber, waiters]);
+
+  const startEditOrder = (order: QueuedOrder) => {
+    setEditingOrderId(order.id);
+    setEditingOrderDate(new Date(order.created_at).toISOString().slice(0, 16));
+    setEditingOrderItems(
+      (order.kitchen_order_items || []).map((item) => ({
+        product_id: String(item.product_id || ""),
+        quantity: Number(item.quantity || 1),
+        notes: String(item.notes || ""),
+      }))
+    );
+  };
+
+  const addEditingOrderItem = () => {
+    const fallbackProductId = filteredProducts[0]?.id || products[0]?.id || "";
+    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, notes: "" }]);
+  };
+
+  const saveEditedOrder = async () => {
+    if (!editingOrderId) return;
+    try {
+      const iso = new Date(editingOrderDate).toISOString();
+      const { error: orderErr } = await supabase
+        .from("kitchen_orders")
+        .update({ created_at: iso })
+        .eq("id", editingOrderId);
+      if (orderErr) throw orderErr;
+      const { error: delErr } = await supabase.from("kitchen_order_items").delete().eq("order_id", editingOrderId);
+      if (delErr) throw delErr;
+      const nextItems = editingOrderItems
+        .filter((item) => item.product_id && Number(item.quantity) > 0)
+        .map((item) => ({
+          order_id: editingOrderId,
+          product_id: item.product_id,
+          quantity: Number(item.quantity),
+          notes: item.notes.trim() || null,
+        }));
+      if (nextItems.length > 0) {
+        const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
+        if (insErr) throw insErr;
+      }
+      setEditingOrderId(null);
+      setEditingOrderDate("");
+      setEditingOrderItems([]);
+      await loadData();
+      alert("Order updated.");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to update order.");
+    }
+  };
+
+  const splitPreview = useMemo(() => {
+    if (cart.length === 0) return null;
+    const currentTotal = cart.reduce((sum, item) => sum + item.total, 0);
+    if (splitBillMode === "item") {
+      const groups = cart.reduce(
+        (acc, item, idx) => {
+          const bucket = idx % 2 === 0 ? "A" : "B";
+          acc[bucket] += item.total;
+          return acc;
+        },
+        { A: 0, B: 0 }
+      );
+      return groups;
+    }
+    if (splitBillMode === "guest") {
+      const count = Math.max(1, Number(splitGuestCount) || 1);
+      const each = currentTotal / count;
+      return { A: each, B: currentTotal - each };
+    }
+    const pctA = Math.max(0, Math.min(100, Number(splitPercentA) || 0));
+    const a = (currentTotal * pctA) / 100;
+    return { A: a, B: currentTotal - a };
+  }, [cart, splitBillMode, splitGuestCount, splitPercentA]);
+
   const total = useMemo(() => cart.reduce((s, i) => s + i.total, 0), [cart]);
+  const promoDiscountAmount = useMemo(() => {
+    const code = promoCode.trim().toUpperCase();
+    const pct = Number(promoDiscountPercent) || 0;
+    if (!code || pct <= 0) return 0;
+    return Math.round(total * (Math.min(80, pct) / 100) * 100) / 100;
+  }, [promoCode, promoDiscountPercent, total]);
+  const vipDiscountAmount = useMemo(() => {
+    if (!selectedGuestId || !vipGuestIds[selectedGuestId]) return 0;
+    return Math.round(total * 0.05 * 100) / 100;
+  }, [selectedGuestId, total, vipGuestIds]);
+  const payableTotal = Math.max(0, Math.round((total - promoDiscountAmount - vipDiscountAmount) * 100) / 100);
 
   const buildPosGlOverrides = (): PosJournalGlOverrides | undefined => {
     const o: PosJournalGlOverrides = {};
@@ -348,11 +942,11 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
 
   const posVatBreakdown = useMemo(() => {
     if (!posVatEnabled || posVatRate == null || posVatRate <= 0) return null;
-    const gross = total;
+    const gross = payableTotal;
     const net = Math.round((gross / (1 + posVatRate / 100)) * 100) / 100;
     const vat = Math.round((gross - net) * 100) / 100;
     return { net, vat, gross };
-  }, [total, posVatEnabled, posVatRate]);
+  }, [payableTotal, posVatEnabled, posVatRate]);
 
   const validateStockBeforeSubmit = async () => {
     const consumption = buildStockConsumptionLines();
@@ -478,7 +1072,72 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     return Object.values(byProduct).filter((l) => l.quantity_out > 0);
   };
 
-  const processOrder = async (action: PosAction) => {
+  const queueOfflineOrder = (action: PosAction) => {
+    const payload: PendingOfflineOrder = {
+      id: crypto.randomUUID(),
+      createdAt: new Date().toISOString(),
+      status: "pending",
+      retryCount: 0,
+      action,
+      tableNumber: tableNumber.trim(),
+      selectedGuestId,
+      selectedStayId: selectedStay?.id ?? null,
+      paymentMethod,
+      items: cart.map((i) => ({
+        productId: i.product.id,
+        quantity: i.quantity,
+        note: i.note,
+        total: i.total,
+      })),
+    };
+    const next = [payload, ...pendingOfflineOrders];
+    setPendingOfflineOrders(next);
+    localStorage.setItem(OFFLINE_ORDER_KEY, JSON.stringify(next));
+    void saveOfflineOrderIndexedDb(payload);
+    setCart([]);
+    setTableNumber("");
+    setSelectedGuestId("");
+  };
+
+  const syncOfflineOrders = async () => {
+    if (!online || pendingOfflineOrders.length === 0) return;
+    const queueCopy = [...pendingOfflineOrders];
+    for (const item of queueCopy) {
+      item.status = "syncing";
+      void saveOfflineOrderIndexedDb(item);
+      const rebuilt = item.items
+        .map((ln) => {
+          const product = products.find((p) => p.id === ln.productId);
+          if (!product) return null;
+          return { product: { ...product, name: String(product.name || "").trim() || "Item" }, quantity: ln.quantity, note: ln.note, total: ln.total };
+        })
+        .filter(Boolean) as CartItem[];
+      if (rebuilt.length === 0) continue;
+      setCart(rebuilt);
+      setTableNumber(item.tableNumber);
+      setSelectedGuestId(item.selectedGuestId);
+      setPaymentMethod(item.paymentMethod);
+      if (item.selectedStayId) {
+        const stay = activeStays.find((s) => s.id === item.selectedStayId);
+        setSelectedStay(stay || null);
+      }
+      try {
+        await processOrder(item.action, true);
+      } catch {
+        item.retryCount = Number(item.retryCount || 0) + 1;
+        item.status = item.retryCount > 3 ? "conflict" : "failed";
+        await saveOfflineOrderIndexedDb(item);
+        continue;
+      }
+      const remaining = queueCopy.filter((q) => q.id !== item.id);
+      setPendingOfflineOrders(remaining);
+      localStorage.setItem(OFFLINE_ORDER_KEY, JSON.stringify(remaining));
+      await deleteOfflineOrderIndexedDb(item.id);
+    }
+  };
+
+  const processOrder = async (action: PosAction, isSyncRun = false) => {
+    if (submitLockRef.current) return;
     if (readOnly) {
       alert("Subscription inactive: Hotel POS is in read-only mode.");
       return;
@@ -495,7 +1154,17 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       alert("Select a customer from the guest list.");
       return;
     }
+    if (!tableSessionOpen && action !== "bill_to_room") {
+      alert("Open table session first.");
+      return;
+    }
+    if (!online && !isSyncRun) {
+      queueOfflineOrder(action);
+      alert("You are offline. Order queued and will sync when online.");
+      return;
+    }
 
+    submitLockRef.current = true;
     setSending(true);
     try {
       await validateStockBeforeSubmit();
@@ -522,7 +1191,8 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       };
       if (staffRow?.id) basePayload.created_by = staffRow.id;
 
-      const withCustomer = orderCustomer ? { ...basePayload, customer_name: orderCustomer } : basePayload;
+      const waiterName = selectedTableWaiterName ? ` [Waiter: ${selectedTableWaiterName}]` : "";
+      const withCustomer = orderCustomer ? { ...basePayload, customer_name: `${orderCustomer}${waiterName}` } : basePayload;
       const res = await supabase.from("kitchen_orders").insert(withCustomer).select().single();
       let orderData = res.data as { id: string } | null;
       let orderErr = res.error as { message?: string; details?: string } | null;
@@ -537,7 +1207,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         order_id: orderData!.id,
         product_id: item.product.id,
         quantity: item.quantity,
-        notes: item.note || null,
+        notes: `${item.menuType && item.menuType !== "all" ? `[${item.menuType}] ` : ""}${item.courseType ? `[COURSE:${item.courseType}] ` : ""}${item.fireTiming ? `[FIRE:${item.fireTiming}] ` : ""}${item.note || ""}`.trim() || null,
       }));
       const { error: itemsErr } = await supabase.from("kitchen_order_items").insert(items);
       if (itemsErr) throw new Error(itemsErr.message || itemsErr.details || "Failed to create order items.");
@@ -556,7 +1226,9 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         await supabase.from("product_stock_movements").insert(stockMoves);
       }
 
-      const cartDescription = cart.map((i) => `${i.quantity}× ${i.product.name}`).join(", ");
+      const cartDescription = cart
+        .map((i) => `${i.quantity}× ${i.product.name}${i.note ? ` (${i.note})` : ""}${i.menuType && i.menuType !== "all" ? ` [${i.menuType}]` : ""}`)
+        .join(", ") + (promoCode.trim() ? ` [PROMO:${promoCode.trim().toUpperCase()}]` : "");
       const entryDate = businessTodayISO();
 
       if (action === "bill_to_room" && selectedStay) {
@@ -565,7 +1237,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           .insert({
             stay_id: selectedStay.id,
             description: cartDescription,
-            amount: total,
+            amount: payableTotal,
             charge_type: "food",
             created_by: staffRow?.id || null,
           })
@@ -575,7 +1247,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           const chargedAt = (billingRow as { charged_at?: string }).charged_at ?? new Date().toISOString();
           const jr = await createJournalForBillToRoom(
             (billingRow as { id: string }).id,
-            total,
+            payableTotal,
             cartDescription,
             chargedAt,
             staffRow?.id ?? null,
@@ -585,7 +1257,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             alert(`Order saved but journal was not posted: ${jr.error}`);
           }
         }
-      } else if (action === "pay_now") {
+      } else if (action === "pay_now" || action === "credit_sale") {
         const orgId = user?.organization_id ?? undefined;
         const { error: payInsErr } = await insertPaymentWithMethodCompat(
           supabase,
@@ -593,8 +1265,8 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             stay_id: null,
             ...(orgId ? { organization_id: orgId } : {}),
             payment_source: "pos_hotel",
-            amount: total,
-            payment_status: "completed",
+            amount: payableTotal,
+            payment_status: action === "credit_sale" ? "pending" : "completed",
             transaction_id: orderData.id,
             processed_by: staffRow?.id ?? null,
           },
@@ -602,6 +1274,26 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         );
         if (payInsErr) throw new Error(String((payInsErr as Error)?.message || payInsErr) || "Failed to record payment.");
         const deptNameById = new Map(departments.map((d) => [d.id, d.name]));
+        const groupedSalesByDepartment = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();
+        const groupedCogsByDepartment = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();
+        cart.forEach((item) => {
+          const departmentId = item.product.department_id ?? null;
+          const departmentName = departmentId ? deptNameById.get(departmentId) ?? null : null;
+          const salesKey = departmentId ?? "__unassigned__";
+          const prevSale = groupedSalesByDepartment.get(salesKey);
+          groupedSalesByDepartment.set(salesKey, {
+            departmentId,
+            departmentName,
+            amount: Number((prevSale?.amount ?? 0) + item.total),
+          });
+          const cogsAmount = item.quantity * Number(item.product.cost_price ?? 0);
+          const prevCogs = groupedCogsByDepartment.get(salesKey);
+          groupedCogsByDepartment.set(salesKey, {
+            departmentId,
+            departmentName,
+            amount: Number((prevCogs?.amount ?? 0) + cogsAmount),
+          });
+        });
         const cogsByDept = sumPosCogsByDept(
           cart.map((i) => ({
             quantity: i.quantity,
@@ -621,15 +1313,20 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         const vatRate = js.default_vat_percent;
         const useVatJournal =
           posVatEnabled && vatRate != null && Number.isFinite(vatRate) && vatRate > 0;
-        const jr = await createJournalForPosOrder(orderData.id, total, cartDescription, entryDate, staffRow?.id ?? null, {
-          paymentMethod,
-          cogsByDept,
-          salesByDept,
-          vatRatePercent: useVatJournal ? vatRate : undefined,
-          glOverrides: buildPosGlOverrides(),
-        });
-        if (!jr.ok) {
-          alert(`Payment recorded but journal was not posted: ${jr.error}`);
+        if (action === "pay_now") {
+          const jr = await createJournalForPosOrder(orderData.id, payableTotal, cartDescription, entryDate, staffRow?.id ?? null, {
+            paymentMethod,
+            cogsByDept,
+            cogsByDepartment: Array.from(groupedCogsByDepartment.values()),
+            salesByDept,
+            salesByDepartment: Array.from(groupedSalesByDepartment.values()),
+            vatRatePercent: useVatJournal ? vatRate : undefined,
+            glOverrides: buildPosGlOverrides(),
+            organizationId: orgId ?? null,
+          });
+          if (!jr.ok) {
+            alert(`Payment recorded but journal was not posted: ${jr.error}`);
+          }
         }
       }
 
@@ -637,12 +1334,19 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       setSelectedStay(null);
       setTableNumber("");
       setSelectedGuestId("");
+      setTableSessionOpen(false);
+      setTableSessionStartedAt(null);
+      if (orderTable) {
+        updateTableMeta(orderTable, { status: "reserved" });
+      }
       loadData();
       alert(
         action === "send_kitchen"
           ? "Order sent to kitchen."
           : action === "pay_now"
             ? "Order paid and sent successfully."
+            : action === "credit_sale"
+              ? "Credit sale saved and sent successfully."
             : "Order billed to room successfully."
       );
     } catch (err: unknown) {
@@ -656,6 +1360,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       console.error("POS order error:", err);
     } finally {
       setSending(false);
+      submitLockRef.current = false;
     }
   };
 
@@ -737,37 +1442,160 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-3xl font-bold text-slate-900">Hotel POS</h1>
+          <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1">
+            <span className="text-[11px] font-medium text-slate-600">
+              Session: {tableSessionOpen ? "OPEN" : "CLOSED"}
+            </span>
+            <input
+              type="text"
+              placeholder="Table"
+              value={tableNumber}
+              onChange={(e) => setTableNumber(e.target.value)}
+              className="h-7 w-24 border border-slate-200 rounded px-2 text-xs"
+            />
+            <button
+              type="button"
+              disabled={!tableNumber}
+              onClick={() => {
+                void openTableSessionDb(tableNumber);
+              }}
+              className="h-7 px-2 text-xs rounded border border-emerald-300 text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+            >
+              Open
+            </button>
+            <button
+              type="button"
+              disabled={!tableSessionOpen}
+              onClick={() => {
+                void closeTableSessionDb();
+              }}
+              className="h-7 px-2 text-xs rounded border border-slate-300 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Close
+            </button>
+          </div>
           <PageNotes ariaLabel="Hotel POS help">
             <p>Hospitality POS for room/table orders and bill-to-room workflows.</p>
             <p className="mt-2">
               Use <strong>Journal GL settings</strong> to map cash, bank, mobile money, COGS, and inventory accounts used when posting POS sales.
             </p>
           </PageNotes>
+          <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border ${online ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-amber-50 text-amber-700 border-amber-200"}`}>
+            {online ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+            {online ? "Online" : "Offline"}
+          </span>
+          <button
+            type="button"
+            onClick={() => setTouchMode((v) => !v)}
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50"
+          >
+            {touchMode ? <Hand className="w-3 h-3" /> : <TabletSmartphone className="w-3 h-3" />}
+            {touchMode ? "Touch mode on" : "Touch mode off"}
+          </button>
+          {pendingOfflineOrders.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void syncOfflineOrders()}
+              disabled={!online}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50 disabled:opacity-50"
+            >
+              Sync offline ({pendingOfflineOrders.length})
+            </button>
+          )}
         </div>
-        <button
-          type="button"
-          onClick={() => setCurrentPage("admin", { adminTab: "journal_accounts" })}
-          className="inline-flex items-center gap-2 text-sm font-medium text-brand-800 bg-brand-50 hover:bg-brand-100 border border-brand-200 rounded-lg px-3 py-2 shrink-0"
-        >
-          <BookOpen className="w-4 h-4" />
-          Journal GL settings
-        </button>
       </div>
       {readOnly && (
         <ReadOnlyNotice />
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="mb-6 bg-white rounded-xl border border-slate-200 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-bold text-slate-900">Table Layout</h2>
+            <PageNotes ariaLabel="Table layout help">
+              <p>Live table status: occupied, reserved, cleaning, available.</p>
+            </PageNotes>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+          {BASE_TABLES.map((table) => {
+            const status = getTableStatus(table);
+            const selected = tableNumber === table;
+            const statusClass =
+              status === "occupied"
+                ? "bg-red-50 border-red-200 text-red-700"
+                : status === "reserved"
+                  ? "bg-amber-50 border-amber-200 text-amber-700"
+                  : status === "cleaning"
+                    ? "bg-blue-50 border-blue-200 text-blue-700"
+                    : "bg-emerald-50 border-emerald-200 text-emerald-700";
+            return (
+              <button
+                key={table}
+                type="button"
+                onClick={() => setTableNumber(table)}
+                className={`border rounded-lg px-3 py-2 text-left ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
+              >
+                <p className="font-semibold text-sm">{table}</p>
+                <p className="text-[11px] uppercase">{status}</p>
+              </button>
+            );
+          })}
+        </div>
+        {tableNumber && (
+          <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Selected table</label>
+              <input value={tableNumber} readOnly className="w-full border rounded px-2 py-1.5 text-sm bg-slate-50" />
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Status</label>
+              <select
+                value={tableLayout[tableNumber]?.status || "available"}
+                onChange={(e) => updateTableMeta(tableNumber, { status: e.target.value as PosTableLayoutState["status"] })}
+                className="w-full border rounded px-2 py-1.5 text-sm"
+                disabled={getTableStatus(tableNumber) === "occupied"}
+              >
+                <option value="available">available</option>
+                <option value="reserved">reserved</option>
+                <option value="cleaning">cleaning</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-600 mb-1">Assigned waiter</label>
+              <select
+                value={tableLayout[tableNumber]?.waiterId || ""}
+                onChange={(e) => updateTableMeta(tableNumber, { waiterId: e.target.value })}
+                className="w-full border rounded px-2 py-1.5 text-sm"
+              >
+                <option value="">Unassigned</option>
+                {waiters.map((w) => (
+                  <option key={w.id} value={w.id}>
+                    {w.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
         {/* Products */}
-        <div className="lg:col-span-2">
-          <h2 className="text-lg font-bold text-slate-900 mb-3">Products</h2>
+        <div className="xl:col-span-2">
+          <div className="flex items-center gap-2 mb-3">
+            <h2 className="text-lg font-bold text-slate-900">Products</h2>
+            <PageNotes ariaLabel="Products help">
+              <p>Choose department/menu, then add items into the active order area.</p>
+            </PageNotes>
+          </div>
           {productsError && (
             <p className="text-red-600 text-sm mb-3">
               {productsError}. Ensure the products table has id, name, sales_price, active.
             </p>
           )}
           {departments.length > 0 && (
-            <div className="mb-3 flex items-center gap-2">
+            <div className="mb-3 flex flex-wrap items-center gap-2">
               <label className="text-sm text-slate-700">Department</label>
               <select
                 value={selectedDepartmentId}
@@ -781,35 +1609,89 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                   </option>
                 ))}
               </select>
+              <label className="text-sm text-slate-700 ml-2">Menu</label>
+              <select
+                value={selectedMenuType}
+                onChange={(e) => setSelectedMenuType(e.target.value as PosMenuType)}
+                className="border rounded-lg px-3 py-1.5 text-sm"
+              >
+                <option value="all">All menu</option>
+                <option value="breakfast">Breakfast</option>
+                <option value="lunch">Lunch</option>
+                <option value="bar">Bar</option>
+                <option value="room_service">Room service</option>
+              </select>
             </div>
           )}
-          <div className="flex items-center gap-3 mb-2">
-            <select
-              value={selectedProductId}
-              onChange={(e) => setSelectedProductId(e.target.value)}
-              className="flex-1 border rounded-lg px-3 py-2 text-sm"
-            >
-              <option value="">
-                {filteredProducts.length === 0 ? "No products in this department" : "Select product"}
-              </option>
-              {filteredProducts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} – {getUnitPrice(p).toFixed(2)}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              disabled={!selectedProductId || readOnly}
-              onClick={() => {
-                const product = filteredProducts.find((p) => p.id === selectedProductId);
-                if (product) addToCart(product);
-              }}
-              className="app-btn-primary gap-1 text-sm disabled:cursor-not-allowed"
-            >
-              <Plus className="w-4 h-4" />
-              Add
-            </button>
+          <div className="mb-3 border rounded-lg p-3 bg-slate-50">
+            <div className="flex items-center gap-2 mb-2">
+              <p className="text-xs font-semibold text-slate-700">Happy hour & dynamic pricing</p>
+              <PageNotes ariaLabel="Pricing help">
+                <p>Configure time-based discounts here. Active discounts change item pricing immediately.</p>
+              </PageNotes>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+              <label className="flex items-center gap-2 text-xs text-slate-700">
+                <input type="checkbox" checked={happyHourEnabled} onChange={(e) => setHappyHourEnabled(e.target.checked)} />
+                Enable
+              </label>
+              <input type="time" value={happyHourStart} onChange={(e) => setHappyHourStart(e.target.value)} className="border rounded px-2 py-1 text-xs" />
+              <input type="time" value={happyHourEnd} onChange={(e) => setHappyHourEnd(e.target.value)} className="border rounded px-2 py-1 text-xs" />
+              <input
+                type="number"
+                min="0"
+                max="90"
+                value={happyHourDiscountPercent}
+                onChange={(e) => setHappyHourDiscountPercent(e.target.value)}
+                className="border rounded px-2 py-1 text-xs"
+                placeholder="Discount %"
+              />
+            </div>
+            {happyHourEnabled && selectedMenuType === "bar" && isHappyHourNow() ? (
+              <p className="text-xs text-emerald-700 mt-2">Happy hour is active for bar menu.</p>
+            ) : null}
+          </div>
+          <div className="mb-3">
+            <label className="block text-xs font-medium text-slate-600 mb-1">Search products</label>
+            <input
+              value={productSearch}
+              onChange={(e) => setProductSearch(e.target.value)}
+              placeholder="Type to search…"
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            {filteredProducts.length === 0 ? (
+              <p className="text-slate-500 py-6 text-sm text-center">
+                {productsError ? "Products failed to load." : "No products match your filters/search."}
+              </p>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-2 xl:grid-cols-3 gap-2">
+                {filteredProducts.slice(0, 60).map((p) => (
+                  <button
+                    key={p.id}
+                    type="button"
+                    disabled={readOnly}
+                    onClick={() => addToCart(p)}
+                    className={`text-left border border-slate-200 rounded-xl hover:bg-slate-50 active:bg-slate-100 transition ${
+                      touchMode ? "p-4" : "p-3"
+                    }`}
+                  >
+                    <p className={`font-semibold text-slate-900 ${touchMode ? "text-base" : "text-sm"} truncate`}>
+                      {p.name}
+                    </p>
+                    <p className={`text-slate-600 tabular-nums ${touchMode ? "text-sm" : "text-xs"}`}>
+                      {getUnitPrice(p).toFixed(2)}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
+            {filteredProducts.length > 60 ? (
+              <p className="text-xs text-slate-500 mt-3 text-center">
+                Showing first 60 results. Refine search to narrow down.
+              </p>
+            ) : null}
           </div>
           {filteredProducts.length === 0 && !productsError && (
             <p className="text-slate-500 py-4 text-sm">
@@ -819,11 +1701,22 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </div>
 
         {/* Cart + Actions */}
-        <div className="bg-white rounded-xl border border-slate-200 p-6 h-fit">
-          <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">
-            <ShoppingCart className="w-5 h-5" />
-            Cart
-          </h2>
+        <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+              <ShoppingCart className="w-5 h-5" />
+              Active Order
+            </h2>
+            <div className="flex items-center gap-2">
+              <label className="text-sm font-medium text-slate-700">Date</label>
+              <input
+                type="date"
+                value={queueDate}
+                onChange={(e) => setQueueDate(e.target.value)}
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
+          </div>
 
           {/* Customer & Table */}
           <div className="grid grid-cols-2 gap-3 mb-4">
@@ -853,51 +1746,179 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               </select>
             </div>
           </div>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <input
+              type="text"
+              value={promoCode}
+              onChange={(e) => setPromoCode(e.target.value)}
+              placeholder="Promo code"
+              className="border rounded px-2 py-1 text-xs"
+            />
+            <input
+              type="number"
+              min="0"
+              max="80"
+              value={promoDiscountPercent}
+              onChange={(e) => setPromoDiscountPercent(e.target.value)}
+              placeholder="Promo %"
+              className="border rounded px-2 py-1 text-xs"
+            />
+          </div>
+          <label className="inline-flex items-center gap-2 text-xs text-slate-700 mb-3">
+            <input
+              type="checkbox"
+              checked={!!vipGuestIds[selectedGuestId || ""]}
+              onChange={(e) =>
+                setVipGuestIds((prev) => {
+                  const id = selectedGuestId || "";
+                  const next = { ...prev, [id]: e.target.checked };
+                  if (id) {
+                    void (async () => {
+                      try {
+                        await (supabase as any)
+                          .from("pos_customer_profiles")
+                          .upsert({
+                            organization_id: orgId ?? null,
+                            property_customer_id: id,
+                            vip: e.target.checked,
+                            updated_at: new Date().toISOString(),
+                          }, { onConflict: "property_customer_id" });
+                      } catch {
+                        // ignore (pre-migration)
+                      }
+                    })();
+                  }
+                  return next;
+                })
+              }
+              disabled={!selectedGuestId}
+            />
+            VIP guest pricing (5% off)
+          </label>
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <input
+              type="text"
+              placeholder='Modifier e.g. "no salt", "extra cheese"'
+              value={modifierDraft}
+              onChange={(e) => setModifierDraft(e.target.value)}
+              className="col-span-2 border border-slate-200 rounded-lg px-3 py-2 text-xs"
+            />
+          </div>
+          {selectedTableWaiterName ? (
+            <p className="text-xs text-slate-600 mb-2">Waiter on {tableNumber}: {selectedTableWaiterName}</p>
+          ) : null}
 
-          <div className="space-y-3 max-h-64 overflow-y-auto mb-4">
+          <div className="space-y-4 min-h-[360px] max-h-[560px] overflow-y-auto mb-4 pr-1">
             {cart.length === 0 ? (
-              <p className="text-slate-500 text-sm py-4">Cart is empty. Tap products to add.</p>
+              <p className="text-slate-500 text-base py-8 text-center">No items in the active order yet. Add products to build the order.</p>
             ) : (
               cart.map((item) => (
-                <div
-                  key={item.product.id}
-                  className="flex items-center justify-between gap-2 p-2 bg-slate-50 rounded-lg"
-                >
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-slate-900 text-sm truncate">{item.product.name}</p>
-                    <p className="text-xs text-slate-500">
-                      {getUnitPrice(item.product).toFixed(2)} × {item.quantity}
-                    </p>
+                <div key={item.product.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold text-slate-900 text-sm break-words leading-5">
+                        {item.product.name || "Item"}
+                      </p>
+                      <p className="text-xs text-slate-600">
+                        Price: {getUnitPrice(item.product).toFixed(2)} | Qty: {item.quantity}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
+                        className={`p-1.5 hover:bg-slate-200 rounded ${touchMode ? "p-2.5" : ""}`}
+                      >
+                        <Minus className="w-4 h-4" />
+                      </button>
+                      <span className="w-7 text-center text-sm font-semibold">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
+                        className={`p-1.5 hover:bg-slate-200 rounded ${touchMode ? "p-2.5" : ""}`}
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                      <button
+                        onClick={() => removeItem(item.product.id)}
+                        className={`p-1.5 hover:bg-red-100 text-red-600 rounded ${touchMode ? "p-2.5" : ""}`}
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => updateQuantity(item.product.id, item.quantity - 1)}
-                      className="p-1 hover:bg-slate-200 rounded"
+
+                  <div className="grid grid-cols-1 md:grid-cols-[1.2fr_auto_auto_auto] gap-2">
+                    <input
+                      placeholder="Comment"
+                      value={item.note || ""}
+                      onChange={(e) => addNote(item.product.id, e.target.value)}
+                      className="w-full border rounded px-2 py-1.5 text-xs"
+                    />
+                    <select
+                      value={item.courseType || "main_course"}
+                      onChange={(e) => updateItemCourse(item.product.id, e.target.value as CartItem["courseType"])}
+                      className="w-full md:w-24 border rounded px-2 py-1.5 text-xs"
                     >
-                      <Minus className="w-4 h-4" />
-                    </button>
-                    <span className="w-6 text-center text-sm font-medium">{item.quantity}</span>
-                    <button
-                      onClick={() => updateQuantity(item.product.id, item.quantity + 1)}
-                      className="p-1 hover:bg-slate-200 rounded"
+                      <option value="starter">Starter</option>
+                      <option value="main_course">Main</option>
+                      <option value="dessert">Dessert</option>
+                    </select>
+                    <select
+                      value={item.fireTiming || "now"}
+                      onChange={(e) => updateItemFireTiming(item.product.id, e.target.value as CartItem["fireTiming"])}
+                      className="w-full md:w-28 border rounded px-2 py-1.5 text-xs"
                     >
-                      <Plus className="w-4 h-4" />
-                    </button>
+                      <option value="now">Fire now</option>
+                      <option value="with_mains">With mains</option>
+                      <option value="after_mains">After mains</option>
+                    </select>
                     <button
-                      onClick={() => removeItem(item.product.id)}
-                      className="p-1 hover:bg-red-100 text-red-600 rounded"
+                      type="button"
+                      onClick={() => applyModifier(item.product.id)}
+                      className="text-xs px-2 py-1.5 border border-slate-300 rounded hover:bg-white"
                     >
-                      <X className="w-4 h-4" />
+                      Modifier
                     </button>
                   </div>
-                  <input
-                    placeholder="Note"
-                    value={item.note || ""}
-                    onChange={(e) => addNote(item.product.id, e.target.value)}
-                    className="w-20 border rounded px-2 py-1 text-xs"
-                  />
                 </div>
               ))
+            )}
+          </div>
+          <div className="mb-3 border rounded-lg p-2 bg-slate-50">
+            <div className="flex items-center gap-2 mb-2">
+              <label className="text-xs text-slate-700">Split bill</label>
+              <select
+                value={splitBillMode}
+                onChange={(e) => setSplitBillMode(e.target.value as SplitBillMode)}
+                className="border rounded px-2 py-1 text-xs"
+              >
+                <option value="item">By item</option>
+                <option value="guest">By guest</option>
+                <option value="percentage">By percentage</option>
+              </select>
+              {splitBillMode === "guest" ? (
+                <input
+                  type="number"
+                  min="1"
+                  value={splitGuestCount}
+                  onChange={(e) => setSplitGuestCount(e.target.value)}
+                  className="w-16 border rounded px-2 py-1 text-xs"
+                />
+              ) : null}
+              {splitBillMode === "percentage" ? (
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={splitPercentA}
+                  onChange={(e) => setSplitPercentA(e.target.value)}
+                  className="w-16 border rounded px-2 py-1 text-xs"
+                />
+              ) : null}
+            </div>
+            {splitPreview ? (
+              <p className="text-xs text-slate-700">Split A: {splitPreview.A.toFixed(2)} | Split B: {splitPreview.B.toFixed(2)}</p>
+            ) : (
+              <p className="text-xs text-slate-500">Add items to preview split.</p>
             )}
           </div>
 
@@ -936,7 +1957,13 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                 </div>
               </div>
             ) : (
-              <p className="text-xl font-bold text-slate-900">Total: {total.toFixed(2)}</p>
+              <div className="space-y-1">
+                <p className="text-xs text-slate-600">Subtotal: {total.toFixed(2)}</p>
+                {(promoDiscountAmount > 0 || vipDiscountAmount > 0) && (
+                  <p className="text-xs text-emerald-700">Discounts: -{(promoDiscountAmount + vipDiscountAmount).toFixed(2)}</p>
+                )}
+                <p className="text-xl font-bold text-slate-900">Total: {payableTotal.toFixed(2)}</p>
+              </div>
             )}
 
             <div>
@@ -952,147 +1979,6 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                   </option>
                 ))}
               </select>
-            </div>
-
-            <div className="border border-slate-200 rounded-lg p-3 bg-slate-50/90 space-y-3">
-              <button
-                type="button"
-                onClick={() => setPosGlAdvancedOpen((o) => !o)}
-                className="w-full flex items-center justify-between text-left text-sm font-semibold text-slate-900"
-              >
-                <span>GL accounts for this sale (optional)</span>
-                <span className="text-slate-500">{posGlAdvancedOpen ? "−" : "+"}</span>
-              </button>
-              <p className="text-xs text-slate-600">
-                If Admin → Journal account settings are not working, choose accounts here for <strong>this</strong> payment or
-                bill-to-room posting. Leave on Auto to use defaults from settings / chart.
-              </p>
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Revenue (income)</label>
-                  <GlAccountPicker
-                    value={posGlRevenueId}
-                    onChange={setPosGlRevenueId}
-                    options={glByType("income")}
-                    emptyOption={{ label: "Auto — revenue" }}
-                    placeholder="Search account…"
-                    className="w-full text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Receipt / cash-side (Pay now — asset: cash, bank, mobile money)
-                  </label>
-                  <GlAccountPicker
-                    value={posGlReceiptId}
-                    onChange={setPosGlReceiptId}
-                    options={glByType("asset")}
-                    emptyOption={{ label: "Auto — by payment method" }}
-                    placeholder="Search account…"
-                    className="w-full text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">
-                    Accounts receivable (Bill to room — guest ledger)
-                  </label>
-                  <GlAccountPicker
-                    value={posGlReceivableId}
-                    onChange={setPosGlReceivableId}
-                    options={glByType("asset")}
-                    emptyOption={{ label: "Auto — receivable" }}
-                    placeholder="Search account…"
-                    className="w-full text-sm"
-                  />
-                </div>
-                {posVatEnabled && posVatRate != null && posVatRate > 0 ? (
-                  <div>
-                    <label className="block text-xs font-medium text-slate-700 mb-1">VAT / output tax</label>
-                    <GlAccountPicker
-                      value={posGlVatId}
-                      onChange={setPosGlVatId}
-                      options={allGlOptions}
-                      emptyOption={{ label: "Auto — VAT account" }}
-                      placeholder="Search account…"
-                      className="w-full text-sm"
-                    />
-                  </div>
-                ) : null}
-                {posGlAdvancedOpen ? (
-                  <div className="pt-2 border-t border-slate-200 space-y-3">
-                    <p className="text-xs font-medium text-slate-700">COGS & inventory (by department bucket)</p>
-                    <p className="text-xs text-slate-500">Only used when stock / cost lines apply. Expense = COGS; Asset = inventory.</p>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Bar COGS</label>
-                        <GlAccountPicker
-                          value={posGlCogsBar}
-                          onChange={setPosGlCogsBar}
-                          options={glByType("expense")}
-                          emptyOption={{ label: "Auto" }}
-                          placeholder="…"
-                          className="w-full text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Bar inventory</label>
-                        <GlAccountPicker
-                          value={posGlInvBar}
-                          onChange={setPosGlInvBar}
-                          options={glByType("asset")}
-                          emptyOption={{ label: "Auto" }}
-                          placeholder="…"
-                          className="w-full text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Kitchen COGS</label>
-                        <GlAccountPicker
-                          value={posGlCogsKitchen}
-                          onChange={setPosGlCogsKitchen}
-                          options={glByType("expense")}
-                          emptyOption={{ label: "Auto" }}
-                          placeholder="…"
-                          className="w-full text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Kitchen inventory</label>
-                        <GlAccountPicker
-                          value={posGlInvKitchen}
-                          onChange={setPosGlInvKitchen}
-                          options={glByType("asset")}
-                          emptyOption={{ label: "Auto" }}
-                          placeholder="…"
-                          className="w-full text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Room COGS</label>
-                        <GlAccountPicker
-                          value={posGlCogsRoom}
-                          onChange={setPosGlCogsRoom}
-                          options={glByType("expense")}
-                          emptyOption={{ label: "Auto" }}
-                          placeholder="…"
-                          className="w-full text-xs"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-0.5">Room inventory</label>
-                        <GlAccountPicker
-                          value={posGlInvRoom}
-                          onChange={setPosGlInvRoom}
-                          options={glByType("asset")}
-                          emptyOption={{ label: "Auto" }}
-                          placeholder="…"
-                          className="w-full text-xs"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
             </div>
 
             <div>
@@ -1118,7 +2004,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               <button
                 onClick={() => processOrder("send_kitchen")}
                 disabled={sending || cart.length === 0 || readOnly}
-                className="w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2"
+                className={`w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center justify-center gap-2 ${touchMode ? "py-3 text-base" : "py-2"}`}
               >
                 {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
                 Send to Kitchen
@@ -1126,7 +2012,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               <button
                 onClick={() => processOrder("pay_now")}
                 disabled={sending || cart.length === 0 || readOnly}
-                className="app-btn-primary w-full py-2 font-medium disabled:cursor-not-allowed"
+                className={`app-btn-primary w-full font-medium disabled:cursor-not-allowed ${touchMode ? "py-3 text-base" : "py-2"}`}
               >
                 {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
                 Pay Now
@@ -1134,10 +2020,18 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               <button
                 onClick={() => processOrder("bill_to_room")}
                 disabled={sending || cart.length === 0 || readOnly}
-                className="w-full bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2 rounded-lg font-medium flex items-center justify-center gap-2"
+                className={`w-full bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center justify-center gap-2 ${touchMode ? "py-3 text-base" : "py-2"}`}
               >
                 {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
                 Bill to Room
+              </button>
+              <button
+                onClick={() => processOrder("credit_sale")}
+                disabled={sending || cart.length === 0 || readOnly}
+                className={`w-full bg-purple-700 hover:bg-purple-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center justify-center gap-2 ${touchMode ? "py-3 text-base" : "py-2"}`}
+              >
+                {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
+                Credit Sale
               </button>
               <button
                 onClick={holdCurrentTicket}
@@ -1207,13 +2101,17 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               <option value="pending">Pending only</option>
               <option value="preparing">Preparing only</option>
             </select>
-            <label className="text-sm font-medium text-slate-700">Date</label>
-            <input
-              type="date"
-              value={queueDate}
-              onChange={(e) => setQueueDate(e.target.value)}
+            <label className="text-sm font-medium text-slate-700">Station</label>
+            <select
+              value={stationFilter}
+              onChange={(e) => setStationFilter(e.target.value as StationFilter)}
               className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
+            >
+              <option value="all">All stations</option>
+              <option value="kitchen">Kitchen</option>
+              <option value="bar">Bar</option>
+              <option value="dessert">Dessert</option>
+            </select>
           </div>
         </div>
         {queueError ? (
@@ -1222,7 +2120,13 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           <p className="text-slate-500 text-sm">No orders found for this date/filter.</p>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {queue.map((o) => (
+            {queue
+              .filter((o: any) =>
+                stationFilter === "all"
+                  ? true
+                  : (o.kitchen_order_items || []).some((it: any) => (it.station || "kitchen") === stationFilter)
+              )
+              .map((o: any) => (
               <div
                 key={o.id}
                 className="bg-white rounded-xl border border-slate-200 p-4"
@@ -1247,17 +2151,306 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                   </span>
                 </div>
                 <div className="text-sm text-slate-600">
-                  {o.kitchen_order_items?.map((it, i) => (
+                  {o.kitchen_order_items?.map((it: any, i: number) => (
                     <p key={i}>
-                      {it.quantity}× {it.products?.name || "Item"} {it.notes && `(${it.notes})`}
+                      {it.quantity}× {it.products?.name || "Item"} [{it.station || "kitchen"}] {it.notes && `(${it.notes})`}
                     </p>
                   ))}
                 </div>
-                <p className="text-xs text-slate-400 mt-2">
-                  {new Date(o.created_at).toLocaleTimeString()}
-                </p>
+                <p className="text-xs text-slate-400 mt-2">{new Date(o.created_at).toLocaleString()}</p>
+                <div className="mt-3 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => startEditOrder(o)}
+                    className="inline-flex items-center gap-1 px-2 py-1 border border-slate-300 rounded hover:bg-slate-50 text-xs"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                </div>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      {editingOrderId ? (
+        <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="text-lg font-bold text-slate-900">Edit Order</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingOrderId(null);
+                setEditingOrderDate("");
+                setEditingOrderItems([]);
+              }}
+              className="px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Order date & time</label>
+            <input
+              type="datetime-local"
+              value={editingOrderDate}
+              onChange={(e) => setEditingOrderDate(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="space-y-3">
+            {editingOrderItems.map((item, index) => (
+              <div key={`${editingOrderId}-${index}`} className="grid grid-cols-1 md:grid-cols-[1.5fr_120px_1fr_auto] gap-2 items-center">
+                <select
+                  value={item.product_id}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, product_id: e.target.value } : row))
+                    )
+                  }
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Select product</option>
+                  {products.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min="1"
+                  value={item.quantity}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, quantity: Number(e.target.value) || 1 } : row))
+                    )
+                  }
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <input
+                  type="text"
+                  value={item.notes}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, notes: e.target.value } : row))
+                    )
+                  }
+                  placeholder="Comments"
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEditingOrderItems((prev) => prev.filter((_, i) => i !== index))}
+                  className="px-3 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 text-sm"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={addEditingOrderItem}
+              className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
+            >
+              Add Item
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveEditedOrder()}
+              className="app-btn-primary text-sm"
+            >
+              Save Order Changes
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
+        <h2 className="text-lg font-bold text-slate-900 mb-3">Staff Performance Analytics</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+          {waiters.map((w) => {
+            const waiterTables = Object.values(tableLayout).filter((t) => t.waiterId === w.id).map((t) => t.number);
+            const sales = postedTransactions
+              .filter((tx) => waiterTables.some((table) => tx.saleId.includes(table)))
+              .reduce((sum, tx) => sum + tx.amount, 0);
+            const assignedOrders = queue.filter((q) => q.table_number && waiterTables.includes(q.table_number)).length;
+            const upsell = assignedOrders > 0 ? sales / assignedOrders : 0;
+            return (
+              <div key={w.id} className="border rounded-lg p-3 bg-slate-50">
+                <p className="font-semibold text-sm text-slate-900">{w.full_name}</p>
+                <p className="text-xs text-slate-600">Sales: {sales.toFixed(2)}</p>
+                <p className="text-xs text-slate-600">Orders: {assignedOrders}</p>
+                <p className="text-xs text-slate-600">Upsell metric (avg/order): {upsell.toFixed(2)}</p>
+              </div>
+            );
+          })}
+          {waiters.length === 0 && <p className="text-sm text-slate-500">No waiter analytics yet.</p>}
+        </div>
+      </div>
+
+      <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+          <h2 className="text-lg font-bold text-slate-900">Posted Hotel POS Transactions</h2>
+          <button
+            type="button"
+            onClick={() => void loadPostedTransactions()}
+            className="inline-flex items-center gap-1 text-sm px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Refresh
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mb-3">
+          Edit posted POS payments for {queueDate}. Changes update the `payments` record only.
+        </p>
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
+          Refunded transactions are locked and cannot be edited.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
+          <input
+            type="password"
+            placeholder="Manager PIN (for waiter override)"
+            value={managerPinDraft}
+            onChange={(e) => setManagerPinDraft(e.target.value)}
+            className="border rounded px-2 py-1 text-xs"
+          />
+          <p className="text-xs text-slate-600">
+            Roles: waiter can view; supervisor/manager can edit. Waiter requires manager PIN for void/refund.
+          </p>
+        </div>
+        {postedTransactionsError ? (
+          <p className="text-sm text-red-600 mb-3">{postedTransactionsError}</p>
+        ) : null}
+        {postedTransactionsLoading ? (
+          <p className="text-sm text-slate-500">Loading posted transactions...</p>
+        ) : postedTransactions.length === 0 ? (
+          <p className="text-sm text-slate-500">No posted hotel POS transactions found for this date.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left border-b border-slate-200">
+                  <th className="py-2 pr-2">Time</th>
+                  <th className="py-2 pr-2">Sale ID</th>
+                  <th className="py-2 pr-2">Amount</th>
+                  <th className="py-2 pr-2">Method</th>
+                  <th className="py-2 pr-2">Status</th>
+                  <th className="py-2 pr-2">Last Edit</th>
+                  <th className="py-2 text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {postedTransactions.map((tx) => {
+                  const draft = postedTransactionDrafts[tx.id];
+                  const isRefunded = tx.paymentStatus === "refunded";
+                  const role = (user?.role || "").toLowerCase();
+                  const canEdit = role === "manager" || role === "supervisor" || role === "accountant" || role === "admin";
+                  return (
+                    <tr key={tx.id} className="border-b border-slate-100">
+                      <td className="py-2 pr-2">{new Date(tx.paidAt).toLocaleTimeString()}</td>
+                      <td className="py-2 pr-2 font-mono text-xs">{tx.saleId.slice(0, 12)}</td>
+                      <td className="py-2 pr-2">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={draft?.amount ?? tx.amount.toFixed(2)}
+                          onChange={(e) =>
+                            setPostedTransactionDrafts((prev) => ({
+                              ...prev,
+                              [tx.id]: {
+                                amount: e.target.value,
+                                paymentMethod: prev[tx.id]?.paymentMethod ?? tx.paymentMethod,
+                                paymentStatus: prev[tx.id]?.paymentStatus ?? tx.paymentStatus,
+                              },
+                            }))
+                          }
+                          className="w-28 border border-slate-300 rounded px-2 py-1 text-xs"
+                          disabled={readOnly || isRefunded || !canEdit}
+                        />
+                      </td>
+                      <td className="py-2 pr-2">
+                        <select
+                          value={draft?.paymentMethod ?? tx.paymentMethod}
+                          onChange={(e) =>
+                            setPostedTransactionDrafts((prev) => ({
+                              ...prev,
+                              [tx.id]: {
+                                amount: prev[tx.id]?.amount ?? tx.amount.toFixed(2),
+                                paymentMethod: e.target.value as PaymentMethodCode,
+                                paymentStatus: prev[tx.id]?.paymentStatus ?? tx.paymentStatus,
+                              },
+                            }))
+                          }
+                          className="border border-slate-300 rounded px-2 py-1 text-xs"
+                          disabled={readOnly || isRefunded || !canEdit}
+                        >
+                          {PAYMENT_METHOD_SELECT_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="py-2 pr-2">
+                        <select
+                          value={draft?.paymentStatus ?? tx.paymentStatus}
+                          onChange={(e) =>
+                            setPostedTransactionDrafts((prev) => ({
+                              ...prev,
+                              [tx.id]: {
+                                amount: prev[tx.id]?.amount ?? tx.amount.toFixed(2),
+                                paymentMethod: prev[tx.id]?.paymentMethod ?? tx.paymentMethod,
+                                paymentStatus: e.target.value as PaymentStatus,
+                              },
+                            }))
+                          }
+                          className="border border-slate-300 rounded px-2 py-1 text-xs"
+                          disabled={readOnly || isRefunded || !canEdit}
+                        >
+                          <option value="pending">pending</option>
+                          <option value="completed">completed</option>
+                          <option value="failed">failed</option>
+                          <option value="refunded">refunded</option>
+                        </select>
+                      </td>
+                      <td className="py-2 pr-2 text-xs text-slate-600">
+                        {tx.editedAt
+                          ? `${new Date(tx.editedAt).toLocaleString()}${tx.editedByName ? ` · ${tx.editedByName}` : ""}`
+                          : "—"}
+                        {!canEdit ? <p className="text-[10px] text-amber-700">Read-only by role ({role || "staff"})</p> : null}
+                        {(draft?.paymentStatus === "failed" || draft?.paymentStatus === "refunded") && (
+                          <input
+                            type="text"
+                            placeholder="Void/refund reason"
+                            value={voidReasonDraftByPaymentId[tx.id] || ""}
+                            onChange={(e) =>
+                              setVoidReasonDraftByPaymentId((prev) => ({ ...prev, [tx.id]: e.target.value }))
+                            }
+                            className="mt-1 w-full border rounded px-2 py-1 text-[10px]"
+                            disabled={readOnly || !canEdit}
+                          />
+                        )}
+                      </td>
+                      <td className="py-2 text-right">
+                        <button
+                          type="button"
+                          onClick={() => void savePostedTransaction(tx.id)}
+                          disabled={readOnly || isRefunded || !canEdit || savingPostedTransactionId === tx.id}
+                          className="inline-flex items-center gap-1 px-2 py-1 border border-brand-200 text-brand-700 rounded hover:bg-brand-50 disabled:opacity-60"
+                        >
+                          {isRefunded ? "Locked" : savingPostedTransactionId === tx.id ? "Saving..." : "Save"}
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

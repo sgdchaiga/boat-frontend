@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { UsersRound, Plus, Mail, Phone, Edit2, Shield, Trash2, Tag } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { supabase } from "../../lib/supabase";
 import type { Database } from "../../lib/database.types";
 import { useAuth } from "../../contexts/AuthContext";
@@ -45,6 +46,8 @@ export function AdminUsersPage() {
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState("");
   const [isActive, setIsActive] = useState(true);
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
 
   const [showRoleTypeModal, setShowRoleTypeModal] = useState(false);
   const [editingRoleType, setEditingRoleType] = useState<OrgRoleType | null>(null);
@@ -89,6 +92,8 @@ export function AdminUsersPage() {
     setPhone("");
     setRole(roleTypes[0]?.role_key ?? "receptionist");
     setIsActive(true);
+    setPassword("");
+    setConfirmPassword("");
     setShowStaffModal(true);
   };
 
@@ -127,12 +132,56 @@ export function AdminUsersPage() {
         return;
       }
     } else {
+      if (password.length < 6) {
+        alert("Password must be at least 6 characters.");
+        return;
+      }
+      if (password !== confirmPassword) {
+        alert("Passwords do not match.");
+        return;
+      }
+
+      const signupClient = createClient(
+        import.meta.env.VITE_SUPABASE_URL,
+        import.meta.env.VITE_SUPABASE_ANON_KEY,
+        {
+          auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+            detectSessionInUrl: false,
+          },
+        }
+      );
+
+      const { data: signUpData, error: signUpErr } = await signupClient.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          data: {
+            full_name: fullName.trim(),
+            role,
+            phone: phone.trim() || "",
+          },
+        },
+      });
+      if (signUpErr) {
+        alert(signUpErr.message);
+        return;
+      }
+      const authUserId = signUpData.user?.id;
+      if (!authUserId) {
+        alert("Failed to create login account for this user.");
+        return;
+      }
+
       const { error } = await supabase.from("staff").insert({
+        id: authUserId,
         full_name: fullName,
         email,
         phone: phone || null,
         role,
         is_active: isActive,
+        organization_id: orgId ?? null,
       });
       if (error) {
         alert(error.message);
@@ -455,6 +504,32 @@ export function AdminUsersPage() {
                   ))}
                 </select>
               </div>
+              {!editingStaff && (
+                <>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                    <input
+                      type="password"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-2 w-full"
+                      placeholder="Minimum 6 characters"
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Confirm password</label>
+                    <input
+                      type="password"
+                      value={confirmPassword}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-2 w-full"
+                      placeholder="Re-enter password"
+                      autoComplete="new-password"
+                    />
+                  </div>
+                </>
+              )}
               {editingStaff && (
                 <div className="flex items-center gap-2">
                   <input

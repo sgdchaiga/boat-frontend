@@ -20,6 +20,7 @@ export function RoomsPage() {
   const [showAddRoom, setShowAddRoom] = useState(false);
   const [roomNumber, setRoomNumber] = useState("");
   const [floor, setFloor] = useState("");
+  const [savingRoom, setSavingRoom] = useState(false);
 
   useEffect(() => {
     fetchRooms();
@@ -78,11 +79,13 @@ export function RoomsPage() {
   /* ----------------------------- */
 
 const addRoom = async () => {
+  if (savingRoom) return;
   if (!roomNumber || !floor) {
     alert("Enter room number and floor");
     return;
   }
 
+  setSavingRoom(true);
   try {
     const { error } = await supabase
       .from("rooms")
@@ -109,6 +112,8 @@ const addRoom = async () => {
 
   } catch (err) {
     console.error("UNEXPECTED ERROR:", err);
+  } finally {
+    setSavingRoom(false);
   }
 };
 
@@ -354,17 +359,19 @@ const addRoom = async () => {
             <div className="flex justify-end gap-2">
 
               <button
-                onClick={() => setShowAddRoom(false)}
-                className="px-4 py-2 bg-gray-200 rounded"
+                onClick={() => !savingRoom && setShowAddRoom(false)}
+                disabled={savingRoom}
+                className="px-4 py-2 bg-gray-200 rounded disabled:opacity-60"
               >
                 Cancel
               </button>
 
               <button
                 onClick={addRoom}
-                className="app-btn-primary rounded-md"
+                disabled={savingRoom}
+                className="app-btn-primary rounded-md disabled:opacity-60"
               >
-                Save
+                {savingRoom ? "Saving..." : "Save"}
               </button>
 
             </div>

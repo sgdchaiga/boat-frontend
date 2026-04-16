@@ -106,9 +106,7 @@ export function computeRangeInTimezone(
     }
     case "today": {
       from = startOfDayUTC(year, month, day);
-      const endOfToday = addDays(from, 1);
-      const nowBuffer = new Date(Date.now() + 5 * 60 * 1000);
-      to = endOfToday > nowBuffer ? endOfToday : nowBuffer;
+      to = addDays(from, 1);
       break;
     }
     case "yesterday": {

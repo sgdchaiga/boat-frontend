@@ -28,6 +28,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const [showAddCharge, setShowAddCharge] = useState(false);
+  const [savingCharge, setSavingCharge] = useState(false);
   const [description, setDescription] = useState("");
   const [chargeType, setChargeType] = useState("room");
   const [amount, setAmount] = useState("");
@@ -154,6 +155,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   };
 
   const handleAddCharge = async () => {
+    if (savingCharge) return;
     if (readOnly) return;
     if (!description || !amount) {
       alert("Please fill description and amount.");
@@ -164,6 +166,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
       return;
     }
 
+    setSavingCharge(true);
     try {
       const payload = {
         description,
@@ -197,6 +200,8 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
     } catch (error) {
       console.error("Error adding charge:", error);
       alert("Failed to add charge: " + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setSavingCharge(false);
     }
   };
 
@@ -320,7 +325,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
           <div className="bg-white rounded-xl p-6 w-96">
             <div className="flex justify-between mb-4">
               <h2 className="text-lg font-semibold">Add Charge</h2>
-              <X className="cursor-pointer" onClick={() => setShowAddCharge(false)} />
+              <X className={`cursor-pointer ${savingCharge ? "opacity-40 pointer-events-none" : ""}`} onClick={() => !savingCharge && setShowAddCharge(false)} />
             </div>
 
             <div className="space-y-3">
@@ -370,10 +375,10 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
 
               <button
                 onClick={handleAddCharge}
-                disabled={readOnly}
+                disabled={readOnly || savingCharge}
                 className="bg-brand-700 text-white w-full py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Save Charge
+                {savingCharge ? "Saving..." : "Save Charge"}
               </button>
             </div>
           </div>

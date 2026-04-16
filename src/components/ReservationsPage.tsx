@@ -44,6 +44,7 @@ export function ReservationsPage() {
   });
 
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [savingReservation, setSavingReservation] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -207,12 +208,14 @@ export function ReservationsPage() {
   /* -------------------- */
 
   const saveReservation = async () => {
+    if (savingReservation) return;
 
     if (!form.property_customer_id || !form.room_id) {
       alert("Select customer and room");
       return;
     }
 
+    setSavingReservation(true);
     try {
 
       if (editingReservation) {
@@ -238,6 +241,8 @@ export function ReservationsPage() {
       console.error(err);
       alert("Failed to save reservation");
 
+    } finally {
+      setSavingReservation(false);
     }
 
   };
@@ -472,6 +477,7 @@ export function ReservationsPage() {
 
               <button
                 onClick={() => setShowForm(false)}
+                disabled={savingReservation}
                 className="px-4 py-2 border rounded"
               >
                 Cancel
@@ -479,9 +485,10 @@ export function ReservationsPage() {
 
               <button
                 onClick={saveReservation}
-                className="bg-blue-600 text-white px-4 py-2 rounded"
+                disabled={savingReservation}
+                className="bg-blue-600 text-white px-4 py-2 rounded disabled:opacity-60"
               >
-                Save
+                {savingReservation ? "Saving..." : "Save"}
               </button>
 
             </div>

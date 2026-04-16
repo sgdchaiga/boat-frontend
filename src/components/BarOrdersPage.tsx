@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Clock } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Database } from "../lib/database.types";
@@ -34,6 +34,7 @@ export function BarOrdersPage() {
   const [orders, setOrders] = useState<BarOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [barDepartment, setBarDepartment] = useState<Department | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   const [dateRange, setDateRange] = useState<DateRangeKey>("last_30_days");
   const [customFrom, setCustomFrom] = useState("");
@@ -42,6 +43,20 @@ export function BarOrdersPage() {
   useEffect(() => {
     fetchOrders();
   }, [dateRange, customFrom, customTo, orgId, superAdmin]);
+
+  const updateStatus = async (orderId: string, newStatus: "preparing" | "ready" | "served" | "completed") => {
+    setUpdatingId(orderId);
+    try {
+      const { error } = await supabase.from("kitchen_orders").update({ order_status: newStatus }).eq("id", orderId);
+      if (error) throw error;
+      await fetchOrders();
+    } catch (err) {
+      console.error("Bar update status error:", err);
+      alert("Failed to update order status.");
+    } finally {
+      setUpdatingId(null);
+    }
+  };
 
   const fetchOrders = async () => {
     try {
@@ -146,6 +161,16 @@ export function BarOrdersPage() {
   const renderStaffName = (order: BarOrder) =>
     order.created_by || "Unknown";
 
+  const filteredOrders = useMemo(() => {
+    if (!barDepartment) return orders;
+    return orders
+      .map((o) => {
+        const barItems = (o.kitchen_order_items || []).filter((it) => it.products?.department_id === barDepartment.id);
+        return { ...o, kitchen_order_items: barItems };
+      })
+      .filter((o) => (o.kitchen_order_items || []).length > 0);
+  }, [orders, barDepartment]);
+
   return (
     <div className="p-6 md:p-8">
       <div className="flex items-center justify-between mb-6">
@@ -206,11 +231,11 @@ export function BarOrdersPage() {
 
       {loading ? (
         <p className="text-slate-500 text-sm">Loading bar orders...</p>
-      ) : orders.length === 0 ? (
+      ) : filteredOrders.length === 0 ? (
         <p className="text-slate-500 text-sm">No bar orders for this period.</p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {orders.map((order) => (
+          {filteredOrders.map((order) => (
             <div
               key={order.id}
               className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col justify-between"
@@ -227,6 +252,9 @@ export function BarOrdersPage() {
                 <p className="text-xs text-slate-500 mb-1">
                   Table: {order.table_number || "POS"} • By:{" "}
                   {renderStaffName(order)}
+                </p>
+                <p className="text-xs text-slate-500 mb-2">
+                  Status: <span className="font-semibold">{order.order_status}</span>
                 </p>
                 <div className="text-sm text-slate-700 space-y-1">
                   {orders.length > 0 &&
@@ -261,6 +289,39 @@ export function BarOrdersPage() {
                     );
                   })()}
                 </div>
+              </div>
+
+              <div className="mt-3 flex gap-2">
+                {order.order_status === "pending" ? (
+                  <button
+                    type="button"
+                    onClick={() => updateStatus(order.id, "preparing")}
+                    disabled={updatingId === order.id}
+                    className="flex-1 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-3 py-2 text-sm font-semibold hover:bg-blue-100 disabled:opacity-50"
+                  >
+                    {updatingId === order.id ? "…" : "Preparing"}
+                  </button>
+                ) : null}
+                {order.order_status === "preparing" ? (
+                  <button
+                    type="button"
+                    onClick={() => updateStatus(order.id, "ready")}
+                    disabled={updatingId === order.id}
+                    className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-100 disabled:opacity-50"
+                  >
+                    {updatingId === order.id ? "…" : "Ready"}
+                  </button>
+                ) : null}
+                {order.order_status === "ready" ? (
+                  <button
+                    type="button"
+                    onClick={() => updateStatus(order.id, "served")}
+                    disabled={updatingId === order.id}
+                    className="flex-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50"
+                  >
+                    {updatingId === order.id ? "…" : "Served"}
+                  </button>
+                ) : null}
               </div>
             </div>
           ))}

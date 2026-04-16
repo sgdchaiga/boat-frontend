@@ -15,6 +15,7 @@ import { AdminApprovalRightsPage } from "./AdminApprovalRightsPage";
 import { AdminJournalAccountsPage } from "./AdminJournalAccountsPage";
 import { AdminGenderTypesPage } from "./AdminGenderTypesPage";
 import { AdminRecipeManagementPage } from "./AdminRecipeManagementPage";
+import { AdminHotelPosControlsPage } from "./AdminHotelPosControlsPage";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
@@ -26,7 +27,8 @@ export type AdminTab =
   | "recipes"
   | "approval"
   | "journal_accounts"
-  | "gender_types";
+  | "gender_types"
+  | "hotel_pos";
 
 const ADMIN_TAB_IDS: AdminTab[] = [
   "users",
@@ -36,6 +38,7 @@ const ADMIN_TAB_IDS: AdminTab[] = [
   "approval",
   "journal_accounts",
   "gender_types",
+  "hotel_pos",
 ];
 
 /** Validated query param for `?adminTab=` deep links (e.g. from Hotel POS). */
@@ -52,6 +55,7 @@ const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "approval", label: "Approval Rights", icon: ShieldCheck },
   { id: "journal_accounts", label: "Journal account settings", icon: BookOpen },
   { id: "gender_types", label: "Gender Types", icon: Users },
+  { id: "hotel_pos", label: "Hotel POS Controls", icon: ShieldCheck },
 ];
 
 interface AdminPageProps {
@@ -108,6 +112,8 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
         return <AdminJournalAccountsPage />;
       case "gender_types":
         return <AdminGenderTypesPage />;
+      case "hotel_pos":
+        return <AdminHotelPosControlsPage />;
       default:
         return <AdminUsersPage />;
     }

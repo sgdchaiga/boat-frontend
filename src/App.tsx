@@ -10,6 +10,7 @@ import { CheckInPage } from './components/CheckInPage';
 import { CustomersPage } from './components/CustomersPage';
 import { ActiveStaysPage } from './components/ActiveStaysPage';
 import { POSPage } from './components/POSPage';
+import { POSDashboardPage } from './components/POSDashboard';
 import { RetailPOSPage } from './components/RetailPOSPage';
 import { RetailInvoicesPage } from './components/RetailInvoicesPage';
 import { RetailCustomersPage } from './components/RetailCustomersPage';
@@ -23,6 +24,7 @@ import { TransactionsPage } from './components/TransactionsPage';
 import { KitchenDisplayPage } from './components/KitchenDisplayPage';
 import { HousekeepingPage } from './components/HousekeepingPage';
 import ProductsPage from './components/ProductsPage';
+import { ReportsDashboard } from "./components/ReportsDashboard";
 import { ReportsPage } from './components/ReportsPage';
 import { DailySalesReportPage } from './components/DailySalesReportPage';
 import { StockMovementReportPage } from './components/reports/StockMovementReportPage';
@@ -556,6 +558,8 @@ function AppContent() {
         return <ActiveStaysPage />;
       case 'POS':
         return <POSPage readOnly={access.readOnly} />;
+      case 'pos_dashboard':
+        return <POSDashboardPage />;
       case 'retail_pos':
         return <RetailPOSPage readOnly={access.readOnly} />;
       case 'retail_customers':

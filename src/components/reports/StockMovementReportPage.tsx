@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, businessDayRangeForDateString, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { PageNotes } from "../common/PageNotes";
@@ -217,6 +217,13 @@ export function StockMovementReportPage() {
       }
     });
 
+    const movementDate = (raw: unknown): Date => {
+      const s = String(raw || "");
+      const dayRange = businessDayRangeForDateString(s);
+      if (dayRange) return dayRange.from;
+      return new Date(s);
+    };
+
     allMoves.forEach((m: any) => {
       const pid = m.product_id as string;
       const loc = (m.location as string) || "default";
@@ -247,7 +254,11 @@ export function StockMovementReportPage() {
         });
       }
       const row = byKey.get(key)!;
-      const mvDate = new Date(m.movement_date);
+      const mvDate = movementDate(m.movement_date);
+      if (mvDate >= to) {
+        // Exclude future/out-of-range rows from current report slice entirely.
+        return;
+      }
       const { inQty: qiEff, outQty: qoEff } = effectiveInOut(m);
       const qtyNet = qiEff - qoEff;
 

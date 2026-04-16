@@ -703,6 +703,11 @@ export type PosPaymentMethod = PaymentMethodCode;
 export type PosDeptBucket = "bar" | "kitchen" | "room";
 
 export type PosCogsByDept = Partial<Record<PosDeptBucket, number>>;
+export type PosDepartmentAmountLine = {
+  departmentId: string | null;
+  departmentName: string | null;
+  amount: number;
+};
 
 /** Map department display name to Bar / Kitchen / Room for POS COGS routing. */
 export function mapDepartmentNameToPosBucket(deptName: string | null | undefined): PosDeptBucket {
@@ -767,6 +772,28 @@ function resolvePosRevenueGlForBucket(
   return (o?.revenueRoomGlAccountId?.trim() || acc.posRevenueRoom) ?? null;
 }
 
+async function loadPosDepartmentGlMap(organizationId: string | null | undefined) {
+  if (!organizationId) return new Map<string, { sales: string | null; purchases: string | null; stock: string | null }>();
+  try {
+    const { data, error } = await (supabase as any)
+      .from("journal_gl_department_settings")
+      .select("department_id,sales_gl_account_id,purchases_gl_account_id,stock_gl_account_id")
+      .eq("organization_id", organizationId);
+    if (error) throw error;
+    const map = new Map<string, { sales: string | null; purchases: string | null; stock: string | null }>();
+    ((data || []) as any[]).forEach((row) => {
+      map.set(String(row.department_id), {
+        sales: row.sales_gl_account_id ?? null,
+        purchases: row.purchases_gl_account_id ?? null,
+        stock: row.stock_gl_account_id ?? null,
+      });
+    });
+    return map;
+  } catch {
+    return new Map<string, { sales: string | null; purchases: string | null; stock: string | null }>();
+  }
+}
+
 /** Optional per-transaction GL overrides for Hotel POS (when journal settings are not used). */
 export type PosJournalGlOverrides = {
   receiptGlAccountId?: string | null;
@@ -793,14 +820,18 @@ export async function createJournalForPosOrder(
   options?: {
     paymentMethod?: PosPaymentMethod;
     cogsByDept?: PosCogsByDept;
+    cogsByDepartment?: PosDepartmentAmountLine[];
     /** Line totals by bar/kitchen/room; splits net revenue across department sales GLs (unless a single revenue override is set). */
     salesByDept?: PosCogsByDept;
+    salesByDepartment?: PosDepartmentAmountLine[];
     /** If > 0 and a VAT GL is configured, `total` is VAT-inclusive: net revenue + output VAT credit. */
     vatRatePercent?: number;
     glOverrides?: PosJournalGlOverrides;
+    organizationId?: string | null;
   }
 ): Promise<JournalPostResult> {
   const acc = await getDefaultGlAccounts();
+  const deptGlMap = await loadPosDepartmentGlMap(options?.organizationId);
   const o = options?.glOverrides;
   const date = toBusinessDateString(orderDate);
   const receiptGl = o?.receiptGlAccountId?.trim()
@@ -808,10 +839,14 @@ export async function createJournalForPosOrder(
     : resolvePosReceiptGlAccountId(acc, options?.paymentMethod);
   const revenueId = o?.revenueGlAccountId?.trim() ? o.revenueGlAccountId : acc.revenue;
   const salesByDept = options?.salesByDept;
+  const salesByDepartment = (options?.salesByDepartment || [])
+    .map((line) => ({ ...line, amount: roundMoney(line.amount) }))
+    .filter((line) => line.amount > 0.001);
   const deptBuckets: PosDeptBucket[] = ["bar", "kitchen", "room"];
   const totalSales = deptBuckets.reduce((s, k) => s + roundMoney(salesByDept?.[k] ?? 0), 0);
+  const totalSalesByDepartment = salesByDepartment.reduce((s, line) => s + line.amount, 0);
   const useRevenueSplit =
-    !o?.revenueGlAccountId?.trim() && !!salesByDept && totalSales > 0.001;
+    !o?.revenueGlAccountId?.trim() && ((!!salesByDepartment.length && totalSalesByDepartment > 0.001) || (!!salesByDept && totalSales > 0.001));
 
   if (!receiptGl) {
     return {
@@ -822,14 +857,28 @@ export async function createJournalForPosOrder(
   }
 
   if (useRevenueSplit) {
-    for (const k of deptBuckets) {
-      if (roundMoney(salesByDept![k] ?? 0) <= 0) continue;
-      if (!resolvePosRevenueGlForBucket(k, acc, o)) {
-        return {
-          ok: false,
-          error:
-            "Missing sales revenue GL for a department in this cart. Set Bar / Kitchen / Room sales under Admin → Journal account settings (table), or pick revenue on the POS.",
-        };
+    if (salesByDepartment.length > 0) {
+      for (const line of salesByDepartment) {
+        if (!line.departmentId) continue;
+        const depGl = deptGlMap.get(line.departmentId);
+        if (!(depGl?.sales || revenueId)) {
+          return {
+            ok: false,
+            error:
+              "Missing sales revenue GL for one of the departments in this cart. Set the department row under Admin → Journal account settings.",
+          };
+        }
+      }
+    } else {
+      for (const k of deptBuckets) {
+        if (roundMoney(salesByDept![k] ?? 0) <= 0) continue;
+        if (!resolvePosRevenueGlForBucket(k, acc, o)) {
+          return {
+            ok: false,
+            error:
+              "Missing sales revenue GL for a department in this cart. Set Bar / Kitchen / Room sales under Admin → Journal account settings (table), or pick revenue on the POS.",
+          };
+        }
       }
     }
   } else if (!revenueId) {
@@ -852,24 +901,36 @@ export async function createJournalForPosOrder(
 
   const lines: JournalLine[] = [{ gl_account_id: receiptGl, debit: gross, credit: 0, line_description: description }];
 
-  if (useRevenueSplit && salesByDept) {
+  if (useRevenueSplit && salesByDepartment.length > 0) {
+    let remaining = revenueCredit;
+    for (let i = 0; i < salesByDepartment.length; i++) {
+      const line = salesByDepartment[i];
+      const frac = line.amount / totalSalesByDepartment;
+      const lineNet = i === salesByDepartment.length - 1 ? roundMoney(remaining) : roundMoney(revenueCredit * frac);
+      remaining = roundMoney(remaining - lineNet);
+      const deptGl = line.departmentId ? deptGlMap.get(line.departmentId) : null;
+      const rid = deptGl?.sales ?? revenueId;
+      if (lineNet > 0.001 && rid) {
+        lines.push({
+          gl_account_id: rid,
+          debit: 0,
+          credit: lineNet,
+          line_description: `${line.departmentName || "Department"} sales`,
+        });
+      }
+    }
+  } else if (useRevenueSplit && salesByDept) {
     let remaining = revenueCredit;
     const activeBuckets = deptBuckets.filter((k) => roundMoney(salesByDept[k] ?? 0) > 0);
     for (let i = 0; i < activeBuckets.length; i++) {
       const b = activeBuckets[i];
       const share = roundMoney(salesByDept[b] ?? 0);
       const frac = share / totalSales;
-      const bucketNet =
-        i === activeBuckets.length - 1 ? roundMoney(remaining) : roundMoney(revenueCredit * frac);
+      const bucketNet = i === activeBuckets.length - 1 ? roundMoney(remaining) : roundMoney(revenueCredit * frac);
       remaining = roundMoney(remaining - bucketNet);
       const rid = resolvePosRevenueGlForBucket(b, acc, o);
       if (bucketNet > 0.001 && rid) {
-        lines.push({
-          gl_account_id: rid,
-          debit: 0,
-          credit: bucketNet,
-          line_description: b === "bar" ? "Bar sales" : b === "kitchen" ? "Kitchen sales" : "Room sales",
-        });
+        lines.push({ gl_account_id: rid, debit: 0, credit: bucketNet, line_description: b === "bar" ? "Bar sales" : b === "kitchen" ? "Kitchen sales" : "Room sales" });
       }
     }
   } else {
@@ -890,7 +951,29 @@ export async function createJournalForPosOrder(
   }
 
   const cogs = options?.cogsByDept;
-  if (cogs) {
+  const cogsByDepartment = (options?.cogsByDepartment || [])
+    .map((line) => ({ ...line, amount: roundMoney(line.amount) }))
+    .filter((line) => line.amount > 0.001);
+  if (cogsByDepartment.length > 0) {
+    for (const line of cogsByDepartment) {
+      const deptGl = line.departmentId ? deptGlMap.get(line.departmentId) : null;
+      const cogsId = deptGl?.purchases ?? null;
+      const stockId = deptGl?.stock ?? null;
+      if (!cogsId || !stockId) continue;
+      lines.push({
+        gl_account_id: cogsId,
+        debit: line.amount,
+        credit: 0,
+        line_description: `${line.departmentName || "Department"} purchases (COGS)`,
+      });
+      lines.push({
+        gl_account_id: stockId,
+        debit: 0,
+        credit: line.amount,
+        line_description: `${line.departmentName || "Department"} stock`,
+      });
+    }
+  } else if (cogs) {
     const buckets: Array<{
       key: PosDeptBucket;
       amt: number;

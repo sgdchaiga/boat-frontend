@@ -29,6 +29,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
   const [idType, setIdType] = useState("");
   const [idNumber, setIdNumber] = useState("");
   const [address, setAddress] = useState("");
+  const [savingCustomer, setSavingCustomer] = useState(false);
 
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
@@ -63,53 +64,58 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
   }, [highlightCustomerId, loading, customers]);
 
   const createCustomer = async () => {
+    if (savingCustomer) return;
     if (!firstName || !lastName) {
       alert("Enter customer name");
       return;
     }
 
-    const { data: inserted, error } = await supabase
-      .from("hotel_customers")
-      .insert([
-        {
-          first_name: firstName,
-          last_name: lastName,
-          email: email || null,
-          phone: phone || null,
-          id_type: idType || null,
-          id_number: idNumber || null,
-          address: address || null,
-        },
-      ])
-      .select("*")
-      .single();
+    setSavingCustomer(true);
+    try {
+      const { data: inserted, error } = await supabase
+        .from("hotel_customers")
+        .insert([
+          {
+            organization_id: orgId ?? null,
+            first_name: firstName,
+            last_name: lastName,
+            email: email || null,
+            phone: phone || null,
+            id_type: idType || null,
+            id_number: idNumber || null,
+            address: address || null,
+          },
+        ])
+        .select("*")
+        .single();
 
-    if (error) {
-      console.error(error);
-      alert(error.message);
-      return;
+      if (error) {
+        console.error(error);
+        alert(error.message);
+        return;
+      }
+
+      if (inserted) {
+        await enqueueSyncOutbox(supabase, {
+          tableName: "hotel_customers",
+          operation: "INSERT",
+          recordId: inserted.id,
+          payload: inserted as Record<string, unknown>,
+        });
+      }
+
+      setShowModal(false);
+      setFirstName("");
+      setLastName("");
+      setEmail("");
+      setPhone("");
+      setIdType("");
+      setIdNumber("");
+      setAddress("");
+      fetchCustomers();
+    } finally {
+      setSavingCustomer(false);
     }
-
-    if (inserted) {
-      await enqueueSyncOutbox(supabase, {
-        tableName: "hotel_customers",
-        operation: "INSERT",
-        recordId: inserted.id,
-        payload: inserted as Record<string, unknown>,
-      });
-    }
-
-    setShowModal(false);
-
-    setFirstName("");
-    setLastName("");
-    setEmail("");
-    setPhone("");
-    setIdType("");
-    setIdNumber("");
-    setAddress("");
-
-    fetchCustomers();
   };
 
   const filtered = customers.filter((c) => {
@@ -257,12 +263,12 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
             />
 
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => setShowModal(false)} className="px-4 py-2 bg-gray-200 rounded">
+              <button type="button" onClick={() => !savingCustomer && setShowModal(false)} disabled={savingCustomer} className="px-4 py-2 bg-gray-200 rounded disabled:opacity-60">
                 Cancel
               </button>
 
-              <button type="button" onClick={createCustomer} className="px-4 py-2 bg-brand-700 text-white rounded">
-                Save
+              <button type="button" onClick={createCustomer} disabled={savingCustomer} className="px-4 py-2 bg-brand-700 text-white rounded disabled:opacity-60">
+                {savingCustomer ? "Saving..." : "Save"}
               </button>
             </div>
           </div>

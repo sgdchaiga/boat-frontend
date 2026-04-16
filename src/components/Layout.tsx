@@ -188,6 +188,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
             ? [{ name: 'Customers', page: 'retail_customers' as const }]
             : [{ name: 'Customers', page: 'hotel_customers' as const }]),
         { name: 'Hotel POS', page: 'POS' },
+        { name: 'POS Dashboard', page: 'pos_dashboard' },
         { name: 'Retail POS', page: 'retail_pos' },
         { name: 'Kitchen Orders', page: 'Kitchen Orders' },
         { name: 'Kitchen Display', page: 'kitchen_display' },

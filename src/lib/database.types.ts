@@ -280,6 +280,9 @@ export interface Database {
           transaction_id: string | null
           paid_at: string
           processed_by: string | null
+          edited_at?: string | null
+          edited_by_staff_id?: string | null
+          edited_by_name?: string | null
           source_documents?: unknown
         }
         Insert: {
@@ -296,6 +299,9 @@ export interface Database {
           transaction_id?: string | null
           paid_at?: string
           processed_by?: string | null
+          edited_at?: string | null
+          edited_by_staff_id?: string | null
+          edited_by_name?: string | null
           source_documents?: unknown
         }
         Update: {
@@ -312,6 +318,9 @@ export interface Database {
           transaction_id?: string | null
           paid_at?: string
           processed_by?: string | null
+          edited_at?: string | null
+          edited_by_staff_id?: string | null
+          edited_by_name?: string | null
           source_documents?: unknown
         }
       }

@@ -22,6 +22,12 @@ import { PageNotes } from "../common/PageNotes";
 type GLAccount = { id: string; account_code: string; account_name: string; account_type: string };
 
 type FaCategoryRow = { id: string; name: string; parent_id: string | null };
+type DepartmentRow = { id: string; name: string };
+type DepartmentGlDraft = {
+  sales_gl_account_id: string | null;
+  purchases_gl_account_id: string | null;
+  stock_gl_account_id: string | null;
+};
 
 type CategoryGlDraft = Pick<
   FixedAssetCategoryGlRow,
@@ -99,6 +105,9 @@ export function AdminJournalAccountsPage() {
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [faCategories, setFaCategories] = useState<FaCategoryRow[]>([]);
+  const [departments, setDepartments] = useState<DepartmentRow[]>([]);
+  const [departmentGl, setDepartmentGl] = useState<Record<string, DepartmentGlDraft>>({});
+  const [newDepartmentName, setNewDepartmentName] = useState("");
   const [categoryGl, setCategoryGl] = useState<Record<string, CategoryGlDraft>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -160,6 +169,36 @@ export function AdminJournalAccountsPage() {
       setFaCategories([]);
       setCategoryGl({});
     }
+    if (orgId && showHotelPosDeptTable) {
+      const { data: deptData } = await filterByOrganizationId(
+        supabase.from("departments").select("id,name").order("name"),
+        orgId,
+        superAdmin
+      );
+      const deptList = (deptData || []) as DepartmentRow[];
+      setDepartments(deptList);
+      try {
+        const { data: deptGlRows } = await (supabase as any)
+          .from("journal_gl_department_settings")
+          .select("department_id,sales_gl_account_id,purchases_gl_account_id,stock_gl_account_id")
+          .eq("organization_id", orgId);
+        const next: Record<string, DepartmentGlDraft> = {};
+        deptList.forEach((d) => {
+          const match = (deptGlRows || []).find((r: any) => r.department_id === d.id);
+          next[d.id] = {
+            sales_gl_account_id: match?.sales_gl_account_id ?? null,
+            purchases_gl_account_id: match?.purchases_gl_account_id ?? null,
+            stock_gl_account_id: match?.stock_gl_account_id ?? null,
+          };
+        });
+        setDepartmentGl(next);
+      } catch {
+        setDepartmentGl({});
+      }
+    } else {
+      setDepartments([]);
+      setDepartmentGl({});
+    }
     setLoading(false);
   };
 
@@ -180,6 +219,18 @@ export function AdminJournalAccountsPage() {
     setCategoryGl((prev) => ({
       ...prev,
       [categoryId]: { ...(prev[categoryId] ?? emptyCategoryGlDraft()), [key]: value || null },
+    }));
+  };
+
+  const setDepartmentAccount = (departmentId: string, key: keyof DepartmentGlDraft, value: string | null) => {
+    setDepartmentGl((prev) => ({
+      ...prev,
+      [departmentId]: {
+        sales_gl_account_id: prev[departmentId]?.sales_gl_account_id ?? null,
+        purchases_gl_account_id: prev[departmentId]?.purchases_gl_account_id ?? null,
+        stock_gl_account_id: prev[departmentId]?.stock_gl_account_id ?? null,
+        [key]: value || null,
+      },
     }));
   };
 
@@ -238,6 +289,19 @@ export function AdminJournalAccountsPage() {
       }
       if (orgId) {
         await upsertJournalGlSettings(orgId, settings);
+        if (showHotelPosDeptTable) {
+          for (const d of departments) {
+            const draft = departmentGl[d.id];
+            if (!draft) continue;
+            await (supabase as any).from("journal_gl_department_settings").upsert({
+              organization_id: orgId,
+              department_id: d.id,
+              sales_gl_account_id: draft.sales_gl_account_id,
+              purchases_gl_account_id: draft.purchases_gl_account_id,
+              stock_gl_account_id: draft.stock_gl_account_id,
+            }, { onConflict: "organization_id,department_id" });
+          }
+        }
         if (enableFixedAssets) {
           for (const c of faCategories) {
             const draft = categoryGl[c.id] ?? emptyCategoryGlDraft();
@@ -403,14 +467,45 @@ export function AdminJournalAccountsPage() {
         {showHotelPosDeptTable ? (
           <div className="space-y-4">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 border-b border-slate-100 pb-2">
-              Hotel POS — by department (Bar · Kitchen · Room)
+              Hotel POS — by department
             </h3>
-            <p className="text-sm text-slate-600">
-              Map <strong>sales revenue</strong>, <strong>COGS</strong>, and <strong>stock</strong> per department. Products use their assigned
-              department; names are mapped to Bar / Kitchen / Room (e.g. departments containing &quot;bar&quot;, &quot;kitchen&quot;, &quot;room&quot;).
-              POS splits the sale total across these revenue accounts in proportion to line totals. Leave a cell on Auto to use the first account of
-              that type from your chart.
-            </p>
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Add department</label>
+                <input
+                  value={newDepartmentName}
+                  onChange={(e) => setNewDepartmentName(e.target.value)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="e.g. Bakery"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const name = newDepartmentName.trim();
+                  if (!name || !orgId) return;
+                  const { data, error } = await supabase
+                    .from("departments")
+                    .insert({ name, organization_id: orgId })
+                    .select("id,name")
+                    .single();
+                  if (error) {
+                    alert(error.message);
+                    return;
+                  }
+                  const row = data as DepartmentRow;
+                  setDepartments((prev) => [...prev, row].sort((a, b) => a.name.localeCompare(b.name)));
+                  setDepartmentGl((prev) => ({
+                    ...prev,
+                    [row.id]: { sales_gl_account_id: null, purchases_gl_account_id: null, stock_gl_account_id: null },
+                  }));
+                  setNewDepartmentName("");
+                }}
+                className="bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800"
+              >
+                Add Department
+              </button>
+            </div>
             <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="min-w-full text-sm border-collapse">
                 <thead>
@@ -422,24 +517,41 @@ export function AdminJournalAccountsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  <tr className="border-b border-slate-100 bg-white">
-                    <td className="px-3 py-3 font-medium text-slate-800 align-top">Bar</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_revenue_bar_id", "income")}</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_cogs_bar_id", "expense")}</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_inventory_bar_id", "asset")}</td>
-                  </tr>
-                  <tr className="border-b border-slate-100 bg-slate-50/30">
-                    <td className="px-3 py-3 font-medium text-slate-800 align-top">Kitchen / F&amp;B</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_revenue_kitchen_id", "income")}</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_cogs_kitchen_id", "expense")}</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_inventory_kitchen_id", "asset")}</td>
-                  </tr>
-                  <tr className="bg-white">
-                    <td className="px-3 py-3 font-medium text-slate-800 align-top">Room / minibar</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_revenue_room_id", "income")}</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_cogs_room_id", "expense")}</td>
-                    <td className="px-3 py-2 align-top">{renderDeptAccountPicker("pos_inventory_room_id", "asset")}</td>
-                  </tr>
+                  {departments.map((dep, index) => (
+                    <tr key={dep.id} className={index % 2 === 0 ? "border-b border-slate-100 bg-white" : "border-b border-slate-100 bg-slate-50/30"}>
+                      <td className="px-3 py-3 font-medium text-slate-800 align-top">{dep.name}</td>
+                      <td className="px-3 py-2 align-top">
+                        <GlAccountPicker
+                          value={departmentGl[dep.id]?.sales_gl_account_id ?? ""}
+                          onChange={(v) => setDepartmentAccount(dep.id, "sales_gl_account_id", v || null)}
+                          options={accounts.filter((a) => a.account_type === "income").map((a) => ({ id: a.id, account_code: a.account_code, account_name: a.account_name }))}
+                          emptyOption={{ label: "Auto (income)" }}
+                          placeholder="Type code or name to search…"
+                          className="w-full min-w-[200px]"
+                        />
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <GlAccountPicker
+                          value={departmentGl[dep.id]?.purchases_gl_account_id ?? ""}
+                          onChange={(v) => setDepartmentAccount(dep.id, "purchases_gl_account_id", v || null)}
+                          options={accounts.filter((a) => a.account_type === "expense").map((a) => ({ id: a.id, account_code: a.account_code, account_name: a.account_name }))}
+                          emptyOption={{ label: "Auto (expense)" }}
+                          placeholder="Type code or name to search…"
+                          className="w-full min-w-[200px]"
+                        />
+                      </td>
+                      <td className="px-3 py-2 align-top">
+                        <GlAccountPicker
+                          value={departmentGl[dep.id]?.stock_gl_account_id ?? ""}
+                          onChange={(v) => setDepartmentAccount(dep.id, "stock_gl_account_id", v || null)}
+                          options={accounts.filter((a) => a.account_type === "asset").map((a) => ({ id: a.id, account_code: a.account_code, account_name: a.account_name }))}
+                          emptyOption={{ label: "Auto (asset)" }}
+                          placeholder="Type code or name to search…"
+                          className="w-full min-w-[200px]"
+                        />
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
