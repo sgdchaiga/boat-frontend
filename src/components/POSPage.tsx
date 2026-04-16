@@ -392,7 +392,11 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
 
       const [productsRes, staysRes, ordersRes, departmentsRes, customersRes, roomsRes, waitersRes, profilesRes] = await Promise.all([
         filterByOrganizationId(
-          supabase.from("products").select("id,name,sales_price,cost_price,track_inventory,department_id").eq("active", true),
+          supabase
+            .from("products")
+            .select("id,name,sales_price,cost_price,track_inventory,department_id,saleable")
+            .eq("active", true)
+            .eq("saleable", true),
           orgId,
           superAdmin
         ),

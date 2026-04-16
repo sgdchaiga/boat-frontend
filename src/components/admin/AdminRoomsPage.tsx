@@ -63,11 +63,16 @@ export function AdminRoomsPage() {
   };
 
   const saveRoomType = async () => {
+    if (!orgId && !superAdmin) {
+      alert("Missing organization on your staff profile. Contact admin to link your account.");
+      return;
+    }
     if (!typeName || !typePrice || Number(typePrice) <= 0) {
       alert("Enter name and valid base price.");
       return;
     }
     const payload = {
+      organization_id: orgId ?? null,
       name: typeName.trim(),
       description: typeDesc.trim() || null,
       base_price: Number(typePrice),
@@ -112,11 +117,16 @@ export function AdminRoomsPage() {
   };
 
   const saveRoom = async () => {
+    if (!orgId && !superAdmin) {
+      alert("Missing organization on your staff profile. Contact admin to link your account.");
+      return;
+    }
     if (!roomNumber.trim() || !roomFloor) {
       alert("Enter room number and floor.");
       return;
     }
     const { error } = await supabase.from("rooms").insert({
+      organization_id: orgId ?? null,
       room_number: roomNumber.trim(),
       floor: parseInt(roomFloor, 10) || 0,
       room_type_id: roomTypeId || null,
