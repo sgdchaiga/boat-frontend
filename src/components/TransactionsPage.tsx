@@ -119,6 +119,13 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
     setLoading(true);
     setFetchError(null);
     try {
+      if (!orgId && !superAdmin) {
+        setRows([]);
+        setCustomers([]);
+        setDepartments([]);
+        setFetchError("Missing organization on your staff profile. Contact admin to link your account.");
+        return;
+      }
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
       const fromStr = from.toISOString();
       const toStr = to.toISOString();

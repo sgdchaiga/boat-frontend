@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Plus, Minus, X, ShoppingCart, Loader2, RefreshCw, Wifi, WifiOff, TabletSmartphone, Hand, Pencil } from "lucide-react";
+import { Plus, Minus, X, ShoppingCart, Loader2, RefreshCw, Wifi, WifiOff, TabletSmartphone, Hand, Pencil, Printer } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { businessTodayISO, computeRangeInTimezone } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
@@ -195,6 +195,8 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const [vipGuestIds, setVipGuestIds] = useState<Record<string, boolean>>({});
   const [splitPercentA, setSplitPercentA] = useState("50");
   const [splitGuestCount, setSplitGuestCount] = useState("2");
+  const [promoEnabled, setPromoEnabled] = useState(true);
+  const [vipPricingEnabled, setVipPricingEnabled] = useState(true);
   const [pendingOfflineOrders, setPendingOfflineOrders] = useState<PendingOfflineOrder[]>([]);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodCode>("cash");
   const [loading, setLoading] = useState(true);
@@ -213,6 +215,12 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderDate, setEditingOrderDate] = useState("");
   const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
+  const [showPrintBill, setShowPrintBill] = useState(false);
+  const printRef = useRef<HTMLDivElement | null>(null);
+  const [showTableLayout, setShowTableLayout] = useState(true);
+  const [showOrderQueue, setShowOrderQueue] = useState(true);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [showPostedTransactions, setShowPostedTransactions] = useState(false);
   const [queueDate, setQueueDate] = useState(() => {
     const f = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Kampala", year: "numeric", month: "2-digit", day: "2-digit" });
     const p = f.formatToParts(new Date());
@@ -223,6 +231,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   });
   const [posVatEnabled, setPosVatEnabled] = useState(false);
   const [posVatRate, setPosVatRate] = useState<number | null>(null);
+  const compactView = !touchMode;
 
   /** Per-sale GL overrides (optional). Empty = use journal settings / chart fallbacks. */
   const [glAccounts, setGlAccounts] = useState<PosGlAccountRow[]>([]);
@@ -568,12 +577,25 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       const { from, to } = computeRangeInTimezone("custom", queueDate, queueDate);
       const orgId = user?.organization_id ?? undefined;
       const superAdmin = !!user?.isSuperAdmin;
+      let ordersByDateQuery = supabase
+        .from("kitchen_orders")
+        .select("id")
+        .gte("created_at", from.toISOString())
+        .lt("created_at", to.toISOString());
+      ordersByDateQuery = filterByOrganizationId(ordersByDateQuery, orgId, superAdmin);
+      const { data: orderRows, error: ordersErr } = await ordersByDateQuery;
+      if (ordersErr) throw ordersErr;
+      const orderIds = ((orderRows || []) as Array<{ id: string }>).map((r) => r.id);
+      if (orderIds.length === 0) {
+        setPostedTransactions([]);
+        setPostedTransactionDrafts({});
+        return;
+      }
       let query = supabase
         .from("payments")
         .select("id, transaction_id, paid_at, amount, payment_method, payment_status, edited_at, edited_by_name")
         .eq("payment_source", "pos_hotel")
-        .gte("paid_at", from.toISOString())
-        .lt("paid_at", to.toISOString())
+        .in("transaction_id", orderIds)
         .order("paid_at", { ascending: false });
       query = filterByOrganizationId(query, orgId, superAdmin);
       let data: any[] | null = null;
@@ -587,8 +609,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           .from("payments")
           .select("id, transaction_id, paid_at, amount, payment_method, payment_status")
           .eq("payment_source", "pos_hotel")
-          .gte("paid_at", from.toISOString())
-          .lt("paid_at", to.toISOString())
+          .in("transaction_id", orderIds)
           .order("paid_at", { ascending: false });
         fallbackQuery = filterByOrganizationId(fallbackQuery, orgId, superAdmin);
         const fallbackRes = await fallbackQuery;
@@ -750,6 +771,28 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     return tableLayout[table]?.status ?? "available";
   };
 
+  const nextOrderStatus = (status: string): string | null => {
+    if (status === "pending") return "preparing";
+    if (status === "preparing") return "ready";
+    if (status === "ready") return "served";
+    return null;
+  };
+
+  const updateQueueOrderStatus = async (orderId: string, currentStatus: string) => {
+    const next = nextOrderStatus(currentStatus);
+    if (!next) return;
+    try {
+      const { error } = await supabase
+        .from("kitchen_orders")
+        .update({ order_status: next })
+        .eq("id", orderId);
+      if (error) throw error;
+      await loadData();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to update order status.");
+    }
+  };
+
   const addToCart = (product: Product) => {
     const safeProduct: Product = {
       ...product,
@@ -907,15 +950,17 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
 
   const total = useMemo(() => cart.reduce((s, i) => s + i.total, 0), [cart]);
   const promoDiscountAmount = useMemo(() => {
+    if (!promoEnabled) return 0;
     const code = promoCode.trim().toUpperCase();
     const pct = Number(promoDiscountPercent) || 0;
     if (!code || pct <= 0) return 0;
     return Math.round(total * (Math.min(80, pct) / 100) * 100) / 100;
-  }, [promoCode, promoDiscountPercent, total]);
+  }, [promoCode, promoDiscountPercent, promoEnabled, total]);
   const vipDiscountAmount = useMemo(() => {
+    if (!vipPricingEnabled) return 0;
     if (!selectedGuestId || !vipGuestIds[selectedGuestId]) return 0;
     return Math.round(total * 0.05 * 100) / 100;
-  }, [selectedGuestId, total, vipGuestIds]);
+  }, [selectedGuestId, total, vipGuestIds, vipPricingEnabled]);
   const payableTotal = Math.max(0, Math.round((total - promoDiscountAmount - vipDiscountAmount) * 100) / 100);
 
   const buildPosGlOverrides = (): PosJournalGlOverrides | undefined => {
@@ -1228,7 +1273,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
 
       const cartDescription = cart
         .map((i) => `${i.quantity}× ${i.product.name}${i.note ? ` (${i.note})` : ""}${i.menuType && i.menuType !== "all" ? ` [${i.menuType}]` : ""}`)
-        .join(", ") + (promoCode.trim() ? ` [PROMO:${promoCode.trim().toUpperCase()}]` : "");
+        .join(", ") + (promoEnabled && promoCode.trim() ? ` [PROMO:${promoCode.trim().toUpperCase()}]` : "");
       const entryDate = businessTodayISO();
 
       if (action === "bill_to_room" && selectedStay) {
@@ -1439,7 +1484,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   }
 
   return (
-    <div className="p-6 md:p-8">
+    <div className={`${compactView ? "p-4 md:p-5" : "p-6 md:p-8"}`}>
       <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-3xl font-bold text-slate-900">Hotel POS</h1>
@@ -1493,6 +1538,93 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             {touchMode ? <Hand className="w-3 h-3" /> : <TabletSmartphone className="w-3 h-3" />}
             {touchMode ? "Touch mode on" : "Touch mode off"}
           </button>
+          <div className="inline-flex flex-wrap items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2 py-1">
+            <label className="inline-flex items-center gap-1 text-[11px] text-slate-700">
+              <input type="checkbox" checked={happyHourEnabled} onChange={(e) => setHappyHourEnabled(e.target.checked)} />
+              HH
+            </label>
+            <input
+              type="time"
+              value={happyHourStart}
+              onChange={(e) => setHappyHourStart(e.target.value)}
+              className="h-7 border rounded px-1.5 text-[11px]"
+              disabled={!happyHourEnabled}
+            />
+            <input
+              type="time"
+              value={happyHourEnd}
+              onChange={(e) => setHappyHourEnd(e.target.value)}
+              className="h-7 border rounded px-1.5 text-[11px]"
+              disabled={!happyHourEnabled}
+            />
+            <input
+              type="number"
+              min="0"
+              max="90"
+              value={happyHourDiscountPercent}
+              onChange={(e) => setHappyHourDiscountPercent(e.target.value)}
+              className="h-7 w-16 border rounded px-1.5 text-[11px]"
+              placeholder="%"
+              disabled={!happyHourEnabled}
+            />
+            <label className="inline-flex items-center gap-1 text-[11px] text-slate-700">
+              <input type="checkbox" checked={promoEnabled} onChange={(e) => setPromoEnabled(e.target.checked)} />
+              Promo
+            </label>
+            <input
+              type="text"
+              value={promoCode}
+              onChange={(e) => setPromoCode(e.target.value)}
+              placeholder="Code"
+              className="h-7 w-20 border rounded px-1.5 text-[11px]"
+              disabled={!promoEnabled}
+            />
+            <input
+              type="number"
+              min="0"
+              max="80"
+              value={promoDiscountPercent}
+              onChange={(e) => setPromoDiscountPercent(e.target.value)}
+              placeholder="%"
+              className="h-7 w-14 border rounded px-1.5 text-[11px]"
+              disabled={!promoEnabled}
+            />
+            <label className="inline-flex items-center gap-1 text-[11px] text-slate-700">
+              <input type="checkbox" checked={vipPricingEnabled} onChange={(e) => setVipPricingEnabled(e.target.checked)} />
+              VIP
+            </label>
+            <label className="inline-flex items-center gap-1 text-[11px] text-slate-700">
+              <input
+                type="checkbox"
+                checked={!!vipGuestIds[selectedGuestId || ""]}
+                onChange={(e) =>
+                  setVipGuestIds((prev) => {
+                    const id = selectedGuestId || "";
+                    const next = { ...prev, [id]: e.target.checked };
+                    if (id) {
+                      void (async () => {
+                        try {
+                          await (supabase as any)
+                            .from("pos_customer_profiles")
+                            .upsert({
+                              organization_id: orgId ?? null,
+                              property_customer_id: id,
+                              vip: e.target.checked,
+                              updated_at: new Date().toISOString(),
+                            }, { onConflict: "property_customer_id" });
+                        } catch {
+                          // ignore (pre-migration)
+                        }
+                      })();
+                    }
+                    return next;
+                  })
+                }
+                disabled={!selectedGuestId || !vipPricingEnabled}
+              />
+              Guest VIP
+            </label>
+          </div>
           {pendingOfflineOrders.length > 0 && (
             <button
               type="button"
@@ -1509,16 +1641,24 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         <ReadOnlyNotice />
       )}
 
-      <div className="mb-6 bg-white rounded-xl border border-slate-200 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+      <div className="mb-4 bg-white rounded-xl border border-slate-200 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
             <h2 className="text-lg font-bold text-slate-900">Table Layout</h2>
             <PageNotes ariaLabel="Table layout help">
               <p>Live table status: occupied, reserved, cleaning, available.</p>
             </PageNotes>
           </div>
+          <button
+            type="button"
+            onClick={() => setShowTableLayout((v) => !v)}
+            className="text-xs px-2 py-1 border border-slate-300 rounded hover:bg-slate-50"
+          >
+            {showTableLayout ? "Hide" : "Show"}
+          </button>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+        {showTableLayout ? (
+        <div className={`grid grid-cols-3 sm:grid-cols-6 ${compactView ? "lg:grid-cols-12" : "lg:grid-cols-10"} gap-1.5`}>
           {BASE_TABLES.map((table) => {
             const status = getTableStatus(table);
             const selected = tableNumber === table;
@@ -1535,15 +1675,16 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                 key={table}
                 type="button"
                 onClick={() => setTableNumber(table)}
-                className={`border rounded-lg px-3 py-2 text-left ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
+                className={`border rounded-md px-2 py-1.5 text-left ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
               >
-                <p className="font-semibold text-sm">{table}</p>
-                <p className="text-[11px] uppercase">{status}</p>
+                <p className="font-semibold text-xs">{table}</p>
+                <p className="text-[10px] uppercase">{status}</p>
               </button>
             );
           })}
         </div>
-        {tableNumber && (
+        ) : null}
+        {showTableLayout && tableNumber && (
           <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
             <div>
               <label className="block text-xs text-slate-600 mb-1">Selected table</label>
@@ -1624,34 +1765,6 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               </select>
             </div>
           )}
-          <div className="mb-3 border rounded-lg p-3 bg-slate-50">
-            <div className="flex items-center gap-2 mb-2">
-              <p className="text-xs font-semibold text-slate-700">Happy hour & dynamic pricing</p>
-              <PageNotes ariaLabel="Pricing help">
-                <p>Configure time-based discounts here. Active discounts change item pricing immediately.</p>
-              </PageNotes>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
-              <label className="flex items-center gap-2 text-xs text-slate-700">
-                <input type="checkbox" checked={happyHourEnabled} onChange={(e) => setHappyHourEnabled(e.target.checked)} />
-                Enable
-              </label>
-              <input type="time" value={happyHourStart} onChange={(e) => setHappyHourStart(e.target.value)} className="border rounded px-2 py-1 text-xs" />
-              <input type="time" value={happyHourEnd} onChange={(e) => setHappyHourEnd(e.target.value)} className="border rounded px-2 py-1 text-xs" />
-              <input
-                type="number"
-                min="0"
-                max="90"
-                value={happyHourDiscountPercent}
-                onChange={(e) => setHappyHourDiscountPercent(e.target.value)}
-                className="border rounded px-2 py-1 text-xs"
-                placeholder="Discount %"
-              />
-            </div>
-            {happyHourEnabled && selectedMenuType === "bar" && isHappyHourNow() ? (
-              <p className="text-xs text-emerald-700 mt-2">Happy hour is active for bar menu.</p>
-            ) : null}
-          </div>
           <div className="mb-3">
             <label className="block text-xs font-medium text-slate-600 mb-1">Search products</label>
             <input
@@ -1661,7 +1774,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
             />
           </div>
-          <div className="rounded-xl border border-slate-200 bg-white p-3">
+          <div className={`rounded-xl border border-slate-200 bg-white p-3 ${compactView ? "max-h-[44vh] overflow-y-auto" : ""}`}>
             {filteredProducts.length === 0 ? (
               <p className="text-slate-500 py-6 text-sm text-center">
                 {productsError ? "Products failed to load." : "No products match your filters/search."}
@@ -1702,13 +1815,13 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </div>
 
         {/* Cart + Actions */}
-        <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 p-6">
+        <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 p-4 md:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
               <ShoppingCart className="w-5 h-5" />
               Active Order
             </h2>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <label className="text-sm font-medium text-slate-700">Date</label>
               <input
                 type="date"
@@ -1716,27 +1829,25 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                 onChange={(e) => setQueueDate(e.target.value)}
                 className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
               />
-            </div>
-          </div>
-
-          {/* Customer & Table */}
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div>
-              <label className="block text-xs font-medium text-slate-500 mb-1">Table</label>
+              <label className="text-sm font-medium text-slate-700">Table</label>
               <input
                 type="text"
                 placeholder="e.g. 5, Terrace"
                 value={tableNumber}
                 onChange={(e) => setTableNumber(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-36"
               />
             </div>
+          </div>
+
+          {/* Customer, pay method, bill-to-room */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-2">
             <div>
               <label className="block text-xs font-medium text-slate-500 mb-1">Customer</label>
               <select
                 value={selectedGuestId}
                 onChange={(e) => setSelectedGuestId(e.target.value)}
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm"
+                className="w-full border border-slate-200 rounded px-2 py-1.5 text-xs"
               >
                 <option value="">Select customer</option>
                 {hotelCustomers.map((g) => (
@@ -1746,56 +1857,77 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                 ))}
               </select>
             </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Pay Method</label>
+              <select
+                value={paymentMethod}
+                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodCode)}
+                className="w-full border rounded px-2 py-1.5 text-xs"
+              >
+                {PAYMENT_METHOD_SELECT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-600 mb-1">Bill to Room</label>
+              <select
+                value={selectedStay?.id ?? ""}
+                onChange={(e) => {
+                  const s = activeStays.find((x) => x.id === e.target.value);
+                  setSelectedStay(s || null);
+                }}
+                className="w-full border rounded px-2 py-1.5 text-xs"
+              >
+                <option value="">Select room</option>
+                {activeStays.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    Room {s.rooms?.room_number} – {s.hotel_customers?.first_name} {s.hotel_customers?.last_name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="grid grid-cols-2 gap-2 mb-3">
-            <input
-              type="text"
-              value={promoCode}
-              onChange={(e) => setPromoCode(e.target.value)}
-              placeholder="Promo code"
-              className="border rounded px-2 py-1 text-xs"
-            />
-            <input
-              type="number"
-              min="0"
-              max="80"
-              value={promoDiscountPercent}
-              onChange={(e) => setPromoDiscountPercent(e.target.value)}
-              placeholder="Promo %"
-              className="border rounded px-2 py-1 text-xs"
-            />
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5 mb-3">
+            <button
+              onClick={() => processOrder("send_kitchen")}
+              disabled={sending || cart.length === 0 || readOnly}
+              className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium py-1.5 text-xs"
+            >
+              {sending ? "..." : "Kitchen"}
+            </button>
+            <button
+              onClick={() => processOrder("pay_now")}
+              disabled={sending || cart.length === 0 || readOnly}
+              className="app-btn-primary font-medium py-1.5 text-xs disabled:cursor-not-allowed"
+            >
+              {sending ? "..." : "Pay Now"}
+            </button>
+            <button
+              onClick={() => processOrder("bill_to_room")}
+              disabled={sending || cart.length === 0 || readOnly}
+              className="bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium py-1.5 text-xs"
+            >
+              {sending ? "..." : "Bill Room"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowPrintBill(true)}
+              disabled={cart.length === 0}
+              className="border border-slate-300 text-slate-700 hover:bg-slate-50 rounded py-1.5 text-xs"
+            >
+              Print Bill
+            </button>
+            <button
+              onClick={holdCurrentTicket}
+              disabled={sending || cart.length === 0 || readOnly}
+              className="border border-slate-300 text-slate-700 hover:bg-slate-50 rounded py-1.5 text-xs"
+            >
+              Hold Ticket
+            </button>
           </div>
-          <label className="inline-flex items-center gap-2 text-xs text-slate-700 mb-3">
-            <input
-              type="checkbox"
-              checked={!!vipGuestIds[selectedGuestId || ""]}
-              onChange={(e) =>
-                setVipGuestIds((prev) => {
-                  const id = selectedGuestId || "";
-                  const next = { ...prev, [id]: e.target.checked };
-                  if (id) {
-                    void (async () => {
-                      try {
-                        await (supabase as any)
-                          .from("pos_customer_profiles")
-                          .upsert({
-                            organization_id: orgId ?? null,
-                            property_customer_id: id,
-                            vip: e.target.checked,
-                            updated_at: new Date().toISOString(),
-                          }, { onConflict: "property_customer_id" });
-                      } catch {
-                        // ignore (pre-migration)
-                      }
-                    })();
-                  }
-                  return next;
-                })
-              }
-              disabled={!selectedGuestId}
-            />
-            VIP guest pricing (5% off)
-          </label>
           <div className="grid grid-cols-2 gap-2 mb-3">
             <input
               type="text"
@@ -1809,7 +1941,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             <p className="text-xs text-slate-600 mb-2">Waiter on {tableNumber}: {selectedTableWaiterName}</p>
           ) : null}
 
-          <div className="space-y-4 min-h-[360px] max-h-[560px] overflow-y-auto mb-4 pr-1">
+          <div className={`space-y-4 ${compactView ? "min-h-[260px] max-h-[42vh]" : "min-h-[360px] max-h-[560px]"} overflow-y-auto mb-4 pr-1`}>
             {cart.length === 0 ? (
               <p className="text-slate-500 text-base py-8 text-center">No items in the active order yet. Add products to build the order.</p>
             ) : (
@@ -1968,64 +2100,6 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             )}
 
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Pay Now Method</label>
-              <select
-                value={paymentMethod}
-                onChange={(e) => setPaymentMethod(e.target.value as PaymentMethodCode)}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              >
-                {PAYMENT_METHOD_SELECT_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Room (Bill to Room)</label>
-              <select
-                value={selectedStay?.id ?? ""}
-                onChange={(e) => {
-                  const s = activeStays.find((x) => x.id === e.target.value);
-                  setSelectedStay(s || null);
-                }}
-                className="w-full border rounded-lg px-3 py-2 text-sm"
-              >
-                <option value="">Select room</option>
-                {activeStays.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    Room {s.rooms?.room_number} – {s.hotel_customers?.first_name} {s.hotel_customers?.last_name}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-1 gap-2">
-              <button
-                onClick={() => processOrder("send_kitchen")}
-                disabled={sending || cart.length === 0 || readOnly}
-                className={`w-full bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center justify-center gap-2 ${touchMode ? "py-3 text-base" : "py-2"}`}
-              >
-                {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
-                Send to Kitchen
-              </button>
-              <button
-                onClick={() => processOrder("pay_now")}
-                disabled={sending || cart.length === 0 || readOnly}
-                className={`app-btn-primary w-full font-medium disabled:cursor-not-allowed ${touchMode ? "py-3 text-base" : "py-2"}`}
-              >
-                {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
-                Pay Now
-              </button>
-              <button
-                onClick={() => processOrder("bill_to_room")}
-                disabled={sending || cart.length === 0 || readOnly}
-                className={`w-full bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-medium flex items-center justify-center gap-2 ${touchMode ? "py-3 text-base" : "py-2"}`}
-              >
-                {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
-                Bill to Room
-              </button>
               <button
                 onClick={() => processOrder("credit_sale")}
                 disabled={sending || cart.length === 0 || readOnly}
@@ -2033,13 +2107,6 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               >
                 {sending ? <Loader2 className="w-5 h-5 animate-spin" /> : null}
                 Credit Sale
-              </button>
-              <button
-                onClick={holdCurrentTicket}
-                disabled={sending || cart.length === 0 || readOnly}
-                className="w-full py-2 border border-slate-300 text-slate-700 hover:bg-slate-50 rounded-lg text-sm"
-              >
-                Hold Ticket
               </button>
             </div>
 
@@ -2091,6 +2158,13 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Order Queue</h2>
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowOrderQueue((v) => !v)}
+              className="text-xs px-2 py-1 border border-slate-300 rounded hover:bg-slate-50"
+            >
+              {showOrderQueue ? "Hide" : "Show"}
+            </button>
             <label className="text-sm font-medium text-slate-700">Status</label>
             <select
               value={queueStatusFilter}
@@ -2115,6 +2189,8 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             </select>
           </div>
         </div>
+        {!showOrderQueue ? null : (
+        <>
         {queueError ? (
           <p className="text-red-600 text-sm">Failed to load queue: {queueError}</p>
         ) : queue.length === 0 ? (
@@ -2159,7 +2235,20 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                   ))}
                 </div>
                 <p className="text-xs text-slate-400 mt-2">{new Date(o.created_at).toLocaleString()}</p>
-                <div className="mt-3 flex justify-end">
+                <div className="mt-3 flex items-center justify-end gap-2">
+                  {nextOrderStatus(o.order_status) ? (
+                    <button
+                      type="button"
+                      onClick={() => void updateQueueOrderStatus(o.id, o.order_status)}
+                      className="inline-flex items-center gap-1 px-2 py-1 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50 text-xs"
+                    >
+                      {o.order_status === "pending"
+                        ? "Mark Preparing"
+                        : o.order_status === "preparing"
+                          ? "Mark Ready"
+                          : "Mark Served"}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => startEditOrder(o)}
@@ -2172,6 +2261,8 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
               </div>
             ))}
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -2271,7 +2362,17 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       ) : null}
 
       <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
-        <h2 className="text-lg font-bold text-slate-900 mb-3">Staff Performance Analytics</h2>
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h2 className="text-lg font-bold text-slate-900">Staff Performance Analytics</h2>
+          <button
+            type="button"
+            onClick={() => setShowAnalytics((v) => !v)}
+            className="text-xs px-2 py-1 border border-slate-300 rounded hover:bg-slate-50"
+          >
+            {showAnalytics ? "Hide" : "Show"}
+          </button>
+        </div>
+        {showAnalytics ? (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
           {waiters.map((w) => {
             const waiterTables = Object.values(tableLayout).filter((t) => t.waiterId === w.id).map((t) => t.number);
@@ -2291,20 +2392,32 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           })}
           {waiters.length === 0 && <p className="text-sm text-slate-500">No waiter analytics yet.</p>}
         </div>
+        ) : null}
       </div>
 
       <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Posted Hotel POS Transactions</h2>
-          <button
-            type="button"
-            onClick={() => void loadPostedTransactions()}
-            className="inline-flex items-center gap-1 text-sm px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
-          >
-            <RefreshCw className="w-4 h-4" />
-            Refresh
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPostedTransactions((v) => !v)}
+              className="text-xs px-2 py-1 border border-slate-300 rounded hover:bg-slate-50"
+            >
+              {showPostedTransactions ? "Hide" : "Show"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void loadPostedTransactions()}
+              className="inline-flex items-center gap-1 text-sm px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Refresh
+            </button>
+          </div>
         </div>
+        {showPostedTransactions ? (
+        <>
         <p className="text-xs text-slate-500 mb-3">
           Edit posted POS payments for {queueDate}. Changes update the `payments` record only.
         </p>
@@ -2454,7 +2567,127 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             </table>
           </div>
         )}
+        </>
+        ) : null}
       </div>
+
+      {showPrintBill && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4">
+            <div className="flex items-center justify-between border-b px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Printer className="w-4 h-4 text-slate-700" />
+                <h3 className="text-sm font-semibold text-slate-900">Print POS Bill</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowPrintBill(false)}
+                className="text-xs px-2 py-1 border border-slate-300 rounded hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="px-4 py-3 flex gap-2 print:hidden">
+              <button
+                type="button"
+                onClick={() => {
+                  window.print();
+                }}
+                className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800"
+              >
+                <Printer className="w-4 h-4" />
+                Print
+              </button>
+              <p className="text-xs text-slate-500">
+                Use this to print a guest bill for the current cart.
+              </p>
+            </div>
+            <div
+              ref={printRef}
+              className="px-4 pb-4 pt-2 print:p-0"
+            >
+              <style>{`
+                @media print {
+                  body * { visibility: hidden; }
+                  #hotel-pos-print-bill, #hotel-pos-print-bill * { visibility: visible; }
+                  #hotel-pos-print-bill { position: absolute; left: 0; top: 0; width: 100%; background: white; padding: 1rem; }
+                }
+              `}</style>
+              <div id="hotel-pos-print-bill" className="text-sm text-slate-800">
+                <div className="mb-4 border-b pb-3">
+                  <h1 className="text-lg font-bold text-slate-900">Hotel POS Bill</h1>
+                  <p className="text-xs text-slate-600">
+                    {new Date().toLocaleDateString()} – {new Date().toLocaleTimeString()}
+                  </p>
+                  <p className="text-xs text-slate-600 mt-1">
+                    Table: {tableNumber || "—"}
+                    {selectedGuestId
+                      ? ` · Guest: ${
+                          hotelCustomers.find((g) => g.id === selectedGuestId)?.first_name || ""
+                        } ${
+                          hotelCustomers.find((g) => g.id === selectedGuestId)?.last_name || ""
+                        }`
+                      : ""}
+                  </p>
+                </div>
+                <table className="w-full mb-4">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-1 text-xs">Item</th>
+                      <th className="text-right py-1 text-xs">Qty</th>
+                      <th className="text-right py-1 text-xs">Price</th>
+                      <th className="text-right py-1 text-xs">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cart.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="py-3 text-center text-xs text-slate-500">
+                          No items in cart
+                        </td>
+                      </tr>
+                    ) : (
+                      cart.map((item) => (
+                        <tr key={item.product.id} className="border-b">
+                          <td className="py-1 pr-2 align-top">
+                            <div className="font-medium">{item.product.name || "Item"}</div>
+                            {item.note ? (
+                              <div className="text-[11px] text-slate-500">({item.note})</div>
+                            ) : null}
+                          </td>
+                          <td className="py-1 text-right align-top">{item.quantity}</td>
+                          <td className="py-1 text-right align-top">
+                            {getUnitPrice(item.product).toFixed(2)}
+                          </td>
+                          <td className="py-1 text-right align-top">
+                            {(getUnitPrice(item.product) * item.quantity).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+                <div className="border-t pt-2 space-y-1 text-right">
+                  <p className="text-xs text-slate-600">
+                    Subtotal: <span className="font-medium">{total.toFixed(2)}</span>
+                  </p>
+                  {(promoDiscountAmount > 0 || vipDiscountAmount > 0) && (
+                    <p className="text-xs text-slate-600">
+                      Discounts: -{(promoDiscountAmount + vipDiscountAmount).toFixed(2)}
+                    </p>
+                  )}
+                  <p className="text-sm font-bold">
+                    Total: {payableTotal.toFixed(2)}
+                  </p>
+                </div>
+                <p className="text-[11px] text-slate-500 text-center mt-4">
+                  Thank you.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -134,6 +134,12 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   const fetchData = async () => {
     try {
       setLoadError(null);
+      if (!orgId && !superAdmin) {
+        setBillings([]);
+        setActiveStays([]);
+        setLoadError("Missing organization on your staff profile. Contact admin to link your account.");
+        return;
+      }
       const billingsQuery = filterByOrganizationId(
         supabase
           .from("billing")
@@ -167,6 +173,10 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   const handleAddCharge = async () => {
     if (savingCharge) return;
     if (readOnly) return;
+    if (!orgId && !superAdmin) {
+      alert("Missing organization on your staff profile. Contact admin to link your account.");
+      return;
+    }
     if (!description || !amount) {
       alert("Please fill description and amount.");
       return;

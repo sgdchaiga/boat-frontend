@@ -40,6 +40,13 @@ export function FinancialReportsPage() {
   const fetchFinancialReport = async () => {
     setLoading(true);
     try {
+      if (!orgId && !superAdmin) {
+        setTotalCharges(0);
+        setTotalPayments(0);
+        setChargeTypeRows([]);
+        setPaymentMethodRows([]);
+        return;
+      }
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
       const fromStr = from.toISOString();
       const toStr = to.toISOString();

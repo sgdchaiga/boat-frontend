@@ -2,6 +2,8 @@ import { useEffect, useState, useRef } from "react";
 import { Hotel, Printer } from "lucide-react";
 import { APP_SHORT_NAME } from "../constants/branding";
 import { supabase } from "../lib/supabase";
+import { useAuth } from "../contexts/AuthContext";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 interface StayBill {
   id: string;
@@ -32,6 +34,9 @@ interface GuestBillProps {
 }
 
 export function GuestBill({ stay, onClose }: GuestBillProps) {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [charges, setCharges] = useState<BillingCharge[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,17 +46,32 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
     const fetch = async () => {
       setLoading(true);
       try {
-        const [chargesRes, paymentsRes] = await Promise.all([
+        if (!orgId && !superAdmin) {
+          setCharges([]);
+          setPayments([]);
+          return;
+        }
+        const chargesQ = filterByOrganizationId(
           supabase
             .from("billing")
             .select("id, description, amount, charge_type, charged_at")
             .eq("stay_id", stay.id)
             .order("charged_at", { ascending: true }),
+          orgId,
+          superAdmin
+        );
+        const paymentsQ = filterByOrganizationId(
           supabase
             .from("payments")
             .select("id, amount, payment_method, payment_status, paid_at")
             .eq("stay_id", stay.id)
             .order("paid_at", { ascending: true }),
+          orgId,
+          superAdmin
+        );
+        const [chargesRes, paymentsRes] = await Promise.all([
+          chargesQ,
+          paymentsQ,
         ]);
         if (chargesRes.data) setCharges(chargesRes.data as BillingCharge[]);
         if (paymentsRes.data) setPayments(paymentsRes.data as PaymentRow[]);
@@ -62,7 +82,7 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
       }
     };
     fetch();
-  }, [stay.id]);
+  }, [stay.id, orgId, superAdmin]);
 
   const totalCharges = charges.reduce((s, c) => s + Number(c.amount), 0);
   const totalPaid = payments

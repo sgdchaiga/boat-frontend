@@ -105,6 +105,34 @@ export function Dashboard({ onNavigate }: DashboardProps) {
   const fetchStats = async () => {
     try {
       setLoadError(null);
+      if (!orgId && !superAdmin) {
+        setStats({
+          totalRooms: 0,
+          availableRooms: 0,
+          occupiedRooms: 0,
+          maintenanceRooms: 0,
+          cleaningRooms: 0,
+          activeStays: 0,
+          todayCheckIns: 0,
+          todayCheckOuts: 0,
+          pendingReservations: 0,
+          totalGuests: 0,
+          pendingHousekeeping: 0,
+          occupancyRate: 0,
+        });
+        setHotelRev({
+          total: 0,
+          priorTotal: 0,
+          posHotel: 0,
+          stay: 0,
+          kitchen: 0,
+          debtor: 0,
+          roomChargesBilling: 0,
+        });
+        setKitchenOrdersActive(0);
+        setLoadError("Missing organization on your staff profile. Contact admin to link your account.");
+        return;
+      }
       const today = businessTodayISO();
 
       const { from: revFrom, to: revTo } = computeRangeInTimezone(revenueRange, "", "");

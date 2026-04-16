@@ -29,6 +29,10 @@ export function FinancialPaymentsByChargeTypePage() {
   const loadData = async () => {
     setLoading(true);
     try {
+      if (!orgId && !superAdmin) {
+        setRows([]);
+        return;
+      }
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
       const fromStr = from.toISOString();
       const toStr = to.toISOString();

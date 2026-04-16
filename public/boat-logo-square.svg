@@ -1,0 +1,37 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#020617"/>
+      <stop offset="1" stop-color="#0F172A"/>
+    </linearGradient>
+    <linearGradient id="sailMain" x1="500" y1="255" x2="758" y2="540" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#0EA5E9"/>
+    </linearGradient>
+    <linearGradient id="hull" x1="260" y1="705" x2="764" y2="705" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14B8A6"/>
+      <stop offset="1" stop-color="#06B6D4"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="188" fill="url(#bg)"/>
+  <rect x="64" y="64" width="896" height="896" rx="148" fill="#0A1020" stroke="#1E293B" stroke-width="4"/>
+
+  <!-- Mast -->
+  <rect x="496" y="232" width="28" height="420" rx="14" fill="#38BDF8"/>
+
+  <!-- Right sail -->
+  <path d="M524 238L730 540H524V238Z" fill="url(#sailMain)"/>
+
+  <!-- Left sail -->
+  <path d="M524 356L346 576H524V356Z" fill="#67E8F9" fill-opacity="0.95"/>
+
+  <!-- Hull -->
+  <path d="M234 640H790C744 742 651 804 512 804C373 804 280 742 234 640Z" fill="url(#hull)"/>
+  <path d="M252 694H772" stroke="#A5F3FC" stroke-width="12" stroke-linecap="round" opacity="0.65"/>
+
+  <!-- Brand -->
+  <text x="512" y="914" fill="#F8FAFC" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="110" font-weight="800" text-anchor="middle" letter-spacing="6">
+    BOAT
+  </text>
+</svg>
