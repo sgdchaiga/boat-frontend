@@ -1235,6 +1235,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         const { data: billingRow } = await supabase
           .from("billing")
           .insert({
+            organization_id: orgId ?? null,
             stay_id: selectedStay.id,
             description: cartDescription,
             amount: payableTotal,

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { createJournalForRoomCharge } from "../lib/journal";
 import {
   type ActiveStayOption,
@@ -22,6 +23,8 @@ type BillingSortKey = "id" | "customer" | "charge_type" | "description" | "amoun
 
 export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) {
   const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [billings, setBillings] = useState<BillingWithCustomer[]>([]);
   const [activeStays, setActiveStays] = useState<ActiveStayOption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -125,22 +128,29 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   );
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [orgId, superAdmin]);
 
   const fetchData = async () => {
     try {
       setLoadError(null);
-      const [billingsResult, staysResult] = await Promise.all([
+      const billingsQuery = filterByOrganizationId(
         supabase
           .from("billing")
           .select("*, stays(rooms(room_number), hotel_customers(first_name, last_name))")
           .order("charged_at", { ascending: false }),
+        orgId,
+        superAdmin
+      );
+      const staysQuery = filterByOrganizationId(
         supabase
           .from("stays")
           .select("id, room_id, actual_check_in, rooms(room_number), hotel_customers(first_name, last_name)")
           .is("actual_check_out", null),
-      ]);
+        orgId,
+        superAdmin
+      );
+      const [billingsResult, staysResult] = await Promise.all([billingsQuery, staysQuery]);
 
       if (billingsResult.error) throw billingsResult.error;
 
@@ -169,6 +179,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
     setSavingCharge(true);
     try {
       const payload = {
+        organization_id: orgId ?? null,
         description,
         charge_type: chargeType,
         amount: Number(amount),
