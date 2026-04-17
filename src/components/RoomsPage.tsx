@@ -3,12 +3,17 @@ import { BedDouble, Plus, CreditCard as Edit2, Search } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Database } from "../lib/database.types";
 import { PageNotes } from "./common/PageNotes";
+import { useAuth } from "../contexts/AuthContext";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 type Room = Database["public"]["Tables"]["rooms"]["Row"] & {
   room_types: { name: string; base_price: number } | null;
 };
 
 export function RoomsPage() {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [rooms, setRooms] = useState<Room[]>([]);
   const [occupiedRoomIds, setOccupiedRoomIds] = useState<Set<string>>(new Set());
   const [reservedRoomIds, setReservedRoomIds] = useState<Set<string>>(new Set());
@@ -24,7 +29,7 @@ export function RoomsPage() {
 
   useEffect(() => {
     fetchRooms();
-  }, []);
+  }, [orgId, superAdmin]);
 
   /* ----------------------------- */
   /* FETCH ROOMS + STAYS + RESERVATIONS */
@@ -33,23 +38,41 @@ export function RoomsPage() {
   const fetchRooms = async () => {
     try {
       setLoading(true);
+      if (!orgId && !superAdmin) {
+        setRooms([]);
+        setOccupiedRoomIds(new Set());
+        setReservedRoomIds(new Set());
+        return;
+      }
 
       const today = new Date().toISOString().slice(0, 10);
 
       const [roomsRes, staysRes, reservationsRes] = await Promise.all([
-        supabase
-          .from("rooms")
-          .select("*, room_types(name, base_price)")
-          .order("room_number"),
-        supabase
-          .from("stays")
-          .select("room_id")
-          .is("actual_check_out", null),
-        supabase
-          .from("reservations")
-          .select("room_id, check_in_date, check_out_date, status")
-          .in("status", ["pending", "confirmed", "checked_in"])
-          .gte("check_out_date", today)
+        filterByOrganizationId(
+          supabase
+            .from("rooms")
+            .select("*, room_types(name, base_price)")
+            .order("room_number"),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase
+            .from("stays")
+            .select("room_id")
+            .is("actual_check_out", null),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase
+            .from("reservations")
+            .select("room_id, check_in_date, check_out_date, status")
+            .in("status", ["pending", "confirmed", "checked_in"])
+            .gte("check_out_date", today),
+          orgId,
+          superAdmin
+        ),
       ]);
 
       if (roomsRes.error) throw roomsRes.error;
@@ -91,6 +114,7 @@ const addRoom = async () => {
       .from("rooms")
       .insert([
         {
+          organization_id: orgId ?? null,
           room_number: roomNumber,
           floor: floor,
           status: "available"
@@ -123,10 +147,14 @@ const addRoom = async () => {
 
   const updateRoomStatus = async (roomId: string, newStatus: string) => {
     try {
-      const { error } = await supabase
-        .from("rooms")
-        .update({ status: newStatus })
-        .eq("id", roomId);
+      const { error } = await filterByOrganizationId(
+        supabase
+          .from("rooms")
+          .update({ status: newStatus })
+          .eq("id", roomId),
+        orgId,
+        superAdmin
+      );
 
       if (error) throw error;
 
