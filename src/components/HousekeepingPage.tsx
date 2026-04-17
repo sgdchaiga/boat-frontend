@@ -3,6 +3,8 @@ import { Sparkles, Plus, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Database } from '../lib/database.types';
 import { PageNotes } from './common/PageNotes';
+import { useAuth } from '../contexts/AuthContext';
+import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
 
 type HousekeepingTask = Database['public']['Tables']['housekeeping_tasks']['Row'] & {
   rooms: { room_number: string } | null;
@@ -10,6 +12,9 @@ type HousekeepingTask = Database['public']['Tables']['housekeeping_tasks']['Row'
 };
 
 export function HousekeepingPage() {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [tasks, setTasks] = useState<HousekeepingTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -26,15 +31,28 @@ export function HousekeepingPage() {
 
   useEffect(() => {
     fetchTasks();
-  }, []);
+  }, [orgId, superAdmin]);
 
   useEffect(() => {
     if (!showAddModal) return;
     let cancelled = false;
     (async () => {
+      if (!orgId && !superAdmin) {
+        setRooms([]);
+        setStaffList([]);
+        return;
+      }
       const [roomsR, staffR] = await Promise.all([
-        supabase.from('rooms').select('id, room_number').order('room_number'),
-        supabase.from('staff').select('id, full_name').eq('is_active', true).order('full_name'),
+        filterByOrganizationId(
+          supabase.from('rooms').select('id, room_number').order('room_number'),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase.from('staff').select('id, full_name').eq('is_active', true).order('full_name'),
+          orgId,
+          superAdmin
+        ),
       ]);
       if (cancelled) return;
       setRooms(roomsR.data || []);
@@ -43,14 +61,22 @@ export function HousekeepingPage() {
     return () => {
       cancelled = true;
     };
-  }, [showAddModal]);
+  }, [showAddModal, orgId, superAdmin]);
 
   const fetchTasks = async () => {
     try {
-      const { data, error } = await supabase
-        .from('housekeeping_tasks')
-        .select('*, rooms(room_number), staff(full_name)')
-        .order('created_at', { ascending: false });
+      if (!orgId && !superAdmin) {
+        setTasks([]);
+        return;
+      }
+      const { data, error } = await filterByOrganizationId(
+        supabase
+          .from('housekeeping_tasks')
+          .select('*, rooms(room_number), staff(full_name)')
+          .order('created_at', { ascending: false }),
+        orgId,
+        superAdmin
+      );
 
       if (error) throw error;
       setTasks(data || []);
@@ -74,6 +100,7 @@ export function HousekeepingPage() {
         priority: newPriority,
         notes: newNotes.trim() || null,
         assigned_to: newAssignedTo || null,
+        organization_id: orgId ?? null,
       });
       if (error) throw error;
       setShowAddModal(false);
@@ -98,10 +125,14 @@ export function HousekeepingPage() {
         updates.completed_at = new Date().toISOString();
       }
 
-      const { error } = await supabase
-        .from('housekeeping_tasks')
-        .update(updates)
-        .eq('id', taskId);
+      const { error } = await filterByOrganizationId(
+        supabase
+          .from('housekeeping_tasks')
+          .update(updates)
+          .eq('id', taskId),
+        orgId,
+        superAdmin
+      );
 
       if (error) throw error;
       fetchTasks();

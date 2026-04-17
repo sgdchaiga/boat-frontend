@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import type { Database } from "../lib/database.types";
 import { PageNotes } from "./common/PageNotes";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
   hotel_customers: { id: string; first_name: string; last_name: string } | null;
@@ -25,6 +26,8 @@ type Room = {
 export function ReservationsPage() {
 
   const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [hotelCustomers, setHotelCustomers] = useState<PropertyCustomer[]>([]);
@@ -51,11 +54,18 @@ export function ReservationsPage() {
     (async () => {
       setLoading(true);
       try {
+        if (!orgId && !superAdmin) {
+          setReservations([]);
+          setHotelCustomers([]);
+          setRooms([]);
+          return;
+        }
         const today = new Date().toISOString().slice(0, 10);
         const [resRes, custRes] = await Promise.all([
-          supabase
-            .from("reservations")
-            .select(
+          filterByOrganizationId(
+            supabase
+              .from("reservations")
+              .select(
               `
         id,
         property_customer_id,
@@ -67,9 +77,16 @@ export function ReservationsPage() {
         hotel_customers(id, first_name, last_name),
         rooms(id, room_number)
       `
-            )
-            .order("check_in_date", { ascending: true }),
-          supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name"),
+              )
+              .order("check_in_date", { ascending: true }),
+            orgId,
+            superAdmin
+          ),
+          filterByOrganizationId(
+            supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name"),
+            orgId,
+            superAdmin
+          ),
         ]);
         if (cancelled) return;
         if (resRes.error) throw resRes.error;
@@ -87,11 +104,15 @@ export function ReservationsPage() {
             reservedRoomIds.add(r.room_id);
           }
         }
-        let roomQuery = supabase
-          .from("rooms")
-          .select("id,room_number, status")
-          .eq("status", "available")
-          .order("room_number");
+        let roomQuery = filterByOrganizationId(
+          supabase
+            .from("rooms")
+            .select("id,room_number, status")
+            .eq("status", "available")
+            .order("room_number"),
+          orgId,
+          superAdmin
+        );
         if (reservedRoomIds.size > 0) {
           roomQuery = roomQuery.not("id", "in", `(${[...reservedRoomIds].join(",")})`);
         }
@@ -107,16 +128,21 @@ export function ReservationsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [orgId, superAdmin]);
 
   /* -------------------- */
   /* LOAD DATA */
   /* -------------------- */
 
   const fetchReservations = async () => {
-    const { data, error } = await supabase
-      .from("reservations")
-      .select(
+    if (!orgId && !superAdmin) {
+      setReservations([]);
+      return;
+    }
+    const { data, error } = await filterByOrganizationId(
+      supabase
+        .from("reservations")
+        .select(
         `
         id,
         property_customer_id,
@@ -128,29 +154,44 @@ export function ReservationsPage() {
         hotel_customers(id, first_name, last_name),
         rooms(id, room_number)
       `
-      )
-      .order("check_in_date", { ascending: true });
+        )
+        .order("check_in_date", { ascending: true }),
+      orgId,
+      superAdmin
+    );
 
     if (!error) setReservations((data || []) as Reservation[]);
   };
 
   /** Room picker: small reservation query + available rooms (avoids stale React state after saves). */
   const fetchRooms = async () => {
+    if (!orgId && !superAdmin) {
+      setRooms([]);
+      return;
+    }
     const today = new Date().toISOString().slice(0, 10);
-    const { data: reservationsData } = await supabase
-      .from("reservations")
-      .select("room_id, check_out_date, status")
-      .in("status", ["pending", "confirmed", "checked_in"])
-      .gte("check_out_date", today);
+    const { data: reservationsData } = await filterByOrganizationId(
+      supabase
+        .from("reservations")
+        .select("room_id, check_out_date, status")
+        .in("status", ["pending", "confirmed", "checked_in"])
+        .gte("check_out_date", today),
+      orgId,
+      superAdmin
+    );
     const reservedRoomIds = new Set(
       (reservationsData || []).map((r) => r.room_id).filter(Boolean) as string[]
     );
 
-    let query = supabase
-      .from("rooms")
-      .select("id,room_number, status")
-      .eq("status", "available")
-      .order("room_number");
+    let query = filterByOrganizationId(
+      supabase
+        .from("rooms")
+        .select("id,room_number, status")
+        .eq("status", "available")
+        .order("room_number"),
+      orgId,
+      superAdmin
+    );
     if (reservedRoomIds.size > 0) {
       query = query.not("id", "in", `(${[...reservedRoomIds].join(",")})`);
     }
@@ -219,18 +260,21 @@ export function ReservationsPage() {
     try {
 
       if (editingReservation) {
-
-        await supabase
-          .from("reservations")
-          .update(form)
-          .eq("id", editingReservation.id);
-
+        await filterByOrganizationId(
+          supabase
+            .from("reservations")
+            .update(form)
+            .eq("id", editingReservation.id),
+          orgId,
+          superAdmin
+        );
       } else {
-
         await supabase
           .from("reservations")
-          .insert(form);
-
+          .insert({
+            ...form,
+            organization_id: orgId ?? null,
+          });
       }
 
       setShowForm(false);
@@ -267,11 +311,13 @@ export function ReservationsPage() {
         property_customer_id: reservation.property_customer_id,
         room_id: reservation.room_id,
         check_in_time: new Date().toISOString(),
+        organization_id: orgId ?? null,
       };
       const { data: staffRow } = await supabase
         .from("staff")
         .select("id")
         .eq("id", user.id)
+        .eq("organization_id", orgId ?? "")
         .maybeSingle();
       if (staffRow?.id) insertPayload.checked_in_by = staffRow.id;
 
@@ -281,15 +327,23 @@ export function ReservationsPage() {
 
       if (error) throw error;
 
-      await supabase
-        .from("reservations")
-        .update({ status: "checked_in" })
-        .eq("id", reservation.id);
+      await filterByOrganizationId(
+        supabase
+          .from("reservations")
+          .update({ status: "checked_in" })
+          .eq("id", reservation.id),
+        orgId,
+        superAdmin
+      );
 
-      await supabase
-        .from("rooms")
-        .update({ status: "occupied" })
-        .eq("id", reservation.room_id);
+      await filterByOrganizationId(
+        supabase
+          .from("rooms")
+          .update({ status: "occupied" })
+          .eq("id", reservation.room_id),
+        orgId,
+        superAdmin
+      );
 
       fetchReservations();
 

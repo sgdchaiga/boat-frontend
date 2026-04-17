@@ -1,0 +1,623 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 4922
+>>
+stream
+0.200025 w
+0 G
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+40. 801.8899999999999864 Td
+(Hotel POS Manager Quick Reference) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 777.8899999999999864 Td
+(Hotel POS Manager Quick Reference) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 749.8899999999999864 Td
+(Use this guide for oversight, approvals, and control actions in Hotel POS.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 721.8899999999999864 Td
+(1\) Manager Responsibilities) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 707.8899999999999864 Td
+(- Supervise order flow from cart to kitchen to payment.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 693.8899999999999864 Td
+(- Approve sensitive actions \(void/refund/overrides\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 679.8899999999999864 Td
+(- Ensure posted transactions match operational reality.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 665.8899999999999864 Td
+(- Enforce role-based access and PIN controls.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 637.8899999999999864 Td
+(2\) Approval and Override Rules) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 623.8899999999999864 Td
+(- Waiters must escalate sensitive edits/refunds to manager/supervisor.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 609.8899999999999864 Td
+(- Use Manager PIN only for valid, documented reasons.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 595.8899999999999864 Td
+(- Never approve without a clear reason captured in the system.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 581.8899999999999864 Td
+(- Refunded transactions are locked after refund state is applied.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 553.8899999999999864 Td
+(3\) Posted Transaction Controls) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 539.8899999999999864 Td
+(- Open Posted Hotel POS Transactions for selected date.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 525.8899999999999864 Td
+(- Review fields before save:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 511.8899999999999864 Td
+(- Amount) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 497.8899999999999864 Td
+(- Payment method) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 483.8899999999999864 Td
+(- Payment status) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 469.8899999999999864 Td
+(- Void/refund reason \(when required\)) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 455.8899999999999864 Td
+(- Confirm Last Edit details for audit traceability.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 441.8899999999999864 Td
+(- Reject or reverse improper changes immediately.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 413.8899999999999864 Td
+(4\) Queue and Service Oversight) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 399.8899999999999864 Td
+(- Monitor Order Queue by status/station \(Kitchen/Bar/Dessert\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 385.8899999999999864 Td
+(- Ensure delayed tickets are actioned quickly.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 371.8899999999999864 Td
+(- Authorize edits only for genuine corrections.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 357.8899999999999864 Td
+(- Prevent repeated modifications on same order without cause.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 329.8899999999999864 Td
+(5\) Billing and Settlement Checks) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 315.8899999999999864 Td
+(- Verify Pay Now entries reconcile to cash/card/mobile totals.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 301.8899999999999864 Td
+(- Verify Bill to Room entries map to correct active stays.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 287.8899999999999864 Td
+(- Review Credit Sale entries and ensure follow-up collection.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 273.8899999999999864 Td
+(- Spot-check printed bills against cart totals and posted amounts.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 245.8899999999999864 Td
+(6\) Security and Data Discipline) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 231.8899999999999864 Td
+(- Do not share manager credentials or PIN.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 217.8899999999999864 Td
+(- Ensure each staff user operates with own account.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 203.8899999999999864 Td
+(- Confirm organization-bound data visibility only.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 189.8899999999999864 Td
+(- Escalate any cross-hotel or cross-tenant data anomaly immediately.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 161.8899999999999864 Td
+(7\) End-of-Day Manager Checklist) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 147.8899999999999864 Td
+(- All active sessions reviewed; completed sessions closed.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 133.8899999999999864 Td
+(- No unexplained pending/preparing orders left in queue.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 119.8899999999999864 Td
+(- Posted payment totals reconciled with tender summaries.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 105.8899999999999864 Td
+(- Voids/refunds reviewed with reasons and approver accountability.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 91.8899999999999864 Td
+(- Exceptions documented for finance/admin follow-up.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 63.8899999999999864 Td
+(8\) Escalation Triggers) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 49.8899999999999864 Td
+(- Duplicate or suspicious payment edits.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 6 0 R
+>>
+endobj
+6 0 obj
+<<
+/Length 746
+>>
+stream
+0.200025 w
+0 G
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 801.8899999999999864 Td
+(- Missing reason for void/refund request.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 787.8899999999999864 Td
+(- Unmatched bill-to-room charge.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 773.8899999999999864 Td
+(- Repeated user access or role misuse.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 759.8899999999999864 Td
+(- Any suspected data leakage across hotels.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 731.8899999999999864 Td
+(---) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 703.8899999999999864 Td
+(Audience: Managers / Supervisors / Accountants  ) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 689.8899999999999864 Td
+(Module: Hotel POS  ) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 675.8899999999999864 Td
+(Version: 1.0) Tj
+ET
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R 5 0 R ]
+/Count 2
+>>
+endobj
+7 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+9 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+10 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+12 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+13 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+14 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+15 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+16 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+17 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+18 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+19 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+20 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 7 0 R
+/F2 8 0 R
+/F3 9 0 R
+/F4 10 0 R
+/F5 11 0 R
+/F6 12 0 R
+/F7 13 0 R
+/F8 14 0 R
+/F9 15 0 R
+/F10 16 0 R
+/F11 17 0 R
+/F12 18 0 R
+/F13 19 0 R
+/F14 20 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+21 0 obj
+<<
+/Producer (jsPDF 4.2.0)
+/CreationDate (D:20260417083436+03'00')
+>>
+endobj
+22 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 23
+0000000000 65535 f 
+0000006060 00000 n 
+0000007885 00000 n 
+0000000015 00000 n 
+0000000152 00000 n 
+0000005126 00000 n 
+0000005263 00000 n 
+0000006123 00000 n 
+0000006248 00000 n 
+0000006378 00000 n 
+0000006511 00000 n 
+0000006649 00000 n 
+0000006773 00000 n 
+0000006902 00000 n 
+0000007034 00000 n 
+0000007170 00000 n 
+0000007298 00000 n 
+0000007425 00000 n 
+0000007554 00000 n 
+0000007687 00000 n 
+0000007789 00000 n 
+0000008135 00000 n 
+0000008221 00000 n 
+trailer
+<<
+/Size 23
+/Root 22 0 R
+/Info 21 0 R
+/ID [ <D28FDCA35EC7A33389EE4B9C90ECEEF1> <D28FDCA35EC7A33389EE4B9C90ECEEF1> ]
+>>
+startxref
+8325
+%%EOF

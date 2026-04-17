@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import type { Database } from "../lib/database.types";
 import { PageNotes } from "./common/PageNotes";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
   hotel_customers: { id: string; first_name: string; last_name: string } | null;
@@ -12,6 +13,8 @@ type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
 export function CheckInPage() {
 
   const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -23,17 +26,22 @@ export function CheckInPage() {
 
   useEffect(() => {
     fetchReservations();
-  }, []);
+  }, [orgId, superAdmin]);
 
   const fetchReservations = async () => {
 
     setLoading(true);
 
     try {
+      if (!orgId && !superAdmin) {
+        setReservations([]);
+        return;
+      }
 
-      const { data, error } = await supabase
-        .from("reservations")
-        .select(
+      const { data, error } = await filterByOrganizationId(
+        supabase
+          .from("reservations")
+          .select(
           `
           id,
           property_customer_id,
@@ -45,9 +53,12 @@ export function CheckInPage() {
           hotel_customers(id, first_name, last_name),
           rooms(id, room_number)
         `
-        )
-        .in("status", ["pending", "confirmed"])
-        .order("check_in_date", { ascending: true });
+          )
+          .in("status", ["pending", "confirmed"])
+          .order("check_in_date", { ascending: true }),
+        orgId,
+        superAdmin
+      );
 
       if (error) throw error;
 
@@ -82,11 +93,14 @@ export function CheckInPage() {
 
       /* Check if already checked in */
 
-      const { data: existingStay } = await supabase
-        .from("stays")
-        .select("id")
-        .eq("reservation_id", reservation.id)
-        .maybeSingle();
+      const { data: existingStay } = await filterByOrganizationId(
+        supabase
+          .from("stays")
+          .select("id")
+          .eq("reservation_id", reservation.id),
+        orgId,
+        superAdmin
+      ).maybeSingle();
 
       if (existingStay) {
         alert("Guest already checked in");
@@ -103,26 +117,35 @@ export function CheckInPage() {
           property_customer_id: reservation.property_customer_id,
           room_id: reservation.room_id,
           actual_check_in: new Date().toISOString(),
-          checked_in_by: user.id
+          checked_in_by: user.id,
+          organization_id: orgId ?? null,
         });
 
       if (stayError) throw stayError;
 
       /* Update reservation */
 
-      const { error: reservationError } = await supabase
-        .from("reservations")
-        .update({ status: "checked_in" })
-        .eq("id", reservation.id);
+      const { error: reservationError } = await filterByOrganizationId(
+        supabase
+          .from("reservations")
+          .update({ status: "checked_in" })
+          .eq("id", reservation.id),
+        orgId,
+        superAdmin
+      );
 
       if (reservationError) throw reservationError;
 
       /* Update room status */
 
-      const { error: roomError } = await supabase
-        .from("rooms")
-        .update({ status: "occupied" })
-        .eq("id", reservation.room_id);
+      const { error: roomError } = await filterByOrganizationId(
+        supabase
+          .from("rooms")
+          .update({ status: "occupied" })
+          .eq("id", reservation.room_id),
+        orgId,
+        superAdmin
+      );
 
       if (roomError) throw roomError;
 

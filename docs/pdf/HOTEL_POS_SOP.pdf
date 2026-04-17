@@ -1,0 +1,763 @@
+%PDF-1.3
+%ºß¬à
+3 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 4 0 R
+>>
+endobj
+4 0 obj
+<<
+/Length 4719
+>>
+stream
+0.200025 w
+0 G
+BT
+/F2 14 Tf
+16.0999999999999979 TL
+0 g
+40. 801.8899999999999864 Td
+(Hotel POS SOP) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 777.8899999999999864 Td
+(Hotel POS SOP \(One-Page Guide\)) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 749.8899999999999864 Td
+(This quick guide is for front desk, waiters, supervisors, and managers using the current Hotel POS module.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 721.8899999999999864 Td
+(1\) Start of Shift) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 707.8899999999999864 Td
+(- Open Sales -> Hotel POS.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 693.8899999999999864 Td
+(- Confirm internet status \(Online/Offline\) at the top.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 679.8899999999999864 Td
+(- Select your table and click Open in the session bar.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 665.8899999999999864 Td
+(- Confirm your role access \(waiter/supervisor/manager/accountant\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 637.8899999999999864 Td
+(2\) Table and Session Use) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 623.8899999999999864 Td
+(- Use Table Layout to choose tables \(T1, VIP1, etc.\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 609.8899999999999864 Td
+(- Status color guide:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 595.8899999999999864 Td
+(- Green: available) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 581.8899999999999864 Td
+(- Amber: reserved) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 567.8899999999999864 Td
+(- Blue: cleaning) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 553.8899999999999864 Td
+(- Red: occupied) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 539.8899999999999864 Td
+(- Update table status and waiter assignment from the selected table section.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 525.8899999999999864 Td
+(- Close table session only after bill is cleared.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 497.8899999999999864 Td
+(3\) Taking Orders) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 483.8899999999999864 Td
+(- Choose Department and Menu \(Breakfast/Lunch/Bar/Room Service\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 469.8899999999999864 Td
+(- Search item in Search products.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 455.8899999999999864 Td
+(- Click product tile to add to cart.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 441.8899999999999864 Td
+(- For each cart item:) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 427.8899999999999864 Td
+(- Adjust quantity with +/-.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 413.8899999999999864 Td
+(- Add comment/note where needed.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 399.8899999999999864 Td
+(- Set Course and Fire timing if required.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 385.8899999999999864 Td
+(- Use Modifier for custom requests.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 357.8899999999999864 Td
+(4\) Customer and Pricing) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 343.8899999999999864 Td
+(- Set Table and \(optional\) Customer.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 329.8899999999999864 Td
+(- Use Promo code / Promo % if approved.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 315.8899999999999864 Td
+(- Mark VIP only for approved VIP guest records.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 301.8899999999999864 Td
+(- Verify total before posting.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 273.8899999999999864 Td
+(5\) Posting Order Actions) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 259.8899999999999864 Td
+(- Send to Kitchen: sends order for preparation, no payment posted.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 245.8899999999999864 Td
+(- Pay Now: posts completed payment immediately \(select payment method first\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 231.8899999999999864 Td
+(- Bill to Room: posts charge to selected active room stay.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 217.8899999999999864 Td
+(- Credit Sale: records sale with pending payment.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 203.8899999999999864 Td
+(- Hold Ticket: parks current cart for later resume.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 175.8899999999999864 Td
+(6\) Printing Bill) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 161.8899999999999864 Td
+(- Ensure cart has correct items and totals.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 147.8899999999999864 Td
+(- Click Print Bill in Hotel POS action buttons.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 133.8899999999999864 Td
+(- In preview popup, click Print.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 119.8899999999999864 Td
+(- Hand printed copy to guest/customer.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 91.8899999999999864 Td
+(7\) Order Queue Management) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 77.8899999999999864 Td
+(- Use queue filters: Status and Station \(Kitchen/Bar/Dessert\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 63.8899999999999864 Td
+(- Click Edit to adjust queued order date/items if needed.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 49.8899999999999864 Td
+(- Save changes immediately after edits.) Tj
+ET
+endstream
+endobj
+5 0 obj
+<</Type /Page
+/Parent 1 0 R
+/Resources 2 0 R
+/MediaBox [0 0 595.2799999999999727 841.8899999999999864]
+/Contents 6 0 R
+>>
+endobj
+6 0 obj
+<<
+/Length 2780
+>>
+stream
+0.200025 w
+0 G
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 787.8899999999999864 Td
+(8\) Posted Transactions and Controls) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 773.8899999999999864 Td
+(- Posted Hotel POS Transactions shows payments for selected date.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 759.8899999999999864 Td
+(- Editable by authorized roles \(manager/supervisor/accountant/admin\).) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 745.8899999999999864 Td
+(- Refunded transactions are locked.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 731.8899999999999864 Td
+(- Always enter valid void/refund reason where prompted.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 717.8899999999999864 Td
+(- Manager PIN override is required for sensitive waiter actions.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 689.8899999999999864 Td
+(9\) End of Shift Checklist) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 675.8899999999999864 Td
+(- Ensure no active cart is left unsaved.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 661.8899999999999864 Td
+(- Confirm all prepared orders are posted correctly.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 647.8899999999999864 Td
+(- Reconcile cash/mobile/card totals with posted payments.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 633.8899999999999864 Td
+(- Clear or close table sessions that are complete.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 619.8899999999999864 Td
+(- Report any mismatch immediately to supervisor.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 591.8899999999999864 Td
+(10\) Do/Don’t Rules) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 563.8899999999999864 Td
+(Do) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 549.8899999999999864 Td
+(- Confirm table, items, and totals before posting.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 535.8899999999999864 Td
+(- Use comments/modifiers for special guest requests.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 521.8899999999999864 Td
+(- Print and provide bill after verification.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 507.8899999999999864 Td
+(- Use role-approved workflows for edits/refunds.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 479.8899999999999864 Td
+(Don’t) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 465.8899999999999864 Td
+(- Do not post duplicate payments for the same order.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 451.8899999999999864 Td
+(- Do not refund/void without reason and approval.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 437.8899999999999864 Td
+(- Do not close a session with pending unsettled orders.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 423.8899999999999864 Td
+(- Do not share manager PIN.) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 395.8899999999999864 Td
+(---) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 367.8899999999999864 Td
+(Owner: Operations / Finance  ) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 353.8899999999999864 Td
+(Module: Hotel POS  ) Tj
+ET
+BT
+/F1 10 Tf
+11.5 TL
+0 g
+40. 339.8899999999999864 Td
+(Version: 1.0 \(Current system behavior\)) Tj
+ET
+endstream
+endobj
+1 0 obj
+<</Type /Pages
+/Kids [3 0 R 5 0 R ]
+/Count 2
+>>
+endobj
+7 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+8 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+9 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+10 0 obj
+<<
+/Type /Font
+/BaseFont /Helvetica-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+11 0 obj
+<<
+/Type /Font
+/BaseFont /Courier
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+12 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+13 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-Oblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+14 0 obj
+<<
+/Type /Font
+/BaseFont /Courier-BoldOblique
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+15 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Roman
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+16 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Bold
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+17 0 obj
+<<
+/Type /Font
+/BaseFont /Times-Italic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+18 0 obj
+<<
+/Type /Font
+/BaseFont /Times-BoldItalic
+/Subtype /Type1
+/Encoding /WinAnsiEncoding
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+19 0 obj
+<<
+/Type /Font
+/BaseFont /ZapfDingbats
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+20 0 obj
+<<
+/Type /Font
+/BaseFont /Symbol
+/Subtype /Type1
+/FirstChar 32
+/LastChar 255
+>>
+endobj
+2 0 obj
+<<
+/ProcSet [/PDF /Text /ImageB /ImageC /ImageI]
+/Font <<
+/F1 7 0 R
+/F2 8 0 R
+/F3 9 0 R
+/F4 10 0 R
+/F5 11 0 R
+/F6 12 0 R
+/F7 13 0 R
+/F8 14 0 R
+/F9 15 0 R
+/F10 16 0 R
+/F11 17 0 R
+/F12 18 0 R
+/F13 19 0 R
+/F14 20 0 R
+>>
+/XObject <<
+>>
+>>
+endobj
+21 0 obj
+<<
+/Producer (jsPDF 4.2.0)
+/CreationDate (D:20260417083436+03'00')
+>>
+endobj
+22 0 obj
+<<
+/Type /Catalog
+/Pages 1 0 R
+/OpenAction [3 0 R /FitH null]
+/PageLayout /OneColumn
+>>
+endobj
+xref
+0 23
+0000000000 65535 f 
+0000007892 00000 n 
+0000009717 00000 n 
+0000000015 00000 n 
+0000000152 00000 n 
+0000004923 00000 n 
+0000005060 00000 n 
+0000007955 00000 n 
+0000008080 00000 n 
+0000008210 00000 n 
+0000008343 00000 n 
+0000008481 00000 n 
+0000008605 00000 n 
+0000008734 00000 n 
+0000008866 00000 n 
+0000009002 00000 n 
+0000009130 00000 n 
+0000009257 00000 n 
+0000009386 00000 n 
+0000009519 00000 n 
+0000009621 00000 n 
+0000009967 00000 n 
+0000010053 00000 n 
+trailer
+<<
+/Size 23
+/Root 22 0 R
+/Info 21 0 R
+/ID [ <1DEC16FE357369B29D53C6EBA2A39081> <1DEC16FE357369B29D53C6EBA2A39081> ]
+>>
+startxref
+10157
+%%EOF

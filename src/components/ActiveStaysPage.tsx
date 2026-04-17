@@ -5,6 +5,7 @@ import { GuestBill } from './GuestBill';
 import { useAuth } from '../contexts/AuthContext';
 import type { Database } from '../lib/database.types';
 import { PageNotes } from './common/PageNotes';
+import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
 
 type Stay = Database['public']['Tables']['stays']['Row'] & {
   hotel_customers: { first_name: string; last_name: string; email: string | null } | null;
@@ -13,6 +14,8 @@ type Stay = Database['public']['Tables']['stays']['Row'] & {
 
 export function ActiveStaysPage() {
   const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [stays, setStays] = useState<Stay[]>([]);
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -20,15 +23,23 @@ export function ActiveStaysPage() {
 
   useEffect(() => {
     fetchActiveStays();
-  }, []);
+  }, [orgId, superAdmin]);
 
   const fetchActiveStays = async () => {
   try {
-    const { data, error } = await supabase
-      .from("stays")
-      .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
-      .is("actual_check_out", null)
-      .order("actual_check_in", { ascending: false });
+    if (!orgId && !superAdmin) {
+      setStays([]);
+      return;
+    }
+    const { data, error } = await filterByOrganizationId(
+      supabase
+        .from("stays")
+        .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
+        .is("actual_check_out", null)
+        .order("actual_check_in", { ascending: false }),
+      orgId,
+      superAdmin
+    );
 
     if (error) throw error;
 
@@ -51,29 +62,42 @@ export function ActiveStaysPage() {
         .from('staff')
         .select('id')
         .eq('id', user.id)
+        .eq('organization_id', orgId ?? '')
         .maybeSingle();
       if (staffRow?.id) updatePayload.checked_out_by = staffRow.id;
 
-      const { error: stayError } = await supabase
-        .from('stays')
-        .update(updatePayload)
-        .eq('id', stay.id);
+      const { error: stayError } = await filterByOrganizationId(
+        supabase
+          .from('stays')
+          .update(updatePayload)
+          .eq('id', stay.id),
+        orgId,
+        superAdmin
+      );
 
       if (stayError) throw stayError;
 
       if (stay.reservation_id) {
-        const { error: reservationError } = await supabase
-          .from('reservations')
-          .update({ status: 'checked_out' })
-          .eq('id', stay.reservation_id);
+        const { error: reservationError } = await filterByOrganizationId(
+          supabase
+            .from('reservations')
+            .update({ status: 'checked_out' })
+            .eq('id', stay.reservation_id),
+          orgId,
+          superAdmin
+        );
 
         if (reservationError) throw reservationError;
       }
 
-      const { error: roomError } = await supabase
-        .from('rooms')
-        .update({ status: 'cleaning' })
-        .eq('id', stay.rooms.id);
+      const { error: roomError } = await filterByOrganizationId(
+        supabase
+          .from('rooms')
+          .update({ status: 'cleaning' })
+          .eq('id', stay.rooms.id),
+        orgId,
+        superAdmin
+      );
 
       if (roomError) throw roomError;
 

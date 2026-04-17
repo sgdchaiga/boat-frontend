@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "pos:last2days": "node scripts/show-pos-transactions.mjs",
+    "sop:pdf": "node scripts/generate-sop-pdfs.mjs",
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
