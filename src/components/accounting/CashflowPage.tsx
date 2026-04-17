@@ -2,6 +2,8 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
 import { getDefaultGlAccounts } from "../../lib/journal";
+import { useAuth } from "../../contexts/AuthContext";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import {
   type GlAccountRow,
   type JournalLineRow,
@@ -35,6 +37,9 @@ type CashMovement = {
 type StatementMethod = "direct" | "indirect";
 
 export function CashflowPage() {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [view, setView] = useState<"statement" | "ledger">("statement");
   const [method, setMethod] = useState<StatementMethod>("indirect");
   const [dateRange, setDateRange] = useState<DateRangeKey>("this_month");
@@ -63,16 +68,26 @@ export function CashflowPage() {
 
   const fetchLedger = useCallback(async () => {
     if (!cashAccountId) return;
+    if (!orgId && !superAdmin) {
+      setQueryError("Missing organization on your staff profile. Contact admin to link your account.");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setQueryError(null);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
     const fromStr = from.toISOString().slice(0, 10);
     const toStr = to.toISOString().slice(0, 10);
 
-    const { data: entriesBefore, error: eBefore } = await supabase
-      .from("journal_entries")
-      .select("id")
-      .lt("entry_date", fromStr);
+    const { data: entriesBefore, error: eBefore } = await filterByOrganizationId(
+      supabase
+        .from("journal_entries")
+        .select("id")
+        .lt("entry_date", fromStr)
+        .eq("is_posted", true),
+      orgId,
+      superAdmin
+    );
     if (eBefore) {
       setQueryError(eBefore.message);
       setLoading(false);
@@ -82,11 +97,15 @@ export function CashflowPage() {
 
     let opening = 0;
     if (entryIdsBefore.length > 0) {
-      const { data: linesBefore, error: eOpen } = await supabase
-        .from("journal_entry_lines")
-        .select("debit, credit")
-        .eq("gl_account_id", cashAccountId)
-        .in("journal_entry_id", entryIdsBefore);
+      const { data: linesBefore, error: eOpen } = await filterByOrganizationId(
+        supabase
+          .from("journal_entry_lines")
+          .select("debit, credit")
+          .eq("gl_account_id", cashAccountId)
+          .in("journal_entry_id", entryIdsBefore),
+        orgId,
+        superAdmin
+      );
       if (eOpen) {
         setQueryError(eOpen.message);
         setLoading(false);
@@ -98,12 +117,17 @@ export function CashflowPage() {
       });
     }
 
-    const { data: entriesData, error: eEnt } = await supabase
-      .from("journal_entries")
-      .select("id, transaction_id, entry_date, description")
-      .gte("entry_date", fromStr)
-      .lte("entry_date", toStr)
-      .order("entry_date");
+    const { data: entriesData, error: eEnt } = await filterByOrganizationId(
+      supabase
+        .from("journal_entries")
+        .select("id, transaction_id, entry_date, description")
+        .gte("entry_date", fromStr)
+        .lte("entry_date", toStr)
+        .eq("is_posted", true)
+        .order("entry_date"),
+      orgId,
+      superAdmin
+    );
 
     if (eEnt) {
       setQueryError(eEnt.message);
@@ -120,11 +144,15 @@ export function CashflowPage() {
       return;
     }
 
-    const { data: linesData, error: eLines } = await supabase
-      .from("journal_entry_lines")
-      .select("journal_entry_id, debit, credit")
-      .eq("gl_account_id", cashAccountId)
-      .in("journal_entry_id", entryIds);
+    const { data: linesData, error: eLines } = await filterByOrganizationId(
+      supabase
+        .from("journal_entry_lines")
+        .select("journal_entry_id, debit, credit")
+        .eq("gl_account_id", cashAccountId)
+        .in("journal_entry_id", entryIds),
+      orgId,
+      superAdmin
+    );
 
     if (eLines) {
       setQueryError(eLines.message);
@@ -163,15 +191,24 @@ export function CashflowPage() {
     setOpeningBalance(opening);
     setClosingBalance(running);
     setLoading(false);
-  }, [cashAccountId, dateRange, customFrom, customTo]);
+  }, [cashAccountId, dateRange, customFrom, customTo, orgId, superAdmin]);
 
   const fetchAccountsForLedger = useCallback(async () => {
-    const { data, error } = await supabase
-      .from("gl_accounts")
-      .select("id, account_code, account_name, category")
-      .eq("account_type", "asset")
-      .eq("is_active", true)
-      .order("account_code");
+    if (!orgId && !superAdmin) {
+      setQueryError("Missing organization on your staff profile. Contact admin to link your account.");
+      setLoading(false);
+      return;
+    }
+    const { data, error } = await filterByOrganizationId(
+      supabase
+        .from("gl_accounts")
+        .select("id, account_code, account_name, category")
+        .eq("account_type", "asset")
+        .eq("is_active", true)
+        .order("account_code"),
+      orgId,
+      superAdmin
+    );
 
     if (error) {
       setQueryError(error.message);
@@ -193,19 +230,28 @@ export function CashflowPage() {
 
     setCashAccountId((prev) => prev || pick);
     if (!pick) setLoading(false);
-  }, []);
+  }, [orgId, superAdmin]);
 
   const fetchStatement = useCallback(async () => {
+    if (!orgId && !superAdmin) {
+      setQueryError("Missing organization on your staff profile. Contact admin to link your account.");
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setQueryError(null);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
     const fromStr = from.toISOString().slice(0, 10);
     const toStr = to.toISOString().slice(0, 10);
 
-    const { data: accData, error: eAcc } = await supabase
-      .from("gl_accounts")
-      .select("id, account_code, account_name, account_type, category")
-      .eq("is_active", true);
+    const { data: accData, error: eAcc } = await filterByOrganizationId(
+      supabase
+        .from("gl_accounts")
+        .select("id, account_code, account_name, account_type, category")
+        .eq("is_active", true),
+      orgId,
+      superAdmin
+    );
 
     if (eAcc) {
       setQueryError(eAcc.message);
@@ -232,19 +278,24 @@ export function CashflowPage() {
 
     const fetchLinesForEntries = async (entryIds: string[]) => {
       if (entryIds.length === 0) return [] as JournalLineRow[];
-      const { data, error } = await supabase
-        .from("journal_entry_lines")
-        .select("gl_account_id, debit, credit, journal_entry_id")
-        .in("journal_entry_id", entryIds);
+      const { data, error } = await filterByOrganizationId(
+        supabase
+          .from("journal_entry_lines")
+          .select("gl_account_id, debit, credit, journal_entry_id")
+          .in("journal_entry_id", entryIds),
+        orgId,
+        superAdmin
+      );
       if (error) throw new Error(error.message);
       return (data || []) as (JournalLineRow & { journal_entry_id: string })[];
     };
 
     const fetchEntryIds = async (cond: { lt?: string; lte?: string; gte?: string }) => {
-      let q = supabase.from("journal_entries").select("id");
+      let q = filterByOrganizationId(supabase.from("journal_entries").select("id"), orgId, superAdmin);
       if (cond.lt) q = q.lt("entry_date", cond.lt);
       if (cond.lte) q = q.lte("entry_date", cond.lte);
       if (cond.gte) q = q.gte("entry_date", cond.gte);
+      q = q.eq("is_posted", true);
       const { data, error } = await q;
       if (error) throw new Error(error.message);
       return ((data || []) as { id: string }[]).map((e) => e.id);
@@ -259,11 +310,16 @@ export function CashflowPage() {
       const linesThroughEnd = await fetchLinesForEntries(idsThroughEnd);
       const linesPeriod = await fetchLinesForEntries(periodEntryIds);
 
-      const { data: entriesPeriodMeta, error: eMeta } = await supabase
-        .from("journal_entries")
-        .select("id, reference_type, description, entry_date")
-        .gte("entry_date", fromStr)
-        .lte("entry_date", toStr);
+      const { data: entriesPeriodMeta, error: eMeta } = await filterByOrganizationId(
+        supabase
+          .from("journal_entries")
+          .select("id, reference_type, description, entry_date")
+          .gte("entry_date", fromStr)
+          .lte("entry_date", toStr)
+          .eq("is_posted", true),
+        orgId,
+        superAdmin
+      );
       if (eMeta) throw new Error(eMeta.message);
 
       const balBeginWC = cumulativeBalances(allAccounts, linesBeforeFrom);
@@ -356,7 +412,7 @@ export function CashflowPage() {
     } finally {
       setLoading(false);
     }
-  }, [dateRange, customFrom, customTo]);
+  }, [dateRange, customFrom, customTo, orgId, superAdmin]);
 
   useEffect(() => {
     fetchAccountsForLedger();

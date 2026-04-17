@@ -1,5 +1,6 @@
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
 
 /** Escape for CSV (Excel-compatible). */
 export function csvCell(value: string | number | null | undefined): string {
@@ -23,6 +24,38 @@ export function downloadCsv(filename: string, rows: (string | number)[][]): void
   URL.revokeObjectURL(url);
 }
 
+export function formatCurrency(
+  value: number,
+  options?: { currency?: string; locale?: string; minimumFractionDigits?: number; maximumFractionDigits?: number }
+): string {
+  const currency = options?.currency || "USD";
+  const locale = options?.locale || "en-US";
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency,
+    minimumFractionDigits: options?.minimumFractionDigits ?? 2,
+    maximumFractionDigits: options?.maximumFractionDigits ?? 2,
+  }).format(Number(value) || 0);
+}
+
+export function downloadXlsx(
+  filename: string,
+  rows: (string | number)[][],
+  options?: { companyName?: string; sheetName?: string }
+): void {
+  const finalRows: (string | number)[][] = [];
+  if (options?.companyName?.trim()) {
+    finalRows.push([options.companyName.trim()]);
+    finalRows.push([]);
+  }
+  finalRows.push(...rows);
+  const ws = XLSX.utils.aoa_to_sheet(finalRows);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, options?.sheetName || "Report");
+  const name = filename.endsWith(".xlsx") ? filename : `${filename}.xlsx`;
+  XLSX.writeFile(wb, name);
+}
+
 export type AccountingPdfSection = {
   title: string;
   head: string[];
@@ -35,9 +68,16 @@ export function exportAccountingPdf(options: {
   filename: string;
   sections: AccountingPdfSection[];
   footerLines?: string[];
+  companyName?: string;
 }): void {
   const doc = new jsPDF();
   let y = 16;
+  if (options.companyName?.trim()) {
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text(options.companyName.trim(), 14, y);
+    y += 7;
+  }
   doc.setFontSize(15);
   doc.setFont("helvetica", "bold");
   doc.text(options.title, 14, y);

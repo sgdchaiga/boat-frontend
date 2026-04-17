@@ -68,7 +68,8 @@ interface QueuedOrder {
   customer_name: string | null;
   order_status: string;
   created_at: string;
-  kitchen_order_items?: { id?: string; product_id?: string; quantity: number; notes?: string; products?: { name: string } }[];
+  kitchen_order_items?: { id?: string; product_id?: string; quantity: number; notes?: string; products?: { name: string; sales_price?: number | null } }[];
+  payments_total?: number;
 }
 
 type PosAction = "send_kitchen" | "pay_now" | "bill_to_room" | "credit_sale";
@@ -167,6 +168,11 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [activeStays, setActiveStays] = useState<ActiveStay[]>([]);
   const [queue, setQueue] = useState<QueuedOrder[]>([]);
+  const [payQueueOrder, setPayQueueOrder] = useState<QueuedOrder | null>(null);
+  const [payQueueAmount, setPayQueueAmount] = useState("");
+  const [payQueueMethod, setPayQueueMethod] = useState<PaymentMethodCode>("cash");
+  const [payQueueDate, setPayQueueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [savingQueuePayment, setSavingQueuePayment] = useState(false);
   const [selectedStay, setSelectedStay] = useState<ActiveStay | null>(null);
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [selectedGuestId, setSelectedGuestId] = useState<string>("");
@@ -437,10 +443,37 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             if (deptName.includes("bar")) return "bar";
             return "kitchen";
           })(),
-          products: i.product_id && productMap[i.product_id] ? { name: productMap[i.product_id].name } : { name: "Item" },
+          products:
+            i.product_id && productMap[i.product_id]
+              ? { name: productMap[i.product_id].name, sales_price: productMap[i.product_id].sales_price ?? 0 }
+              : { name: "Item", sales_price: 0 },
         })),
       }));
-      setQueue(queueWithProducts as unknown as QueuedOrder[]);
+      const orderIds = queueWithProducts.map((o: any) => String(o.id));
+      let paymentsMap: Record<string, number> = {};
+      if (orderIds.length > 0) {
+        const { data: paymentsData, error: payError } = await filterByOrganizationId(
+          supabase.from("payments").select("amount, payment_status, transaction_id").in("transaction_id", orderIds),
+          orgId,
+          superAdmin
+        );
+        if (payError) {
+          console.error("POS queue payments:", payError);
+        } else {
+          (paymentsData || []).forEach((p: any) => {
+            if (p.payment_status === "completed" && p.transaction_id) {
+              const key = String(p.transaction_id);
+              paymentsMap[key] = (paymentsMap[key] || 0) + Number(p.amount || 0);
+            }
+          });
+        }
+      }
+      setQueue(
+        (queueWithProducts as unknown as QueuedOrder[]).map((o) => ({
+          ...o,
+          payments_total: paymentsMap[o.id] || 0,
+        }))
+      );
       if (ordersRes.error) setQueueError(ordersRes.error.message);
       if (departmentsRes.data) setDepartments(departmentsRes.data as Department[]);
       if (customersRes.data) setHotelCustomers(customersRes.data as PropertyCustomer[]);
@@ -463,6 +496,58 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       console.error(e);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getQueueOrderTotals = (order: QueuedOrder) => {
+    const total = (order.kitchen_order_items || []).reduce((sum, item) => {
+      const price = Number(item.products?.sales_price ?? 0);
+      return sum + Number(item.quantity || 0) * price;
+    }, 0);
+    const paid = Number(order.payments_total || 0);
+    const balance = Math.max(0, total - paid);
+    return { total, paid, balance };
+  };
+
+  const openQueuePayModal = (order: QueuedOrder) => {
+    const { balance } = getQueueOrderTotals(order);
+    setPayQueueOrder(order);
+    setPayQueueAmount(balance.toFixed(2));
+    setPayQueueMethod("cash");
+    setPayQueueDate(new Date().toISOString().slice(0, 10));
+  };
+
+  const saveQueueOrderPayment = async () => {
+    if (!payQueueOrder) return;
+    const amount = Number(payQueueAmount);
+    const { balance } = getQueueOrderTotals(payQueueOrder);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert("Enter a valid payment amount.");
+      return;
+    }
+    if (amount > balance + 0.01) {
+      alert("Payment cannot exceed outstanding amount.");
+      return;
+    }
+    setSavingQueuePayment(true);
+    try {
+      const insertPayload: Record<string, unknown> = {
+        amount,
+        paid_at: `${payQueueDate}T12:00:00`,
+        payment_status: "completed",
+        payment_source: "pos_hotel",
+        transaction_id: payQueueOrder.id,
+        processed_by: user?.id ?? null,
+        ...(orgId ? { organization_id: orgId } : {}),
+      };
+      const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payQueueMethod);
+      if (error) throw error;
+      setPayQueueOrder(null);
+      await loadData();
+    } catch (e) {
+      alert(`Failed to record payment: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingQueuePayment(false);
     }
   };
 
@@ -2238,8 +2323,27 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                     </p>
                   ))}
                 </div>
+                {(() => {
+                  const { total, paid, balance } = getQueueOrderTotals(o);
+                  return (
+                    <div className="mt-2 border-t border-slate-100 pt-2 text-xs text-slate-600">
+                      <p>Total: {total.toFixed(2)}</p>
+                      <p>Paid: {paid.toFixed(2)}</p>
+                      <p className="font-semibold text-slate-800">Outstanding: {balance.toFixed(2)}</p>
+                    </div>
+                  );
+                })()}
                 <p className="text-xs text-slate-400 mt-2">{new Date(o.created_at).toLocaleString()}</p>
                 <div className="mt-3 flex items-center justify-end gap-2">
+                  {getQueueOrderTotals(o).balance > 0.01 ? (
+                    <button
+                      type="button"
+                      onClick={() => openQueuePayModal(o)}
+                      className="inline-flex items-center gap-1 px-2 py-1 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50 text-xs"
+                    >
+                      Pay Outstanding
+                    </button>
+                  ) : null}
                   {nextOrderStatus(o.order_status) ? (
                     <button
                       type="button"
@@ -2574,6 +2678,71 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </>
         ) : null}
       </div>
+
+      {payQueueOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !savingQueuePayment && setPayQueueOrder(null)}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">Settle Order</h3>
+            <p className="text-sm text-slate-600 mb-3">
+              Sale ID: <span className="font-mono">{payQueueOrder.id.slice(0, 8)}</span>
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Amount</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={payQueueAmount}
+                  onChange={(e) => setPayQueueAmount(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Payment date</label>
+                <input
+                  type="date"
+                  value={payQueueDate}
+                  onChange={(e) => setPayQueueDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Payment method</label>
+                <select
+                  value={payQueueMethod}
+                  onChange={(e) => setPayQueueMethod(e.target.value as PaymentMethodCode)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {PAYMENT_METHOD_SELECT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPayQueueOrder(null)}
+                  disabled={savingQueuePayment}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveQueueOrderPayment()}
+                  disabled={savingQueuePayment}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {savingQueuePayment ? "Saving..." : "Record Payment"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showPrintBill && (
         <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/40">

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
+import { useAuth } from "../../contexts/AuthContext";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 
 type GLAccount = { id: string; account_code: string; account_name: string; account_type: string };
 type LedgerLine = {
@@ -19,6 +21,9 @@ type LedgerLine = {
 };
 
 export function GeneralLedgerPage() {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [dateRange, setDateRange] = useState<DateRangeKey>("this_month");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -39,31 +44,25 @@ export function GeneralLedgerPage() {
     const fromStr = from.toISOString().slice(0, 10);
     const toStr = to.toISOString().slice(0, 10);
 
-    const { data: entriesData, error: e1 } = await supabase
-      .from("journal_entries")
-      .select("id, transaction_id, entry_date, description")
-      .gte("entry_date", fromStr)
-      .lte("entry_date", toStr)
-      .order("entry_date");
-
-    if (e1) {
-      setFetchError(e1.message);
+    if (!orgId && !superAdmin) {
+      setFetchError("Missing organization on your staff profile. Contact admin to link your account.");
       setLines([]);
       setLoading(false);
       return;
     }
 
-    if (!entriesData?.length) {
-      setLines([]);
-      setLoading(false);
-      return;
-    }
-
-    const entryIds = (entriesData as { id: string }[]).map((e) => e.id);
-    const { data: linesData, error: e2 } = await supabase
-      .from("journal_entry_lines")
-      .select("id, journal_entry_id, gl_account_id, debit, credit, line_description")
-      .in("journal_entry_id", entryIds);
+    const { data: linesData, error: e2 } = await filterByOrganizationId(
+      supabase
+        .from("journal_entry_lines")
+        .select(
+          "id, debit, credit, line_description, gl_accounts!inner(id, account_code, account_name, account_type), journal_entries!inner(id, transaction_id, entry_date, description)"
+        )
+        .gte("journal_entries.entry_date", fromStr)
+        .lte("journal_entries.entry_date", toStr)
+        .eq("journal_entries.is_posted", true),
+      orgId,
+      superAdmin
+    );
 
     if (e2) {
       setFetchError(e2.message);
@@ -72,10 +71,14 @@ export function GeneralLedgerPage() {
       return;
     }
 
-    const { data: accData, error: e3 } = await supabase
-      .from("gl_accounts")
-      .select("id, account_code, account_name, account_type")
-      .order("account_code");
+    const { data: accData, error: e3 } = await filterByOrganizationId(
+      supabase
+        .from("gl_accounts")
+        .select("id, account_code, account_name, account_type")
+        .order("account_code"),
+      orgId,
+      superAdmin
+    );
 
     if (e3) {
       setFetchError(e3.message);
@@ -86,12 +89,16 @@ export function GeneralLedgerPage() {
 
     setAccounts((accData || []) as GLAccount[]);
 
-    const entriesMap = Object.fromEntries((entriesData as { id: string; transaction_id: string | null; entry_date: string; description: string }[]).map((e) => [e.id, e]));
-    const accMap = Object.fromEntries(((accData || []) as GLAccount[]).map((a) => [a.id, a]));
-
-    const ledger: LedgerLine[] = (linesData || []).map((l: { id: string; journal_entry_id: string; gl_account_id: string; debit: number; credit: number; line_description: string | null }) => {
-      const ent = entriesMap[l.journal_entry_id];
-      const acc = accMap[l.gl_account_id];
+    const ledger: LedgerLine[] = (linesData || []).map((l: {
+      id: string;
+      debit: number;
+      credit: number;
+      line_description: string | null;
+      gl_accounts: { id: string; account_code: string; account_name: string; account_type: string } | null;
+      journal_entries: { transaction_id: string | null; entry_date: string; description: string } | null;
+    }) => {
+      const ent = l.journal_entries;
+      const acc = l.gl_accounts;
       return {
         id: l.id,
         transaction_id: ent?.transaction_id ?? null,
@@ -100,12 +107,12 @@ export function GeneralLedgerPage() {
         debit: Number(l.debit) || 0,
         credit: Number(l.credit) || 0,
         line_description: l.line_description,
-        account_id: l.gl_account_id,
+        account_id: acc?.id || "",
         account_code: acc?.account_code || "",
         account_name: acc?.account_name || "",
         account_type: acc?.account_type || "",
       };
-    });
+    }).filter((row) => !!row.account_id);
 
     setLines(ledger.sort((a, b) => a.account_code.localeCompare(b.account_code) || a.entry_date.localeCompare(b.entry_date)));
     setLoading(false);

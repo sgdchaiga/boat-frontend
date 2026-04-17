@@ -7,6 +7,7 @@ import { businessTodayISO } from "../../lib/timezone";
 import { orderGlAccountsWithExpensePreferences, fetchExpenseGlAccountPreferenceOrder } from "../../lib/manualJournalGlOptions";
 import { GlAccountPicker, type GlAccountOption } from "../common/GlAccountPicker";
 import { PageNotes } from "../common/PageNotes";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 
 type GLAccount = {
   id: string;
@@ -50,12 +51,22 @@ export function ManualJournalsPage() {
   }, [orgId, superAdmin]);
 
   const fetchAccounts = async () => {
+    if (!orgId && !superAdmin) {
+      setAccounts([]);
+      setExpenseGlPreferenceOrder([]);
+      setLoading(false);
+      return;
+    }
     const [accRes, prefOrder] = await Promise.all([
-      supabase
-        .from("gl_accounts")
-        .select("id, account_code, account_name, account_type")
-        .eq("is_active", true)
-        .order("account_code"),
+      filterByOrganizationId(
+        supabase
+          .from("gl_accounts")
+          .select("id, account_code, account_name, account_type")
+          .eq("is_active", true)
+          .order("account_code"),
+        orgId,
+        superAdmin
+      ),
       fetchExpenseGlAccountPreferenceOrder(orgId, superAdmin),
     ]);
     setAccounts((accRes.data || []) as GLAccount[]);

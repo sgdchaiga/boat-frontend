@@ -4,6 +4,7 @@
  */
 
 import { supabase } from "./supabase";
+import { filterByOrganizationId } from "./supabaseOrgFilter";
 import { resolveJournalAccountSettings } from "./journalAccountSettings";
 import {
   fetchFixedAssetCategoryGlMap,
@@ -119,11 +120,15 @@ export async function getDefaultGlAccounts(): Promise<{
 
   const settings = await resolveJournalAccountSettings(orgId ?? undefined);
 
-  const { data: accounts } = await supabase
-    .from("gl_accounts")
-    .select("id, account_type, category, account_name, account_code")
-    .eq("is_active", true)
-    .order("account_code");
+  const { data: accounts } = await filterByOrganizationId(
+    supabase
+      .from("gl_accounts")
+      .select("id, account_type, category, account_name, account_code")
+      .eq("is_active", true)
+      .order("account_code"),
+    orgId,
+    false
+  );
 
   const list = (accounts || []) as {
     id: string;
@@ -293,11 +298,16 @@ export async function deleteJournalEntryByReference(
   referenceType: JournalReferenceType,
   referenceId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const { error } = await supabase
-    .from("journal_entries")
-    .delete()
-    .eq("reference_type", referenceType)
-    .eq("reference_id", referenceId);
+  const orgId = await resolveOrganizationId();
+  const { error } = await filterByOrganizationId(
+    supabase
+      .from("journal_entries")
+      .delete()
+      .eq("reference_type", referenceType)
+      .eq("reference_id", referenceId),
+    orgId,
+    false
+  );
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
@@ -1085,12 +1095,17 @@ export async function createJournalForBill(
 
 /** Asset GL for vendor prepayment / excess (prepaid, advance, deposit, or unearned in name). */
 async function findVendorAdvanceAssetAccountId(): Promise<string | null> {
-  const { data } = await supabase
-    .from("gl_accounts")
-    .select("id, account_name, account_type")
-    .eq("is_active", true)
-    .eq("account_type", "asset")
-    .order("account_code");
+  const orgId = await resolveOrganizationId();
+  const { data } = await filterByOrganizationId(
+    supabase
+      .from("gl_accounts")
+      .select("id, account_name, account_type")
+      .eq("is_active", true)
+      .eq("account_type", "asset")
+      .order("account_code"),
+    orgId,
+    false
+  );
   const list = ((data || []) as { id: string; account_name: string }[]).filter(
     (a) => !(a.account_name || "").toLowerCase().includes("cash")
   );
@@ -1263,21 +1278,30 @@ export async function createJournalForExpense(
 
 /** Default GL for bank fees (e.g. account 6400) for the organization. */
 export async function resolveBankChargesGlAccountId(_organizationId: string | null): Promise<string | null> {
-  const { data: byCode } = await supabase
-    .from("gl_accounts")
-    .select("id")
-    .eq("is_active", true)
-    .eq("account_code", "6400")
-    .maybeSingle();
+  const orgId = _organizationId ?? (await resolveOrganizationId());
+  const { data: byCode } = await filterByOrganizationId(
+    supabase
+      .from("gl_accounts")
+      .select("id")
+      .eq("is_active", true)
+      .eq("account_code", "6400")
+      .maybeSingle(),
+    orgId,
+    false
+  );
   if (byCode) return (byCode as { id: string }).id;
 
-  const { data: byName } = await supabase
-    .from("gl_accounts")
-    .select("id")
-    .eq("is_active", true)
-    .ilike("account_name", "%bank%charge%")
-    .limit(1)
-    .maybeSingle();
+  const { data: byName } = await filterByOrganizationId(
+    supabase
+      .from("gl_accounts")
+      .select("id")
+      .eq("is_active", true)
+      .ilike("account_name", "%bank%charge%")
+      .limit(1)
+      .maybeSingle(),
+    orgId,
+    false
+  );
   if (byName) return (byName as { id: string }).id;
 
   const acc = await getDefaultGlAccounts();
@@ -1420,20 +1444,42 @@ export interface BackfillResult {
   errors: string[];
 }
 
+export interface BackfillProgress {
+  phase:
+    | "loading-existing"
+    | "room_charge"
+    | "payment"
+    | "bill"
+    | "vendor_payment"
+    | "vendor_credit"
+    | "expense"
+    | "pos"
+    | "done";
+  phaseLabel: string;
+  processed: number;
+  total: number;
+  percent: number;
+}
+
 /**
  * Create journal entries for all existing transactions that don't already have one.
  * Call this once to backfill the journal_entries table from billing, payments, POS, bills, vendor_payments, expenses.
  */
 async function loadJournalReferenceIdsByType(): Promise<Record<string, Set<string>>> {
+  const orgId = await resolveOrganizationId();
   const refIds: Record<string, Set<string>> = {};
   const pageSize = 1000;
   let from = 0;
   for (;;) {
-    const { data, error } = await supabase
-      .from("journal_entries")
-      .select("reference_type, reference_id")
-      .not("reference_id", "is", null)
-      .range(from, from + pageSize - 1);
+    const { data, error } = await filterByOrganizationId(
+      supabase
+        .from("journal_entries")
+        .select("reference_type, reference_id")
+        .not("reference_id", "is", null)
+        .range(from, from + pageSize - 1),
+      orgId,
+      false
+    );
     if (error) throw error;
     if (!data?.length) break;
     for (const row of data) {
@@ -1450,7 +1496,15 @@ async function loadJournalReferenceIdsByType(): Promise<Record<string, Set<strin
   return refIds;
 }
 
-export async function backfillJournalEntries(): Promise<BackfillResult> {
+export async function backfillJournalEntries(options?: {
+  dryRun?: boolean;
+  onProgress?: (progress: BackfillProgress) => void;
+}): Promise<BackfillResult> {
+  const dryRun = !!options?.dryRun;
+  const reportProgress = (phase: BackfillProgress["phase"], phaseLabel: string, processed: number, total: number) => {
+    const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 100;
+    options?.onProgress?.({ phase, phaseLabel, processed, total, percent });
+  };
   const result: BackfillResult = {
     room_charge: 0,
     payment: 0,
@@ -1475,7 +1529,9 @@ export async function backfillJournalEntries(): Promise<BackfillResult> {
     return result;
   }
 
+  reportProgress("loading-existing", "Loading existing journal references", 0, 1);
   const refIds = await loadJournalReferenceIdsByType();
+  reportProgress("loading-existing", "Loaded existing references", 1, 1);
 
   const has = (type: string, id: string) => refIds[type]?.has(id) ?? false;
   const add = (type: string, id: string) => {
@@ -1485,100 +1541,135 @@ export async function backfillJournalEntries(): Promise<BackfillResult> {
 
   // Room charges (billing)
   const { data: billings } = await supabase.from("billing").select("id, amount, description, charged_at, created_by");
-  for (const b of billings || []) {
+  const billingsList = billings || [];
+  reportProgress("room_charge", "Backfilling room charges", 0, billingsList.length);
+  let billingsProcessed = 0;
+  for (const b of billingsList) {
     const row = b as { id: string; amount: number; description: string; charged_at: string; created_by: string | null };
     if (has("room_charge", row.id)) continue;
-    const jr = await createJournalForRoomCharge(
-      row.id,
-      Number(row.amount),
-      row.description || "Room charge",
-      row.charged_at || new Date().toISOString(),
-      backfillCreatedBy
-    );
+    const jr = dryRun
+      ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+      : await createJournalForRoomCharge(
+          row.id,
+          Number(row.amount),
+          row.description || "Room charge",
+          row.charged_at || new Date().toISOString(),
+          backfillCreatedBy
+        );
     if (jr.ok) {
       add("room_charge", row.id);
       result.room_charge++;
     } else {
       result.errors.push(`Billing ${row.id}: ${jr.error}`);
     }
+    billingsProcessed += 1;
+    reportProgress("room_charge", "Backfilling room charges", billingsProcessed, billingsList.length);
   }
 
   // Payments
   const { data: payments } = await supabase.from("payments").select("id, amount, paid_at, processed_by");
-  for (const p of payments || []) {
+  const paymentsList = payments || [];
+  reportProgress("payment", "Backfilling payments", 0, paymentsList.length);
+  let paymentsProcessed = 0;
+  for (const p of paymentsList) {
     const row = p as { id: string; amount: number; paid_at: string; processed_by: string | null };
     if (has("payment", row.id)) continue;
-    const jr = await createJournalForPayment(
-      row.id,
-      Number(row.amount),
-      row.paid_at || new Date().toISOString(),
-      backfillCreatedBy
-    );
+    const jr = dryRun
+      ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+      : await createJournalForPayment(
+          row.id,
+          Number(row.amount),
+          row.paid_at || new Date().toISOString(),
+          backfillCreatedBy
+        );
     if (jr.ok) {
       add("payment", row.id);
       result.payment++;
     } else {
       result.errors.push(`Payment ${row.id}: ${jr.error}`);
     }
+    paymentsProcessed += 1;
+    reportProgress("payment", "Backfilling payments", paymentsProcessed, paymentsList.length);
   }
 
   // Bills
   const { data: bills } = await supabase.from("bills").select("id, amount, description, bill_date");
-  for (const b of bills || []) {
+  const billsList = bills || [];
+  reportProgress("bill", "Backfilling bills", 0, billsList.length);
+  let billsProcessed = 0;
+  for (const b of billsList) {
     const row = b as { id: string; amount: number; description: string | null; bill_date: string | null };
     if (has("bill", row.id)) continue;
-    const jr = await createJournalForBill(
-      row.id,
-      Number(row.amount),
-      row.description,
-      row.bill_date || businessTodayISO(),
-      backfillCreatedBy
-    );
+    const jr = dryRun
+      ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+      : await createJournalForBill(
+          row.id,
+          Number(row.amount),
+          row.description,
+          row.bill_date || businessTodayISO(),
+          backfillCreatedBy
+        );
     if (jr.ok) {
       add("bill", row.id);
       result.bill++;
     } else {
       result.errors.push(`Bill ${row.id}: ${jr.error}`);
     }
+    billsProcessed += 1;
+    reportProgress("bill", "Backfilling bills", billsProcessed, billsList.length);
   }
 
   // Vendor payments
   const { data: vendorPayments } = await supabase.from("vendor_payments").select("id, amount, payment_date");
-  for (const v of vendorPayments || []) {
+  const vendorPaymentsList = vendorPayments || [];
+  reportProgress("vendor_payment", "Backfilling vendor payments", 0, vendorPaymentsList.length);
+  let vendorPaymentsProcessed = 0;
+  for (const v of vendorPaymentsList) {
     const row = v as { id: string; amount: number; payment_date: string };
     if (has("vendor_payment", row.id)) continue;
-    const jr = await createJournalForVendorPayment(
-      row.id,
-      Number(row.amount),
-      row.payment_date || businessTodayISO(),
-      backfillCreatedBy
-    );
+    const jr = dryRun
+      ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+      : await createJournalForVendorPayment(
+          row.id,
+          Number(row.amount),
+          row.payment_date || businessTodayISO(),
+          backfillCreatedBy
+        );
     if (jr.ok) {
       add("vendor_payment", row.id);
       result.vendor_payment++;
     } else {
       result.errors.push(`Vendor payment ${row.id}: ${jr.error}`);
     }
+    vendorPaymentsProcessed += 1;
+    reportProgress("vendor_payment", "Backfilling vendor payments", vendorPaymentsProcessed, vendorPaymentsList.length);
   }
 
   // Vendor credits
   const { data: vendorCredits } = await supabase.from("vendor_credits").select("id, amount, reason, credit_date");
-  for (const c of vendorCredits || []) {
+  const vendorCreditsList = vendorCredits || [];
+  reportProgress("vendor_credit", "Backfilling vendor credits", 0, vendorCreditsList.length);
+  let vendorCreditsProcessed = 0;
+  for (const c of vendorCreditsList) {
     const row = c as { id: string; amount: number; reason: string | null; credit_date: string | null };
     if (has("vendor_credit", row.id)) continue;
-    const jr = await createJournalForVendorCredit(
-      row.id,
-      Number(row.amount),
-      row.credit_date || businessTodayISO(),
-      row.reason,
-      backfillCreatedBy
-    );
+    const jr = dryRun
+      ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+      : await createJournalForVendorCredit(
+          row.id,
+          Number(row.amount),
+          row.credit_date || businessTodayISO(),
+          row.reason,
+          backfillCreatedBy
+        );
     if (jr.ok) {
       add("vendor_credit", row.id);
       result.vendor_credit++;
     } else {
       result.errors.push(`Vendor credit ${row.id}: ${jr.error}`);
     }
+    vendorCreditsProcessed += 1;
+    reportProgress("vendor_credit", "Backfilling vendor credits", vendorCreditsProcessed, vendorCreditsList.length);
   }
 
   // Expenses — use line-item GL accounts when expense_lines exist (same as Expenses page); else legacy single-line post.
@@ -1636,11 +1727,15 @@ export async function backfillJournalEntries(): Promise<BackfillResult> {
     }
   }
 
+  reportProgress("expense", "Backfilling expenses", 0, expenseList.length);
+  let expensesProcessed = 0;
   for (const row of expenseList) {
     if (has("expense", row.id)) continue;
     const lineRows = linesByExpenseId.get(row.id);
     let jr: JournalPostResult;
-    if (lineRows && lineRows.length > 0) {
+    if (dryRun) {
+      jr = { ok: true, journalId: `dryrun-${row.id}` };
+    } else if (lineRows && lineRows.length > 0) {
       const journalRows: ExpenseJournalLineInput[] = lineRows.map((l) => ({
         expense_gl_account_id: l.expense_gl_account_id,
         source_cash_gl_account_id: l.source_cash_gl_account_id,
@@ -1672,12 +1767,15 @@ export async function backfillJournalEntries(): Promise<BackfillResult> {
     } else {
       result.errors.push(`Expense ${row.id}: ${jr.error}`);
     }
+    expensesProcessed += 1;
+    reportProgress("expense", "Backfilling expenses", expensesProcessed, expenseList.length);
   }
 
   // POS (kitchen_orders): get orders with items and product prices to compute total
   const { data: orders } = await supabase.from("kitchen_orders").select("id, created_at");
   const orderIds = (orders || []).map((o: { id: string }) => o.id);
   if (orderIds.length > 0) {
+    reportProgress("pos", "Backfilling POS orders", 0, (orders || []).length);
     const { data: items } = await supabase
       .from("kitchen_order_items")
       .select("order_id, quantity, product_id")
@@ -1692,26 +1790,32 @@ export async function backfillJournalEntries(): Promise<BackfillResult> {
       if (!totalByOrder[i.order_id]) totalByOrder[i.order_id] = 0;
       totalByOrder[i.order_id] += (i.quantity || 0) * (priceMap[i.product_id] ?? 0);
     });
+    let posProcessed = 0;
     for (const o of orders || []) {
       const row = o as { id: string; created_at: string };
       if (has("pos", row.id)) continue;
       const total = totalByOrder[row.id] ?? 0;
       if (total <= 0) continue;
-      const jr = await createJournalForPosOrder(
-        row.id,
-        total,
-        "POS order (backfill)",
-        toBusinessDateString(row.created_at || new Date().toISOString()),
-        backfillCreatedBy
-      );
+      const jr = dryRun
+        ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+        : await createJournalForPosOrder(
+            row.id,
+            total,
+            "POS order (backfill)",
+            toBusinessDateString(row.created_at || new Date().toISOString()),
+            backfillCreatedBy
+          );
       if (jr.ok) {
         add("pos", row.id);
         result.pos++;
       } else {
         result.errors.push(`POS ${row.id}: ${jr.error}`);
       }
+      posProcessed += 1;
+      reportProgress("pos", "Backfilling POS orders", posProcessed, (orders || []).length);
     }
   }
 
+  reportProgress("done", dryRun ? "Dry run complete" : "Backfill complete", 1, 1);
   return result;
 }

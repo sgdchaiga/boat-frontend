@@ -4,6 +4,8 @@ import { businessTodayISO } from "../../lib/timezone";
 import { downloadCsv, exportAccountingPdf } from "../../lib/accountingReportExport";
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
+import { useAuth } from "../../contexts/AuthContext";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 
 type AccountTotal = { account_code: string; account_name: string; total: number };
 
@@ -19,6 +21,9 @@ function accountBalanceDelta(
 }
 
 export function BalanceSheetPage() {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
   const [asOfDate, setAsOfDate] = useState(() => businessTodayISO());
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
@@ -37,13 +42,8 @@ export function BalanceSheetPage() {
   const fetchData = async () => {
     setLoading(true);
     setFetchError(null);
-    const { data: entriesData, error: e1 } = await supabase
-      .from("journal_entries")
-      .select("id")
-      .lte("entry_date", asOfDate);
-
-    if (e1) {
-      setFetchError(e1.message);
+    if (!orgId && !superAdmin) {
+      setFetchError("Missing organization on your staff profile. Contact admin to link your account.");
       setAssets([]);
       setLiabilities([]);
       setEquity([]);
@@ -54,24 +54,32 @@ export function BalanceSheetPage() {
       setLoading(false);
       return;
     }
-
-    if (!entriesData?.length) {
-      setAssets([]);
-      setLiabilities([]);
-      setEquity([]);
-      setTotalAssets(0);
-      setTotalLiabilities(0);
-      setTotalEquity(0);
-      setNetIncome(0);
-      setLoading(false);
-      return;
-    }
-
-    const entryIds = (entriesData as { id: string }[]).map((e) => e.id);
-    const { data: linesData, error: e2 } = await supabase
-      .from("journal_entry_lines")
-      .select("gl_account_id, debit, credit")
-      .in("journal_entry_id", entryIds);
+    const [linesRes, accRes] = await Promise.all([
+      filterByOrganizationId(
+        supabase
+          .from("journal_entry_lines")
+          .select(
+            "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type), journal_entries!inner(entry_date)"
+          )
+          .lte("journal_entries.entry_date", asOfDate)
+          .eq("journal_entries.is_posted", true)
+          .in("gl_accounts.account_type", ["asset", "liability", "equity", "income", "expense"]),
+        orgId,
+        superAdmin
+      ),
+      filterByOrganizationId(
+        supabase
+          .from("gl_accounts")
+          .select("id, account_code, account_name, account_type")
+          .in("account_type", ["asset", "liability", "equity", "income", "expense"])
+          .eq("is_active", true)
+          .order("account_code"),
+        orgId,
+        superAdmin
+      ),
+    ]);
+    const linesData = linesRes.data;
+    const e2 = linesRes.error;
 
     if (e2) {
       setFetchError(e2.message);
@@ -86,13 +94,8 @@ export function BalanceSheetPage() {
       return;
     }
 
-    const { data: accData, error: e3 } = await supabase
-      .from("gl_accounts")
-      .select("id, account_code, account_name, account_type")
-      .in("account_type", ["asset", "liability", "equity", "income", "expense"]);
-
-    if (e3) {
-      setFetchError(e3.message);
+    if (accRes.error) {
+      setFetchError(accRes.error.message);
       setAssets([]);
       setLiabilities([]);
       setEquity([]);
@@ -104,15 +107,22 @@ export function BalanceSheetPage() {
       return;
     }
 
-    const accMap = Object.fromEntries(((accData || []) as { id: string; account_code: string; account_name: string; account_type: string }[]).map((a) => [a.id, a]));
+    const accounts = (accRes.data || []) as { id: string; account_code: string; account_name: string; account_type: string }[];
+    const accMap: Record<string, { id: string; account_code: string; account_name: string; account_type: string }> = Object.fromEntries(
+      accounts.map((a) => [a.id, a])
+    );
     const byAccount: Record<string, number> = {};
-    (linesData || []).forEach((l: { gl_account_id: string; debit: number; credit: number }) => {
-      const acc = accMap[l.gl_account_id];
+    (linesData || []).forEach((l: { debit: number; credit: number; gl_accounts: { id: string; account_code: string; account_name: string; account_type: string } | null }) => {
+      const acc = l.gl_accounts;
       if (!acc) return;
-      if (!byAccount[l.gl_account_id]) byAccount[l.gl_account_id] = 0;
+      accMap[acc.id] = acc;
+      if (!byAccount[acc.id]) byAccount[acc.id] = 0;
       const dr = Number(l.debit) || 0;
       const cr = Number(l.credit) || 0;
-      byAccount[l.gl_account_id] += accountBalanceDelta(acc.account_type, dr, cr);
+      byAccount[acc.id] += accountBalanceDelta(acc.account_type, dr, cr);
+    });
+    accounts.forEach((acc) => {
+      if (!(acc.id in byAccount)) byAccount[acc.id] = 0;
     });
 
     const a: AccountTotal[] = [], li: AccountTotal[] = [], eq: AccountTotal[] = [];
