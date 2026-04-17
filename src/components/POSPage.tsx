@@ -1726,9 +1726,9 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         )}
       </div>
 
-      <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Products */}
-        <div className="xl:col-span-2">
+        <div className="lg:col-span-2">
           <div className="flex items-center gap-2 mb-3">
             <h2 className="text-lg font-bold text-slate-900">Products</h2>
             <PageNotes ariaLabel="Products help">
@@ -1819,7 +1819,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </div>
 
         {/* Cart + Actions */}
-        <div className="xl:col-span-3 bg-white rounded-xl border border-slate-200 p-4 md:p-5">
+        <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-4 md:p-5">
           <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
             <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
               <ShoppingCart className="w-5 h-5" />
