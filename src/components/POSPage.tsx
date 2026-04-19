@@ -242,7 +242,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
   const [showPrintBill, setShowPrintBill] = useState(false);
   const printRef = useRef<HTMLDivElement | null>(null);
   const isWaiterCompact = compactMode === "waiter";
-  const [showTableLayout, setShowTableLayout] = useState(!isWaiterCompact);
+  const [showTableLayout, setShowTableLayout] = useState(true);
   const [showOrderQueue, setShowOrderQueue] = useState(!isWaiterCompact);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showPostedTransactions, setShowPostedTransactions] = useState(false);
@@ -1792,7 +1792,6 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
         <ReadOnlyNotice />
       )}
 
-      {!isWaiterCompact ? (
       <div className="mb-4 bg-white rounded-xl border border-slate-200 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
@@ -1810,34 +1809,64 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
           </button>
         </div>
         {showTableLayout ? (
-        <div className={`grid grid-cols-3 sm:grid-cols-6 ${compactView ? "lg:grid-cols-12" : "lg:grid-cols-10"} gap-1.5`}>
-          {BASE_TABLES.map((table) => {
-            const status = getTableStatus(table);
-            const selected = tableNumber === table;
-            const statusClass =
-              status === "occupied"
-                ? "bg-red-50 border-red-200 text-red-700"
-                : status === "reserved"
-                  ? "bg-amber-50 border-amber-200 text-amber-700"
-                  : status === "cleaning"
-                    ? "bg-blue-50 border-blue-200 text-blue-700"
-                    : "bg-emerald-50 border-emerald-200 text-emerald-700";
-            return (
-              <button
-                key={table}
-                type="button"
-                onClick={() => setTableNumber(table)}
-                className={`border rounded-md px-2 py-1.5 text-left ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
-              >
-                <p className="font-semibold text-xs">{table}</p>
-                <p className="text-[10px] uppercase">{status}</p>
-              </button>
-            );
-          })}
-        </div>
+          isWaiterCompact ? (
+            <div className="overflow-x-auto pb-1">
+              <div className="flex items-stretch gap-1.5 min-w-max">
+                {BASE_TABLES.map((table) => {
+                  const status = getTableStatus(table);
+                  const selected = tableNumber === table;
+                  const statusClass =
+                    status === "occupied"
+                      ? "bg-red-50 border-red-200 text-red-700"
+                      : status === "reserved"
+                        ? "bg-amber-50 border-amber-200 text-amber-700"
+                        : status === "cleaning"
+                          ? "bg-blue-50 border-blue-200 text-blue-700"
+                          : "bg-emerald-50 border-emerald-200 text-emerald-700";
+                  return (
+                    <button
+                      key={table}
+                      type="button"
+                      onClick={() => setTableNumber(table)}
+                      className={`border rounded-md text-left px-3 py-2.5 min-h-[56px] min-w-[84px] ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
+                    >
+                      <p className="font-semibold text-sm">{table}</p>
+                      <p className="text-xs uppercase">{status}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className={`grid grid-cols-3 sm:grid-cols-6 ${compactView ? "lg:grid-cols-12" : "lg:grid-cols-10"} gap-1.5`}>
+              {BASE_TABLES.map((table) => {
+                const status = getTableStatus(table);
+                const selected = tableNumber === table;
+                const statusClass =
+                  status === "occupied"
+                    ? "bg-red-50 border-red-200 text-red-700"
+                    : status === "reserved"
+                      ? "bg-amber-50 border-amber-200 text-amber-700"
+                      : status === "cleaning"
+                        ? "bg-blue-50 border-blue-200 text-blue-700"
+                        : "bg-emerald-50 border-emerald-200 text-emerald-700";
+                return (
+                  <button
+                    key={table}
+                    type="button"
+                    onClick={() => setTableNumber(table)}
+                    className={`border rounded-md px-2 py-1.5 text-left ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
+                  >
+                    <p className="font-semibold text-xs">{table}</p>
+                    <p className="text-[10px] uppercase">{status}</p>
+                  </button>
+                );
+              })}
+            </div>
+          )
         ) : null}
         {showTableLayout && tableNumber && (
-          <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-2">
+          <div className={`mt-3 grid ${isWaiterCompact ? "grid-cols-1 sm:grid-cols-3" : "grid-cols-1 md:grid-cols-3"} gap-2`}>
             <div>
               <label className="block text-xs text-slate-600 mb-1">Selected table</label>
               <input value={tableNumber} readOnly className="w-full border rounded px-2 py-1.5 text-sm bg-slate-50" />
@@ -1873,7 +1902,6 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
           </div>
         )}
       </div>
-      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Products */}
