@@ -97,15 +97,11 @@ export function CashflowPage() {
 
     let opening = 0;
     if (entryIdsBefore.length > 0) {
-      const { data: linesBefore, error: eOpen } = await filterByOrganizationId(
-        supabase
-          .from("journal_entry_lines")
-          .select("debit, credit")
-          .eq("gl_account_id", cashAccountId)
-          .in("journal_entry_id", entryIdsBefore),
-        orgId,
-        superAdmin
-      );
+      const { data: linesBefore, error: eOpen } = await supabase
+        .from("journal_entry_lines")
+        .select("debit, credit")
+        .eq("gl_account_id", cashAccountId)
+        .in("journal_entry_id", entryIdsBefore);
       if (eOpen) {
         setQueryError(eOpen.message);
         setLoading(false);
@@ -144,15 +140,11 @@ export function CashflowPage() {
       return;
     }
 
-    const { data: linesData, error: eLines } = await filterByOrganizationId(
-      supabase
-        .from("journal_entry_lines")
-        .select("journal_entry_id, debit, credit")
-        .eq("gl_account_id", cashAccountId)
-        .in("journal_entry_id", entryIds),
-      orgId,
-      superAdmin
-    );
+    const { data: linesData, error: eLines } = await supabase
+      .from("journal_entry_lines")
+      .select("journal_entry_id, debit, credit")
+      .eq("gl_account_id", cashAccountId)
+      .in("journal_entry_id", entryIds);
 
     if (eLines) {
       setQueryError(eLines.message);
@@ -278,14 +270,10 @@ export function CashflowPage() {
 
     const fetchLinesForEntries = async (entryIds: string[]) => {
       if (entryIds.length === 0) return [] as JournalLineRow[];
-      const { data, error } = await filterByOrganizationId(
-        supabase
-          .from("journal_entry_lines")
-          .select("gl_account_id, debit, credit, journal_entry_id")
-          .in("journal_entry_id", entryIds),
-        orgId,
-        superAdmin
-      );
+      const { data, error } = await supabase
+        .from("journal_entry_lines")
+        .select("gl_account_id, debit, credit, journal_entry_id")
+        .in("journal_entry_id", entryIds);
       if (error) throw new Error(error.message);
       return (data || []) as (JournalLineRow & { journal_entry_id: string })[];
     };

@@ -3,7 +3,7 @@ import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
-import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 
 type GLAccount = { id: string; account_code: string; account_name: string; account_type: string };
 type LedgerLine = {
@@ -51,7 +51,7 @@ export function GeneralLedgerPage() {
       return;
     }
 
-    const { data: linesData, error: e2 } = await filterByOrganizationId(
+    const { data: linesData, error: e2 } = await filterJournalLinesByOrganizationId(
       supabase
         .from("journal_entry_lines")
         .select(

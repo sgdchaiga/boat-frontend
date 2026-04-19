@@ -5,7 +5,7 @@ import { downloadCsv, exportAccountingPdf } from "../../lib/accountingReportExpo
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
-import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 
 type AccountTotal = { account_code: string; account_name: string; total: number };
 
@@ -55,7 +55,7 @@ export function BalanceSheetPage() {
       return;
     }
     const [linesRes, accRes] = await Promise.all([
-      filterByOrganizationId(
+      filterJournalLinesByOrganizationId(
         supabase
           .from("journal_entry_lines")
           .select(

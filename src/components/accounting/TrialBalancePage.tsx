@@ -5,7 +5,7 @@ import { downloadCsv, exportAccountingPdf } from "../../lib/accountingReportExpo
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
-import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 
 type AccountBalance = {
   account_id: string;
@@ -48,7 +48,7 @@ export function TrialBalancePage() {
     }
 
     const [linesRes, accRes] = await Promise.all([
-      filterByOrganizationId(
+      filterJournalLinesByOrganizationId(
         supabase
           .from("journal_entry_lines")
           .select(

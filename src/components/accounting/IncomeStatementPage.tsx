@@ -5,11 +5,10 @@ import { downloadXlsx, exportAccountingPdf, formatCurrency } from "../../lib/acc
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
-import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
 
 type AccountTotal = { account_id: string; account_code: string; account_name: string; total: number };
-type Department = { id: string; name: string };
 type TrendPoint = { period: string; revenue: number; expenses: number };
 type ExpenseSlice = { name: string; value: number };
 type DrillLine = {
@@ -51,10 +50,6 @@ export function IncomeStatementPage() {
   const [previousTotalRevenue, setPreviousTotalRevenue] = useState(0);
   const [previousTotalExpenses, setPreviousTotalExpenses] = useState(0);
   const [previousLabel, setPreviousLabel] = useState("Previous");
-  const [selectedBranch, setSelectedBranch] = useState("");
-  const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
-  const [departments, setDepartments] = useState<Department[]>([]);
-  const [branchOptions, setBranchOptions] = useState<string[]>([]);
   const [companyName, setCompanyName] = useState("Business");
   const [trendData, setTrendData] = useState<TrendPoint[]>([]);
   const [expenseBreakdown, setExpenseBreakdown] = useState<ExpenseSlice[]>([]);
@@ -63,12 +58,11 @@ export function IncomeStatementPage() {
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillError, setDrillError] = useState<string | null>(null);
   const totalsCacheRef = useRef<Map<string, TotalsSnapshot>>(new Map());
-  const departmentsCacheRef = useRef<Map<string, Department[]>>(new Map());
   const requestSeqRef = useRef(0);
 
   useEffect(() => {
     fetchData();
-  }, [dateRange, debouncedCustomFrom, debouncedCustomTo, selectedBranch, selectedDepartmentId, compareRange]);
+  }, [dateRange, debouncedCustomFrom, debouncedCustomTo, compareRange]);
 
   useEffect(() => {
     if (dateRange !== "custom") {
@@ -125,35 +119,22 @@ export function IncomeStatementPage() {
     }
 
     const fetchTotalsForRange = async (fromDate: string, toDate: string) => {
-      const cacheKey = [
-        orgId || "platform",
-        superAdmin ? "super" : "tenant",
-        fromDate,
-        toDate,
-        selectedBranch || "-",
-        selectedDepartmentId || "-",
-      ].join("|");
+      const cacheKey = [orgId || "platform", superAdmin ? "super" : "tenant", fromDate, toDate].join("|");
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
-      let linesQuery = supabase
+      const linesQuery = supabase
         .from("journal_entry_lines")
         .select(
-          "debit, credit, dimensions, gl_accounts!inner(id, account_code, account_name, account_type), journal_entries!inner(entry_date)"
+          "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type), journal_entries!inner(entry_date)"
         )
         .gte("journal_entries.entry_date", fromDate)
         .lte("journal_entries.entry_date", toDate)
         .eq("journal_entries.is_posted", true)
         .in("gl_accounts.account_type", ["income", "expense"]);
-      if (selectedBranch) {
-        linesQuery = linesQuery.eq("dimensions->>branch", selectedBranch);
-      }
-      if (selectedDepartmentId) {
-        linesQuery = linesQuery.eq("dimensions->>department_id", selectedDepartmentId);
-      }
 
       const [linesRes, accRes] = await Promise.all([
-        filterByOrganizationId(linesQuery, orgId, superAdmin),
+        filterJournalLinesByOrganizationId(linesQuery, orgId, superAdmin),
         filterByOrganizationId(
           supabase
             .from("gl_accounts")
@@ -173,18 +154,14 @@ export function IncomeStatementPage() {
       const accMap: Record<string, { id: string; account_code: string; account_name: string; account_type: string }> = Object.fromEntries(
         accounts.map((a) => [a.id, a])
       );
-      const branches = new Set<string>();
       const byAccount: Record<string, number> = {};
       (linesRes.data || []).forEach((l: {
         debit: number;
         credit: number;
-        dimensions?: Record<string, unknown> | null;
         gl_accounts: { id: string; account_code: string; account_name: string; account_type: string } | null;
       }) => {
         const acc = l.gl_accounts;
         if (!acc) return;
-        const branch = typeof l.dimensions?.branch === "string" ? l.dimensions.branch.trim() : "";
-        if (branch) branches.add(branch);
         accMap[acc.id] = acc;
         if (!byAccount[acc.id]) byAccount[acc.id] = 0;
         if (acc.account_type === "income") byAccount[acc.id] += (Number(l.credit) || 0) - (Number(l.debit) || 0);
@@ -244,7 +221,7 @@ export function IncomeStatementPage() {
         expenseRows: exp,
         totalRevenue: tr,
         totalExpenses: te,
-        branches: Array.from(branches).sort((a, b) => a.localeCompare(b)),
+        branches: [] as string[],
         trend,
         expenseBreakdown,
       };
@@ -253,25 +230,8 @@ export function IncomeStatementPage() {
     };
     try {
       const currentRes = await fetchTotalsForRange(fromStr, toStr);
-      const deptCacheKey = `${orgId || "platform"}|${superAdmin ? "super" : "tenant"}`;
-      let deptRows = departmentsCacheRef.current.get(deptCacheKey);
-      if (!deptRows) {
-        const deptRes = await filterByOrganizationId(
-          supabase
-            .from("departments")
-            .select("id, name")
-            .order("name"),
-          orgId,
-          superAdmin
-        );
-        if (deptRes.error) throw new Error(deptRes.error.message);
-        deptRows = (deptRes.data || []) as Department[];
-        departmentsCacheRef.current.set(deptCacheKey, deptRows);
-      }
 
       if (requestSeq !== requestSeqRef.current) return;
-      setDepartments(deptRows);
-      setBranchOptions(currentRes.branches);
       setRevenue(currentRes.revenueRows);
       setExpenses(currentRes.expenseRows);
       setTotalRevenue(currentRes.totalRevenue);
@@ -347,19 +307,17 @@ export function IncomeStatementPage() {
       const { from, to } = computeRangeInTimezone(dateRange, effectiveCustomFrom, effectiveCustomTo);
       const fromStr = from.toISOString().slice(0, 10);
       const toStr = to.toISOString().slice(0, 10);
-      let q = supabase
+      const q = supabase
         .from("journal_entry_lines")
         .select(
-          "id, debit, credit, line_description, dimensions, journal_entries!inner(id, entry_date, description, transaction_id, reference_type), gl_accounts!inner(id)"
+          "id, debit, credit, line_description, journal_entries!inner(id, entry_date, description, transaction_id, reference_type), gl_accounts!inner(id)"
         )
         .eq("gl_account_id", account.id)
         .gte("journal_entries.entry_date", fromStr)
         .lte("journal_entries.entry_date", toStr)
         .eq("journal_entries.is_posted", true)
         .order("entry_date", { ascending: false, referencedTable: "journal_entries" });
-      if (selectedBranch) q = q.eq("dimensions->>branch", selectedBranch);
-      if (selectedDepartmentId) q = q.eq("dimensions->>department_id", selectedDepartmentId);
-      const { data, error } = await filterByOrganizationId(q, orgId, superAdmin);
+      const { data, error } = await filterJournalLinesByOrganizationId(q, orgId, superAdmin);
       if (error) throw new Error(error.message);
       const rows = ((data || []) as Array<{
         id: string;
@@ -439,6 +397,10 @@ export function IncomeStatementPage() {
               Revenue and expenses (P&amp;L) only. A sale appears under revenue; a purchase bill appears under expense. Cash and payables are on the
               balance sheet and cash flow, not here.
             </p>
+            <p className="mt-2">
+              This report uses all posted journal lines for income and expense accounts (no per-branch filter unless your database has optional{" "}
+              <code className="text-xs">journal_entry_lines.dimensions</code>).
+            </p>
           </PageNotes>
         </div>
       </div>
@@ -472,14 +434,6 @@ export function IncomeStatementPage() {
               <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border rounded-lg px-3 py-2" />
             </>
           )}
-          <select value={selectedBranch} onChange={(e) => setSelectedBranch(e.target.value)} className="border rounded-lg px-3 py-2">
-            <option value="">All branches</option>
-            {branchOptions.map((branch) => (
-              <option key={branch} value={branch}>
-                {branch}
-              </option>
-            ))}
-          </select>
           <select
             value={compareRange}
             onChange={(e) => setCompareRange(e.target.value as "none" | "previous_period" | "same_period_last_year")}
@@ -488,18 +442,6 @@ export function IncomeStatementPage() {
             <option value="none">No comparison</option>
             <option value="previous_period">Compare with previous period</option>
             <option value="same_period_last_year">Compare with same period last year</option>
-          </select>
-          <select
-            value={selectedDepartmentId}
-            onChange={(e) => setSelectedDepartmentId(e.target.value)}
-            className="border rounded-lg px-3 py-2"
-          >
-            <option value="">All departments</option>
-            {departments.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
           </select>
         </div>
         {!loading && !fetchError && <AccountingExportButtons onExcel={exportExcel} onPdf={exportPdf} />}
