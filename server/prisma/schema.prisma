@@ -25,10 +25,13 @@ model Organization {
   enableAccounting   Boolean  @default(true) @map("enable_accounting")
   enableReports      Boolean  @default(true) @map("enable_reports")
   enableAdmin        Boolean  @default(true) @map("enable_admin")
+  enableCommunications Boolean @default(true) @map("enable_communications")
+  enableWallet       Boolean  @default(true) @map("enable_wallet")
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   staff Staff[]
+  notificationMessages NotificationMessage[]
 
   @@map("organizations")
 }
@@ -47,4 +50,26 @@ model Staff {
   organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 
   @@map("staff")
+}
+
+model NotificationMessage {
+  id                String   @id @default(uuid()) @db.Uuid
+  channel           String
+  to                String
+  provider          String
+  providerMessageId String   @unique @map("provider_message_id")
+  status            String
+  templateId        String?  @map("template_id")
+  text              String?
+  variables         Json?
+  organizationId    String?  @map("organization_id") @db.Uuid
+  error             String?
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([provider, providerMessageId])
+  @@map("notification_messages")
 }

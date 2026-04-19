@@ -6,6 +6,8 @@ interface ImportMetaEnv {
   /** `true` | `1` | `yes` = skip requiring Supabase URL/key (use with local JWT API + placeholder client). */
   readonly VITE_LOCAL_AUTH?: string;
   readonly VITE_API_URL?: string;
+  /** boat-server base URL for SMS/WhatsApp (e.g. http://localhost:3001). */
+  readonly VITE_BOAT_API_URL?: string;
   /** `online` (default) or `lan` (on-prem + optional cloud sync queue). */
   readonly VITE_DEPLOYMENT_MODE: string;
   /** Same uuid as `tenant_settings.cloud_tenant_id` on the LAN DB / cloud tenancy. */

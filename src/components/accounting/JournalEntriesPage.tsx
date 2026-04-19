@@ -6,6 +6,7 @@ import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { orderGlAccountsWithExpensePreferences, fetchExpenseGlAccountPreferenceOrder } from "../../lib/manualJournalGlOptions";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { randomUuid } from "../../lib/randomUuid";
 
 type GLAccount = {
   id: string;
@@ -272,14 +273,14 @@ export function JournalEntriesPage() {
                 ? String((l.dimensions as Record<string, unknown>).department_id ?? "")
                 : "",
           }))
-        : [{ id: crypto.randomUUID(), gl_account_id: "", debit: 0, credit: 0, line_description: "", branch: "", department_id: "" }]
+        : [{ id: randomUuid(), gl_account_id: "", debit: 0, credit: 0, line_description: "", branch: "", department_id: "" }]
     );
   };
 
   const addEditLine = () => {
     setEditLines((prev) => [
       ...prev,
-      { id: crypto.randomUUID(), gl_account_id: "", debit: 0, credit: 0, line_description: "", branch: "", department_id: "" },
+      { id: randomUuid(), gl_account_id: "", debit: 0, credit: 0, line_description: "", branch: "", department_id: "" },
     ]);
   };
 

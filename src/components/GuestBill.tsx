@@ -1,12 +1,13 @@
 import { useEffect, useState, useRef } from "react";
-import { Hotel, Printer } from "lucide-react";
-import { APP_SHORT_NAME } from "../constants/branding";
+import { Printer } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 interface StayBill {
   id: string;
+  /** Present when stay row is loaded with `organization_id` (multi-tenant stays). */
+  organization_id?: string | null;
   hotel_customers: { first_name: string; last_name: string } | null;
   rooms: { room_number: string } | null;
   check_in_time?: string;
@@ -39,6 +40,7 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
   const superAdmin = !!user?.isSuperAdmin;
   const [charges, setCharges] = useState<BillingCharge[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
+  const [orgBillHeader, setOrgBillHeader] = useState<{ name: string; address: string | null } | null>(null);
   const [loading, setLoading] = useState(true);
   const printRef = useRef<HTMLDivElement>(null);
 
@@ -49,8 +51,10 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
         if (!orgId && !superAdmin) {
           setCharges([]);
           setPayments([]);
+          setOrgBillHeader(null);
           return;
         }
+        const headerOrgId = stay.organization_id ?? orgId ?? null;
         const chargesQ = filterByOrganizationId(
           supabase
             .from("billing")
@@ -69,12 +73,21 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
           orgId,
           superAdmin
         );
-        const [chargesRes, paymentsRes] = await Promise.all([
-          chargesQ,
-          paymentsQ,
-        ]);
+        const orgQ = headerOrgId
+          ? supabase.from("organizations").select("name,address").eq("id", headerOrgId).maybeSingle()
+          : Promise.resolve({ data: null, error: null });
+        const [chargesRes, paymentsRes, orgRes] = await Promise.all([chargesQ, paymentsQ, orgQ]);
         if (chargesRes.data) setCharges(chargesRes.data as BillingCharge[]);
         if (paymentsRes.data) setPayments(paymentsRes.data as PaymentRow[]);
+        const row = orgRes.data as { name?: string | null; address?: string | null } | null;
+        if (row?.name?.trim()) {
+          setOrgBillHeader({
+            name: row.name.trim(),
+            address: row.address?.trim() ? row.address.trim() : null,
+          });
+        } else {
+          setOrgBillHeader(null);
+        }
       } catch (err) {
         console.error("Fetch bill error:", err);
       } finally {
@@ -82,7 +95,7 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
       }
     };
     fetch();
-  }, [stay.id, orgId, superAdmin]);
+  }, [stay.id, stay.organization_id, orgId, superAdmin]);
 
   const totalCharges = charges.reduce((s, c) => s + Number(c.amount), 0);
   const totalPaid = payments
@@ -139,15 +152,18 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
           <p className="text-slate-500 py-4">Loading bill…</p>
         ) : (
           <div id="guest-bill-print" className="print-bill">
-            {/* Hotel header with logo */}
-            <div className="flex items-center justify-center gap-3 mb-6 border-b pb-4">
-              <div className="flex items-center justify-center w-12 h-12 rounded-lg bg-brand-700 text-white print:bg-slate-800">
-                <Hotel className="w-8 h-8" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-slate-900">{APP_SHORT_NAME}</h1>
-                <p className="text-slate-600 text-sm">Guest Bill</p>
-              </div>
+            <div className="text-center mb-6 border-b pb-4">
+              <h1 className="text-xl font-bold text-slate-900">
+                {orgBillHeader?.name?.trim() || "Guest bill"}
+              </h1>
+              {orgBillHeader?.address ? (
+                <p className="text-slate-600 text-sm mt-2 whitespace-pre-line max-w-md mx-auto">
+                  {orgBillHeader.address}
+                </p>
+              ) : null}
+              {orgBillHeader?.name ? (
+                <p className="text-slate-500 text-xs uppercase tracking-wide mt-3">Guest bill</p>
+              ) : null}
             </div>
             <p className="text-slate-500 text-sm text-center mb-6">
               {new Date().toLocaleDateString()} – {new Date().toLocaleTimeString()}

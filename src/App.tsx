@@ -10,6 +10,9 @@ import { CheckInPage } from './components/CheckInPage';
 import { CustomersPage } from './components/CustomersPage';
 import { ActiveStaysPage } from './components/ActiveStaysPage';
 import { POSPage } from './components/POSPage';
+import { HotelPosKitchenBarPage } from './components/HotelPosKitchenBarPage';
+import { HotelPosSupervisorPage } from './components/HotelPosSupervisorPage';
+import { HotelPosReportsPage } from './components/HotelPosReportsPage';
 import { POSDashboardPage } from './components/POSDashboard';
 import { RetailPOSPage } from './components/RetailPOSPage';
 import { RetailInvoicesPage } from './components/RetailInvoicesPage';
@@ -17,6 +20,7 @@ import { RetailCustomersPage } from './components/RetailCustomersPage';
 import { RetailCreditSalesReportPage } from './components/RetailCreditSalesReportPage';
 import { BarOrdersPage } from './components/BarOrdersPage';
 import { KitchenOrdersPage } from './components/KitchenOrdersPage';
+import { KitchenMenuPage } from './components/KitchenMenuPage';
 import { BillingPage } from './components/BillingPage';
 import { PaymentsPage } from './components/PaymentsPage';
 import { CashReceiptsPage } from './components/CashReceiptsPage';
@@ -142,6 +146,8 @@ import { VslaReportsPage } from './components/vsla/VslaReportsPage';
 import { VslaControlsPage } from './components/vsla/VslaControlsPage';
 import { VslaMeetingMinutesPage } from './components/vsla/VslaMeetingMinutesPage';
 import { VslaMemberStatementPage } from './components/vsla/VslaMemberStatementPage';
+import { CommunicationsPage } from './components/communications/CommunicationsPage';
+import type { CommunicationsTabId } from './components/communications/CommunicationsPage';
 
 /** Old bookmarks / links: Financial Summary was removed; land on Revenue by Charge Type. */
 function normalizeLegacyPage(page: string): string {
@@ -181,6 +187,8 @@ const MANAGED_PAGE_STATE_KEYS = [
   "schoolFeeInvoiceId",
   "vslaMeetingTab",
   "vslaDisburseLoanId",
+  "communicationsTab",
+  "communicationsContext",
 ] as const;
 
 function getPageStateFromUrl(): Record<string, unknown> {
@@ -227,6 +235,17 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (vslaMeetingTab) state.vslaMeetingTab = vslaMeetingTab;
   const vslaDisburseLoanId = qp.get("vslaDisburseLoanId");
   if (vslaDisburseLoanId) state.vslaDisburseLoanId = vslaDisburseLoanId;
+  const communicationsTab = qp.get("communicationsTab");
+  if (
+    communicationsTab === "inbox" ||
+    communicationsTab === "sms" ||
+    communicationsTab === "whatsapp" ||
+    communicationsTab === "internal"
+  ) {
+    state.communicationsTab = communicationsTab;
+  }
+  const communicationsContext = qp.get("communicationsContext");
+  if (communicationsContext) state.communicationsContext = communicationsContext;
   return state;
 }
 
@@ -360,6 +379,8 @@ function AppContent() {
           businessType: user?.business_type ?? null,
           subscriptionStatus: user?.subscription_status ?? "none",
           enableFixedAssets: user?.enable_fixed_assets === true,
+          enableCommunications: user?.enable_communications !== false,
+          enableWallet: user?.enable_wallet !== false,
           schoolEnableReports: user?.school_enable_reports === true,
           schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
           schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -403,6 +424,14 @@ function AppContent() {
         return <PlatformPlansPage />;
       case 'platform_superusers':
         return <PlatformSuperUsersPage />;
+      case 'communications':
+        return (
+          <CommunicationsPage
+            initialTab={pageState?.communicationsTab as CommunicationsTabId | undefined}
+            contextNote={pageState?.communicationsContext as string | undefined}
+            onNavigate={navigate}
+          />
+        );
       case 'dashboard':
         return <Dashboard onNavigate={setCurrentPage} />;
       case 'retail_dashboard':
@@ -557,7 +586,14 @@ function AppContent() {
       case 'stays':
         return <ActiveStaysPage />;
       case 'POS':
-        return <POSPage readOnly={access.readOnly} />;
+      case HOTEL_PAGE.posWaiter:
+        return <POSPage readOnly={access.readOnly} compactMode="waiter" />;
+      case HOTEL_PAGE.posKitchenBar:
+        return <HotelPosKitchenBarPage />;
+      case HOTEL_PAGE.posSupervisor:
+        return <HotelPosSupervisorPage />;
+      case HOTEL_PAGE.posReports:
+        return <HotelPosReportsPage />;
       case 'pos_dashboard':
         return <POSDashboardPage />;
       case 'retail_pos':
@@ -584,6 +620,8 @@ function AppContent() {
         return <BarOrdersPage />;
       case 'Kitchen Orders':
         return <KitchenOrdersPage />;
+      case 'kitchen_menu':
+        return <KitchenMenuPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'billing':
         return <BillingPage onNavigate={navigate} readOnly={access.readOnly} />;
       case 'payments':
@@ -636,21 +674,6 @@ function AppContent() {
       case 'reports_stock_movement':
         return <StockMovementReportPage />;
       case 'inventory_stock_adjustments':
-        return <AdminStockAdjustmentsPage highlightAdjustmentSourceId={pageState?.highlightAdjustmentSourceId as string | undefined} />;
-      case 'inventory_stock_balances':
-        return <StockBalancesPage />;
-      case 'inventory_store_requisitions':
-        return <StoreRequisitionsPage highlightRequisitionId={pageState?.highlightRequisitionId as string | undefined} />;
-      case 'manufacturing':
-        return <ManufacturingPage readOnly={access.readOnly} onNavigate={navigate} />;
-      case 'manufacturing_bom':
-        return <ManufacturingBomPage readOnly={access.readOnly} />;
-      case 'manufacturing_work_orders':
-        return <ManufacturingWorkOrdersPage readOnly={access.readOnly} />;
-      case 'manufacturing_production_entries':
-        return <ManufacturingProductionEntriesPage readOnly={access.readOnly} />;
-      case 'manufacturing_costing':
-        return <ManufacturingCostingPage readOnly={access.readOnly} />;
         return <AdminStockAdjustmentsPage highlightAdjustmentSourceId={pageState?.highlightAdjustmentSourceId as string | undefined} />;
       case 'inventory_stock_balances':
         return <StockBalancesPage />;

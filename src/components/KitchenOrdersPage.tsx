@@ -14,11 +14,16 @@ import {
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 
-/** Hide bar / room-service lines from the Kitchen queue (shared `kitchen_orders` table). */
-function excludeLineFromKitchenQueue(deptName: string | null | undefined): boolean {
+/** Hide bar / room-service / retail (bar–sauna) lines from the Kitchen queue (shared `kitchen_orders` table). */
+function excludeLineFromKitchenQueue(
+  deptName: string | null | undefined,
+  posCatalogMode?: string | null
+): boolean {
+  if (posCatalogMode === "dish_menu") return false;
+  if (posCatalogMode === "product_catalog") return true;
   const n = (deptName || "").toLowerCase();
   if (/\broom\b/.test(n) || n.includes("room service")) return true;
-  if (/\bbar\b/.test(n)) return true;
+  if (/\bbar\b/.test(n) || n.includes("sauna") || n.includes("spa")) return true;
   return false;
 }
 
@@ -71,7 +76,7 @@ export function KitchenOrdersPage() {
       const toIso = fromTo?.to.toISOString();
 
       const [departmentsRes, ordersRes, productsRes] = await Promise.all([
-        filterByOrganizationId(supabase.from("departments").select("id,name"), orgId, superAdmin),
+        filterByOrganizationId(supabase.from("departments").select("id,name,pos_catalog_mode"), orgId, superAdmin),
         filterByOrganizationId(
           (() => {
             let q = supabase
@@ -110,12 +115,14 @@ export function KitchenOrdersPage() {
 
       const departments = (departmentsRes.data || []) as Department[];
       const deptNameById = Object.fromEntries(departments.map((d) => [d.id, d.name]));
+      const deptModeById = Object.fromEntries(departments.map((d) => [d.id, d.pos_catalog_mode ?? null]));
       const productMap = Object.fromEntries(
         ((productsRes?.data || []) as { id: string; name: string; department_id: string | null; sales_price: number | null }[])
           .map((p) => [p.id, p])
       );
       const kitchenDeps = departments.filter((d) => {
         const n = d.name.toLowerCase();
+        if (d.pos_catalog_mode === "dish_menu") return true;
         return n.includes("kitchen") || n.includes("restaurant") || n.includes("food");
       });
       setKitchenDepartments(kitchenDeps);
@@ -133,6 +140,7 @@ export function KitchenOrdersPage() {
                     sales_price: number | null;
                   });
             const deptName = prod.department_id ? deptNameById[prod.department_id] ?? null : null;
+            const deptMode = prod.department_id ? deptModeById[prod.department_id] ?? null : null;
             return {
               ...i,
               products: {
@@ -141,10 +149,16 @@ export function KitchenOrdersPage() {
                 sales_price: prod.sales_price,
               },
               _deptName: deptName,
+              _deptMode: deptMode,
             };
           });
-          const filteredItems = items.filter((i: { _deptName: string | null }) => !excludeLineFromKitchenQueue(i._deptName));
-          const kitchen_order_items = filteredItems.map(({ _deptName, ...rest }: { _deptName: string | null; [k: string]: unknown }) => rest);
+          const filteredItems = items.filter(
+            (i: { _deptName: string | null; _deptMode: string | null }) =>
+              !excludeLineFromKitchenQueue(i._deptName, i._deptMode)
+          );
+          const kitchen_order_items = filteredItems.map(
+            ({ _deptName, _deptMode, ...rest }: { _deptName: string | null; _deptMode: string | null; [k: string]: unknown }) => rest
+          );
           return { ...o, kitchen_order_items };
         })
         .filter((o) => o.kitchen_order_items.length > 0) as KitchenOrder[]);

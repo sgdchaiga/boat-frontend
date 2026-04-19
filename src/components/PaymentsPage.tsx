@@ -43,6 +43,18 @@ type OutstandingInvoice = {
   customer_name: string;
 };
 
+function buildDebtorTransactionNumber(paymentDate: string): string {
+  const ymd = (paymentDate || new Date().toISOString().slice(0, 10)).replace(/-/g, "");
+  const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `DBT-${ymd}-${suffix}`;
+}
+
+function paymentTransactionNumber(p: PaymentWithCustomer): string {
+  const tx = String(p.transaction_id || "").trim();
+  if (tx) return tx;
+  return `DBT-${String(p.id || "").slice(0, 8).toUpperCase()}`;
+}
+
 function stayOptionLabel(s: ActiveStayOption): string {
   const room = s.rooms?.room_number ?? "—";
   const guest = guestDisplayName(s.hotel_customers ?? null) || "Guest";
@@ -145,6 +157,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
   const [loadingInvoices, setLoadingInvoices] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodCode>("cash");
   const [transactionId, setTransactionId] = useState("");
+  /** Calendar date for `paid_at` (journal + list). Defaults to today when opening the modal. */
+  const [paymentReceivedDate, setPaymentReceivedDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [savingPayment, setSavingPayment] = useState(false);
 
@@ -584,6 +598,9 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
     try {
       const { data: staffRow } = await supabase.from("staff").select("id").eq("id", user?.id).maybeSingle();
 
+      const dateStr = paymentReceivedDate.trim() || new Date().toISOString().slice(0, 10);
+      const paidAtIso = new Date(`${dateStr}T12:00:00`).toISOString();
+
       const insertPayload: Record<string, unknown> = {
         stay_id: parsed.kind === "hc" && paymentStayId ? paymentStayId : null,
         property_customer_id: parsed.kind === "hc" ? parsed.id : null,
@@ -592,7 +609,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
         ...(orgId ? { organization_id: orgId } : {}),
         amount: amt,
         payment_status: "completed",
-        transaction_id: transactionId.trim() || null,
+        paid_at: paidAtIso,
+        transaction_id: transactionId.trim() || buildDebtorTransactionNumber(dateStr),
         processed_by: staffRow?.id ?? null,
       };
 
@@ -616,7 +634,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
       }
       if (inserted) {
         const paymentId = (inserted as { id: string }).id;
-        const paidAt = (inserted as { paid_at?: string }).paid_at ?? new Date().toISOString();
+        const paidAt = (inserted as { paid_at?: string }).paid_at ?? paidAtIso;
         const jr = await createJournalForPayment(paymentId, amt, paidAt, user?.id ?? null);
         if (!jr.ok) {
           alert(`Payment saved but journal was not posted: ${jr.error}`);
@@ -681,7 +699,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
     Boolean(showOverHint);
 
   return (
-    <div className="p-6 md:p-8">
+    <div className="p-6 md:p-8 max-w-[min(100vw,1200px)] mx-auto w-full min-w-0 box-border">
       {readOnly && <ReadOnlyNotice />}
 
       <div className="flex justify-between items-start mb-8 flex-wrap gap-4">
@@ -702,6 +720,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
             setCustomerKey("");
             setPaymentStayId("");
             setAllocationInputs({});
+            setPaymentReceivedDate(new Date().toISOString().slice(0, 10));
             setShowRecordPayment(true);
           }}
           disabled={readOnly}
@@ -757,7 +776,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
           No payments in this date range. Change the date range or choose All dates.
         </p>
       ) : (
-        <table className="w-full border">
+        <div className="w-full overflow-x-auto rounded-lg border border-slate-200">
+          <table className="w-full min-w-[640px] text-sm border-collapse">
           <thead className="bg-slate-50">
             <tr>
               {payTh("customer", "Customer")}
@@ -788,7 +808,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                     ) : null}
                   </div>
                 </td>
-                <td className="p-3 font-mono text-sm">{p.transaction_id || "—"}</td>
+                <td className="p-3 font-mono text-sm">{paymentTransactionNumber(p)}</td>
                 <td className="p-3 text-right">
                   <button
                     type="button"
@@ -816,6 +836,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
             ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {detailPayment && (
@@ -842,7 +863,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
               <dt className="text-slate-500">Method</dt>
               <dd className="text-slate-900">{formatPaymentMethodLabel(detailPayment.payment_method)}</dd>
               <dt className="text-slate-500">Transaction ID</dt>
-              <dd className="text-slate-900">{detailPayment.transaction_id || "—"}</dd>
+              <dd className="text-slate-900">{paymentTransactionNumber(detailPayment)}</dd>
               <dt className="text-slate-500">Total</dt>
               <dd className="font-semibold tabular-nums text-slate-900">{Number(detailPayment.amount || 0).toFixed(2)}</dd>
             </dl>
@@ -908,8 +929,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
       )}
 
       {showRecordPayment && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-10 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-10 p-3 sm:p-4">
+          <div className="bg-white rounded-xl p-4 sm:p-6 w-full max-w-[min(100vw-1.5rem,42rem)] max-h-[90vh] overflow-y-auto min-w-0">
             <div className="flex justify-between mb-4">
               <h2 className="text-lg font-semibold">Record payment</h2>
               <X
@@ -993,6 +1014,18 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                   value={paymentAmount}
                   onChange={(e) => setPaymentAmount(e.target.value)}
                 />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Payment date</label>
+                <input
+                  type="date"
+                  className="w-full max-w-xs border border-slate-200 rounded-lg px-3 py-2"
+                  value={paymentReceivedDate}
+                  onChange={(e) => setPaymentReceivedDate(e.target.value)}
+                  disabled={readOnly}
+                />
+                <p className="text-xs text-slate-500 mt-1">Used for the receipt date and accounting journal date.</p>
               </div>
 
               <div>

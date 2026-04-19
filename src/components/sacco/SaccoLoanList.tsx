@@ -1,9 +1,18 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { useAppContext, Loan } from '@/contexts/AppContext';
 import { Search, Eye, X } from 'lucide-react';
+import { ModuleMessagingToolbar } from '@/components/communications/ModuleMessagingButtons';
+
+function digitsOnlyPhone(phone: string | null | undefined): string {
+  if (!phone) return '';
+  return phone.replace(/\D/g, '');
+}
 
 const LoanList: React.FC = () => {
-  const { loans, formatCurrency } = useAppContext();
+  const { user } = useAuth();
+  const communicationsEnabled = user?.enable_communications !== false;
+  const { loans, formatCurrency, members, setCurrentPage } = useAppContext();
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -24,6 +33,14 @@ const LoanList: React.FC = () => {
 
   const totalPortfolio = filtered.reduce((s, l) => s + l.balance, 0);
   const totalDisbursed = filtered.filter(l => l.status === 'disbursed').reduce((s, l) => s + l.amount, 0);
+
+  const memberPhoneById = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const mem of members) {
+      if (mem.phone) m.set(mem.id, digitsOnlyPhone(mem.phone));
+    }
+    return m;
+  }, [members]);
 
   // Generate amortization schedule for viewed loan
   const getSchedule = (loan: Loan) => {
@@ -134,6 +151,18 @@ const LoanList: React.FC = () => {
               <button onClick={() => setViewLoan(null)} className="p-1 hover:bg-slate-100 rounded-lg"><X size={20} /></button>
             </div>
             <div className="p-6 space-y-4">
+              {communicationsEnabled ? (
+              <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3">
+                <p className="text-xs font-semibold text-emerald-900 uppercase tracking-wide mb-2">Notify member</p>
+                <ModuleMessagingToolbar
+                  onNavigate={setCurrentPage}
+                  phone={memberPhoneById.get(viewLoan.memberId) ?? ''}
+                  defaultMessage={`Loan ${viewLoan.id} (${viewLoan.loanType}) — Balance ${formatCurrency(viewLoan.balance)}. Member: ${viewLoan.memberName}.`}
+                  contextLabel={`loan:${viewLoan.id}:${viewLoan.memberName}`}
+                  compact
+                />
+              </div>
+              ) : null}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {[
                   ['Member', viewLoan.memberName], ['Type', viewLoan.loanType], ['Amount', formatCurrency(viewLoan.amount)],

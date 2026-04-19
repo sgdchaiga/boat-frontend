@@ -24,7 +24,9 @@ import type { BusinessType } from "../contexts/AuthContext";
 import { useAuth } from "../contexts/AuthContext";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
+import { ModuleMessagingToolbar, SendWhatsAppButton } from "@/components/communications/ModuleMessagingButtons";
 import type { RetailCustomerRow } from "./RetailCustomersPage";
+import { randomUuid } from "@/lib/randomUuid";
 
 /** Typed client omits newer tables; use for retail_invoices / retail_invoice_lines until DB types are regenerated. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,6 +64,11 @@ type GuestRow = {
 
 function guestDisplayName(g: GuestRow): string {
   return `${g.first_name} ${g.last_name}`.trim() || "Guest";
+}
+
+function digitsOnlyPhone(phone: string | null | undefined): string {
+  if (!phone) return "";
+  return phone.replace(/\D/g, "");
 }
 
 type PaymentRow = {
@@ -119,6 +126,22 @@ type DbInvoice = {
   lines?: DbInvoiceLine[];
 };
 
+function resolveInvoiceCustomerPhone(
+  inv: DbInvoice,
+  retailCustomers: RetailCustomerRow[],
+  propertyGuests: GuestRow[]
+): string {
+  if (inv.customer_id) {
+    const c = retailCustomers.find((x) => x.id === inv.customer_id);
+    if (c?.phone) return digitsOnlyPhone(c.phone);
+  }
+  if (inv.property_customer_id) {
+    const g = propertyGuests.find((x) => x.id === inv.property_customer_id);
+    if (g?.phone) return digitsOnlyPhone(g.phone);
+  }
+  return "";
+}
+
 type LineDraft = {
   tempId: string;
   description: string;
@@ -147,7 +170,7 @@ function formatMoney(amount: number) {
 
 function newLineDraft(): LineDraft {
   return {
-    tempId: crypto.randomUUID(),
+    tempId: randomUuid(),
     description: "",
     product_id: "",
     quantity: "1",
@@ -179,6 +202,7 @@ export function RetailInvoicesPage({
   highlightSaleId?: string;
 }) {
   const { user } = useAuth();
+  const communicationsEnabled = user?.enable_communications !== false;
   const orgId = user?.organization_id ?? null;
   const businessType = user?.business_type ?? null;
   const invoiceGuestMode = invoiceUsesPropertyCustomersTable(businessType);
@@ -907,14 +931,14 @@ export function RetailInvoicesPage({
 
   if (!orgId) {
     return (
-      <div className="p-6 md:p-8">
+      <div className="max-w-[min(100vw,1200px)] mx-auto w-full min-w-0 p-6 md:p-8">
         <p className="text-slate-600">Link your staff account to an organization to use invoices.</p>
       </div>
     );
   }
 
   return (
-    <div className="p-6 md:p-8 space-y-6">
+    <div className="max-w-[min(100vw,1200px)] mx-auto w-full min-w-0 p-6 md:p-8 space-y-6">
       <style>{`
         @media print {
           @page {
@@ -1128,6 +1152,8 @@ export function RetailInvoicesPage({
                   dbInvoices.map((inv) => {
                     const paid = invoiceSettlement[inv.id]?.paid ?? 0;
                     const balance = invoiceBalanceDue(inv, invoiceSettlement);
+                    const custPhone = resolveInvoiceCustomerPhone(inv, customers, propertyCustomersList);
+                    const notifyMsg = `Invoice ${inv.invoice_number} — Total ${formatMoney(inv.total)}. Balance ${formatMoney(balance)}. — ${businessDisplayName}`;
                     return (
                     <tr key={inv.id} className="border-t border-slate-100">
                       <td className="p-3 font-mono text-xs font-medium">{inv.invoice_number}</td>
@@ -1180,6 +1206,14 @@ export function RetailInvoicesPage({
                             <Eye className="w-3.5 h-3.5" />
                             Preview
                           </button>
+                          {communicationsEnabled ? (
+                          <SendWhatsAppButton
+                            phone={custPhone}
+                            defaultMessage={notifyMsg}
+                            label="WhatsApp"
+                            compact
+                          />
+                          ) : null}
                           <button
                             type="button"
                             className="px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-xs inline-flex items-center gap-1"
@@ -1645,6 +1679,18 @@ export function RetailInvoicesPage({
                 ✕
               </button>
             </div>
+            {onNavigate && communicationsEnabled ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50/90 p-3 print:hidden">
+                <p className="text-xs font-semibold text-slate-600 mb-2">Send to customer</p>
+                <ModuleMessagingToolbar
+                  onNavigate={onNavigate}
+                  phone={resolveInvoiceCustomerPhone(previewInvoice, customers, propertyCustomersList)}
+                  defaultMessage={`Invoice ${previewInvoice.invoice_number} — Total ${formatMoney(previewInvoice.total)}. Balance ${formatMoney(invoiceBalanceDue(previewInvoice, invoiceSettlement))}. — ${businessDisplayName}`}
+                  contextLabel={`invoice:${previewInvoice.id}`}
+                  compact
+                />
+              </div>
+            ) : null}
             <div
               id="invoice-print-root"
               className="border-2 border-slate-200 rounded-xl p-8 text-sm bg-white text-slate-900 shadow-sm"

@@ -33,6 +33,8 @@ export function AdminRoomsPage() {
   const [roomNumber, setRoomNumber] = useState("");
   const [roomFloor, setRoomFloor] = useState("");
   const [roomTypeId, setRoomTypeId] = useState("");
+  const [roomNightlyRate, setRoomNightlyRate] = useState("");
+  const [editingRoom, setEditingRoom] = useState<Room | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -110,9 +112,22 @@ export function AdminRoomsPage() {
   };
 
   const openRoomModal = () => {
+    setEditingRoom(null);
     setRoomNumber("");
     setRoomFloor("");
     setRoomTypeId(roomTypes[0]?.id ?? "");
+    setRoomNightlyRate("");
+    setShowRoomModal(true);
+  };
+
+  const openEditRoomModal = (r: Room) => {
+    setEditingRoom(r);
+    setRoomNumber(r.room_number);
+    setRoomFloor(String(r.floor));
+    setRoomTypeId(r.room_type_id ?? "");
+    setRoomNightlyRate(
+      r.nightly_rate != null && Number.isFinite(Number(r.nightly_rate)) ? String(r.nightly_rate) : ""
+    );
     setShowRoomModal(true);
   };
 
@@ -125,18 +140,45 @@ export function AdminRoomsPage() {
       alert("Enter room number and floor.");
       return;
     }
-    const { error } = await supabase.from("rooms").insert({
-      organization_id: orgId ?? null,
-      room_number: roomNumber.trim(),
-      floor: parseInt(roomFloor, 10) || 0,
-      room_type_id: roomTypeId || null,
-      status: "available",
-    });
-    if (error) {
-      alert(error.message);
+    const nr = roomNightlyRate.trim() ? parseFloat(roomNightlyRate) : null;
+    if (nr != null && (!Number.isFinite(nr) || nr < 0)) {
+      alert("Enter a valid nightly rate or leave it blank to use the room type default.");
       return;
     }
+    if (editingRoom) {
+      const { error } = await filterByOrganizationId(
+        supabase
+          .from("rooms")
+          .update({
+            room_number: roomNumber.trim(),
+            floor: parseInt(roomFloor, 10) || 0,
+            room_type_id: roomTypeId || null,
+            nightly_rate: nr,
+          })
+          .eq("id", editingRoom.id),
+        orgId,
+        superAdmin
+      );
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    } else {
+      const { error } = await supabase.from("rooms").insert({
+        organization_id: orgId ?? null,
+        room_number: roomNumber.trim(),
+        floor: parseInt(roomFloor, 10) || 0,
+        room_type_id: roomTypeId || null,
+        nightly_rate: nr,
+        status: "available",
+      });
+      if (error) {
+        alert(error.message);
+        return;
+      }
+    }
     setShowRoomModal(false);
+    setEditingRoom(null);
     fetchData();
   };
 
@@ -258,14 +300,34 @@ export function AdminRoomsPage() {
                       Floor {r.floor}
                       {r.room_types && ` · ${r.room_types.name}`}
                     </p>
+                    <p className="text-xs text-slate-600 mt-1">
+                      Rate / night:{" "}
+                      <span className="font-medium">
+                        {r.nightly_rate != null && Number(r.nightly_rate) > 0
+                          ? Number(r.nightly_rate).toFixed(2)
+                          : r.room_types
+                            ? `${Number(r.room_types.base_price).toFixed(2)} (type default)`
+                            : "—"}
+                      </span>
+                    </p>
                   </div>
                 </div>
-                <button
-                  onClick={() => deleteRoom(r.id)}
-                  className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
+                <div className="flex gap-1 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => openEditRoomModal(r)}
+                    className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                    title="Edit room"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => deleteRoom(r.id)}
+                    className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 rounded-lg"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -351,7 +413,7 @@ export function AdminRoomsPage() {
       {showRoomModal && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 w-full max-w-md">
-            <h3 className="text-lg font-semibold mb-4">Add Room</h3>
+            <h3 className="text-lg font-semibold mb-4">{editingRoom ? "Edit Room" : "Add Room"}</h3>
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">
@@ -393,10 +455,27 @@ export function AdminRoomsPage() {
                   ))}
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Nightly rate (optional)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={roomNightlyRate}
+                  onChange={(e) => setRoomNightlyRate(e.target.value)}
+                  className="border rounded-lg px-3 py-2 w-full"
+                  placeholder="Uses room type base price when empty"
+                />
+              </div>
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <button
-                onClick={() => setShowRoomModal(false)}
+                onClick={() => {
+                  setShowRoomModal(false);
+                  setEditingRoom(null);
+                }}
                 className="px-4 py-2 border rounded-lg hover:bg-slate-50"
               >
                 Cancel
@@ -405,7 +484,7 @@ export function AdminRoomsPage() {
                 onClick={saveRoom}
                 className="px-4 py-2 bg-brand-700 text-white rounded-lg hover:bg-brand-800"
               >
-                Add Room
+                {editingRoom ? "Save Room" : "Add Room"}
               </button>
             </div>
           </div>

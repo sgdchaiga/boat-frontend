@@ -28,7 +28,8 @@ export type ModuleId =
   | "school_fixed_deposit"
   | "vsla"
   | "payroll"
-  | "wallet";
+  | "wallet"
+  | "communications";
 
 type ModuleAudience = "hotel" | "retail" | "both" | "sacco" | "school" | "manufacturing" | "vsla";
 
@@ -67,6 +68,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   vsla: "vsla",
   payroll: "both",
   wallet: "both",
+  communications: "both",
 };
 
 const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
@@ -96,6 +98,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   vsla: true,
   payroll: true,
   wallet: true,
+  communications: false,
 };
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
@@ -118,6 +121,10 @@ export function getModuleAccess(input: {
   subscriptionStatus?: SubscriptionStatus;
   /** When not true, Fixed assets navigation is hidden (superuser-controlled per organization). */
   enableFixedAssets?: boolean;
+  /** Platform: Communications hub. */
+  enableCommunications?: boolean;
+  /** Platform: Wallet module. */
+  enableWallet?: boolean;
   /** School org: superuser toggles for BOAT-linked areas (ignored for non-school). */
   schoolEnableReports?: boolean;
   schoolEnableFixedDeposit?: boolean;
@@ -130,6 +137,8 @@ export function getModuleAccess(input: {
     businessType,
     subscriptionStatus = "none",
     enableFixedAssets,
+    enableCommunications,
+    enableWallet,
     schoolEnableReports,
     schoolEnableFixedDeposit,
     schoolEnableAccounting,
@@ -187,6 +196,22 @@ export function getModuleAccess(input: {
     };
   }
 
+  if (moduleId === "communications" && enableCommunications !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Communications is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "wallet" && enableWallet !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Wallet is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
   if (!MODULE_REQUIRES_SUBSCRIPTION[moduleId]) {
     return { visible: true, readOnly: false };
   }
@@ -205,6 +230,7 @@ export function getModuleAccess(input: {
 const SCHOOL_PAGE_VALUES = new Set(Object.values(SCHOOL_PAGE) as string[]);
 
 export function pageToModuleId(page: string): ModuleId | null {
+  if (page === "communications") return "communications";
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
   if (SCHOOL_PAGE_VALUES.has(page)) return "school";
   if (["dashboard"].includes(page)) return "dashboard";
@@ -214,9 +240,9 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (["retail_credit_sales_report"].includes(page)) return "retail_credit_sales_report";
   if (["rooms", "reservations", "checkin", "stays", "housekeeping", "hotel_rooms_setup"].includes(page))
     return "frontdesk";
-  if (page === "POS") return "hotel_pos";
+  if (["POS", "hotel_pos_waiter", "hotel_pos_supervisor"].includes(page)) return "hotel_pos";
   if (page === "retail_pos") return "retail_pos";
-  if (["kitchen_display", "Kitchen Orders", "Bar Orders"].includes(page)) return "kitchen_ops";
+  if (["kitchen_display", "Kitchen Orders", "Bar Orders", "kitchen_menu", "hotel_pos_kitchen_bar"].includes(page)) return "kitchen_ops";
   if (page === "billing") return "billing";
   if (page === "payments" || page === "cash_receipts") return "payments_received";
   if (["transactions"].includes(page)) return "transactions";
@@ -246,6 +272,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_school_fee_trends",
     "reports_school_top_defaulters",
     "reports_school_term_performance",
+    "hotel_pos_reports",
   ].includes(page)) return "reports";
   if ([
     "gl_accounts",

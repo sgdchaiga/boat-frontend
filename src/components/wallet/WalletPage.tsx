@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { buildWalletAutoReference } from "@/lib/autoReference";
+import { randomUuid } from "@/lib/randomUuid";
 
 type WalletCustomerKind = "hotel" | "retail" | "student";
 
@@ -387,7 +388,7 @@ export function WalletPage({ readOnly }: Props) {
       p_reference: autoRef,
       p_narration: payload.narration || null,
       p_created_by: user.id,
-      p_idempotency_key: crypto.randomUUID(),
+      p_idempotency_key: randomUuid(),
       p_metadata: {},
     });
     if (rpc.error) return { ok: false as const, message: rpc.error.message };

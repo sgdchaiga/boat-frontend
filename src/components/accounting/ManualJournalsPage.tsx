@@ -8,6 +8,7 @@ import { orderGlAccountsWithExpensePreferences, fetchExpenseGlAccountPreferenceO
 import { GlAccountPicker, type GlAccountOption } from "../common/GlAccountPicker";
 import { PageNotes } from "../common/PageNotes";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { randomUuid } from "../../lib/randomUuid";
 
 type GLAccount = {
   id: string;
@@ -75,7 +76,7 @@ export function ManualJournalsPage() {
   };
 
   const addLine = () => {
-    setLines((prev) => [...prev, { id: crypto.randomUUID(), gl_account_id: "", debit: 0, credit: 0, line_description: "" }]);
+    setLines((prev) => [...prev, { id: randomUuid(), gl_account_id: "", debit: 0, credit: 0, line_description: "" }]);
   };
 
   const removeLine = (id: string) => {
@@ -129,8 +130,8 @@ export function ManualJournalsPage() {
         setDescription("");
         setEntryDate(businessTodayISO());
         setLines([
-          { id: crypto.randomUUID(), gl_account_id: "", debit: 0, credit: 0, line_description: "" },
-          { id: crypto.randomUUID(), gl_account_id: "", debit: 0, credit: 0, line_description: "" },
+          { id: randomUuid(), gl_account_id: "", debit: 0, credit: 0, line_description: "" },
+          { id: randomUuid(), gl_account_id: "", debit: 0, credit: 0, line_description: "" },
         ]);
       } else {
         alert("Failed to save journal entry: " + result.error);

@@ -16,6 +16,10 @@ type Org = {
   school_enable_accounting?: boolean | null;
   school_enable_inventory?: boolean | null;
   school_enable_purchases?: boolean | null;
+  enable_communications?: boolean | null;
+  enable_wallet?: boolean | null;
+  /** Platform: hotel automated room charges (check-in + night audit). */
+  hotel_enable_smart_room_charges?: boolean | null;
 };
 
 type Plan = { id: string; code: string; name: string; business_type_code?: string | null };
@@ -91,6 +95,9 @@ export function PlatformOrganizationsPage() {
   const [editSchoolAccounting, setEditSchoolAccounting] = useState(false);
   const [editSchoolInventory, setEditSchoolInventory] = useState(false);
   const [editSchoolPurchases, setEditSchoolPurchases] = useState(false);
+  const [editEnableCommunications, setEditEnableCommunications] = useState(true);
+  const [editEnableWallet, setEditEnableWallet] = useState(true);
+  const [editHotelSmartRoomCharges, setEditHotelSmartRoomCharges] = useState(true);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -300,6 +307,9 @@ export function PlatformOrganizationsPage() {
     setEditSchoolAccounting(!!org.school_enable_accounting);
     setEditSchoolInventory(!!org.school_enable_inventory);
     setEditSchoolPurchases(!!org.school_enable_purchases);
+    setEditEnableCommunications(org.enable_communications !== false);
+    setEditEnableWallet(org.enable_wallet !== false);
+    setEditHotelSmartRoomCharges(org.hotel_enable_smart_room_charges !== false);
     setErr(null);
     setModal("sub");
   };
@@ -326,6 +336,9 @@ export function PlatformOrganizationsPage() {
         school_enable_accounting: editSchoolAccounting,
         school_enable_inventory: editSchoolInventory,
         school_enable_purchases: editSchoolPurchases,
+        enable_communications: editEnableCommunications,
+        enable_wallet: editEnableWallet,
+        hotel_enable_smart_room_charges: editHotelSmartRoomCharges,
       })
       .eq("id", editOrg.id);
     if (orgUpdate.error) {
@@ -686,6 +699,36 @@ export function PlatformOrganizationsPage() {
               />
               Enable fixed assets module (standalone register, depreciation, GL)
             </label>
+            {(editBiz === "hotel" || editBiz === "mixed") && (
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editHotelSmartRoomCharges}
+                  onChange={(e) => setEditHotelSmartRoomCharges(e.target.checked)}
+                />
+                Hotel — automated room charges (first night at check-in + Run Daily Charges / scheduled night audit).
+                When off, property staff post room revenue only via Billing → Add Charge.
+              </label>
+            )}
+            <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">
+              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Modules (all org types)</p>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableCommunications}
+                  onChange={(e) => setEditEnableCommunications(e.target.checked)}
+                />
+                Communications (SMS / WhatsApp hub)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableWallet}
+                  onChange={(e) => setEditEnableWallet(e.target.checked)}
+                />
+                Wallet
+              </label>
+            </div>
             {editBiz === "school" && (
               <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">
                 <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">

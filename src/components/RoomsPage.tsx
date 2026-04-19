@@ -26,6 +26,9 @@ export function RoomsPage() {
   const [roomNumber, setRoomNumber] = useState("");
   const [floor, setFloor] = useState("");
   const [savingRoom, setSavingRoom] = useState(false);
+  const [editRateRoom, setEditRateRoom] = useState<Room | null>(null);
+  const [editRateValue, setEditRateValue] = useState("");
+  const [savingRate, setSavingRate] = useState(false);
 
   useEffect(() => {
     fetchRooms();
@@ -144,6 +147,50 @@ const addRoom = async () => {
   /* ----------------------------- */
   /* UPDATE ROOM STATUS */
   /* ----------------------------- */
+
+  const effectiveNightlyRate = (room: Room) => {
+    const override = room.nightly_rate != null ? Number(room.nightly_rate) : NaN;
+    if (Number.isFinite(override) && override > 0) return override;
+    const base = room.room_types?.base_price != null ? Number(room.room_types.base_price) : NaN;
+    if (Number.isFinite(base) && base > 0) return base;
+    return 0;
+  };
+
+  const openEditRate = (room: Room) => {
+    setEditRateRoom(room);
+    setEditRateValue(
+      room.nightly_rate != null && Number.isFinite(Number(room.nightly_rate))
+        ? String(room.nightly_rate)
+        : ""
+    );
+  };
+
+  const saveRoomRate = async () => {
+    if (!editRateRoom || savingRate) return;
+    if (!orgId && !superAdmin) return;
+    const v = editRateValue.trim();
+    const num = v === "" ? null : parseFloat(v);
+    if (num != null && (!Number.isFinite(num) || num < 0)) {
+      alert("Enter a valid positive amount or leave blank for room type default.");
+      return;
+    }
+    setSavingRate(true);
+    try {
+      const { error } = await filterByOrganizationId(
+        supabase.from("rooms").update({ nightly_rate: num }).eq("id", editRateRoom.id),
+        orgId,
+        superAdmin
+      );
+      if (error) throw error;
+      setEditRateRoom(null);
+      fetchRooms();
+    } catch (e) {
+      console.error(e);
+      alert(e instanceof Error ? e.message : "Failed to save rate");
+    } finally {
+      setSavingRate(false);
+    }
+  };
 
   const updateRoomStatus = async (roomId: string, newStatus: string) => {
     try {
@@ -317,13 +364,29 @@ const addRoom = async () => {
 
               </div>
 
-              <Edit2 className="w-4 h-4 text-slate-500" />
+              <button
+                type="button"
+                onClick={() => openEditRate(room)}
+                className="p-1.5 rounded-lg text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+                title="Edit nightly rate"
+              >
+                <Edit2 className="w-4 h-4" />
+              </button>
 
             </div>
 
             <p className="text-sm text-slate-500">Room Type</p>
-            <p className="font-medium mb-3">
+            <p className="font-medium mb-1">
               {room.room_types?.name || "Not Set"}
+            </p>
+            <p className="text-sm text-slate-600 mb-3">
+              Rate / night:{" "}
+              <span className="font-semibold text-slate-800">
+                {effectiveNightlyRate(room) > 0 ? effectiveNightlyRate(room).toFixed(2) : "—"}
+              </span>
+              {room.nightly_rate == null && room.room_types && effectiveNightlyRate(room) > 0 && (
+                <span className="text-xs text-slate-500"> (type default)</span>
+              )}
             </p>
 
             {(() => {
@@ -361,6 +424,46 @@ const addRoom = async () => {
       </div>
 
       {/* ADD ROOM MODAL */}
+
+      {editRateRoom && (
+        <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-xl w-96 shadow-lg">
+            <h2 className="text-xl font-bold mb-2">Room {editRateRoom.room_number}</h2>
+            <p className="text-sm text-slate-600 mb-4">
+              Override nightly rate for auto room charges. Leave blank to use the room type default (
+              {editRateRoom.room_types ? Number(editRateRoom.room_types.base_price).toFixed(2) : "—"}).
+            </p>
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              className="border w-full p-2 mb-4 rounded"
+              placeholder="Room type default"
+              value={editRateValue}
+              onChange={(e) => setEditRateValue(e.target.value)}
+              disabled={savingRate}
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !savingRate && setEditRateRoom(null)}
+                disabled={savingRate}
+                className="px-4 py-2 bg-gray-200 rounded disabled:opacity-60"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveRoomRate()}
+                disabled={savingRate}
+                className="app-btn-primary rounded-md disabled:opacity-60"
+              >
+                {savingRate ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAddRoom && (
 

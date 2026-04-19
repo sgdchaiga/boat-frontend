@@ -23,6 +23,9 @@ import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { GlAccountPicker, type GlAccountOption } from "./common/GlAccountPicker";
+import { effectivePosCatalogMode } from "../lib/posCatalogMode";
+import { randomUuid } from "../lib/randomUuid";
+import { getNextOrderStatus, type ServiceType } from "../lib/hotelPosOrderStatus";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 type PropertyCustomer = Database["public"]["Tables"]["hotel_customers"]["Row"];
@@ -124,6 +127,10 @@ type PosTableStatus = "available" | "occupied" | "reserved" | "cleaning";
 type SplitBillMode = "item" | "guest" | "percentage";
 type StationFilter = "all" | "bar" | "kitchen" | "dessert";
 
+type PosSellMode = "kitchen_dishes" | "retail_products" | "all";
+
+const POS_SELL_MODE_STORAGE_KEY = "hotel-pos-sell-mode-v1";
+
 interface PosTableLayoutState {
   number: string;
   status: Exclude<PosTableStatus, "occupied">;
@@ -157,9 +164,10 @@ const BASE_TABLES = ["T1", "T2", "T3", "T4", "VIP1", "VIP2", "B1", "B2"];
 
 interface POSPageProps {
   readOnly?: boolean;
+  compactMode?: "full" | "waiter";
 }
 
-export function POSPage({ readOnly = false }: POSPageProps = {}) {
+export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const [products, setProducts] = useState<Product[]>([]);
@@ -191,6 +199,16 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const [waiters, setWaiters] = useState<Array<{ id: string; full_name: string }>>([]);
   const [splitBillMode, setSplitBillMode] = useState<SplitBillMode>("item");
   const [stationFilter, setStationFilter] = useState<StationFilter>("all");
+  const [posSellMode, setPosSellMode] = useState<PosSellMode>(() => {
+    if (typeof window === "undefined") return "all";
+    try {
+      const v = localStorage.getItem(POS_SELL_MODE_STORAGE_KEY);
+      if (v === "kitchen_dishes" || v === "retail_products" || v === "all") return v;
+    } catch {
+      /* ignore */
+    }
+    return "all";
+  });
   const [tableSessionOpen, setTableSessionOpen] = useState(false);
   const [tableSessionStartedAt, setTableSessionStartedAt] = useState<string | null>(null);
   const [tableSessionId, setTableSessionId] = useState<string | null>(null);
@@ -223,8 +241,9 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
   const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
   const [showPrintBill, setShowPrintBill] = useState(false);
   const printRef = useRef<HTMLDivElement | null>(null);
-  const [showTableLayout, setShowTableLayout] = useState(true);
-  const [showOrderQueue, setShowOrderQueue] = useState(true);
+  const isWaiterCompact = compactMode === "waiter";
+  const [showTableLayout, setShowTableLayout] = useState(!isWaiterCompact);
+  const [showOrderQueue, setShowOrderQueue] = useState(!isWaiterCompact);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showPostedTransactions, setShowPostedTransactions] = useState(false);
   const [queueDate, setQueueDate] = useState(() => {
@@ -415,7 +434,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           superAdmin
         ),
         ordersQuery,
-        filterByOrganizationId(supabase.from("departments").select("id,name").order("name"), orgId, superAdmin),
+        filterByOrganizationId(supabase.from("departments").select("id,name,pos_catalog_mode").order("name"), orgId, superAdmin),
         filterByOrganizationId(supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name"), orgId, superAdmin),
         filterByOrganizationId(supabase.from("rooms").select("id,room_number"), orgId, superAdmin),
         filterByOrganizationId(supabase.from("staff").select("id,full_name").eq("is_active", true).order("full_name"), orgId, superAdmin),
@@ -439,8 +458,13 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           station: (() => {
             const deptId = i.product_id && productMap[i.product_id] ? productMap[i.product_id].department_id : null;
             const deptName = deptId ? deptMap[deptId] || "" : "";
-            if (deptName.includes("dessert")) return "dessert";
-            if (deptName.includes("bar")) return "bar";
+            const deptRow = (departmentsRes.data || []).find((x: { id: string }) => x.id === deptId) as
+              | { name?: string; pos_catalog_mode?: string | null }
+              | undefined;
+            const n = deptName.toLowerCase();
+            if (n.includes("dessert")) return "dessert";
+            if (n.includes("bar") || n.includes("sauna") || n.includes("spa")) return "bar";
+            if (deptRow && effectivePosCatalogMode(deptRow) === "product_catalog") return "bar";
             return "kitchen";
           })(),
           products:
@@ -829,6 +853,22 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     return "all";
   };
 
+  const departmentsForPicker = useMemo(() => {
+    if (posSellMode === "all") return departments;
+    return departments.filter((d) => {
+      const m = effectivePosCatalogMode(d);
+      if (posSellMode === "kitchen_dishes") return m === "dish_menu";
+      return m === "product_catalog";
+    });
+  }, [departments, posSellMode]);
+
+  useEffect(() => {
+    if (departmentsForPicker.length === 0) return;
+    if (!departmentsForPicker.some((d) => d.id === selectedDepartmentId)) {
+      setSelectedDepartmentId(departmentsForPicker[0].id);
+    }
+  }, [departmentsForPicker, selectedDepartmentId]);
+
   const getUnitPrice = (product: Product) => {
     const base = product.sales_price ?? 0;
     if (!isHappyHourNow()) return base;
@@ -840,9 +880,18 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     const byDept = selectedDepartmentId ? (p.department_id ?? null) === selectedDepartmentId : true;
     const menuType = getProductMenuType(p);
     const byMenu = selectedMenuType === "all" ? true : menuType === selectedMenuType;
-      const q = productSearch.trim().toLowerCase();
+    const q = productSearch.trim().toLowerCase();
     const bySearch = !q ? true : String(p.name || "").toLowerCase().includes(q);
-    return byDept && byMenu && bySearch;
+    const bySellMode =
+      posSellMode === "all"
+        ? true
+        : (() => {
+            const dept = p.department_id ? departments.find((x) => x.id === p.department_id) : null;
+            const m = dept ? effectivePosCatalogMode(dept) : "product_catalog";
+            if (posSellMode === "kitchen_dishes") return m === "dish_menu";
+            return m === "product_catalog";
+          })();
+    return byDept && byMenu && bySearch && bySellMode;
   });
 
   const activeOccupiedTables = useMemo(() => {
@@ -860,15 +909,28 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     return tableLayout[table]?.status ?? "available";
   };
 
-  const nextOrderStatus = (status: string): string | null => {
-    if (status === "pending") return "preparing";
-    if (status === "preparing") return "ready";
-    if (status === "ready") return "served";
-    return null;
+  const getOrderServiceType = (order: QueuedOrder): ServiceType => {
+    const hasBarLine = (order.kitchen_order_items || []).some((item: any) => (item.station || "kitchen") === "bar");
+    if (hasBarLine) return "bar";
+    return "restaurant";
   };
 
-  const updateQueueOrderStatus = async (orderId: string, currentStatus: string) => {
-    const next = nextOrderStatus(currentStatus);
+  const nextOrderStatus = (status: string, serviceType: ServiceType): string | null => {
+    return getNextOrderStatus(status, serviceType);
+  };
+
+  const getNextOrderStatusLabel = (status: string, serviceType: ServiceType): string => {
+    const next = nextOrderStatus(status, serviceType);
+    if (!next) return "Update Status";
+    if (next === "preparing") return "Mark Preparing";
+    if (next === "ready") return "Mark Ready";
+    if (next === "served") return "Mark Served";
+    if (next === "in_progress") return "Mark In Progress";
+    return "Mark Completed";
+  };
+
+  const updateQueueOrderStatus = async (orderId: string, currentStatus: string, serviceType: ServiceType) => {
+    const next = nextOrderStatus(currentStatus, serviceType);
     if (!next) return;
     try {
       const { error } = await supabase
@@ -1208,7 +1270,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
 
   const queueOfflineOrder = (action: PosAction) => {
     const payload: PendingOfflineOrder = {
-      id: crypto.randomUUID(),
+      id: randomUuid(),
       createdAt: new Date().toISOString(),
       status: "pending",
       retryCount: 0,
@@ -1511,7 +1573,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
     const guest = hotelCustomers.find((g) => g.id === selectedGuestId);
     const label = guest ? `${guest.first_name} ${guest.last_name}` : tableNumber.trim() || "Untitled";
     const ticket: HeldTicket = {
-      id: crypto.randomUUID(),
+      id: randomUuid(),
       label,
       tableNumber,
       guestId: selectedGuestId,
@@ -1730,6 +1792,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         <ReadOnlyNotice />
       )}
 
+      {!isWaiterCompact ? (
       <div className="mb-4 bg-white rounded-xl border border-slate-200 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
@@ -1810,14 +1873,22 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
           </div>
         )}
       </div>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Products */}
         <div className="lg:col-span-2">
           <div className="flex items-center gap-2 mb-3">
-            <h2 className="text-lg font-bold text-slate-900">Products</h2>
+            <h2 className="text-lg font-bold text-slate-900">{posSellMode === "kitchen_dishes" ? "Kitchen menu" : "Products"}</h2>
             <PageNotes ariaLabel="Products help">
-              <p>Choose department/menu, then add items into the active order area.</p>
+              <p>
+                <strong>Kitchen menu</strong> lists dish products (set department to &quot;Kitchen menu&quot; in Admin → Products).
+                Link each dish to ingredients under Admin → Recipe Management so stock reduces correctly.
+              </p>
+              <p className="mt-2">
+                <strong>Bar / sauna</strong> lists retail SKUs (beer, spa items): stock reduces on the product you sell.
+              </p>
+              <p className="mt-2">Pick department and meal period, then add items to the active order.</p>
             </PageNotes>
           </div>
           {productsError && (
@@ -1826,21 +1897,42 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
             </p>
           )}
           {departments.length > 0 && (
-            <div className="mb-3 flex flex-wrap items-center gap-2">
-              <label className="text-sm text-slate-700">Department</label>
-              <select
-                value={selectedDepartmentId}
-                onChange={(e) => setSelectedDepartmentId(e.target.value)}
-                className="border rounded-lg px-3 py-1.5 text-sm"
-              >
-                {/* No \"All\" option so products are always scoped */}
-                {departments.map((d) => (
-                  <option key={d.id} value={d.id}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-              <label className="text-sm text-slate-700 ml-2">Menu</label>
+            <div className="mb-3 flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-sm text-slate-700">Sell from</label>
+                <select
+                  value={posSellMode}
+                  onChange={(e) => {
+                    const v = e.target.value as PosSellMode;
+                    setPosSellMode(v);
+                    try {
+                      localStorage.setItem(POS_SELL_MODE_STORAGE_KEY, v);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                  className="border rounded-lg px-3 py-1.5 text-sm max-w-[min(100%,20rem)]"
+                >
+                  <option value="all">All (manager)</option>
+                  <option value="kitchen_dishes">Kitchen menu (dishes)</option>
+                  <option value="retail_products">Bar / sauna (products)</option>
+                </select>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-sm text-slate-700">Department</label>
+                <select
+                  value={selectedDepartmentId}
+                  onChange={(e) => setSelectedDepartmentId(e.target.value)}
+                  className="border rounded-lg px-3 py-1.5 text-sm"
+                  disabled={departmentsForPicker.length === 0}
+                >
+                  {departmentsForPicker.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+                <label className="text-sm text-slate-700 ml-2">Menu</label>
               <select
                 value={selectedMenuType}
                 onChange={(e) => setSelectedMenuType(e.target.value as PosMenuType)}
@@ -1852,6 +1944,14 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                 <option value="bar">Bar</option>
                 <option value="room_service">Room service</option>
               </select>
+              </div>
+              {posSellMode !== "all" && departmentsForPicker.length === 0 ? (
+                <p className="text-amber-800 text-sm">
+                  No departments for this mode. In Admin → Products → Departments, set{" "}
+                  <span className="font-medium">POS list</span> to{" "}
+                  {posSellMode === "kitchen_dishes" ? "Kitchen menu (dishes)" : "Bar / retail (products)"}.
+                </p>
+              ) : null}
             </div>
           )}
           <div className="mb-3">
@@ -2243,6 +2343,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
       </div>
 
       {/* Order queue */}
+      {!isWaiterCompact ? (
       <div className="mt-8">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Order Queue</h2>
@@ -2344,17 +2445,13 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
                       Pay Outstanding
                     </button>
                   ) : null}
-                  {nextOrderStatus(o.order_status) ? (
+                  {nextOrderStatus(o.order_status, getOrderServiceType(o)) ? (
                     <button
                       type="button"
-                      onClick={() => void updateQueueOrderStatus(o.id, o.order_status)}
+                      onClick={() => void updateQueueOrderStatus(o.id, o.order_status, getOrderServiceType(o))}
                       className="inline-flex items-center gap-1 px-2 py-1 border border-emerald-300 text-emerald-700 rounded hover:bg-emerald-50 text-xs"
                     >
-                      {o.order_status === "pending"
-                        ? "Mark Preparing"
-                        : o.order_status === "preparing"
-                          ? "Mark Ready"
-                          : "Mark Served"}
+                      {getNextOrderStatusLabel(o.order_status, getOrderServiceType(o))}
                     </button>
                   ) : null}
                   <button
@@ -2373,8 +2470,9 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </>
         )}
       </div>
+      ) : null}
 
-      {editingOrderId ? (
+      {!isWaiterCompact && editingOrderId ? (
         <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
           <div className="flex items-center justify-between gap-3 mb-4">
             <h2 className="text-lg font-bold text-slate-900">Edit Order</h2>
@@ -2469,6 +2567,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </div>
       ) : null}
 
+      {!isWaiterCompact ? (
       <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
         <div className="flex items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Staff Performance Analytics</h2>
@@ -2502,7 +2601,9 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </div>
         ) : null}
       </div>
+      ) : null}
 
+      {!isWaiterCompact ? (
       <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Posted Hotel POS Transactions</h2>
@@ -2678,6 +2779,7 @@ export function POSPage({ readOnly = false }: POSPageProps = {}) {
         </>
         ) : null}
       </div>
+      ) : null}
 
       {payQueueOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !savingQueuePayment && setPayQueueOrder(null)}>

@@ -4,9 +4,12 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 
+type PosCatalogMode = "dish_menu" | "product_catalog";
+
 interface Department {
   id: string;
   name: string;
+  pos_catalog_mode?: PosCatalogMode | null;
 }
 
 interface Product {
@@ -35,6 +38,7 @@ export function AdminProductsPage() {
   const [showDeptModal, setShowDeptModal] = useState(false);
   const [editingDept, setEditingDept] = useState<Department | null>(null);
   const [deptName, setDeptName] = useState("");
+  const [deptPosCatalog, setDeptPosCatalog] = useState<PosCatalogMode>("product_catalog");
 
   // Product form
   const [showProductModal, setShowProductModal] = useState(false);
@@ -51,7 +55,7 @@ export function AdminProductsPage() {
   const fetchData = async () => {
     setLoading(true);
     const [deptRes, prodRes] = await Promise.all([
-      filterByOrganizationId(supabase.from("departments").select("id, name").order("name"), orgId, superAdmin),
+      filterByOrganizationId(supabase.from("departments").select("id, name, pos_catalog_mode").order("name"), orgId, superAdmin),
       filterByOrganizationId(
         supabase.from("products").select("id, name, sales_price, cost_price, department_id, active").order("name"),
         orgId,
@@ -77,6 +81,7 @@ export function AdminProductsPage() {
   const openDeptModal = (d?: Department) => {
     setEditingDept(d || null);
     setDeptName(d?.name ?? "");
+    setDeptPosCatalog(d?.pos_catalog_mode === "dish_menu" ? "dish_menu" : "product_catalog");
     setShowDeptModal(true);
   };
 
@@ -223,7 +228,15 @@ export function AdminProductsPage() {
                   <div className="bg-slate-100 p-2 rounded-lg">
                     <Layers className="w-5 h-5 text-slate-600" />
                   </div>
-                  <span className="font-medium text-slate-900">{d.name}</span>
+                  <div>
+                    <span className="font-medium text-slate-900">{d.name}</span>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      POS:{" "}
+                      {d.pos_catalog_mode === "dish_menu"
+                        ? "Kitchen menu (dishes)"
+                        : "Bar / retail (products)"}
+                    </p>
+                  </div>
                 </div>
                 <div className="flex gap-1">
                   <button
@@ -339,6 +352,17 @@ export function AdminProductsPage() {
                 className="border rounded-lg px-3 py-2 w-full"
                 placeholder="e.g. Kitchen, Bar"
               />
+            </div>
+            <div className="mt-4">
+              <label className="block text-sm font-medium text-slate-700 mb-1">POS list</label>
+              <select
+                value={deptPosCatalog}
+                onChange={(e) => setDeptPosCatalog(e.target.value as PosCatalogMode)}
+                className="border rounded-lg px-3 py-2 w-full text-sm"
+              >
+                <option value="dish_menu">Kitchen menu (dishes — attach recipes for ingredient stock)</option>
+                <option value="product_catalog">Bar / sauna / retail (sell this product; stock on SKU)</option>
+              </select>
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <button

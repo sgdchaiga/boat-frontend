@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { getTenantIdFromEnv, shouldEnqueueLanSync } from "@/lib/deployment";
+import { randomUuid } from "@/lib/randomUuid";
 
 export type SyncOperation = "INSERT" | "UPDATE" | "DELETE";
 
@@ -27,7 +28,7 @@ export async function enqueueSyncOutbox(
     return { error: null };
   }
 
-  const idempotencyKey = `${event.tableName}:${event.recordId}:${event.operation}:${crypto.randomUUID()}`;
+  const idempotencyKey = `${event.tableName}:${event.recordId}:${event.operation}:${randomUuid()}`;
 
   const { error } = await client.from("sync_outbox").insert({
     tenant_id: tenantId,

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Plus, Save } from "lucide-react";
 import { supabase } from "../../lib/supabase";
+import { randomUuid } from "../../lib/randomUuid";
 import { PageNotes } from "../common/PageNotes";
 
 interface Product {
@@ -32,7 +33,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
   const [glAccountId, setGlAccountId] = useState("");
   const [rows, setRows] = useState<AdjustmentRow[]>([
     {
-      id: crypto.randomUUID(),
+      id: randomUuid(),
       product_id: "",
       currentQty: 0,
       newQty: "",
@@ -116,7 +117,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
     setRows((prev) => [
       ...prev,
       {
-        id: crypto.randomUUID(),
+        id: randomUuid(),
         product_id: "",
         currentQty: 0,
         newQty: "",
@@ -176,7 +177,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
       setCurrentStock(stock);
       setRows([
         {
-          id: crypto.randomUUID(),
+          id: randomUuid(),
           product_id: "",
           currentQty: 0,
           newQty: "",

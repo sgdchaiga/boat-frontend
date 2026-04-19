@@ -6,6 +6,7 @@ import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { PageNotes } from "./common/PageNotes";
+import { getNextOrderStatus } from "../lib/hotelPosOrderStatus";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 
@@ -44,7 +45,7 @@ export function BarOrdersPage() {
     fetchOrders();
   }, [dateRange, customFrom, customTo, orgId, superAdmin]);
 
-  const updateStatus = async (orderId: string, newStatus: "preparing" | "ready" | "served" | "completed") => {
+  const updateStatus = async (orderId: string, newStatus: "preparing" | "ready" | "served") => {
     setUpdatingId(orderId);
     try {
       const { error } = await supabase.from("kitchen_orders").update({ order_status: newStatus }).eq("id", orderId);
@@ -295,7 +296,10 @@ export function BarOrdersPage() {
                 {order.order_status === "pending" ? (
                   <button
                     type="button"
-                    onClick={() => updateStatus(order.id, "preparing")}
+                    onClick={() => {
+                      const next = getNextOrderStatus(order.order_status, "bar");
+                      if (next === "preparing") void updateStatus(order.id, next);
+                    }}
                     disabled={updatingId === order.id}
                     className="flex-1 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-3 py-2 text-sm font-semibold hover:bg-blue-100 disabled:opacity-50"
                   >
@@ -305,7 +309,10 @@ export function BarOrdersPage() {
                 {order.order_status === "preparing" ? (
                   <button
                     type="button"
-                    onClick={() => updateStatus(order.id, "ready")}
+                    onClick={() => {
+                      const next = getNextOrderStatus(order.order_status, "bar");
+                      if (next === "ready") void updateStatus(order.id, next);
+                    }}
                     disabled={updatingId === order.id}
                     className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-100 disabled:opacity-50"
                   >
@@ -315,7 +322,10 @@ export function BarOrdersPage() {
                 {order.order_status === "ready" ? (
                   <button
                     type="button"
-                    onClick={() => updateStatus(order.id, "served")}
+                    onClick={() => {
+                      const next = getNextOrderStatus(order.order_status, "bar");
+                      if (next === "served") void updateStatus(order.id, next);
+                    }}
                     disabled={updatingId === order.id}
                     className="flex-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50"
                   >

@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { budgetPeriodRange, budgetVariance, frequencyPeriodMultiplier, netJournalActivity } from "@/lib/budgetActuals";
+import { randomUuid } from "@/lib/randomUuid";
 
 type BudgetRow = {
   id: string;
@@ -390,7 +391,7 @@ export function BudgetingPage({ readOnly }: Props) {
     const glId = draftLine.gl_account_id || null;
     const g = glId ? accounts.find((a) => a.id === glId) : null;
     const newRow: LineRow = {
-      id: `temp-${crypto.randomUUID()}`,
+      id: `temp-${randomUuid()}`,
       budget_id: selectedId,
       gl_account_id: glId,
       line_label: label,

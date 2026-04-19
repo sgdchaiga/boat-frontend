@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
@@ -19,7 +19,15 @@ interface BillingPageProps {
   readOnly?: boolean;
 }
 
-type BillingSortKey = "id" | "customer" | "charge_type" | "description" | "amount" | "charged_at";
+type BillingSortKey =
+  | "id"
+  | "customer"
+  | "charge_type"
+  | "description"
+  | "amount"
+  | "charged_at"
+  | "stay_night_date"
+  | "auto_charge_source";
 
 export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) {
   const { user } = useAuth();
@@ -39,6 +47,9 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
 
   const [billingSort, setBillingSort] = useState<{ key: BillingSortKey; dir: "asc" | "desc" } | null>(null);
   const [billingRange, setBillingRange] = useState<BillingRangePreset>("all");
+  const [nightAuditBusy, setNightAuditBusy] = useState(false);
+  const [nightAuditOverrideDate, setNightAuditOverrideDate] = useState("");
+  const [nightAuditBanner, setNightAuditBanner] = useState<string | null>(null);
   const { from: billingDateFrom, to: billingDateTo } = useMemo(
     () => billingRangeToDates(billingRange),
     [billingRange]
@@ -87,6 +98,12 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
           break;
         case "charged_at":
           cmp = new Date(a.charged_at).getTime() - new Date(b.charged_at).getTime();
+          break;
+        case "stay_night_date":
+          cmp = (a.stay_night_date || "").localeCompare(b.stay_night_date || "");
+          break;
+        case "auto_charge_source":
+          cmp = (a.auto_charge_source || "").localeCompare(b.auto_charge_source || "");
           break;
         default:
           cmp = 0;
@@ -205,7 +222,9 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
           Number(amount),
           description,
           chargedAt,
-          user?.id ?? null
+          user?.id ?? null,
+          undefined,
+          orgId ?? null
         );
         if (!jr.ok) {
           alert(`Charge saved but journal was not posted: ${jr.error}`);
@@ -223,6 +242,65 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
       alert("Failed to add charge: " + (error instanceof Error ? error.message : String(error)));
     } finally {
       setSavingCharge(false);
+    }
+  };
+
+  const smartRoomChargesOn = user?.hotel_enable_smart_room_charges !== false;
+
+  const runNightAudit = async () => {
+    if (readOnly || nightAuditBusy) return;
+    if (!smartRoomChargesOn) {
+      setNightAuditBanner(
+        "Automated room charges are turned off for this organization. Add room nights manually with Add Charge."
+      );
+      return;
+    }
+    if (!orgId && !superAdmin) {
+      alert("Missing organization on your staff profile.");
+      return;
+    }
+    if (!orgId) {
+      alert("Night audit must be run from a staff account linked to a hotel organization.");
+      return;
+    }
+    setNightAuditBusy(true);
+    setNightAuditBanner(null);
+    try {
+      const { data, error } = await supabase.rpc("run_hotel_night_audit_for_org", {
+        p_organization_id: orgId,
+        p_folio_night_date: nightAuditOverrideDate.trim() || null,
+        p_created_by: user?.id ?? null,
+      });
+      if (error) throw error;
+      const row = data as {
+        ok?: boolean;
+        folio_night_date?: string;
+        posted?: number;
+        skipped?: number;
+        failed?: number;
+        last_error?: string | null;
+        error?: string;
+      } | null;
+      if (row?.ok === false) {
+        setNightAuditBanner(row.error || "Night audit failed.");
+        return;
+      }
+      if (row?.reason === "smart_room_charges_disabled") {
+        setNightAuditBanner(
+          "Automated room charges are turned off for this organization (platform setting). Use Add Charge for room nights."
+        );
+        return;
+      }
+      setNightAuditBanner(
+        `Folio night ${row?.folio_night_date ?? "—"}: posted ${row?.posted ?? 0}, skipped ${row?.skipped ?? 0}, failed ${row?.failed ?? 0}.` +
+          (row?.last_error ? ` Last error: ${row.last_error}` : "")
+      );
+      void fetchData();
+    } catch (e) {
+      console.error(e);
+      setNightAuditBanner(e instanceof Error ? e.message : "Night audit failed.");
+    } finally {
+      setNightAuditBusy(false);
     }
   };
 
@@ -244,19 +322,67 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
             <h1 className="text-3xl font-bold">Billing</h1>
             <PageNotes ariaLabel="Billing help">
               <p>Guest folio charges for active stays (hotel).</p>
+              {!smartRoomChargesOn && (
+                <p className="mt-2 text-amber-800">
+                  Automated room charges (check-in + Run Daily Charges) are <strong>off</strong> for this organization.
+                  Post room revenue with <strong>Add Charge</strong>. A platform admin can re-enable them under Platform →
+                  Organizations → Subscription.
+                </p>
+              )}
             </PageNotes>
           </div>
         </div>
 
-        <button
-          onClick={() => !readOnly && setShowAddCharge(true)}
-          disabled={readOnly}
-          className="bg-brand-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Plus className="w-5 h-5" />
-          Add Charge
-        </button>
+        <div className="flex flex-wrap gap-2 justify-end">
+          <button
+            type="button"
+            onClick={() => void runNightAudit()}
+            disabled={
+              readOnly || nightAuditBusy || (!orgId && !superAdmin) || !smartRoomChargesOn
+            }
+            className="border border-slate-300 bg-white text-slate-800 px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-50"
+            title={
+              smartRoomChargesOn
+                ? "Posts missing room charges for the folio night (default: yesterday in the property timezone). Same logic as the scheduled job."
+                : "Disabled while automated room charges are off for this organization."
+            }
+          >
+            <Moon className="w-5 h-5" />
+            {nightAuditBusy ? "Running…" : "Run Daily Charges"}
+          </button>
+          <button
+            onClick={() => !readOnly && setShowAddCharge(true)}
+            disabled={readOnly}
+            className="bg-brand-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus className="w-5 h-5" />
+            Add Charge
+          </button>
+        </div>
       </div>
+
+      <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Optional folio night (YYYY-MM-DD)</label>
+          <input
+            type="date"
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            value={nightAuditOverrideDate}
+            onChange={(e) => setNightAuditOverrideDate(e.target.value)}
+            disabled={readOnly || nightAuditBusy || !smartRoomChargesOn}
+          />
+        </div>
+        <p className="text-xs text-slate-500 max-w-xl pb-1">
+          Leave blank to use <strong>yesterday</strong> in the property timezone (see organizations.hotel_timezone in the
+          database, default UTC). Charges duplicate nights only once (check-in + audit share the same folio night).
+        </p>
+      </div>
+
+      {nightAuditBanner && (
+        <div className="mb-4 p-3 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 whitespace-pre-wrap">
+          {nightAuditBanner}
+        </div>
+      )}
 
       {loadError && (
         <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">{loadError}</div>
@@ -317,6 +443,8 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
               {billTh("charge_type", "Department")}
               {billTh("description", "Description")}
               {billTh("amount", "Amount", "right")}
+              {billTh("stay_night_date", "Folio night")}
+              {billTh("auto_charge_source", "Source")}
               {billTh("charged_at", "Date")}
             </tr>
           </thead>
@@ -334,6 +462,8 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
                 <td className="p-3 capitalize">{b.charge_type}</td>
                 <td className="p-3">{b.description}</td>
                 <td className="p-3 text-right">{Number(b.amount).toFixed(2)}</td>
+                <td className="p-3 text-sm">{b.stay_night_date || "—"}</td>
+                <td className="p-3 text-sm capitalize">{b.auto_charge_source ?? "manual"}</td>
                 <td className="p-3">{new Date(b.charged_at).toLocaleDateString()}</td>
               </tr>
             ))}

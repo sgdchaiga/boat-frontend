@@ -103,6 +103,8 @@ export interface Database {
           room_type_id: string | null
           floor: number
           status: 'available' | 'occupied' | 'maintenance' | 'cleaning'
+          /** Optional rack override; when null, room type base_price applies. */
+          nightly_rate?: number | null
           created_at: string
         }
         Insert: {
@@ -111,6 +113,7 @@ export interface Database {
           room_type_id?: string | null
           floor: number
           status?: 'available' | 'occupied' | 'maintenance' | 'cleaning'
+          nightly_rate?: number | null
           created_at?: string
         }
         Update: {
@@ -119,6 +122,7 @@ export interface Database {
           room_type_id?: string | null
           floor?: number
           status?: 'available' | 'occupied' | 'maintenance' | 'cleaning'
+          nightly_rate?: number | null
           created_at?: string
         }
       }
@@ -244,6 +248,8 @@ export interface Database {
           charge_type: 'room' | 'service' | 'food' | 'other'
           charged_at: string
           created_by: string | null
+          stay_night_date?: string | null
+          auto_charge_source?: 'manual' | 'checkin' | 'night_audit'
         }
         Insert: {
           id?: string
@@ -253,6 +259,8 @@ export interface Database {
           charge_type: 'room' | 'service' | 'food' | 'other'
           charged_at?: string
           created_by?: string | null
+          stay_night_date?: string | null
+          auto_charge_source?: 'manual' | 'checkin' | 'night_audit'
         }
         Update: {
           id?: string
@@ -262,6 +270,8 @@ export interface Database {
           charge_type?: 'room' | 'service' | 'food' | 'other'
           charged_at?: string
           created_by?: string | null
+          stay_night_date?: string | null
+          auto_charge_source?: 'manual' | 'checkin' | 'night_audit'
         }
       }
       payments: {
@@ -538,18 +548,22 @@ export interface Database {
           id: string
           organization_id: string | null
           name: string
+          /** dish_menu = kitchen menu items; product_catalog = bar/sauna retail SKUs */
+          pos_catalog_mode?: "dish_menu" | "product_catalog" | null
           created_at?: string
         }
         Insert: {
           id?: string
           organization_id?: string
           name: string
+          pos_catalog_mode?: "dish_menu" | "product_catalog" | null
           created_at?: string
         }
         Update: {
           id?: string
           organization_id?: string | null
           name?: string
+          pos_catalog_mode?: "dish_menu" | "product_catalog" | null
           created_at?: string
         }
       }
@@ -674,8 +688,27 @@ export interface Database {
           p_reference_id: string | null
           p_created_by: string | null
           p_lines: Json
+          p_organization_id?: string | null
         }
         Returns: string
+      }
+      post_hotel_room_night_charge: {
+        Args: {
+          p_organization_id: string
+          p_stay_id: string
+          p_source: string
+          p_created_by?: string | null
+          p_folio_night_date?: string | null
+        }
+        Returns: Json
+      }
+      run_hotel_night_audit_for_org: {
+        Args: {
+          p_organization_id: string
+          p_folio_night_date?: string | null
+          p_created_by?: string | null
+        }
+        Returns: Json
       }
     }
   }

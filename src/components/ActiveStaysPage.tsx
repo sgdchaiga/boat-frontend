@@ -8,6 +8,8 @@ import { PageNotes } from './common/PageNotes';
 import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
 
 type Stay = Database['public']['Tables']['stays']['Row'] & {
+  /** Returned from `select('*')` on stays; used for printed guest bill header. */
+  organization_id?: string | null;
   hotel_customers: { first_name: string; last_name: string; email: string | null } | null;
   rooms: { id: string; room_number: string } | null;
 };

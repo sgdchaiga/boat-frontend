@@ -86,6 +86,10 @@ export function CheckInPage() {
       alert("Reservation missing guest or room");
       return;
     }
+    if (!orgId) {
+      alert("Your account must be linked to a hotel organization to check in guests.");
+      return;
+    }
 
     setProcessingId(reservation.id);
 
@@ -110,7 +114,7 @@ export function CheckInPage() {
 
       /* Create stay */
 
-      const { error: stayError } = await supabase
+      const { data: stayRow, error: stayError } = await supabase
         .from("stays")
         .insert({
           reservation_id: reservation.id,
@@ -119,9 +123,36 @@ export function CheckInPage() {
           actual_check_in: new Date().toISOString(),
           checked_in_by: user.id,
           organization_id: orgId ?? null,
-        });
+        })
+        .select("id")
+        .single();
 
       if (stayError) throw stayError;
+      if (!stayRow?.id) throw new Error("Stay was not created");
+
+      if (user.hotel_enable_smart_room_charges !== false) {
+        const { data: folioRpc, error: folioErr } = await supabase.rpc("post_hotel_room_night_charge", {
+          p_organization_id: orgId,
+          p_stay_id: stayRow.id,
+          p_source: "checkin",
+          p_created_by: user.id,
+        });
+
+        if (folioErr) {
+          console.error("First-night folio RPC:", folioErr);
+          throw new Error(
+            `Guest checked in, but the first-night room charge failed: ${folioErr.message}. Fix room rate / journal settings, then use Billing → Run Daily Charges or add the charge manually.`
+          );
+        }
+
+        const folio = folioRpc as { ok?: boolean; error?: string; skipped?: boolean; reason?: string } | null;
+        if (folio && folio.ok === false) {
+          throw new Error(
+            folio.error ||
+              "Guest checked in, but the first-night room charge could not be posted (see room rate and journal GL settings)."
+          );
+        }
+      }
 
       /* Update reservation */
 

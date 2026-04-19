@@ -15,6 +15,7 @@ import {
   PAYMENT_METHOD_SELECT_OPTIONS,
   type PaymentMethodCode,
 } from "../lib/paymentMethod";
+import { randomUuid } from "../lib/randomUuid";
 
 interface Product {
   id: string;
@@ -243,7 +244,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
         .eq("id", user?.id)
         .maybeSingle();
 
-      const saleId = crypto.randomUUID();
+      const saleId = randomUuid();
       const orgId = user?.organization_id ?? undefined;
       const { data: paymentRow, error: paymentError } = await insertPaymentWithMethodCompat(
         supabase,

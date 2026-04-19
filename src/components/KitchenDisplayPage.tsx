@@ -5,6 +5,7 @@ import { computeRangeInTimezone } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { PageNotes } from "./common/PageNotes";
+import { getNextOrderStatus } from "../lib/hotelPosOrderStatus";
 
 interface KitchenItem {
   quantity: number;
@@ -260,7 +261,10 @@ export function KitchenDisplayPage() {
               <div className="flex gap-2 mt-4">
                 {order.order_status === "pending" && (
                   <button
-                    onClick={() => updateStatus(order.id, "preparing")}
+                    onClick={() => {
+                      const next = getNextOrderStatus(order.order_status, "restaurant");
+                      if (next === "preparing") void updateStatus(order.id, next);
+                    }}
                     disabled={updatingId === order.id}
                     className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 py-2 rounded-lg font-semibold transition"
                   >
@@ -269,7 +273,10 @@ export function KitchenDisplayPage() {
                 )}
                 {order.order_status === "preparing" && (
                   <button
-                    onClick={() => updateStatus(order.id, "ready")}
+                    onClick={() => {
+                      const next = getNextOrderStatus(order.order_status, "restaurant");
+                      if (next === "ready") void updateStatus(order.id, next);
+                    }}
                     disabled={updatingId === order.id}
                     className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 py-2 rounded-lg font-semibold transition"
                   >

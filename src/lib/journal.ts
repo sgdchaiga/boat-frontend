@@ -47,6 +47,8 @@ export interface CreateJournalEntryParams {
   reference_id?: string | null;
   lines: JournalLine[];
   created_by?: string | null;
+  /** When set, stamps journal_entries.organization_id (required for service/cron posts). */
+  organizationId?: string | null;
 }
 
 export type JournalPostResult = { ok: true; journalId: string } | { ok: false; error: string };
@@ -260,7 +262,7 @@ export function clearJournalAccountCache() {
 }
 
 export async function createJournalEntry(params: CreateJournalEntryParams): Promise<JournalPostResult> {
-  const { entry_date, description, reference_type, reference_id, lines, created_by } = params;
+  const { entry_date, description, reference_type, reference_id, lines, created_by, organizationId } = params;
   if (!lines.length) return { ok: false, error: "No journal lines" };
   const totalDr = lines.reduce((s, l) => s + l.debit, 0);
   const totalCr = lines.reduce((s, l) => s + l.credit, 0);
@@ -268,25 +270,46 @@ export async function createJournalEntry(params: CreateJournalEntryParams): Prom
     return { ok: false, error: "Debits must equal credits" };
   }
 
-  const { data, error } = await supabase.rpc("create_journal_entry_atomic", {
-    p_entry_date: toBusinessDateString(entry_date),
-    p_description: description,
-    p_reference_type: reference_type,
-    p_reference_id: reference_id ?? null,
-    p_created_by: created_by ?? null,
-    p_lines: lines.map((l) => {
+  const orgForJournal =
+    organizationId === undefined ? await resolveOrganizationId() : organizationId;
+
+  const toRpcLines = (includeDimensions: boolean) =>
+    lines.map((l) => {
       const row: Record<string, unknown> = {
         gl_account_id: l.gl_account_id,
         debit: l.debit,
         credit: l.credit,
         line_description: l.line_description ?? null,
       };
-      if (l.dimensions != null && typeof l.dimensions === "object" && Object.keys(l.dimensions).length > 0) {
+      if (
+        includeDimensions &&
+        l.dimensions != null &&
+        typeof l.dimensions === "object" &&
+        Object.keys(l.dimensions).length > 0
+      ) {
         row.dimensions = l.dimensions;
       }
       return row;
-    }),
-  });
+    });
+
+  const runCreate = (includeDimensions: boolean) =>
+    supabase.rpc("create_journal_entry_atomic", {
+      p_entry_date: toBusinessDateString(entry_date),
+      p_description: description,
+      p_reference_type: reference_type,
+      p_reference_id: reference_id ?? null,
+      p_created_by: created_by ?? null,
+      p_lines: toRpcLines(includeDimensions),
+      p_organization_id: orgForJournal ?? null,
+    });
+
+  let { data, error } = await runCreate(true);
+  if (error && /dimensions/i.test(error.message) && /journal_entry_lines/i.test(error.message)) {
+    console.warn(
+      "[journal] create_journal_entry_atomic retrying without dimensions; journal_entry_lines.dimensions is unavailable in this DB schema."
+    );
+    ({ data, error } = await runCreate(false));
+  }
 
   if (error) return { ok: false, error: error.message };
   if (!data) return { ok: false, error: "Journal entry was not created" };
@@ -655,7 +678,8 @@ export async function createJournalForRoomCharge(
   description: string,
   chargedAt: string,
   createdBy: string | null,
-  glOverrides?: RoomChargeGlOverrides
+  glOverrides?: RoomChargeGlOverrides,
+  organizationId?: string | null
 ): Promise<JournalPostResult> {
   const acc = await getDefaultGlAccounts();
   const date = toBusinessDateString(chargedAt);
@@ -678,6 +702,7 @@ export async function createJournalForRoomCharge(
       { gl_account_id: revenueId, debit: 0, credit: amount, line_description: "Revenue" },
     ],
     created_by: createdBy,
+    organizationId: organizationId === undefined ? undefined : organizationId,
   });
 }
 

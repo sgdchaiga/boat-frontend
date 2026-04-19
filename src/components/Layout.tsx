@@ -25,6 +25,7 @@ import {
   BookOpen,
   Wallet,
   Factory,
+  MessageSquare,
 } from 'lucide-react';
 import { APP_SHORT_NAME } from '../constants/branding';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
@@ -144,6 +145,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
 
   const platformNavigation: NavLeaf[] = [
     { name: 'Overview', icon: LayoutDashboard, page: 'platform_overview' },
+    { name: 'Communications', icon: MessageSquare, page: 'communications' },
     { name: 'Organizations', icon: Building2, page: 'platform_organizations' },
     { name: 'Business admins', icon: UsersRound, page: 'platform_business_admins' },
     { name: 'Business types', icon: Building2, page: 'platform_business_types' },
@@ -173,6 +175,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
 
     return [
     { name: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' },
+    { name: 'Communications', icon: MessageSquare, page: 'communications' },
     { name: 'Retail Dashboard', icon: LayoutDashboard, page: 'retail_dashboard' },
     ...(frontDeskNav ? [frontDeskNav] : []),
     {
@@ -187,11 +190,11 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           : businessType === 'retail' || businessType === 'restaurant'
             ? [{ name: 'Customers', page: 'retail_customers' as const }]
             : [{ name: 'Customers', page: 'hotel_customers' as const }]),
-        { name: 'Hotel POS', page: 'POS' },
-        { name: 'POS Dashboard', page: 'pos_dashboard' },
+        { name: 'POS (Waiter/Cashier)', page: HOTEL_PAGE.posWaiter },
+        { name: 'Kitchen/Bar Screen', page: HOTEL_PAGE.posKitchenBar },
+        { name: 'Supervisor Dashboard', page: HOTEL_PAGE.posSupervisor },
+        { name: 'Reports & Analytics', page: HOTEL_PAGE.posReports },
         { name: 'Retail POS', page: 'retail_pos' },
-        { name: 'Kitchen Orders', page: 'Kitchen Orders' },
-        { name: 'Kitchen Display', page: 'kitchen_display' },
         { name: 'Invoices', page: 'retail_credit_invoices' },
         { name: 'Cash receipts', page: 'cash_receipts' },
         { name: 'Debtor payments', page: 'payments' },
@@ -312,6 +315,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const saccoNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: SACCOPRO_PAGE.dashboard },
+      { name: 'Communications', icon: MessageSquare, page: 'communications' },
       { name: 'Overview', icon: Home, page: SACCOPRO_PAGE.overview },
       {
         name: 'Members',
@@ -400,6 +404,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const schoolNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: GraduationCap, page: SCHOOL_PAGE.dashboard },
+      { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
         name: 'School catalog',
         icon: BookOpen,
@@ -551,6 +556,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const vslaNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: VSLA_PAGE.dashboard },
+      { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
         name: 'Members',
         icon: UsersRound,
@@ -625,6 +631,8 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       businessType,
       subscriptionStatus,
       enableFixedAssets: user?.enable_fixed_assets === true,
+      enableCommunications: user?.enable_communications !== false,
+      enableWallet: user?.enable_wallet !== false,
       schoolEnableReports: user?.school_enable_reports === true,
       schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
       schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -640,6 +648,8 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       businessType,
       subscriptionStatus,
       enableFixedAssets: user?.enable_fixed_assets === true,
+      enableCommunications: user?.enable_communications !== false,
+      enableWallet: user?.enable_wallet !== false,
       schoolEnableReports: user?.school_enable_reports === true,
       schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
       schoolEnableAccounting: user?.school_enable_accounting === true,

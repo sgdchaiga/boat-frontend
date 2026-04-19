@@ -40,6 +40,12 @@ interface AuthUser {
   subscription_period_end?: string | null;
   /** Platform enables per organization; gates Fixed assets navigation. */
   enable_fixed_assets?: boolean;
+  /** Platform: Communications hub (SMS/WhatsApp). */
+  enable_communications?: boolean;
+  /** Platform: Wallet module. */
+  enable_wallet?: boolean;
+  /** Platform: automated hotel room charges (check-in + night audit). When false, room revenue is manual. */
+  hotel_enable_smart_room_charges?: boolean;
   /** School tenants: platform toggles for BOAT-linked areas. */
   school_enable_reports?: boolean;
   school_enable_fixed_deposit?: boolean;
@@ -92,6 +98,9 @@ async function loadTenantProfile(userId: string): Promise<{
   subscription_plan_code: string | null;
   subscription_period_end: string | null;
   enable_fixed_assets: boolean;
+  enable_communications: boolean;
+  enable_wallet: boolean;
+  hotel_enable_smart_room_charges: boolean;
   school_enable_reports: boolean;
   school_enable_fixed_deposit: boolean;
   school_enable_accounting: boolean;
@@ -106,6 +115,9 @@ async function loadTenantProfile(userId: string): Promise<{
     subscription_plan_code: null,
     subscription_period_end: null,
     enable_fixed_assets: false,
+    enable_communications: true,
+    enable_wallet: true,
+    hotel_enable_smart_room_charges: true,
     school_enable_reports: false,
     school_enable_fixed_deposit: false,
     school_enable_accounting: false,
@@ -125,7 +137,7 @@ async function loadTenantProfile(userId: string): Promise<{
     supabase
       .from("organizations")
       .select(
-        "business_type, enable_fixed_assets, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases"
+        "business_type, enable_fixed_assets, enable_communications, enable_wallet, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases"
       )
       .eq("id", organization_id)
       .maybeSingle(),
@@ -149,6 +161,9 @@ async function loadTenantProfile(userId: string): Promise<{
   const org = orgRow as {
     business_type?: BusinessType | null;
     enable_fixed_assets?: boolean | null;
+    enable_communications?: boolean | null;
+    enable_wallet?: boolean | null;
+    hotel_enable_smart_room_charges?: boolean | null;
     school_enable_reports?: boolean | null;
     school_enable_fixed_deposit?: boolean | null;
     school_enable_accounting?: boolean | null;
@@ -164,6 +179,9 @@ async function loadTenantProfile(userId: string): Promise<{
     subscription_plan_code: sub?.subscription_plans?.code ?? null,
     subscription_period_end: sub?.period_end ?? null,
     enable_fixed_assets: !!org?.enable_fixed_assets,
+    enable_communications: org?.enable_communications !== false,
+    enable_wallet: org?.enable_wallet !== false,
+    hotel_enable_smart_room_charges: org?.hotel_enable_smart_room_charges !== false,
     school_enable_reports: !!org?.school_enable_reports,
     school_enable_fixed_deposit: !!org?.school_enable_fixed_deposit,
     school_enable_accounting: !!org?.school_enable_accounting,

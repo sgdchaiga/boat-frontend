@@ -13,6 +13,7 @@ import { SourceDocumentsCell } from "../common/SourceDocumentsCell";
 import { SearchableCombobox } from "../common/SearchableCombobox";
 import { buildStoragePath, uploadSourceDocument, type SourceDocumentRef } from "../../lib/sourceDocuments";
 import { loadJournalAccountSettings, resolveJournalAccountSettings } from "../../lib/journalAccountSettings";
+import { randomUuid } from "../../lib/randomUuid";
 
 type GlAccount = {
   id: string;
@@ -52,7 +53,7 @@ type LineDraft = {
 
 function emptyLine(): LineDraft {
   return {
-    key: crypto.randomUUID(),
+    key: randomUuid(),
     vendor_id: "",
     expense_gl_account_id: "",
     source_cash_gl_account_id: "",
@@ -653,7 +654,7 @@ export function ExpensesPage() {
           const net = Number(l.amount) || 0;
           const vat = Number(l.vat_amount) || 0;
           return {
-            key: crypto.randomUUID(),
+            key: randomUuid(),
             vendor_id: l.vendor_id ?? "",
             expense_gl_account_id: l.expense_gl_account_id,
             source_cash_gl_account_id: l.source_cash_gl_account_id,

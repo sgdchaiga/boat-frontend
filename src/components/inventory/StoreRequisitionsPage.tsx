@@ -3,6 +3,7 @@ import { Plus, Edit2, CheckCircle, Clock, Save, X, Trash2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { randomUuid } from "../../lib/randomUuid";
 import { PageNotes } from "../common/PageNotes";
 
 interface Requisition {
@@ -45,7 +46,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
   const [toLocation, setToLocation] = useState("bar");
   const [note, setNote] = useState("");
   const [itemRows, setItemRows] = useState<RequisitionItemRow[]>([
-    { id: crypto.randomUUID(), product_id: "", quantity: "" },
+    { id: randomUuid(), product_id: "", quantity: "" },
   ]);
   const [saving, setSaving] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
@@ -96,7 +97,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     setFromLocation("store");
     setToLocation("bar");
     setNote("");
-    setItemRows([{ id: crypto.randomUUID(), product_id: "", quantity: "" }]);
+    setItemRows([{ id: randomUuid(), product_id: "", quantity: "" }]);
     setShowModal(true);
   };
 
@@ -126,17 +127,17 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     setItemRows(
       (items || []).length > 0
         ? (items || []).map((it: any) => ({
-            id: crypto.randomUUID(),
+            id: randomUuid(),
             product_id: it.product_id,
             quantity: String(it.quantity ?? ""),
           }))
-        : [{ id: crypto.randomUUID(), product_id: "", quantity: "" }]
+        : [{ id: randomUuid(), product_id: "", quantity: "" }]
     );
     setShowModal(true);
   };
 
   const addItemRow = () => {
-    setItemRows((prev) => [...prev, { id: crypto.randomUUID(), product_id: "", quantity: "" }]);
+    setItemRows((prev) => [...prev, { id: randomUuid(), product_id: "", quantity: "" }]);
   };
 
   const updateItemRow = (id: string, patch: Partial<RequisitionItemRow>) => {

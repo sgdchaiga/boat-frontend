@@ -6,6 +6,7 @@ import { PageNotes } from "@/components/common/PageNotes";
 import { SchoolFeeReceiptPreviewModal } from "@/components/school/SchoolFeeReceiptPreviewModal";
 import { schoolFeeReceiptDetailFromPayment, type SchoolFeeReceiptDetail } from "@/lib/schoolFeeReceipt";
 import { buildSchoolFeesAutoReference } from "@/lib/autoReference";
+import { randomUuid } from "@/lib/randomUuid";
 
 type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string };
 type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; created_at?: string };
@@ -280,7 +281,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         p_reference: autoRef,
         p_narration: `School fees (${targetInvoices.map((i) => i.invoice_number).join(", ") || "invoice"})`,
         p_created_by: staffId,
-        p_idempotency_key: crypto.randomUUID(),
+        p_idempotency_key: randomUuid(),
         p_metadata: { source: "school_fees" },
       });
       if (wPay.error) {
@@ -311,7 +312,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           p_reference: null,
           p_narration: "Reversal: school fee record failed",
           p_created_by: user.id,
-          p_idempotency_key: crypto.randomUUID(),
+          p_idempotency_key: randomUuid(),
           p_metadata: { source: "school_fees_reversal" },
         });
       }
