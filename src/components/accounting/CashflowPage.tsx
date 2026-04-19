@@ -21,7 +21,7 @@ import {
   buildIndirectOperating,
   roundMoney,
 } from "../../lib/cashFlowStatement";
-import { downloadCsv, exportAccountingPdf, type AccountingPdfSection } from "../../lib/accountingReportExport";
+import { downloadCsv, exportAccountingPdf, formatDrCrCell, type AccountingPdfSection } from "../../lib/accountingReportExport";
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 
@@ -535,8 +535,8 @@ export function CashflowPage() {
         m.transaction_id ?? "",
         m.entry_date,
         m.description,
-        m.debit > 0 ? m.debit.toFixed(2) : "",
-        m.credit > 0 ? m.credit.toFixed(2) : "",
+        formatDrCrCell(m.debit),
+        formatDrCrCell(m.credit),
         m.balance.toFixed(2),
       ]),
       [],
@@ -560,8 +560,8 @@ export function CashflowPage() {
             m.transaction_id ?? "—",
             m.entry_date,
             m.description,
-            m.debit > 0 ? m.debit.toFixed(2) : "",
-            m.credit > 0 ? m.credit.toFixed(2) : "",
+            formatDrCrCell(m.debit),
+            formatDrCrCell(m.credit),
             m.balance.toFixed(2),
           ]),
         },
@@ -700,8 +700,8 @@ export function CashflowPage() {
                     <td className="p-2 font-mono text-slate-600">{m.transaction_id ?? "—"}</td>
                     <td className="p-2">{m.entry_date}</td>
                     <td className="p-2">{m.description}</td>
-                    <td className="p-2 text-right">{m.debit > 0 ? m.debit.toFixed(2) : ""}</td>
-                    <td className="p-2 text-right">{m.credit > 0 ? m.credit.toFixed(2) : ""}</td>
+                    <td className="p-2 text-right">{formatDrCrCell(m.debit)}</td>
+                    <td className="p-2 text-right">{formatDrCrCell(m.credit)}</td>
                     <td className="p-2 text-right font-medium">{m.balance.toFixed(2)}</td>
                   </tr>
                 ))}

@@ -24,6 +24,16 @@ export function downloadCsv(filename: string, rows: (string | number)[][]): void
   URL.revokeObjectURL(url);
 }
 
+/** True if a GL line amount should be treated as non-zero (avoids float noise). */
+export function isNonZeroGlAmount(n: number): boolean {
+  return Math.abs(Number(n) || 0) >= 0.0001;
+}
+
+/** Debit/credit (or In/Out) column: always two decimals, including `0.00` — never blank. */
+export function formatDrCrCell(n: number): string {
+  return (Number(n) || 0).toFixed(2);
+}
+
 export function formatCurrency(
   value: number,
   options?: { currency?: string; locale?: string; minimumFractionDigits?: number; maximumFractionDigits?: number }

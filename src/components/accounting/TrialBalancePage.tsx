@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { businessTodayISO, computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
-import { downloadCsv, exportAccountingPdf } from "../../lib/accountingReportExport";
+import { downloadCsv, exportAccountingPdf, formatDrCrCell, isNonZeroGlAmount } from "../../lib/accountingReportExport";
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
@@ -29,6 +29,7 @@ export function TrialBalancePage() {
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [rows, setRows] = useState<AccountBalance[]>([]);
   const [useAsOf, setUseAsOf] = useState(false);
+  const [showZeroBalanceAccounts, setShowZeroBalanceAccounts] = useState(true);
 
   useEffect(() => {
     fetchData();
@@ -127,6 +128,14 @@ export function TrialBalancePage() {
   const totalCredits = rows.reduce((s, r) => s + r.credit, 0);
   const balanced = Math.abs(totalDebits - totalCredits) < 0.01;
 
+  const rowsDisplayed = useMemo(
+    () =>
+      showZeroBalanceAccounts
+        ? rows
+        : rows.filter((r) => isNonZeroGlAmount(r.debit) || isNonZeroGlAmount(r.credit)),
+    [rows, showZeroBalanceAccounts]
+  );
+
   const periodLabel = useMemo(() => {
     if (useAsOf) return `As of ${asOfDate}`;
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
@@ -143,11 +152,11 @@ export function TrialBalancePage() {
       ["Trial Balance", periodLabel],
       [],
       ["Account", "Name", "Debit", "Credit"],
-      ...rows.map((r) => [
+      ...rowsDisplayed.map((r) => [
         r.account_code,
         r.account_name,
-        r.debit > 0 ? r.debit.toFixed(2) : "",
-        r.credit > 0 ? r.credit.toFixed(2) : "",
+        formatDrCrCell(r.debit),
+        formatDrCrCell(r.credit),
       ]),
       [],
       ["", "Total", totalDebits.toFixed(2), totalCredits.toFixed(2)],
@@ -165,11 +174,11 @@ export function TrialBalancePage() {
         {
           title: "Accounts",
           head: ["Account", "Name", "Debit", "Credit"],
-          body: rows.map((r) => [
+          body: rowsDisplayed.map((r) => [
             r.account_code,
             r.account_name,
-            r.debit > 0 ? r.debit.toFixed(2) : "",
-            r.credit > 0 ? r.credit.toFixed(2) : "",
+            formatDrCrCell(r.debit),
+            formatDrCrCell(r.credit),
           ]),
         },
       ],
@@ -223,6 +232,15 @@ export function TrialBalancePage() {
               )}
             </>
           )}
+          <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showZeroBalanceAccounts}
+              onChange={(e) => setShowZeroBalanceAccounts(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            Show zero-balance accounts
+          </label>
         </div>
         {!loading && !fetchError && <AccountingExportButtons onExcel={exportExcel} onPdf={exportPdf} />}
       </div>
@@ -241,12 +259,12 @@ export function TrialBalancePage() {
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => (
+              {rowsDisplayed.map((r) => (
                 <tr key={r.account_id} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
                   <td className="p-3">{r.account_name}</td>
-                  <td className="p-3 text-right">{r.debit > 0 ? r.debit.toFixed(2) : ""}</td>
-                  <td className="p-3 text-right">{r.credit > 0 ? r.credit.toFixed(2) : ""}</td>
+                  <td className="p-3 text-right">{formatDrCrCell(r.debit)}</td>
+                  <td className="p-3 text-right">{formatDrCrCell(r.credit)}</td>
                 </tr>
               ))}
             </tbody>
@@ -264,6 +282,11 @@ export function TrialBalancePage() {
             </tfoot>
           </table>
           {rows.length === 0 && <p className="p-6 text-center text-slate-500">No journal entries in the selected period.</p>}
+          {rows.length > 0 && rowsDisplayed.length === 0 && (
+            <p className="p-6 text-center text-slate-500">
+              All accounts are zero in this period (turn on &quot;Show zero-balance accounts&quot; to list every account).
+            </p>
+          )}
         </div>
       )}
     </div>

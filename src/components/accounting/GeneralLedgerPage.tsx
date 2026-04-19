@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
+import { formatDrCrCell } from "../../lib/accountingReportExport";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 
@@ -202,8 +203,8 @@ export function GeneralLedgerPage() {
                       <td className="p-2 font-mono text-slate-600">{r.transaction_id ?? "—"}</td>
                       <td className="p-2">{r.entry_date}</td>
                       <td className="p-2">{r.description}</td>
-                      <td className="p-2 text-right">{r.debit > 0 ? r.debit.toFixed(2) : ""}</td>
-                      <td className="p-2 text-right">{r.credit > 0 ? r.credit.toFixed(2) : ""}</td>
+                      <td className="p-2 text-right">{formatDrCrCell(r.debit)}</td>
+                      <td className="p-2 text-right">{formatDrCrCell(r.credit)}</td>
                       <td className="p-2 text-right font-medium">{r.balance.toFixed(2)}</td>
                     </tr>
                   ))}

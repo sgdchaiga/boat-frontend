@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { businessTodayISO } from "../../lib/timezone";
-import { downloadCsv, exportAccountingPdf } from "../../lib/accountingReportExport";
+import { downloadCsv, exportAccountingPdf, isNonZeroGlAmount } from "../../lib/accountingReportExport";
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
@@ -25,6 +25,7 @@ export function BalanceSheetPage() {
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const [asOfDate, setAsOfDate] = useState(() => businessTodayISO());
+  const [showZeroBalanceAccounts, setShowZeroBalanceAccounts] = useState(true);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [assets, setAssets] = useState<AccountTotal[]>([]);
@@ -156,23 +157,36 @@ export function BalanceSheetPage() {
   const totalLiabEquityAndPnL = totalLiabilities + totalEquity + netIncome;
   const balanced = Math.abs(totalAssets - totalLiabEquityAndPnL) < 0.01;
 
+  const assetsDisplayed = useMemo(
+    () => (showZeroBalanceAccounts ? assets : assets.filter((r) => isNonZeroGlAmount(r.total))),
+    [assets, showZeroBalanceAccounts]
+  );
+  const liabilitiesDisplayed = useMemo(
+    () => (showZeroBalanceAccounts ? liabilities : liabilities.filter((r) => isNonZeroGlAmount(r.total))),
+    [liabilities, showZeroBalanceAccounts]
+  );
+  const equityDisplayed = useMemo(
+    () => (showZeroBalanceAccounts ? equity : equity.filter((r) => isNonZeroGlAmount(r.total))),
+    [equity, showZeroBalanceAccounts]
+  );
+
   const exportExcel = () => {
     const data: (string | number)[][] = [
       ["Balance Sheet", `As of ${asOfDate}`],
       [],
       ["Assets"],
       ["Code", "Name", "Amount"],
-      ...assets.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
+      ...assetsDisplayed.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
       ["", "Total Assets", totalAssets.toFixed(2)],
       [],
       ["Liabilities"],
       ["Code", "Name", "Amount"],
-      ...liabilities.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
+      ...liabilitiesDisplayed.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
       ["", "Total Liabilities", totalLiabilities.toFixed(2)],
       [],
       ["Equity"],
       ["Code", "Name", "Amount"],
-      ...equity.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
+      ...equityDisplayed.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
       ["", "Total Equity (GL)", totalEquity.toFixed(2)],
       [],
       ["Net income (P&L, cumulative)", "", netIncome.toFixed(2)],
@@ -192,17 +206,17 @@ export function BalanceSheetPage() {
         {
           title: "Assets",
           head: ["Code", "Name", "Amount"],
-          body: assets.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
+          body: assetsDisplayed.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
         },
         {
           title: "Liabilities",
           head: ["Code", "Name", "Amount"],
-          body: liabilities.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
+          body: liabilitiesDisplayed.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
         },
         {
           title: "Equity",
           head: ["Code", "Name", "Amount"],
-          body: equity.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
+          body: equityDisplayed.map((r) => [r.account_code, r.account_name, r.total.toFixed(2)]),
         },
         {
           title: "Net income (P&L, cumulative)",
@@ -243,6 +257,15 @@ export function BalanceSheetPage() {
         <div className="flex flex-wrap gap-4 items-center">
           <label className="flex items-center gap-2">As of</label>
           <input type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} className="border rounded-lg px-3 py-2" />
+          <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={showZeroBalanceAccounts}
+              onChange={(e) => setShowZeroBalanceAccounts(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            Show zero-balance accounts
+          </label>
         </div>
         {!loading && !fetchError && <AccountingExportButtons onExcel={exportExcel} onPdf={exportPdf} />}
       </div>
@@ -254,7 +277,7 @@ export function BalanceSheetPage() {
           <div className="p-4 border-b bg-slate-50 font-medium">Assets</div>
           <table className="w-full text-sm">
             <tbody>
-              {assets.map((r) => (
+              {assetsDisplayed.map((r) => (
                 <tr key={r.account_code} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
                   <td className="p-3">{r.account_name}</td>
@@ -262,6 +285,13 @@ export function BalanceSheetPage() {
                 </tr>
               ))}
               {assets.length === 0 && <tr><td colSpan={3} className="p-3 text-slate-500">No asset accounts</td></tr>}
+              {assets.length > 0 && assetsDisplayed.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="p-3 text-slate-500">
+                    No non-zero asset accounts (turn on &quot;Show zero-balance accounts&quot; to list all).
+                  </td>
+                </tr>
+              )}
             </tbody>
             <tfoot className="bg-slate-100 font-medium">
               <tr><td colSpan={2} className="p-3 text-right">Total Assets</td><td className="p-3 text-right">{totalAssets.toFixed(2)}</td></tr>
@@ -270,7 +300,7 @@ export function BalanceSheetPage() {
           <div className="p-4 border-t border-b bg-slate-50 font-medium">Liabilities</div>
           <table className="w-full text-sm">
             <tbody>
-              {liabilities.map((r) => (
+              {liabilitiesDisplayed.map((r) => (
                 <tr key={r.account_code} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
                   <td className="p-3">{r.account_name}</td>
@@ -278,6 +308,13 @@ export function BalanceSheetPage() {
                 </tr>
               ))}
               {liabilities.length === 0 && <tr><td colSpan={3} className="p-3 text-slate-500">No liability accounts</td></tr>}
+              {liabilities.length > 0 && liabilitiesDisplayed.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="p-3 text-slate-500">
+                    No non-zero liability accounts (turn on &quot;Show zero-balance accounts&quot; to list all).
+                  </td>
+                </tr>
+              )}
             </tbody>
             <tfoot className="bg-slate-100 font-medium">
               <tr><td colSpan={2} className="p-3 text-right">Total Liabilities</td><td className="p-3 text-right">{totalLiabilities.toFixed(2)}</td></tr>
@@ -286,7 +323,7 @@ export function BalanceSheetPage() {
           <div className="p-4 border-t border-b bg-slate-50 font-medium">Equity</div>
           <table className="w-full text-sm">
             <tbody>
-              {equity.map((r) => (
+              {equityDisplayed.map((r) => (
                 <tr key={r.account_code} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
                   <td className="p-3">{r.account_name}</td>
@@ -294,6 +331,13 @@ export function BalanceSheetPage() {
                 </tr>
               ))}
               {equity.length === 0 && <tr><td colSpan={3} className="p-3 text-slate-500">No equity accounts</td></tr>}
+              {equity.length > 0 && equityDisplayed.length === 0 && (
+                <tr>
+                  <td colSpan={3} className="p-3 text-slate-500">
+                    No non-zero equity accounts (turn on &quot;Show zero-balance accounts&quot; to list all).
+                  </td>
+                </tr>
+              )}
             </tbody>
             <tfoot className="bg-slate-100 font-medium">
               <tr><td colSpan={2} className="p-3 text-right">Total Equity (GL accounts)</td><td className="p-3 text-right">{totalEquity.toFixed(2)}</td></tr>
