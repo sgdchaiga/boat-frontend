@@ -34,7 +34,7 @@
     "desktop:dist": "npm run desktop:dist:local",
     "desktop:dist:local": "npm run build:desktop:local && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
     "desktop:dist:admin": "npm run build:desktop:admin && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
-    "postinstall": "electron-rebuild -f -w better-sqlite3"
+    "postinstall": "node -e \"const { execSync } = require('child_process'); const skip = process.env.VERCEL || process.env.CI || process.env.SKIP_ELECTRON_REBUILD; if (skip) { console.log('Skipping electron-rebuild on CI/Vercel.'); process.exit(0); } execSync('electron-rebuild -f -w better-sqlite3', { stdio: 'inherit' });\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -47,8 +47,10 @@
     "react-dom": "^18.3.1",
     "react-hot-toast": "^2.6.0",
     "recharts": "^2.15.4",
-    "better-sqlite3": "^11.7.0",
     "xlsx": "^0.18.5"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^11.7.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",

@@ -23,3 +23,12 @@ dist-ssr
 *.sln
 *.sw?
 .env
+
+# Desktop / electron-builder — never commit installers or unpacked apps
+release/
+release-desktop/
+dist-electron/
+out/
+*.blockmap
+*.nsis.7z
+latest*.yml
