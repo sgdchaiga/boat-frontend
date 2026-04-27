@@ -4,6 +4,7 @@ import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
 import { getDefaultGlAccounts } from "../../lib/journal";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import {
   type GlAccountRow,
   type JournalLineRow,
@@ -45,6 +46,7 @@ export function CashflowPage() {
   const [dateRange, setDateRange] = useState<DateRangeKey>("this_month");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const [compareRange, setCompareRange] = useState<"none" | "previous_period" | "same_period_last_year">("none");
   const [loading, setLoading] = useState(true);
   const [queryError, setQueryError] = useState<string | null>(null);
 
@@ -65,6 +67,14 @@ export function CashflowPage() {
   const [financing, setFinancing] = useState(0);
   const [directOperatingNet, setDirectOperatingNet] = useState(0);
   const [reconcileDiff, setReconcileDiff] = useState(0);
+  const [previousLabel, setPreviousLabel] = useState("Previous");
+  const [previousCashBegin, setPreviousCashBegin] = useState(0);
+  const [previousCashEnd, setPreviousCashEnd] = useState(0);
+  const [previousNetChangeCash, setPreviousNetChangeCash] = useState(0);
+  const [previousIndirectOperatingNet, setPreviousIndirectOperatingNet] = useState(0);
+  const [previousDirectOperatingNet, setPreviousDirectOperatingNet] = useState(0);
+  const [previousInvesting, setPreviousInvesting] = useState(0);
+  const [previousFinancing, setPreviousFinancing] = useState(0);
 
   const fetchLedger = useCallback(async () => {
     if (!cashAccountId) return;
@@ -194,9 +204,8 @@ export function CashflowPage() {
     const { data, error } = await filterByOrganizationId(
       supabase
         .from("gl_accounts")
-        .select("id, account_code, account_name, category")
+        .select("*")
         .eq("account_type", "asset")
-        .eq("is_active", true)
         .order("account_code"),
       orgId,
       superAdmin
@@ -208,7 +217,14 @@ export function CashflowPage() {
       return;
     }
 
-    const rows = (data || []) as { id: string; account_code: string; account_name: string; category: string | null }[];
+    const rows = normalizeGlAccountRows((data || []) as unknown[])
+      .filter((row) => row.is_active && row.account_type === "asset")
+      .map((row) => ({
+        id: row.id,
+        account_code: row.account_code,
+        account_name: row.account_name,
+        category: row.category,
+      }));
     setAccounts(rows);
 
     const defaults = await getDefaultGlAccounts();
@@ -239,8 +255,7 @@ export function CashflowPage() {
     const { data: accData, error: eAcc } = await filterByOrganizationId(
       supabase
         .from("gl_accounts")
-        .select("id, account_code, account_name, account_type, category")
-        .eq("is_active", true),
+        .select("*"),
       orgId,
       superAdmin
     );
@@ -251,7 +266,15 @@ export function CashflowPage() {
       return;
     }
 
-    const allAccounts = (accData || []) as GlAccountRow[];
+    const allAccounts = normalizeGlAccountRows((accData || []) as unknown[])
+      .filter((row) => row.is_active)
+      .map((row) => ({
+        id: row.id,
+        account_code: row.account_code,
+        account_name: row.account_name,
+        account_type: row.account_type,
+        category: row.category,
+      })) as GlAccountRow[];
     const accMap = Object.fromEntries(allAccounts.map((a) => [a.id, a]));
 
     const defaults = await getDefaultGlAccounts();
@@ -289,10 +312,10 @@ export function CashflowPage() {
       return ((data || []) as { id: string }[]).map((e) => e.id);
     };
 
-    try {
-      const idsBeforeFrom = await fetchEntryIds({ lt: fromStr });
-      const idsThroughEnd = await fetchEntryIds({ lte: toStr });
-      const periodEntryIds = await fetchEntryIds({ gte: fromStr, lte: toStr });
+    const computeStatementForRange = async (rangeFrom: string, rangeTo: string) => {
+      const idsBeforeFrom = await fetchEntryIds({ lt: rangeFrom });
+      const idsThroughEnd = await fetchEntryIds({ lte: rangeTo });
+      const periodEntryIds = await fetchEntryIds({ gte: rangeFrom, lte: rangeTo });
 
       const linesBeforeFrom = await fetchLinesForEntries(idsBeforeFrom);
       const linesThroughEnd = await fetchLinesForEntries(idsThroughEnd);
@@ -302,8 +325,8 @@ export function CashflowPage() {
         supabase
           .from("journal_entries")
           .select("id, reference_type, description, entry_date")
-          .gte("entry_date", fromStr)
-          .lte("entry_date", toStr)
+          .gte("entry_date", rangeFrom)
+          .lte("entry_date", rangeTo)
           .eq("is_posted", true),
         orgId,
         superAdmin
@@ -322,8 +345,8 @@ export function CashflowPage() {
 
       const balBeginCash = cumulativeBalances(allAccounts, linesBeforeFrom);
       const balEndCash = cumulativeBalances(allAccounts, linesThroughEnd);
-      let cb = 0,
-        ce = 0;
+      let cb = 0;
+      let ce = 0;
       for (const id of cashPoolIds) {
         cb += balBeginCash[id] ?? 0;
         ce += balEndCash[id] ?? 0;
@@ -350,10 +373,10 @@ export function CashflowPage() {
         });
       }
 
-      let inv = 0,
-        fin = 0;
-      let receipts = 0,
-        payments = 0;
+      let inv = 0;
+      let fin = 0;
+      let receipts = 0;
+      let payments = 0;
 
       for (const e of (entriesPeriodMeta || []) as {
         id: string;
@@ -386,21 +409,75 @@ export function CashflowPage() {
       const classified = roundMoney(directOpNet + inv + fin);
       const diff = roundMoney(netChange - classified);
 
-      setCashBegin(cb);
-      setCashEnd(ce);
-      setNetChangeCash(netChange);
-      setIndirect(indirectResult);
-      setDirectOps({ receipts, payments, net: directOpNet });
-      setInvesting(inv);
-      setFinancing(fin);
-      setDirectOperatingNet(directOpNet);
-      setReconcileDiff(diff);
+      return {
+        cashBegin: cb,
+        cashEnd: ce,
+        netChangeCash: netChange,
+        indirectResult,
+        directOps: { receipts, payments, net: directOpNet },
+        investing: inv,
+        financing: fin,
+        directOperatingNet: directOpNet,
+        reconcileDiff: diff,
+      };
+    };
+
+    try {
+      const current = await computeStatementForRange(fromStr, toStr);
+      setCashBegin(current.cashBegin);
+      setCashEnd(current.cashEnd);
+      setNetChangeCash(current.netChangeCash);
+      setIndirect(current.indirectResult);
+      setDirectOps(current.directOps);
+      setInvesting(current.investing);
+      setFinancing(current.financing);
+      setDirectOperatingNet(current.directOperatingNet);
+      setReconcileDiff(current.reconcileDiff);
+
+      if (compareRange === "none") {
+        setPreviousLabel("Previous");
+        setPreviousCashBegin(0);
+        setPreviousCashEnd(0);
+        setPreviousNetChangeCash(0);
+        setPreviousIndirectOperatingNet(0);
+        setPreviousDirectOperatingNet(0);
+        setPreviousInvesting(0);
+        setPreviousFinancing(0);
+      } else {
+        const msPerDay = 24 * 60 * 60 * 1000;
+        const currentFrom = new Date(`${fromStr}T00:00:00`);
+        const currentTo = new Date(`${toStr}T00:00:00`);
+        let prevFrom = new Date(currentFrom);
+        let prevTo = new Date(currentTo);
+        if (compareRange === "previous_period") {
+          const daySpan = Math.floor((currentTo.getTime() - currentFrom.getTime()) / msPerDay) + 1;
+          prevFrom = new Date(currentFrom.getTime() - daySpan * msPerDay);
+          prevTo = new Date(currentTo.getTime() - daySpan * msPerDay);
+          setPreviousLabel("Previous period");
+        } else {
+          prevFrom.setFullYear(prevFrom.getFullYear() - 1);
+          prevTo.setFullYear(prevTo.getFullYear() - 1);
+          setPreviousLabel("Same period last year");
+        }
+
+        const previous = await computeStatementForRange(
+          prevFrom.toISOString().slice(0, 10),
+          prevTo.toISOString().slice(0, 10)
+        );
+        setPreviousCashBegin(previous.cashBegin);
+        setPreviousCashEnd(previous.cashEnd);
+        setPreviousNetChangeCash(previous.netChangeCash);
+        setPreviousIndirectOperatingNet(previous.indirectResult.netCashOperatingIndirect);
+        setPreviousDirectOperatingNet(previous.directOperatingNet);
+        setPreviousInvesting(previous.investing);
+        setPreviousFinancing(previous.financing);
+      }
     } catch (e) {
       setQueryError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
-  }, [dateRange, customFrom, customTo, orgId, superAdmin]);
+  }, [dateRange, customFrom, customTo, orgId, superAdmin, compareRange]);
 
   useEffect(() => {
     fetchAccountsForLedger();
@@ -650,6 +727,17 @@ export function CashflowPage() {
               <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border rounded-lg px-3 py-2" />
             </>
           )}
+          {view === "statement" && (
+            <select
+              value={compareRange}
+              onChange={(e) => setCompareRange(e.target.value as "none" | "previous_period" | "same_period_last_year")}
+              className="border rounded-lg px-3 py-2"
+            >
+              <option value="none">No comparison</option>
+              <option value="previous_period">Compare with previous period</option>
+              <option value="same_period_last_year">Compare with same period last year</option>
+            </select>
+          )}
           {view === "ledger" && (
             <select
               value={cashAccountId}
@@ -717,8 +805,9 @@ export function CashflowPage() {
           </div>
         )
       ) : (
-        <div className="space-y-6 max-w-2xl">
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className={`grid grid-cols-1 gap-6 items-start ${compareRange !== "none" ? "xl:grid-cols-[minmax(0,3fr)_minmax(320px,2fr)]" : ""}`}>
+          <div className="space-y-6 max-w-2xl">
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
             <div className="p-4 border-b bg-slate-50 font-medium">Cash position (pool)</div>
             <table className="w-full text-sm">
               <tbody>
@@ -823,6 +912,59 @@ export function CashflowPage() {
               <strong>Reconciliation:</strong> Classified operating + investing + financing ({(directOperatingNet + investing + financing).toFixed(2)}) vs
               actual change in cash pool ({netChangeCash.toFixed(2)}). Difference: {reconcileDiff.toFixed(2)}. Mixed journal lines or
               unclassified entries may cause this.
+            </div>
+          )}
+          </div>
+          {compareRange !== "none" && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-w-2xl xl:max-w-none">
+              <div className="p-4 border-b bg-slate-50 font-medium">Comparison ({previousLabel})</div>
+              <table className="w-full text-sm">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="p-3 text-left">Metric</th>
+                    <th className="p-3 text-right">Current</th>
+                    <th className="p-3 text-right">{previousLabel}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="border-t">
+                    <td className="p-3">Cash at beginning of period</td>
+                    <td className="p-3 text-right font-mono">{cashBegin.toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono">{previousCashBegin.toFixed(2)}</td>
+                  </tr>
+                  <tr className="border-t">
+                    <td className="p-3">Cash at end of period</td>
+                    <td className="p-3 text-right font-mono">{cashEnd.toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono">{previousCashEnd.toFixed(2)}</td>
+                  </tr>
+                  <tr className="border-t font-medium bg-slate-50">
+                    <td className="p-3">Net increase (decrease) in cash</td>
+                    <td className="p-3 text-right font-mono">{netChangeCash.toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono">{previousNetChangeCash.toFixed(2)}</td>
+                  </tr>
+                  <tr className="border-t">
+                    <td className="p-3">
+                      Net cash from operating activities ({method === "indirect" ? "indirect" : "direct"})
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {(method === "indirect" ? indirect?.netCashOperatingIndirect ?? 0 : directOperatingNet).toFixed(2)}
+                    </td>
+                    <td className="p-3 text-right font-mono">
+                      {(method === "indirect" ? previousIndirectOperatingNet : previousDirectOperatingNet).toFixed(2)}
+                    </td>
+                  </tr>
+                  <tr className="border-t">
+                    <td className="p-3">Net cash from investing activities</td>
+                    <td className="p-3 text-right font-mono">{investing.toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono">{previousInvesting.toFixed(2)}</td>
+                  </tr>
+                  <tr className="border-t">
+                    <td className="p-3">Net cash from financing activities</td>
+                    <td className="p-3 text-right font-mono">{financing.toFixed(2)}</td>
+                    <td className="p-3 text-right font-mono">{previousFinancing.toFixed(2)}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           )}
         </div>

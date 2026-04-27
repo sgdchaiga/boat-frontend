@@ -7,6 +7,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { orderGlAccountsWithExpensePreferences, fetchExpenseGlAccountPreferenceOrder } from "../../lib/manualJournalGlOptions";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { randomUuid } from "../../lib/randomUuid";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 
 type GLAccount = {
   id: string;
@@ -226,8 +227,7 @@ export function JournalEntriesPage() {
       .range(page * 50, page * 50 + 49);
     const accountsQuery = supabase
       .from("gl_accounts")
-      .select("id, account_code, account_name, account_type")
-      .eq("is_active", true)
+      .select("*")
       .order("account_code");
     const scopedEntriesQuery = superAdmin || !orgId ? entriesQuery : entriesQuery.eq("organization_id", orgId);
     const scopedAccountsQuery = superAdmin || !orgId ? accountsQuery : accountsQuery.eq("organization_id", orgId);
@@ -245,7 +245,15 @@ export function JournalEntriesPage() {
     const fetchedEntries = (entRes.data || []) as JournalEntry[];
     setEntries(fetchedEntries);
     setHasMorePages(fetchedEntries.length === 50);
-    setAccounts((accRes.data || []) as GLAccount[]);
+    const normalizedAccounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+      .filter((row) => row.is_active)
+      .map((row) => ({
+        id: row.id,
+        account_code: row.account_code,
+        account_name: row.account_name,
+        account_type: row.account_type,
+      }));
+    setAccounts(normalizedAccounts as GLAccount[]);
     setDepartments((depRes.data || []) as Array<{ id: string; name: string }>);
     setExpenseGlPreferenceOrder(prefOrder);
     setLoading(false);

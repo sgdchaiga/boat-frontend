@@ -1,13 +1,17 @@
 {
   "name": "boat",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.0.9",
   "type": "module",
   "scripts": {
+    "local:import": "node scripts/import-local-masters.mjs",
     "pos:last2days": "node scripts/show-pos-transactions.mjs",
     "sop:pdf": "node scripts/generate-sop-pdfs.mjs",
     "dev": "vite",
     "build": "vite build",
+    "build:desktop": "npm run build:desktop:local",
+    "build:desktop:local": "cross-env VITE_LOCAL_AUTH=true VITE_DEPLOYMENT_MODE=lan VITE_LOCAL_BUSINESS_TYPE=retail vite build --base=./",
+    "build:desktop:admin": "cross-env VITE_LOCAL_AUTH=false VITE_DEPLOYMENT_MODE=online vite build --base=./",
     "lint": "eslint .",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
@@ -19,8 +23,18 @@
     "deploy:down": "docker compose -f deploy/docker-compose.yml --env-file deploy/compose.env down",
     "pack:release": "powershell -ExecutionPolicy Bypass -File scripts/pack-release.ps1",
     "db:apply": "powershell -ExecutionPolicy Bypass -File scripts/apply-migrations.ps1",
+    "db:push": "powershell -ExecutionPolicy Bypass -File scripts/supabase-db-push.ps1",
+    "db:migrate": "powershell -ExecutionPolicy Bypass -File scripts/db-migrate.ps1",
     "install:retail": "powershell -ExecutionPolicy Bypass -File deploy/install-retail-windows.ps1",
-    "replay:teller-balances": "node scripts/replay-teller-savings-balances.mjs"
+    "replay:teller-balances": "node scripts/replay-teller-savings-balances.mjs",
+    "desktop:dev": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "desktop:start": "npm run desktop:start:local",
+    "desktop:start:local": "npm run build:desktop:local && cross-env NODE_ENV=production electron .",
+    "desktop:start:admin": "npm run build:desktop:admin && cross-env NODE_ENV=production electron .",
+    "desktop:dist": "npm run desktop:dist:local",
+    "desktop:dist:local": "npm run build:desktop:local && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "desktop:dist:admin": "npm run build:desktop:admin && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.4",
@@ -33,22 +47,54 @@
     "react-dom": "^18.3.1",
     "react-hot-toast": "^2.6.0",
     "recharts": "^2.15.4",
+    "better-sqlite3": "^11.7.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@eslint/js": "^9.9.1",
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
+    "@types/better-sqlite3": "^7.6.11",
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.18",
     "eslint": "^9.9.1",
     "eslint-plugin-react-hooks": "^5.1.0-rc.0",
     "eslint-plugin-react-refresh": "^0.4.11",
+    "concurrently": "^9.0.1",
+    "cross-env": "^7.0.3",
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
+    "electron-rebuild": "^3.2.9",
     "globals": "^15.9.0",
     "postcss": "^8.4.35",
     "tailwindcss": "^3.4.1",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.3.0",
-    "vite": "^5.4.2"
+    "vite": "^5.4.2",
+    "wait-on": "^8.0.1"
+  },
+  "main": "desktop/main.cjs",
+  "build": {
+    "appId": "com.boat.desktop.sqlite",
+    "productName": "BOAT Desktop",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*.cjs",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis"
+      ],
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": false
+    }
   }
 }

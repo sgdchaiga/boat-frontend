@@ -5,6 +5,7 @@ import { APP_NAME, APP_SHORT_NAME } from "@/constants/branding";
 import { useAuth, type UserRole } from "@/contexts/AuthContext";
 
 export const LoginPage: React.FC = () => {
+  const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
 
   const { signIn, signUp, pendingPasswordReset, resetPasswordForEmail, setNewPassword } = useAuth();
 
@@ -157,6 +158,11 @@ export const LoginPage: React.FC = () => {
                   ? "Sign in to access your account"
                   : "Create a new staff account"}
           </p>
+          {localAuthEnabled && (
+            <p className="mt-2 text-xs text-emerald-200">
+              Desktop local mode: accounts are stored on this computer and internet is optional.
+            </p>
+          )}
 
         </div>
 

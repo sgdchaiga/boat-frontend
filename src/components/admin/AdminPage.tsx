@@ -16,9 +16,13 @@ import { AdminJournalAccountsPage } from "./AdminJournalAccountsPage";
 import { AdminGenderTypesPage } from "./AdminGenderTypesPage";
 import { AdminRecipeManagementPage } from "./AdminRecipeManagementPage";
 import { AdminHotelPosControlsPage } from "./AdminHotelPosControlsPage";
+import { AdminSyncQueuePage } from "./AdminSyncQueuePage";
+import { AdminLocalImportPage } from "./AdminLocalImportPage";
+import { AdminSubscriptionRenewalPage } from "./AdminSubscriptionRenewalPage";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
+import { FeatureFlagsSummary } from "../common/FeatureFlagsSummary";
 
 export type AdminTab =
   | "users"
@@ -28,7 +32,10 @@ export type AdminTab =
   | "approval"
   | "journal_accounts"
   | "gender_types"
-  | "hotel_pos";
+  | "hotel_pos"
+  | "sync_queue"
+  | "local_import"
+  | "subscription_renewal";
 
 const ADMIN_TAB_IDS: AdminTab[] = [
   "users",
@@ -39,6 +46,9 @@ const ADMIN_TAB_IDS: AdminTab[] = [
   "journal_accounts",
   "gender_types",
   "hotel_pos",
+  "sync_queue",
+  "local_import",
+  "subscription_renewal",
 ];
 
 /** Validated query param for `?adminTab=` deep links (e.g. from Hotel POS). */
@@ -52,10 +62,13 @@ const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "business", label: "Business Configuration", icon: Building2 },
   { id: "products", label: "Products & Departments", icon: Package },
   { id: "recipes", label: "Recipe Management", icon: Package },
-  { id: "approval", label: "Approval Rights", icon: ShieldCheck },
+  { id: "approval", label: "Permissions", icon: ShieldCheck },
   { id: "journal_accounts", label: "Journal account settings", icon: BookOpen },
   { id: "gender_types", label: "Gender Types", icon: Users },
   { id: "hotel_pos", label: "Hotel POS Controls", icon: ShieldCheck },
+  { id: "sync_queue", label: "Local backup & sync", icon: BookOpen },
+  { id: "local_import", label: "Local Bulk Import", icon: BookOpen },
+  { id: "subscription_renewal", label: "Subscription renewal", icon: BookOpen },
 ];
 
 interface AdminPageProps {
@@ -68,12 +81,15 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
   const { user } = useAuth();
   const businessType = (user?.business_type || "").toLowerCase();
   const showRecipeManagement = businessType === "hotel" || businessType === "mixed";
+  const showHotelPosControls = businessType === "hotel" || businessType === "mixed";
   const [activeTab, setActiveTab] = useState<AdminTab>(() => {
     if (initialTab && ADMIN_TAB_IDS.includes(initialTab)) return initialTab;
     return "users";
   });
+  const [permissionsFocusStaffId, setPermissionsFocusStaffId] = useState<string | null>(null);
   const visibleTabs = TABS.filter((tab) => {
     if (!showRecipeManagement && tab.id === "recipes") return false;
+    if (!showHotelPosControls && tab.id === "hotel_pos") return false;
     return true;
   });
 
@@ -99,7 +115,14 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
     }
     switch (activeTab) {
       case "users":
-        return <AdminUsersPage />;
+        return (
+          <AdminUsersPage
+            onOpenPermissions={(staffId) => {
+              setPermissionsFocusStaffId(staffId ?? null);
+              setActiveTab("approval");
+            }}
+          />
+        );
       case "business":
         return <AdminHotelConfigPage />;
       case "products":
@@ -107,15 +130,28 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
       case "recipes":
         return <AdminRecipeManagementPage />;
       case "approval":
-        return <AdminApprovalRightsPage />;
+        return <AdminApprovalRightsPage initialFocusStaffId={permissionsFocusStaffId ?? undefined} />;
       case "journal_accounts":
         return <AdminJournalAccountsPage />;
       case "gender_types":
         return <AdminGenderTypesPage />;
       case "hotel_pos":
         return <AdminHotelPosControlsPage />;
+      case "sync_queue":
+        return <AdminSyncQueuePage />;
+      case "local_import":
+        return <AdminLocalImportPage />;
+      case "subscription_renewal":
+        return <AdminSubscriptionRenewalPage />;
       default:
-        return <AdminUsersPage />;
+        return (
+          <AdminUsersPage
+            onOpenPermissions={(staffId) => {
+              setPermissionsFocusStaffId(staffId ?? null);
+              setActiveTab("approval");
+            }}
+          />
+        );
     }
   };
 
@@ -137,6 +173,7 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
       {readOnly && (
         <ReadOnlyNotice message="Subscription inactive - read-only mode. Changes are disabled." />
       )}
+      <FeatureFlagsSummary />
 
       <div className="flex flex-col lg:flex-row gap-6">
         <nav className="lg:w-64 shrink-0">

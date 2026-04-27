@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
-import { UsersRound, Plus, Mail, Phone, Edit2, Shield, Trash2, Tag } from "lucide-react";
+import { UsersRound, Plus, Mail, Phone, Edit2, Shield, Trash2, Tag, KeyRound } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "../../lib/supabase";
 import type { Database } from "../../lib/database.types";
-import { useAuth } from "../../contexts/AuthContext";
+import { useAuth, type UserRole } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { desktopApi } from "@/lib/desktopApi";
+import { readLocalAccounts, writeLocalAccounts } from "@/lib/localAuthStore";
 
 type Staff = Database["public"]["Tables"]["staff"]["Row"];
 type OrgRoleType = Database["public"]["Tables"]["organization_role_types"]["Row"];
@@ -28,10 +30,16 @@ function roleSelectOptions(roleTypes: OrgRoleType[], memberRole: string): { role
   return base;
 }
 
-export function AdminUsersPage() {
+interface AdminUsersPageProps {
+  onOpenPermissions?: (staffId?: string) => void;
+}
+
+export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
+  const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+  const useLocalDesktopNewStaff = localAuthEnabled && desktopApi.isAvailable();
 
   const [staff, setStaff] = useState<Staff[]>([]);
   const [roleTypes, setRoleTypes] = useState<OrgRoleType[]>([]);
@@ -55,6 +63,10 @@ export function AdminUsersPage() {
   const [newDisplayName, setNewDisplayName] = useState("");
   const [editDisplayName, setEditDisplayName] = useState("");
   const [editSortOrder, setEditSortOrder] = useState("0");
+  const [newCanEditPosOrders, setNewCanEditPosOrders] = useState(false);
+  const [newCanEditCashReceipts, setNewCanEditCashReceipts] = useState(false);
+  const [editCanEditPosOrders, setEditCanEditPosOrders] = useState(false);
+  const [editCanEditCashReceipts, setEditCanEditCashReceipts] = useState(false);
 
   const loadRoleTypes = useCallback(async () => {
     let q = supabase.from("organization_role_types").select("*").order("sort_order", { ascending: true });
@@ -84,6 +96,22 @@ export function AdminUsersPage() {
   }, [fetchAll]);
 
   const roleLabel = (key: string) => roleTypes.find((r) => r.role_key === key)?.display_name ?? key;
+
+  const syncLocalAccountProfile = (staffId: string, patch: Partial<{ full_name: string; phone: string; role: string }>) => {
+    if (!useLocalDesktopNewStaff) return;
+    const accounts = readLocalAccounts();
+    const idx = accounts.findIndex((a) => a.id === staffId);
+    if (idx < 0) return;
+    const next = [...accounts];
+    const current = next[idx];
+    next[idx] = {
+      ...current,
+      ...(patch.full_name !== undefined ? { full_name: patch.full_name } : {}),
+      ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
+      ...(patch.role !== undefined ? { role: patch.role } : {}),
+    };
+    writeLocalAccounts(next);
+  };
 
   const openCreateStaff = () => {
     setEditingStaff(null);
@@ -131,6 +159,11 @@ export function AdminUsersPage() {
         alert(error.message);
         return;
       }
+      syncLocalAccountProfile(editingStaff.id, {
+        full_name: fullName.trim(),
+        phone: phone.trim(),
+        role,
+      });
     } else {
       if (password.length < 6) {
         alert("Password must be at least 6 characters.");
@@ -141,51 +174,91 @@ export function AdminUsersPage() {
         return;
       }
 
-      const signupClient = createClient(
-        import.meta.env.VITE_SUPABASE_URL,
-        import.meta.env.VITE_SUPABASE_ANON_KEY,
-        {
-          auth: {
-            persistSession: false,
-            autoRefreshToken: false,
-            detectSessionInUrl: false,
-          },
+      if (useLocalDesktopNewStaff) {
+        const normalizedEmail = email.trim().toLowerCase();
+        const accounts = readLocalAccounts();
+        if (accounts.some((a) => a.email.toLowerCase() === normalizedEmail)) {
+          alert("An account with this email already exists on this computer.");
+          return;
         }
-      );
+        if (!orgId) {
+          alert("Organization context is missing. Cannot create local staff.");
+          return;
+        }
+        const newId = crypto.randomUUID();
+        const createdAt = new Date().toISOString();
+        const newAccount = {
+          id: newId,
+          email: normalizedEmail,
+          password,
+          full_name: fullName.trim(),
+          role: role as UserRole,
+          phone: phone.trim() || "",
+          created_at: createdAt,
+        };
+        writeLocalAccounts([...accounts, newAccount]);
+        const { error: staffErr } = await supabase.from("staff").insert({
+          id: newId,
+          full_name: fullName,
+          email: normalizedEmail,
+          phone: phone || null,
+          role,
+          is_active: isActive,
+          organization_id: orgId,
+          created_at: createdAt,
+        });
+        if (staffErr) {
+          writeLocalAccounts(accounts);
+          alert(staffErr.message);
+          return;
+        }
+      } else {
+        const signupClient = createClient(
+          import.meta.env.VITE_SUPABASE_URL,
+          import.meta.env.VITE_SUPABASE_ANON_KEY,
+          {
+            auth: {
+              persistSession: false,
+              autoRefreshToken: false,
+              detectSessionInUrl: false,
+            },
+          }
+        );
 
-      const { data: signUpData, error: signUpErr } = await signupClient.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: {
-            full_name: fullName.trim(),
-            role,
-            phone: phone.trim() || "",
+        const { data: signUpData, error: signUpErr } = await signupClient.auth.signUp({
+          email: email.trim(),
+          password,
+          options: {
+            data: {
+              full_name: fullName.trim(),
+              role,
+              phone: phone.trim() || "",
+            },
           },
-        },
-      });
-      if (signUpErr) {
-        alert(signUpErr.message);
-        return;
-      }
-      const authUserId = signUpData.user?.id;
-      if (!authUserId) {
-        alert("Failed to create login account for this user.");
-        return;
-      }
+        });
+        if (signUpErr) {
+          alert(signUpErr.message);
+          return;
+        }
+        const authUserId = signUpData.user?.id;
+        if (!authUserId) {
+          alert("Failed to create login account for this user.");
+          return;
+        }
 
-      const { error } = await supabase.from("staff").insert({
-        id: authUserId,
-        full_name: fullName,
-        email,
-        phone: phone || null,
-        role,
-        is_active: isActive,
-        organization_id: orgId ?? null,
-      });
-      if (error) {
-        alert(error.message);
-        return;
+        const { error } = await supabase.from("staff").insert({
+          id: authUserId,
+          full_name: fullName,
+          email,
+          phone: phone || null,
+          role,
+          is_active: isActive,
+          organization_id: orgId ?? null,
+        });
+        if (error) {
+          alert(error.message);
+          return;
+        }
       }
     }
     setShowStaffModal(false);
@@ -213,6 +286,7 @@ export function AdminUsersPage() {
         alert(error.message);
         return;
       }
+      syncLocalAccountProfile(member.id, { role: newRole });
       await fetchAll();
     } finally {
       setUpdatingRoleId(null);
@@ -227,6 +301,8 @@ export function AdminUsersPage() {
     setEditingRoleType(null);
     setNewRoleKeyInput("");
     setNewDisplayName("");
+    setNewCanEditPosOrders(false);
+    setNewCanEditCashReceipts(false);
     setShowRoleTypeModal(true);
   };
 
@@ -234,6 +310,8 @@ export function AdminUsersPage() {
     setEditingRoleType(rt);
     setEditDisplayName(rt.display_name);
     setEditSortOrder(String(rt.sort_order));
+    setEditCanEditPosOrders(!!rt.can_edit_pos_orders);
+    setEditCanEditCashReceipts(!!rt.can_edit_cash_receipts);
     setShowRoleTypeModal(true);
   };
 
@@ -242,7 +320,12 @@ export function AdminUsersPage() {
       const so = Math.max(0, parseInt(editSortOrder, 10) || 0);
       const { error } = await supabase
         .from("organization_role_types")
-        .update({ display_name: editDisplayName.trim(), sort_order: so })
+        .update({
+          display_name: editDisplayName.trim(),
+          sort_order: so,
+          can_edit_pos_orders: editCanEditPosOrders,
+          can_edit_cash_receipts: editCanEditCashReceipts,
+        })
         .eq("id", editingRoleType.id);
       if (error) {
         alert(error.message);
@@ -267,6 +350,8 @@ export function AdminUsersPage() {
         role_key: key,
         display_name: newDisplayName.trim(),
         sort_order: roleTypes.length,
+        can_edit_pos_orders: newCanEditPosOrders || key === "admin",
+        can_edit_cash_receipts: newCanEditCashReceipts || key === "admin",
       });
       if (error) {
         alert(error.message);
@@ -336,6 +421,8 @@ export function AdminUsersPage() {
                 <th className="text-left px-4 py-2 font-medium text-slate-700">Key</th>
                 <th className="text-left px-4 py-2 font-medium text-slate-700">Display name</th>
                 <th className="text-left px-4 py-2 font-medium text-slate-700">Order</th>
+                <th className="text-left px-4 py-2 font-medium text-slate-700">POS edits</th>
+                <th className="text-left px-4 py-2 font-medium text-slate-700">Cash receipt edits</th>
                 <th className="text-right px-4 py-2 font-medium text-slate-700">Actions</th>
               </tr>
             </thead>
@@ -345,6 +432,8 @@ export function AdminUsersPage() {
                   <td className="px-4 py-2 font-mono text-slate-800">{rt.role_key}</td>
                   <td className="px-4 py-2 text-slate-800">{rt.display_name}</td>
                   <td className="px-4 py-2 text-slate-600">{rt.sort_order}</td>
+                  <td className="px-4 py-2 text-slate-600">{rt.can_edit_pos_orders ? "Allowed" : "Not allowed"}</td>
+                  <td className="px-4 py-2 text-slate-600">{rt.can_edit_cash_receipts ? "Allowed" : "Not allowed"}</td>
                   <td className="px-4 py-2 text-right">
                     <button
                       type="button"
@@ -382,14 +471,24 @@ export function AdminUsersPage() {
               Change a user&apos;s <strong>role type</strong> from the dropdown on their card or in Edit. Requires administrator or manager access.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={openCreateStaff}
-            className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800"
-          >
-            <Plus className="w-4 h-4" />
-            Add User
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenPermissions?.()}
+              className="flex items-center gap-2 border border-slate-300 bg-white text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-50"
+            >
+              <KeyRound className="w-4 h-4" />
+              Manage Permissions
+            </button>
+            <button
+              type="button"
+              onClick={openCreateStaff}
+              className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800"
+            >
+              <Plus className="w-4 h-4" />
+              Add User
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -438,14 +537,24 @@ export function AdminUsersPage() {
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => openEditStaff(member)}
-                className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
-                title="Edit"
-              >
-                <Edit2 className="w-4 h-4" />
-              </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => onOpenPermissions?.(member.id)}
+                  className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                  title="Special permissions"
+                >
+                  <KeyRound className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => openEditStaff(member)}
+                  className="p-2 text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-lg"
+                  title="Edit"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           ))}
         </div>
@@ -592,6 +701,24 @@ export function AdminUsersPage() {
                     className="border border-slate-300 rounded-lg px-3 py-2 w-full"
                   />
                 </div>
+                <div className="space-y-2 pt-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editCanEditPosOrders}
+                      onChange={(e) => setEditCanEditPosOrders(e.target.checked)}
+                    />
+                    Can edit POS orders
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={editCanEditCashReceipts}
+                      onChange={(e) => setEditCanEditCashReceipts(e.target.checked)}
+                    />
+                    Can edit cash receipts
+                  </label>
+                </div>
               </div>
             ) : (
               <div className="space-y-4">
@@ -613,6 +740,24 @@ export function AdminUsersPage() {
                     className="border border-slate-300 rounded-lg px-3 py-2 w-full"
                     placeholder="e.g. Head chef"
                   />
+                </div>
+                <div className="space-y-2 pt-1">
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={newCanEditPosOrders}
+                      onChange={(e) => setNewCanEditPosOrders(e.target.checked)}
+                    />
+                    Can edit POS orders
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={newCanEditCashReceipts}
+                      onChange={(e) => setNewCanEditCashReceipts(e.target.checked)}
+                    />
+                    Can edit cash receipts
+                  </label>
                 </div>
               </div>
             )}

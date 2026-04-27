@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
+import { desktopApi } from "../lib/desktopApi";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
@@ -44,15 +45,29 @@ export function RetailCustomersPage({
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
   const highlightOpenedRef = useRef<string | null>(null);
+  const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+  const useDesktopLocalMode = localAuthEnabled && desktopApi.isAvailable();
 
   const load = useCallback(async () => {
-    if (!orgId) {
+    if (!orgId && !useDesktopLocalMode) {
       setRows([]);
       setLoading(false);
       return;
     }
     setLoading(true);
     setError(null);
+    if (useDesktopLocalMode) {
+      try {
+        const data = await desktopApi.listRetailCustomers();
+        setRows((data || []) as RetailCustomerRow[]);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "Failed to load local customers.");
+        setRows([]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     const { data, error: e } = await sb.from("retail_customers").select("*").eq("organization_id", orgId).order("name");
     if (e) {
       setError(e.message);
@@ -61,7 +76,7 @@ export function RetailCustomersPage({
       setRows((data || []) as RetailCustomerRow[]);
     }
     setLoading(false);
-  }, [orgId]);
+  }, [orgId, useDesktopLocalMode]);
 
   useEffect(() => {
     void load();
@@ -102,7 +117,7 @@ export function RetailCustomersPage({
   }, [highlightCustomerId, rows, openEdit]);
 
   const save = async () => {
-    if (!orgId || readOnly) return;
+    if ((!orgId && !useDesktopLocalMode) || readOnly) return;
     if (!name.trim()) {
       alert("Name is required.");
       return;
@@ -116,6 +131,18 @@ export function RetailCustomersPage({
         address: address.trim() || null,
         notes: notes.trim() || null,
       };
+      if (useDesktopLocalMode) {
+        if (editing) {
+          const row = await desktopApi.updateRetailCustomer({ id: editing.id, ...payload });
+          if (!row) throw new Error("Failed to update local customer.");
+        } else {
+          const row = await desktopApi.createRetailCustomer(payload);
+          if (!row) throw new Error("Failed to create local customer.");
+        }
+        setShowModal(false);
+        await load();
+        return;
+      }
       if (editing) {
         const { error: e } = await sb.from("retail_customers").update(payload).eq("id", editing.id);
         if (e) throw e;
@@ -135,6 +162,15 @@ export function RetailCustomersPage({
   const remove = async (r: RetailCustomerRow) => {
     if (readOnly) return;
     if (!confirm(`Delete customer “${r.name}”? Invoices linked to this customer will keep their snapshot text.`)) return;
+    if (useDesktopLocalMode) {
+      const res = await desktopApi.deleteRetailCustomer(r.id);
+      if (!res?.ok) {
+        alert("Failed to delete local customer.");
+        return;
+      }
+      await load();
+      return;
+    }
     const { error: e } = await sb.from("retail_customers").delete().eq("id", r.id);
     if (e) {
       alert(e.message);
@@ -143,7 +179,7 @@ export function RetailCustomersPage({
     await load();
   };
 
-  if (!orgId) {
+  if (!orgId && !useDesktopLocalMode) {
     return (
       <div className="p-6 md:p-8">
         <p className="text-slate-600">Link your staff account to an organization to manage customers.</p>

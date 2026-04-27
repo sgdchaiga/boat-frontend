@@ -1,0 +1,3 @@
+id,first_name,last_name,email,phone,id_type,id_number,address
+,Jane,Doe,jane@example.com,+254711000001,Passport,A1234567,Nairobi
+,Mark,Otieno,mark@example.com,+254711000002,National ID,12345678,Kisumu

@@ -13,6 +13,7 @@ import {
 } from "./fixedAssetCategoryGlSettings";
 import type { PaymentMethodCode } from "./paymentMethod";
 import { businessTodayISO, toBusinessDateString } from "./timezone";
+import { normalizeGlAccountRows } from "./glAccountNormalize";
 
 export type JournalReferenceType =
   | "room_charge"
@@ -125,20 +126,19 @@ export async function getDefaultGlAccounts(): Promise<{
   const { data: accounts } = await filterByOrganizationId(
     supabase
       .from("gl_accounts")
-      .select("id, account_type, category, account_name, account_code")
-      .eq("is_active", true)
+      .select("*")
       .order("account_code"),
     orgId,
     false
   );
 
-  const list = (accounts || []) as {
-    id: string;
-    account_type: string;
-    category: string | null;
-    account_name: string;
-    account_code: string;
-  }[];
+  const list = normalizeGlAccountRows((accounts || []) as unknown[]).filter((row) => row.is_active).map((row) => ({
+    id: row.id,
+    account_type: row.account_type,
+    category: row.category,
+    account_name: row.account_name,
+    account_code: row.account_code,
+  }));
   const byType = (t: string) => list.filter((a) => a.account_type === t);
   const first = (arr: { id: string }[]) => (arr.length > 0 ? arr[0].id : null);
   const byCategory = (cat: string) =>
@@ -1124,14 +1124,15 @@ async function findVendorAdvanceAssetAccountId(): Promise<string | null> {
   const { data } = await filterByOrganizationId(
     supabase
       .from("gl_accounts")
-      .select("id, account_name, account_type")
-      .eq("is_active", true)
-      .eq("account_type", "asset")
+      .select("*")
       .order("account_code"),
     orgId,
     false
   );
-  const list = ((data || []) as { id: string; account_name: string }[]).filter(
+  const list = normalizeGlAccountRows((data || []) as unknown[])
+    .filter((a) => a.is_active && a.account_type === "asset")
+    .map((a) => ({ id: a.id, account_name: a.account_name }))
+    .filter(
     (a) => !(a.account_name || "").toLowerCase().includes("cash")
   );
   const byName = (sub: string) =>
@@ -1304,30 +1305,16 @@ export async function createJournalForExpense(
 /** Default GL for bank fees (e.g. account 6400) for the organization. */
 export async function resolveBankChargesGlAccountId(_organizationId: string | null): Promise<string | null> {
   const orgId = _organizationId ?? (await resolveOrganizationId());
-  const { data: byCode } = await filterByOrganizationId(
-    supabase
-      .from("gl_accounts")
-      .select("id")
-      .eq("is_active", true)
-      .eq("account_code", "6400")
-      .maybeSingle(),
+  const { data } = await filterByOrganizationId(
+    supabase.from("gl_accounts").select("*").order("account_code"),
     orgId,
     false
   );
-  if (byCode) return (byCode as { id: string }).id;
-
-  const { data: byName } = await filterByOrganizationId(
-    supabase
-      .from("gl_accounts")
-      .select("id")
-      .eq("is_active", true)
-      .ilike("account_name", "%bank%charge%")
-      .limit(1)
-      .maybeSingle(),
-    orgId,
-    false
-  );
-  if (byName) return (byName as { id: string }).id;
+  const rows = normalizeGlAccountRows((data || []) as unknown[]).filter((row) => row.is_active);
+  const byCode = rows.find((row) => row.account_code === "6400");
+  if (byCode) return byCode.id;
+  const byName = rows.find((row) => /bank.*charge/i.test(row.account_name || ""));
+  if (byName) return byName.id;
 
   const acc = await getDefaultGlAccounts();
   return acc.expense;

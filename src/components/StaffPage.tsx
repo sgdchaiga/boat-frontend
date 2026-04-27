@@ -17,6 +17,7 @@ export function StaffPage({ readOnly = false }: StaffPageProps = {}) {
   const { user } = useAuth();
   const [staff, setStaff] = useState<Staff[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [passwordModalStaff, setPasswordModalStaff] = useState<Staff | null>(null);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -32,18 +33,55 @@ export function StaffPage({ readOnly = false }: StaffPageProps = {}) {
   /* --------------------- */
 
   const fetchStaff = async () => {
-    let q = supabase.from("staff").select("*").order("created_at", { ascending: false });
-    q = filterByOrganizationId(q, user?.organization_id ?? undefined, !!user?.isSuperAdmin);
+    setLoading(true);
+    setLoadError(null);
+    try {
+      let q = supabase.from("staff").select("*").order("created_at", { ascending: false });
+      q = filterByOrganizationId(q, user?.organization_id ?? undefined, !!user?.isSuperAdmin);
 
-    const { data, error } = await q;
+      const { data, error } = await q;
+      if (error) throw error;
 
-    if (error) {
+      const rows = (data || []) as Staff[];
+      if (rows.length > 0) {
+        setStaff(rows);
+        return;
+      }
+
+      if (user) {
+        const fallback = {
+          id: user.id,
+          full_name: user.full_name || "Current User",
+          email: user.email || "",
+          phone: null,
+          role: user.role || "staff",
+          organization_id: user.organization_id || null,
+          created_at: new Date().toISOString(),
+        } as Staff;
+        setStaff([fallback]);
+      } else {
+        setStaff([]);
+      }
+    } catch (error) {
       console.error(error);
-      return;
+      setLoadError(error instanceof Error ? error.message : "Failed to load staff records.");
+      if (user) {
+        const fallback = {
+          id: user.id,
+          full_name: user.full_name || "Current User",
+          email: user.email || "",
+          phone: null,
+          role: user.role || "staff",
+          organization_id: user.organization_id || null,
+          created_at: new Date().toISOString(),
+        } as Staff;
+        setStaff([fallback]);
+      } else {
+        setStaff([]);
+      }
+    } finally {
+      setLoading(false);
     }
-
-    setStaff(data || []);
-    setLoading(false);
   };
 
   /* --------------------- */
@@ -110,6 +148,11 @@ export function StaffPage({ readOnly = false }: StaffPageProps = {}) {
       </div>
 
       {/* STAFF GRID */}
+      {loadError ? (
+        <p className="mb-4 text-sm text-amber-700">
+          Could not read all staff records from database. Showing available local profile.
+        </p>
+      ) : null}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
 
@@ -168,6 +211,9 @@ export function StaffPage({ readOnly = false }: StaffPageProps = {}) {
         ))}
 
       </div>
+      {staff.length === 0 && (
+        <p className="mt-6 text-sm text-slate-600">No staff records found for this organization yet.</p>
+      )}
 
       {/* Change password modal */}
 

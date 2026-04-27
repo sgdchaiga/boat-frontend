@@ -18,6 +18,7 @@ const sb = supabase as any;
 
 interface TransactionRow {
   date: string;
+  dateIso: string;
   customer: string;
   department: string;
   source: "Hotel POS" | "Retail POS" | "Billing" | "Invoice";
@@ -31,6 +32,8 @@ interface TransactionRow {
   retailCustomerId?: string | null;
   /** Present for Invoice rows — used for payment-method filter. */
   invoiceId?: string;
+  /** Backing source id used for date correction updates. */
+  sourceRecordId: string;
 }
 
 type PaymentRow = {
@@ -38,6 +41,7 @@ type PaymentRow = {
   transaction_id: string | null;
   payment_method: string;
   amount: number;
+  paid_at?: string | null;
   payment_status?: string | null;
   invoice_allocations?: unknown;
 };
@@ -100,20 +104,26 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
   const [customerId, setCustomerId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [paymentMethod, setPaymentMethod] = useState("");
+  const [dateBasis, setDateBasis] = useState<"accrual" | "cash">("accrual");
   const [rows, setRows] = useState<TransactionRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [customers, setCustomers] = useState<{ id: string; first_name: string; last_name: string }[]>([]);
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
+  const [editingRow, setEditingRow] = useState<TransactionRow | null>(null);
+  const [editDate, setEditDate] = useState("");
+  const [savingDate, setSavingDate] = useState(false);
+  const role = (user?.role || "").toLowerCase();
+  const canCorrectDates = superAdmin || ["admin", "manager", "accountant", "supervisor"].includes(role);
 
   useEffect(() => {
     fetchTransactions();
-  }, [dateRange, customFrom, customTo, customerId, departmentId, paymentMethod, orgId, superAdmin]);
+  }, [dateRange, customFrom, customTo, customerId, departmentId, paymentMethod, dateBasis, orgId, superAdmin]);
 
   useEffect(() => {
     const interval = setInterval(fetchTransactions, 30000);
     return () => clearInterval(interval);
-  }, [dateRange, customFrom, customTo, customerId, departmentId, paymentMethod, orgId, superAdmin]);
+  }, [dateRange, customFrom, customTo, customerId, departmentId, paymentMethod, dateBasis, orgId, superAdmin]);
 
   const fetchTransactions = async () => {
     setLoading(true);
@@ -127,6 +137,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         return;
       }
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
+      const isCashView = dateBasis === "cash";
       const fromStr = from.toISOString();
       const toStr = to.toISOString();
       const issueFromKey = toBusinessDateString(from);
@@ -140,7 +151,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         retailCustomersRes,
         deptRes,
         productsRes,
-        retailMovesRes,
+        retailSalesRes,
         invoicesRes,
       ] = await Promise.all([
         filterByOrganizationId(
@@ -173,7 +184,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         filterByOrganizationId(
           supabase
             .from("payments")
-            .select("id, transaction_id, payment_method, amount, payment_status, invoice_allocations")
+            .select("id, transaction_id, payment_method, amount, paid_at, payment_status, invoice_allocations")
             .eq("payment_status", "completed"),
           orgId,
           superAdmin
@@ -184,13 +195,24 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         filterByOrganizationId(supabase.from("products").select("id, name, department_id, sales_price"), orgId, superAdmin),
         filterByOrganizationId(
           supabase
-            .from("product_stock_movements")
-            .select("product_id, source_id, quantity_out, movement_date, source_type")
-            .eq("source_type", "sale")
-            .gt("quantity_out", 0)
-            .gte("movement_date", fromStr)
-            .lt("movement_date", toStr)
-            .order("movement_date", { ascending: true }),
+            .from("retail_sales")
+            .select(
+              `
+              id,
+              customer_name,
+              sale_at,
+              retail_sale_lines (
+                id,
+                description,
+                product_id,
+                quantity,
+                line_total
+              )
+            `
+            )
+            .gte("sale_at", fromStr)
+            .lt("sale_at", toStr)
+            .order("sale_at", { ascending: true }),
           orgId,
           superAdmin
         ),
@@ -240,12 +262,17 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
       const retailCustomersList = (retailCustomersRes.data || []) as { id: string; name: string }[];
       const deptList = (deptRes.data || []) as { id: string; name: string }[];
       const productsList = (productsRes?.data || []) as { id: string; name: string; department_id: string | null; sales_price: number | null }[];
-      const retailMoves = (retailMovesRes.data || []) as Array<{
-        product_id: string;
-        source_id: string | null;
-        quantity_out: number | null;
-        movement_date: string;
-        source_type: string | null;
+      const retailSales = (retailSalesRes.data || []) as Array<{
+        id: string;
+        customer_name: string | null;
+        sale_at: string;
+        retail_sale_lines: Array<{
+          id: string;
+          description: string | null;
+          product_id: string | null;
+          quantity: number | null;
+          line_total: number | null;
+        }>;
       }>;
       const productMap = Object.fromEntries(productsList.map((p) => [p.id, p]));
 
@@ -278,12 +305,20 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
 
       const paymentByTransactionId: Record<string, string> = {};
       const paymentAmountByTransactionId: Record<string, number> = {};
+      const paymentDateByTransactionId: Record<string, string> = {};
       payments.forEach((p) => {
         if (p.transaction_id) {
           if (!paymentByTransactionId[p.transaction_id]) {
             paymentByTransactionId[p.transaction_id] = formatPaymentMethodLabel(p.payment_method);
           }
           paymentAmountByTransactionId[p.transaction_id] = (paymentAmountByTransactionId[p.transaction_id] || 0) + Number(p.amount || 0);
+          const paidAt = String(p.paid_at || "");
+          if (paidAt) {
+            const prev = paymentDateByTransactionId[p.transaction_id];
+            if (!prev || new Date(paidAt).getTime() > new Date(prev).getTime()) {
+              paymentDateByTransactionId[p.transaction_id] = paidAt;
+            }
+          }
         }
       });
 
@@ -295,6 +330,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         const customer = order.customer_name || "Walk-in";
         const orderIdShort = order.id.slice(0, 8);
         const method = paymentByTransactionId[order.id] || "—";
+        const rowDateIso = isCashView ? paymentDateByTransactionId[order.id] || order.created_at : order.created_at;
         const items = order.kitchen_order_items || [];
         items.forEach((item: any) => {
           const product = item.product_id ? productMap[item.product_id] : null;
@@ -303,7 +339,8 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           const price = Number(product?.sales_price ?? 0);
           const qty = Number(item.quantity ?? 0);
           transactionRows.push({
-            date: new Date(order.created_at).toLocaleDateString(),
+            date: new Date(rowDateIso).toLocaleDateString(),
+            dateIso: rowDateIso,
             customer,
             department: departmentName,
             source: "Hotel POS",
@@ -313,12 +350,14 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
             quantity: qty,
             amount: qty * price,
             paymentMethod: method,
+            sourceRecordId: order.id,
           });
         });
         if (items.length === 0) {
           const paidAmount = paymentAmountByTransactionId[order.id] ?? 0;
           transactionRows.push({
-            date: new Date(order.created_at).toLocaleDateString(),
+            date: new Date(rowDateIso).toLocaleDateString(),
+            dateIso: rowDateIso,
             customer,
             department: "POS",
             source: "Hotel POS",
@@ -328,35 +367,55 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
             quantity: 1,
             amount: paidAmount,
             paymentMethod: method,
+            sourceRecordId: order.id,
           });
         }
       });
 
-      // Retail sales are sale movements whose source_id does not exist in kitchen_orders.
-      // (Hotel POS uses kitchen_orders; retail POS writes sale movements directly.)
-      retailMoves.forEach((mv, index) => {
-        const sourceIdRaw = mv.source_id ? String(mv.source_id) : "";
-        // Keep rows even when source_id is missing so report quantity matches stock movements.
-        const sourceId = sourceIdRaw || `retail-move-${mv.product_id || "unknown"}-${mv.movement_date}-${index}`;
-        if (sourceIdRaw && kitchenOrderIdSet.has(sourceIdRaw)) return;
-        const qty = Number(mv.quantity_out ?? 0);
-        if (qty <= 0) return;
-        const product = mv.product_id ? productMap[mv.product_id] : null;
-        const depId = product?.department_id ?? null;
-        const departmentName = depId ? depMap[depId] || "Unassigned" : "Unassigned";
-        const unitPrice = Number(product?.sales_price ?? 0);
-        transactionRows.push({
-          date: new Date(mv.movement_date).toLocaleDateString(),
-          customer: "Walk-in",
-          department: departmentName,
-          source: "Retail POS",
-          orderId: sourceId.slice(0, 8),
-          sourceId,
-          description: product?.name || "Unknown product",
-          quantity: qty,
-          amount: qty * unitPrice,
-          paymentMethod: paymentByTransactionId[sourceIdRaw || sourceId] || "—",
-        });
+      // Retail sales must be date-filtered by transaction time (sale_at), not stock movement posting time.
+      retailSales.forEach((sale) => {
+        if (kitchenOrderIdSet.has(sale.id)) return;
+        const customer = sale.customer_name || "Walk-in";
+        const rowDateIso = isCashView ? paymentDateByTransactionId[sale.id] || sale.sale_at : sale.sale_at;
+        const lines = sale.retail_sale_lines || [];
+        for (const line of lines) {
+          const product = line.product_id ? productMap[line.product_id] : null;
+          const depId = product?.department_id ?? null;
+          const departmentName = depId ? depMap[depId] || "Unassigned" : "Unassigned";
+          const qty = Number(line.quantity ?? 0);
+          const amount = Number(line.line_total ?? 0);
+          transactionRows.push({
+            date: new Date(rowDateIso).toLocaleDateString(),
+            dateIso: rowDateIso,
+            customer,
+            department: departmentName,
+            source: "Retail POS",
+            orderId: sale.id.slice(0, 8),
+            sourceId: `${sale.id}:${line.id}`,
+            description: line.description || product?.name || "Item",
+            quantity: qty,
+            amount,
+            paymentMethod: paymentByTransactionId[sale.id] || "—",
+            sourceRecordId: sale.id,
+          });
+        }
+        if (lines.length === 0) {
+          const paidAmount = paymentAmountByTransactionId[sale.id] ?? 0;
+          transactionRows.push({
+            date: new Date(rowDateIso).toLocaleDateString(),
+            dateIso: rowDateIso,
+            customer,
+            department: "Retail",
+            source: "Retail POS",
+            orderId: sale.id.slice(0, 8),
+            sourceId: sale.id,
+            description: paidAmount > 0 ? "Retail Sale" : "Retail Sale (no line items)",
+            quantity: 1,
+            amount: paidAmount,
+            paymentMethod: paymentByTransactionId[sale.id] || "—",
+            sourceRecordId: sale.id,
+          });
+        }
       });
 
       billings.forEach((b: any) => {
@@ -367,8 +426,10 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           typeof b.charge_type === "string"
             ? b.charge_type.charAt(0).toUpperCase() + b.charge_type.slice(1)
             : "Other";
+        const rowDateIso = isCashView ? paymentDateByTransactionId[b.id] || b.charged_at : b.charged_at;
         transactionRows.push({
-          date: new Date(b.charged_at).toLocaleDateString(),
+          date: new Date(rowDateIso).toLocaleDateString(),
+          dateIso: rowDateIso,
           customer,
           department: departmentName,
           source: "Billing",
@@ -378,6 +439,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           quantity: 1,
           amount: Number(b.amount ?? 0),
           paymentMethod: paymentByTransactionId[b.id] || "—",
+          sourceRecordId: b.id,
         });
       });
 
@@ -419,8 +481,10 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         ).toLocaleDateString();
 
         if (lines.length === 0) {
+          const rowDateIso = String(inv.issue_date).includes("T") ? inv.issue_date : `${inv.issue_date}T12:00:00`;
           transactionRows.push({
             date: invDate,
+            dateIso: rowDateIso,
             customer: inv.customer_name || "—",
             department: "Invoice",
             source: "Invoice",
@@ -432,6 +496,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
             paymentMethod: paymentStr,
             retailCustomerId: inv.customer_id,
             invoiceId: inv.id,
+            sourceRecordId: inv.id,
           });
           continue;
         }
@@ -442,8 +507,10 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           const departmentName = depId ? depMap[depId] || "Unassigned" : "Unassigned";
           const qty = Number(line.quantity ?? 0);
           const total = Number(line.line_total ?? 0);
+          const rowDateIso = String(inv.issue_date).includes("T") ? inv.issue_date : `${inv.issue_date}T12:00:00`;
           transactionRows.push({
             date: invDate,
+            dateIso: rowDateIso,
             customer: inv.customer_name || "—",
             department: departmentName,
             source: "Invoice",
@@ -455,12 +522,13 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
             paymentMethod: paymentStr,
             retailCustomerId: inv.customer_id,
             invoiceId: inv.id,
+            sourceRecordId: inv.id,
           });
         }
       }
 
       transactionRows.sort((a, b) => {
-        const d = new Date(a.date).getTime() - new Date(b.date).getTime();
+        const d = new Date(a.dateIso).getTime() - new Date(b.dateIso).getTime();
         return d !== 0 ? d : a.orderId.localeCompare(b.orderId);
       });
 
@@ -487,6 +555,16 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           return displayPaymentMatchesFilter(r.paymentMethod, paymentMethod);
         });
       }
+      if (isCashView) {
+        filtered = filtered.filter((r) => {
+          const pm = String(r.paymentMethod || "").toLowerCase();
+          return pm !== "—" && !pm.startsWith("unpaid");
+        });
+      }
+      filtered = filtered.filter((r) => {
+        const t = new Date(r.dateIso).getTime();
+        return t >= from.getTime() && t < to.getTime();
+      });
 
       setRows(filtered);
     } catch (e) {
@@ -526,6 +604,60 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
     URL.revokeObjectURL(url);
   };
 
+  const openDateEditor = (row: TransactionRow) => {
+    if (!canCorrectDates) {
+      alert("You are not authorized to correct transaction dates.");
+      return;
+    }
+    const currentDate = row.dateIso ? new Date(row.dateIso).toISOString().slice(0, 10) : "";
+    setEditingRow(row);
+    setEditDate(currentDate);
+  };
+
+  const saveDateCorrection = async () => {
+    if (!editingRow || !editDate || savingDate) return;
+    setSavingDate(true);
+    try {
+      if (editingRow.source === "Hotel POS") {
+        const { error } = await supabase
+          .from("kitchen_orders")
+          .update({ created_at: `${editDate}T12:00:00` })
+          .eq("id", editingRow.sourceRecordId);
+        if (error) throw error;
+      } else if (editingRow.source === "Retail POS") {
+        const { error } = await supabase
+          .from("retail_sales")
+          .update({ sale_at: `${editDate}T12:00:00` })
+          .eq("id", editingRow.sourceRecordId);
+        if (error) throw error;
+      } else if (editingRow.source === "Billing") {
+        const { error } = await supabase
+          .from("billing")
+          .update({ charged_at: `${editDate}T12:00:00` })
+          .eq("id", editingRow.sourceRecordId);
+        if (error) throw error;
+      } else if (editingRow.source === "Invoice") {
+        const { error } = await sb
+          .from("retail_invoices")
+          .update({ issue_date: editDate })
+          .eq("id", editingRow.sourceRecordId);
+        if (error) throw error;
+      }
+      setEditingRow(null);
+      setEditDate("");
+      await fetchTransactions();
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg.toLowerCase().includes("row-level security") || msg.toLowerCase().includes("permission denied")) {
+        alert("You are not authorized to correct transaction dates.");
+      } else {
+        alert(`Failed to save date correction: ${msg}`);
+      }
+    } finally {
+      setSavingDate(false);
+    }
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
@@ -533,7 +665,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-3xl font-bold text-slate-900">Transactions</h1>
             <PageNotes ariaLabel="Transactions help">
-              <p>POS, billing, and retail invoice lines (Uganda GMT+3) — use filters for daily sales export.</p>
+              <p>POS, billing, and retail invoice lines (Uganda GMT+3). Use Date basis to switch accrual vs cash timeline.</p>
             </PageNotes>
           </div>
         </div>
@@ -554,6 +686,17 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
       )}
 
       <div className="flex flex-wrap gap-4 mb-6">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-medium text-slate-700">Date basis</span>
+          <select
+            value={dateBasis}
+            onChange={(e) => setDateBasis(e.target.value as "accrual" | "cash")}
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="accrual">Accrual (order/charge/invoice date)</option>
+            <option value="cash">Cash (payment date when paid)</option>
+          </select>
+        </div>
         <div className="flex items-center gap-2">
           <span className="text-sm font-medium text-slate-700">Date</span>
           <select
@@ -677,18 +820,19 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
               <th className="text-right p-3">Amount</th>
               <th className="text-right p-3">Balance</th>
               <th className="text-left p-3">Payment</th>
+              <th className="text-right p-3">Action</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={10} className="p-6 text-slate-500 text-center">
+                <td colSpan={11} className="p-6 text-slate-500 text-center">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={10} className="p-6 text-slate-500 text-center">
+                <td colSpan={11} className="p-6 text-slate-500 text-center">
                   No transactions for the selected filters.
                 </td>
               </tr>
@@ -712,6 +856,16 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
                   <td className="p-3 text-right">{r.amount.toFixed(2)}</td>
                   <td className="p-3 text-right">{runningBalance[i].toFixed(2)}</td>
                   <td className="p-3">{r.paymentMethod}</td>
+                  <td className="p-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => openDateEditor(r)}
+                      disabled={!canCorrectDates}
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Correct date
+                    </button>
+                  </td>
                 </tr>
               ))
             )}
@@ -723,6 +877,46 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         <p className="text-slate-600 text-sm mt-3">
           {rows.length} line(s) · Total: {totalAmount.toFixed(2)}
         </p>
+      )}
+      {editingRow && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !savingDate && setEditingRow(null)}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">Correct transaction date</h3>
+            <p className="text-sm text-slate-600 mb-3">
+              Source: <span className="font-medium">{editingRow.source}</span> · Ref:{" "}
+              <span className="font-mono">{editingRow.orderId}</span>
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Date</label>
+                <input
+                  type="date"
+                  value={editDate}
+                  onChange={(e) => setEditDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingRow(null)}
+                  disabled={savingDate}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveDateCorrection()}
+                  disabled={savingDate || !editDate}
+                  className="rounded-lg bg-brand-700 px-3 py-2 text-sm font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+                >
+                  {savingDate ? "Saving..." : "Save date"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

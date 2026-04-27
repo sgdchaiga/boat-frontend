@@ -7,6 +7,11 @@ import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { PageNotes } from "./common/PageNotes";
 import { getNextOrderStatus } from "../lib/hotelPosOrderStatus";
+import {
+  type PaymentMethodCode,
+  PAYMENT_METHOD_SELECT_OPTIONS,
+  insertPaymentWithMethodCompat,
+} from "../lib/paymentMethod";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 
@@ -36,6 +41,16 @@ export function BarOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [barDepartment, setBarDepartment] = useState<Department | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [productOptions, setProductOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [payingOrder, setPayingOrder] = useState<BarOrder | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payMethod, setPayMethod] = useState<PaymentMethodCode>("cash");
+  const [payDate, setPayDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editingOrderDate, setEditingOrderDate] = useState("");
+  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
+  const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">("all");
 
   const [dateRange, setDateRange] = useState<DateRangeKey>("last_30_days");
   const [customFrom, setCustomFrom] = useState("");
@@ -109,6 +124,9 @@ export function BarOrdersPage() {
         ((productsRes?.data || []) as { id: string; name: string; department_id: string | null; sales_price: number | null }[])
           .map((p) => [p.id, p])
       );
+      setProductOptions(
+        ((productsRes?.data || []) as { id: string; name: string }[]).map((p) => ({ id: p.id, name: p.name }))
+      );
       const rawOrders = (ordersRes.data || []) as any[];
       const data = rawOrders.map((o) => ({
         ...o,
@@ -146,9 +164,142 @@ export function BarOrdersPage() {
         payments_total: paymentsMap[o.id] || 0,
       }));
 
+      const idsToMarkServed = withPayments
+        .filter((order) => {
+          const total = (order.kitchen_order_items || []).reduce((sum, item) => {
+            const price = item.products?.sales_price ?? 0;
+            return sum + item.quantity * Number(price);
+          }, 0);
+          const paid = Number(order.payments_total || 0);
+          return total > 0 && paid >= total && order.order_status !== "served";
+        })
+        .map((order) => order.id);
+
+      if (idsToMarkServed.length > 0) {
+        await Promise.all(
+          idsToMarkServed.map((id) =>
+            supabase.from("kitchen_orders").update({ order_status: "served" }).eq("id", id)
+          )
+        );
+        const servedSet = new Set(idsToMarkServed);
+        setOrders(
+          withPayments.map((order) =>
+            servedSet.has(order.id) ? { ...order, order_status: "served" } : order
+          )
+        );
+        return;
+      }
+
       setOrders(withPayments);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const getOrderTotals = (order: BarOrder) => {
+    const total = order.kitchen_order_items.reduce((sum, item) => {
+      const price = item.products?.sales_price ?? 0;
+      return sum + item.quantity * Number(price);
+    }, 0);
+    const paid = Number(order.payments_total || 0);
+    const balance = Math.max(0, total - paid);
+    return { total, paid, balance };
+  };
+
+  const paymentBucket = (order: BarOrder): "paid" | "unpaid" | "partially_paid" => {
+    const { total, paid } = getOrderTotals(order);
+    if (paid <= 0.01) return "unpaid";
+    if (paid + 0.01 < total) return "partially_paid";
+    return "paid";
+  };
+
+  const openPayModal = (order: BarOrder) => {
+    const { balance } = getOrderTotals(order);
+    setPayingOrder(order);
+    setPayAmount(balance.toFixed(2));
+    setPayMethod("cash");
+    setPayDate(new Date().toISOString().slice(0, 10));
+  };
+
+  const savePaymentForOrder = async () => {
+    if (!payingOrder) return;
+    const amount = Number(payAmount);
+    const { balance } = getOrderTotals(payingOrder);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      alert("Enter a valid payment amount.");
+      return;
+    }
+    if (amount > balance + 0.01) {
+      alert("Payment cannot exceed outstanding amount.");
+      return;
+    }
+    setSavingPayment(true);
+    try {
+      const insertPayload: Record<string, unknown> = {
+        amount,
+        paid_at: `${payDate}T12:00:00`,
+        payment_status: "completed",
+        payment_source: "pos_hotel",
+        transaction_id: payingOrder.id,
+        processed_by: user?.id ?? null,
+        ...(orgId ? { organization_id: orgId } : {}),
+      };
+      const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payMethod);
+      if (error) throw error;
+      setPayingOrder(null);
+      setPayAmount("");
+      await fetchOrders();
+    } catch (e) {
+      alert(`Failed to record payment: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
+  const startEditOrder = (order: BarOrder) => {
+    setEditingOrderId(order.id);
+    setEditingOrderDate(new Date(order.created_at).toISOString().slice(0, 16));
+    setEditingOrderItems(
+      (order.kitchen_order_items || []).map((item) => ({
+        product_id: String((item as any).product_id || ""),
+        quantity: Number(item.quantity || 1),
+        notes: String(item.notes || ""),
+      }))
+    );
+  };
+
+  const addEditingOrderItem = () => {
+    const fallbackProductId = productOptions[0]?.id || "";
+    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, notes: "" }]);
+  };
+
+  const saveEditedOrder = async () => {
+    if (!editingOrderId) return;
+    try {
+      const iso = new Date(editingOrderDate).toISOString();
+      const { error: orderErr } = await supabase.from("kitchen_orders").update({ created_at: iso }).eq("id", editingOrderId);
+      if (orderErr) throw orderErr;
+      const { error: delErr } = await supabase.from("kitchen_order_items").delete().eq("order_id", editingOrderId);
+      if (delErr) throw delErr;
+      const nextItems = editingOrderItems
+        .filter((item) => item.product_id && Number(item.quantity) > 0)
+        .map((item) => ({
+          order_id: editingOrderId,
+          product_id: item.product_id,
+          quantity: Number(item.quantity),
+          notes: item.notes.trim() || null,
+        }));
+      if (nextItems.length > 0) {
+        const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
+        if (insErr) throw insErr;
+      }
+      setEditingOrderId(null);
+      setEditingOrderDate("");
+      setEditingOrderItems([]);
+      await fetchOrders();
+      alert("Order updated.");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to update order.");
     }
   };
 
@@ -164,13 +315,19 @@ export function BarOrdersPage() {
 
   const filteredOrders = useMemo(() => {
     if (!barDepartment) return orders;
-    return orders
+    const byDepartment = orders
       .map((o) => {
         const barItems = (o.kitchen_order_items || []).filter((it) => it.products?.department_id === barDepartment.id);
         return { ...o, kitchen_order_items: barItems };
       })
       .filter((o) => (o.kitchen_order_items || []).length > 0);
-  }, [orders, barDepartment]);
+    return byDepartment.filter((o) => {
+      const bucket = paymentBucket(o);
+      if (paymentFilter === "all") return true;
+      if (paymentFilter === "outstanding") return bucket !== "paid";
+      return bucket === paymentFilter;
+    });
+  }, [orders, barDepartment, paymentFilter]);
 
   return (
     <div className="p-6 md:p-8">
@@ -209,6 +366,17 @@ export function BarOrdersPage() {
             <option value="last_quarter">Last Quarter</option>
             <option value="last_year">Last Year</option>
             <option value="custom">Custom</option>
+          </select>
+          <select
+            value={paymentFilter}
+            onChange={(e) => setPaymentFilter(e.target.value as typeof paymentFilter)}
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="all">All payments</option>
+            <option value="outstanding">Outstanding</option>
+            <option value="partially_paid">Partially paid</option>
+            <option value="paid">Paid</option>
+            <option value="unpaid">Unpaid</option>
           </select>
           {dateRange === "custom" && (
             <div className="flex gap-2 items-center">
@@ -254,6 +422,9 @@ export function BarOrdersPage() {
                   Table: {order.table_number || "POS"} • By:{" "}
                   {renderStaffName(order)}
                 </p>
+                <p className="text-xs text-slate-500 mb-1">
+                  Transaction date: {new Date(order.created_at).toLocaleString()}
+                </p>
                 <p className="text-xs text-slate-500 mb-2">
                   Status: <span className="font-semibold">{order.order_status}</span>
                 </p>
@@ -293,6 +464,22 @@ export function BarOrdersPage() {
               </div>
 
               <div className="mt-3 flex gap-2">
+                {getOrderTotals(order).balance > 0.01 ? (
+                  <button
+                    type="button"
+                    onClick={() => openPayModal(order)}
+                    className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-100"
+                  >
+                    Pay Outstanding
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => startEditOrder(order)}
+                  className="flex-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-100"
+                >
+                  Edit
+                </button>
                 {order.order_status === "pending" ? (
                   <button
                     type="button"
@@ -335,6 +522,166 @@ export function BarOrdersPage() {
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {editingOrderId ? (
+        <div className="mt-6 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="text-lg font-bold text-slate-900">Edit Bar Order</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingOrderId(null);
+                setEditingOrderDate("");
+                setEditingOrderItems([]);
+              }}
+              className="px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Order date & time</label>
+            <input
+              type="datetime-local"
+              value={editingOrderDate}
+              onChange={(e) => setEditingOrderDate(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="space-y-3">
+            {editingOrderItems.map((item, index) => (
+              <div key={`${editingOrderId}-${index}`} className="grid grid-cols-1 md:grid-cols-[1.5fr_120px_1fr_auto] gap-2 items-center">
+                <select
+                  value={item.product_id}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, product_id: e.target.value } : row))
+                    )
+                  }
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Select product</option>
+                  {productOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min={1}
+                  value={item.quantity}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, quantity: Number(e.target.value || 1) } : row))
+                    )
+                  }
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <input
+                  type="text"
+                  value={item.notes}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, notes: e.target.value } : row))
+                    )
+                  }
+                  placeholder="Notes"
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEditingOrderItems((prev) => prev.filter((_, i) => i !== index))}
+                  className="px-3 py-2 border border-red-200 text-red-700 rounded-lg hover:bg-red-50 text-sm"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={addEditingOrderItem}
+              className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
+            >
+              Add item
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveEditedOrder()}
+              className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm"
+            >
+              Save changes
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {payingOrder && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !savingPayment && setPayingOrder(null)}>
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">Settle Bar Order</h3>
+            <p className="text-sm text-slate-600 mb-3">
+              Order: <span className="font-mono">{payingOrder.id.slice(0, 8)}</span>
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Amount</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={payAmount}
+                  onChange={(e) => setPayAmount(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Payment date</label>
+                <input
+                  type="date"
+                  value={payDate}
+                  onChange={(e) => setPayDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Payment method</label>
+                <select
+                  value={payMethod}
+                  onChange={(e) => setPayMethod(e.target.value as PaymentMethodCode)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {PAYMENT_METHOD_SELECT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setPayingOrder(null)}
+                  disabled={savingPayment}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void savePaymentForOrder()}
+                  disabled={savingPayment}
+                  className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                >
+                  {savingPayment ? "Saving..." : "Record Payment"}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

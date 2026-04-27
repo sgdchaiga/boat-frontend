@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { enqueueSyncOutbox } from "../lib/syncOutbox";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { useAuth } from "../contexts/AuthContext";
+import { desktopApi } from "../lib/desktopApi";
 import type { Database } from "../lib/database.types";
 import { PageNotes } from "./common/PageNotes";
 
@@ -30,9 +31,23 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
   const [idNumber, setIdNumber] = useState("");
   const [address, setAddress] = useState("");
   const [savingCustomer, setSavingCustomer] = useState(false);
+  const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+  const useDesktopLocalCustomers = localAuthEnabled && desktopApi.isAvailable();
 
   const fetchCustomers = useCallback(async () => {
     setLoading(true);
+    if (useDesktopLocalCustomers) {
+      try {
+        const rows = await desktopApi.listCustomers();
+        setCustomers((rows as PropertyCustomer[]) || []);
+      } catch (error) {
+        console.error(error);
+        setCustomers([]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     let q = supabase.from("hotel_customers").select("*").order("created_at", { ascending: false });
     q = filterByOrganizationId(q, orgId, superAdmin);
     const { data, error } = await q;
@@ -46,7 +61,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
 
     setCustomers(data || []);
     setLoading(false);
-  }, [orgId, superAdmin]);
+  }, [orgId, superAdmin, useDesktopLocalCustomers]);
 
   useEffect(() => {
     void fetchCustomers();
@@ -72,6 +87,31 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
 
     setSavingCustomer(true);
     try {
+      if (useDesktopLocalCustomers) {
+        const inserted = await desktopApi.createCustomer({
+          first_name: firstName,
+          last_name: lastName,
+          email: email || null,
+          phone: phone || null,
+          id_type: idType || null,
+          id_number: idNumber || null,
+          address: address || null,
+        });
+        if (!inserted) {
+          alert("Failed to save customer locally.");
+          return;
+        }
+        setShowModal(false);
+        setFirstName("");
+        setLastName("");
+        setEmail("");
+        setPhone("");
+        setIdType("");
+        setIdNumber("");
+        setAddress("");
+        fetchCustomers();
+        return;
+      }
       const { data: inserted, error } = await supabase
         .from("hotel_customers")
         .insert([

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { getPayrollAccess } from "@/lib/payrollAccess";
 import { supabase } from "@/lib/supabase";
+import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { useAuth } from "@/contexts/AuthContext";
 import { PayrollGuide } from "@/components/payroll/PayrollGuide";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
@@ -44,11 +45,16 @@ export function PayrollSettingsPage({ readOnly }: Props) {
     }
     setLoading(true);
     const [gRes, sRes] = await Promise.all([
-      supabase.from("gl_accounts").select("id,account_code,account_name").order("account_code"),
+      supabase.from("gl_accounts").select("*").order("account_code"),
       supabase.from("payroll_org_settings").select("*").eq("organization_id", orgId).maybeSingle(),
     ]);
     setErr(gRes.error?.message || sRes.error?.message || null);
-    setGl((gRes.data as GlAcc[]) || []);
+    const normalizedGl = normalizeGlAccountRows((gRes.data || []) as unknown[]).map((row) => ({
+      id: row.id,
+      account_code: row.account_code,
+      account_name: row.account_name,
+    }));
+    setGl(normalizedGl as GlAcc[]);
     setRow((sRes.data as SettingsRow) || {});
     setLoading(false);
   }, [orgId]);

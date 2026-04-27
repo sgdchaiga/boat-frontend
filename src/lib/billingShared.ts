@@ -50,6 +50,13 @@ export function toLocalYMD(d: Date) {
 }
 
 export type BillingRangePreset = "all" | "today" | "yesterday" | "this_month" | "last_month";
+export const BILLING_RANGE_STORAGE_KEY = "boat.billing.range";
+
+export function parseBillingRangePreset(value: string | null | undefined): BillingRangePreset {
+  return value === "today" || value === "yesterday" || value === "this_month" || value === "last_month" || value === "all"
+    ? value
+    : "all";
+}
 
 export function billingRangeToDates(range: BillingRangePreset): { from: string; to: string } {
   const now = new Date();

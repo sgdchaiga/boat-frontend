@@ -6,6 +6,7 @@ import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 
 type AccountBalance = {
   account_id: string;
@@ -65,8 +66,7 @@ export function TrialBalancePage() {
       filterByOrganizationId(
         supabase
           .from("gl_accounts")
-          .select("id, account_code, account_name, account_type")
-          .eq("is_active", true)
+          .select("*")
           .order("account_code"),
         orgId,
         superAdmin
@@ -89,7 +89,14 @@ export function TrialBalancePage() {
       return;
     }
 
-    const accounts = (accRes.data || []) as { id: string; account_code: string; account_name: string; account_type: string }[];
+    const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+      .filter((row) => row.is_active)
+      .map((row) => ({
+        id: row.id,
+        account_code: row.account_code,
+        account_name: row.account_name,
+        account_type: row.account_type,
+      }));
     const accMap: Record<string, { id: string; account_code: string; account_name: string; account_type: string }> = Object.fromEntries(
       accounts.map((a) => [a.id, a])
     );

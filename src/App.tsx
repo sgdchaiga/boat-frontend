@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginPage } from "@/components/LoginPage";
 import { Layout } from './components/Layout';
@@ -15,6 +15,7 @@ import { HotelPosSupervisorPage } from './components/HotelPosSupervisorPage';
 import { HotelPosReportsPage } from './components/HotelPosReportsPage';
 import { POSDashboardPage } from './components/POSDashboard';
 import { RetailPOSPage } from './components/RetailPOSPage';
+import { RetailPosOrdersPage } from './components/RetailPosOrdersPage';
 import { RetailInvoicesPage } from './components/RetailInvoicesPage';
 import { RetailCustomersPage } from './components/RetailCustomersPage';
 import { RetailCreditSalesReportPage } from './components/RetailCreditSalesReportPage';
@@ -28,7 +29,7 @@ import { TransactionsPage } from './components/TransactionsPage';
 import { KitchenDisplayPage } from './components/KitchenDisplayPage';
 import { HousekeepingPage } from './components/HousekeepingPage';
 import ProductsPage from './components/ProductsPage';
-import { ReportsDashboard } from "./components/ReportsDashboard";
+import { InventoryBarcodesPage } from './components/InventoryBarcodesPage';
 import { ReportsPage } from './components/ReportsPage';
 import { DailySalesReportPage } from './components/DailySalesReportPage';
 import { StockMovementReportPage } from './components/reports/StockMovementReportPage';
@@ -37,6 +38,10 @@ import { FinancialPaymentsByMethodPage } from './components/reports/FinancialPay
 import { FinancialPaymentsByChargeTypePage } from './components/reports/FinancialPaymentsByChargeTypePage';
 import { DailyPurchasesSummaryPage } from './components/reports/DailyPurchasesSummaryPage';
 import { DailySummaryReportPage } from './components/reports/DailySummaryReportPage';
+import { RetailShiftVarianceReportPage } from './components/reports/RetailShiftVarianceReportPage';
+import { RetailSalesInsightsPage } from './components/reports/RetailSalesInsightsPage';
+import { PurchasesByItemReportPage } from './components/reports/PurchasesByItemReportPage';
+import { SalesByItemReportPage } from './components/reports/SalesByItemReportPage';
 import { StaffPage } from './components/StaffPage';
 import { GLAccountsPage } from './components/GLAccountsPage';
 import { VendorsPage } from './components/purchases/VendorsPage';
@@ -148,6 +153,10 @@ import { VslaMeetingMinutesPage } from './components/vsla/VslaMeetingMinutesPage
 import { VslaMemberStatementPage } from './components/vsla/VslaMemberStatementPage';
 import { CommunicationsPage } from './components/communications/CommunicationsPage';
 import type { CommunicationsTabId } from './components/communications/CommunicationsPage';
+import { canRunLocalSyncWorker, pushPendingLocalSyncQueue } from './lib/localSyncPush';
+import { canRunLocalBackup, runLocalBackupNow } from './lib/localBackup';
+import { AgentHubPage } from './components/agent/AgentHubPage';
+import { loadPermissionSnapshot } from './lib/permissions';
 
 /** Old bookmarks / links: Financial Summary was removed; land on Revenue by Charge Type. */
 function normalizeLegacyPage(page: string): string {
@@ -306,6 +315,10 @@ function AppContent() {
       setCurrentPage("retail_dashboard");
       return;
     }
+    if (user.business_type === "hotel" && currentPage === "dashboard") {
+      setCurrentPage(user.enable_agent === false ? "dashboard" : "agent_hub");
+      return;
+    }
     if (user.business_type === "sacco" && currentPage === "dashboard") {
       setCurrentPage(SACCOPRO_HOME_PAGE);
       return;
@@ -338,6 +351,72 @@ function AppContent() {
       setCurrentPage('platform_overview');
     }
   }, [user, isSuperAdmin, isHotelStaff, currentPage]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!canRunLocalSyncWorker()) return;
+    let inFlight = false;
+    const run = async () => {
+      if (inFlight) return;
+      if (typeof navigator !== "undefined" && !navigator.onLine) return;
+      inFlight = true;
+      try {
+        await pushPendingLocalSyncQueue();
+      } catch (err) {
+        console.warn("[BOAT] Background sync failed", err);
+      } finally {
+        inFlight = false;
+      }
+    };
+    void run();
+    const timer = window.setInterval(() => {
+      void run();
+    }, 60_000);
+    const onOnline = () => {
+      void run();
+    };
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("online", onOnline);
+    };
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    void loadPermissionSnapshot({
+      organizationId: user.organization_id,
+      staffId: user.id,
+      role: user.role,
+      isSuperAdmin: user.isSuperAdmin,
+    }).catch((e) => {
+      console.warn("Permission snapshot refresh failed", e);
+    });
+  }, [user?.id, user?.organization_id, user?.role, user?.isSuperAdmin]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    if (!canRunLocalBackup()) return;
+    let inFlight = false;
+    const run = async () => {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        await runLocalBackupNow();
+      } catch (err) {
+        console.warn("[BOAT] Scheduled local backup failed", err);
+      } finally {
+        inFlight = false;
+      }
+    };
+    void run();
+    const timer = window.setInterval(() => {
+      void run();
+    }, 6 * 60 * 60 * 1000);
+    return () => {
+      window.clearInterval(timer);
+    };
+  }, [user?.id]);
 
   if (loading) {
     return (
@@ -381,6 +460,13 @@ function AppContent() {
           enableFixedAssets: user?.enable_fixed_assets === true,
           enableCommunications: user?.enable_communications !== false,
           enableWallet: user?.enable_wallet !== false,
+          enablePayroll: user?.enable_payroll !== false,
+          enableBudget: user?.enable_budget !== false,
+          enableAgent: user?.business_type !== "retail" && user?.enable_agent !== false,
+          enableReports: user?.enable_reports !== false,
+          enableAccounting: user?.enable_accounting !== false,
+          enableInventory: user?.enable_inventory !== false,
+          enablePurchases: user?.enable_purchases !== false,
           schoolEnableReports: user?.school_enable_reports === true,
           schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
           schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -432,6 +518,8 @@ function AppContent() {
             onNavigate={navigate}
           />
         );
+      case 'agent_hub':
+        return <AgentHubPage />;
       case 'dashboard':
         return <Dashboard onNavigate={setCurrentPage} />;
       case 'retail_dashboard':
@@ -598,6 +686,8 @@ function AppContent() {
         return <POSDashboardPage />;
       case 'retail_pos':
         return <RetailPOSPage readOnly={access.readOnly} />;
+      case 'retail_pos_orders':
+        return <RetailPosOrdersPage />;
       case 'retail_customers':
         return (
           <RetailCustomersPage
@@ -616,6 +706,10 @@ function AppContent() {
         );
       case 'retail_credit_sales_report':
         return <RetailCreditSalesReportPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case 'reports_retail_shift_variance':
+        return <RetailShiftVarianceReportPage />;
+      case 'reports_retail_sales_insights':
+        return <RetailSalesInsightsPage />;
       case 'Bar Orders':
         return <BarOrdersPage />;
       case 'Kitchen Orders':
@@ -673,12 +767,18 @@ function AppContent() {
         return <DailyPurchasesSummaryPage />;
       case 'reports_stock_movement':
         return <StockMovementReportPage />;
+      case 'reports_purchases_by_item':
+        return <PurchasesByItemReportPage />;
+      case 'reports_sales_by_item':
+        return <SalesByItemReportPage />;
       case 'inventory_stock_adjustments':
         return <AdminStockAdjustmentsPage highlightAdjustmentSourceId={pageState?.highlightAdjustmentSourceId as string | undefined} />;
       case 'inventory_stock_balances':
         return <StockBalancesPage />;
       case 'inventory_store_requisitions':
         return <StoreRequisitionsPage highlightRequisitionId={pageState?.highlightRequisitionId as string | undefined} />;
+      case 'inventory_barcodes':
+        return <InventoryBarcodesPage readOnly={access.readOnly} />;
       case 'manufacturing':
         return <ManufacturingPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'manufacturing_bom':

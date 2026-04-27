@@ -18,8 +18,16 @@ type Org = {
   school_enable_purchases?: boolean | null;
   enable_communications?: boolean | null;
   enable_wallet?: boolean | null;
+  enable_payroll?: boolean | null;
+  enable_budget?: boolean | null;
+  enable_agent?: boolean | null;
+  enable_reports?: boolean | null;
+  enable_accounting?: boolean | null;
+  enable_inventory?: boolean | null;
+  enable_purchases?: boolean | null;
   /** Platform: hotel automated room charges (check-in + night audit). */
   hotel_enable_smart_room_charges?: boolean | null;
+  desktop_device_limit?: number | null;
 };
 
 type Plan = { id: string; code: string; name: string; business_type_code?: string | null };
@@ -97,7 +105,38 @@ export function PlatformOrganizationsPage() {
   const [editSchoolPurchases, setEditSchoolPurchases] = useState(false);
   const [editEnableCommunications, setEditEnableCommunications] = useState(true);
   const [editEnableWallet, setEditEnableWallet] = useState(true);
+  const [editEnablePayroll, setEditEnablePayroll] = useState(true);
+  const [editEnableBudget, setEditEnableBudget] = useState(true);
+  const [editEnableAgent, setEditEnableAgent] = useState(true);
+  const [editEnableReports, setEditEnableReports] = useState(true);
+  const [editEnableAccounting, setEditEnableAccounting] = useState(true);
+  const [editEnableInventory, setEditEnableInventory] = useState(true);
+  const [editEnablePurchases, setEditEnablePurchases] = useState(true);
   const [editHotelSmartRoomCharges, setEditHotelSmartRoomCharges] = useState(true);
+  const [editDesktopDeviceLimit, setEditDesktopDeviceLimit] = useState(1);
+
+  const toggleOrgModule = async (
+    orgId: string,
+    key: "enable_payroll" | "enable_budget" | "enable_agent",
+    nextValue: boolean
+  ) => {
+    setErr(null);
+    const { error } = await supabase.from("organizations").update({ [key]: nextValue }).eq("id", orgId);
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+    setOrgs((prev) =>
+      prev.map((o) =>
+        o.id === orgId
+          ? {
+              ...o,
+              [key]: nextValue,
+            }
+          : o
+      )
+    );
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -124,6 +163,7 @@ export function PlatformOrganizationsPage() {
 
     const [pRes, btRes] = await Promise.all([
       supabase.from("subscription_plans").select("id,code,name,business_type_code").order("sort_order"),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (supabase as any).from("business_types").select("id,code,name,is_active,sort_order").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true }),
     ]);
     const plansData = (pRes.data as Plan[]) || [];
@@ -273,6 +313,7 @@ export function PlatformOrganizationsPage() {
         is_active: true,
         organization_id: inserted.id,
       };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { error: staffErr } = await (supabase as any).from("staff").insert(firstAdminPayload);
       if (staffErr) {
         setErr(`Organization created, but failed to create first admin: ${staffErr.message}`);
@@ -309,7 +350,15 @@ export function PlatformOrganizationsPage() {
     setEditSchoolPurchases(!!org.school_enable_purchases);
     setEditEnableCommunications(org.enable_communications !== false);
     setEditEnableWallet(org.enable_wallet !== false);
+    setEditEnablePayroll(org.enable_payroll !== false);
+    setEditEnableBudget(org.enable_budget !== false);
+    setEditEnableAgent(org.enable_agent !== false);
+    setEditEnableReports(org.enable_reports !== false);
+    setEditEnableAccounting(org.enable_accounting !== false);
+    setEditEnableInventory(org.enable_inventory !== false);
+    setEditEnablePurchases(org.enable_purchases !== false);
     setEditHotelSmartRoomCharges(org.hotel_enable_smart_room_charges !== false);
+    setEditDesktopDeviceLimit(Math.max(1, Number(org.desktop_device_limit ?? 1)));
     setErr(null);
     setModal("sub");
   };
@@ -338,7 +387,15 @@ export function PlatformOrganizationsPage() {
         school_enable_purchases: editSchoolPurchases,
         enable_communications: editEnableCommunications,
         enable_wallet: editEnableWallet,
+        enable_payroll: editEnablePayroll,
+        enable_budget: editEnableBudget,
+        enable_agent: editEnableAgent,
+        enable_reports: editEnableReports,
+        enable_accounting: editEnableAccounting,
+        enable_inventory: editEnableInventory,
+        enable_purchases: editEnablePurchases,
         hotel_enable_smart_room_charges: editHotelSmartRoomCharges,
+        desktop_device_limit: Math.max(1, Math.floor(editDesktopDeviceLimit || 1)),
       })
       .eq("id", editOrg.id);
     if (orgUpdate.error) {
@@ -446,6 +503,9 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">Name</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Business type</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Staff</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Budget</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Agent Hub</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Plan</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Status</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Period end</th>
@@ -460,6 +520,64 @@ export function PlatformOrganizationsPage() {
                     <td className="p-3 font-medium text-slate-900">{org.name}</td>
                     <td className="p-3 text-slate-600 capitalize">{org.business_type}</td>
                     <td className="p-3 text-slate-600">{staffCounts[org.id] ?? 0}</td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_payroll === false
+                              ? "bg-red-100 text-red-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_payroll === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleOrgModule(org.id, "enable_payroll", !(org.enable_payroll !== false))}
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_payroll === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_budget === false
+                              ? "bg-red-100 text-red-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_budget === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleOrgModule(org.id, "enable_budget", !(org.enable_budget !== false))}
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_budget === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_agent === false ? "bg-red-100 text-red-800" : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_agent === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleOrgModule(org.id, "enable_agent", !(org.enable_agent !== false))}
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_agent === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
                     <td className="p-3 text-slate-600">
                       {sub?.subscription_plans?.name ?? "—"}
                     </td>
@@ -691,6 +809,14 @@ export function PlatformOrganizationsPage() {
                 </option>
               ))}
             </select>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Desktop device seats</label>
+            <input
+              type="number"
+              min={1}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+              value={editDesktopDeviceLimit}
+              onChange={(e) => setEditDesktopDeviceLimit(Math.max(1, Number(e.target.value || 1)))}
+            />
             <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
               <input
                 type="checkbox"
@@ -711,7 +837,58 @@ export function PlatformOrganizationsPage() {
               </label>
             )}
             <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">
-              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Modules (all org types)</p>
+              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Core Modules (all org types)</p>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnablePayroll}
+                  onChange={(e) => setEditEnablePayroll(e.target.checked)}
+                />
+                Enable Payroll module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableBudget}
+                  onChange={(e) => setEditEnableBudget(e.target.checked)}
+                />
+                Enable Budget module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableReports}
+                  onChange={(e) => setEditEnableReports(e.target.checked)}
+                />
+                Enable Reports module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableAccounting}
+                  onChange={(e) => setEditEnableAccounting(e.target.checked)}
+                />
+                Enable Accounting module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableInventory}
+                  onChange={(e) => setEditEnableInventory(e.target.checked)}
+                />
+                Enable Inventory module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnablePurchases}
+                  onChange={(e) => setEditEnablePurchases(e.target.checked)}
+                />
+                Enable Purchases module
+              </label>
+            </div>
+            <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">
+              <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Other Modules (all org types)</p>
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input
                   type="checkbox"
@@ -727,6 +904,14 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnableWallet(e.target.checked)}
                 />
                 Wallet
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableAgent}
+                  onChange={(e) => setEditEnableAgent(e.target.checked)}
+                />
+                Agent Hub
               </label>
             </div>
             {editBiz === "school" && (

@@ -27,6 +27,8 @@ const PAGES = {
   balanceSheet: "accounting_balance",
   cashFlow: "accounting_cashflow",
   budgetVariance: "reports_budget_variance",
+  purchasesByItem: "reports_purchases_by_item",
+  salesByItem: "reports_sales_by_item",
 } as const;
 
 type Props = { onNavigate?: (page: string) => void };
@@ -302,6 +304,32 @@ export function SchoolReportsOverview({ onNavigate }: Props) {
               >
                 <div className="flex items-center gap-2 text-indigo-800 font-semibold text-sm">
                   <GraduationCap className="w-4 h-4 shrink-0" />
+                  {item.label}
+                </div>
+                <p className="text-xs text-slate-600 mt-1">{item.desc}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <h2 className="text-lg font-bold text-slate-900 mb-1">Item reports</h2>
+          <p className="text-sm text-slate-600 mb-3">Product-level sales and purchases across selected dates.</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {(
+              [
+                { page: PAGES.salesByItem, label: "Sales by item", desc: "Item quantity and revenue by source, customer, and department" },
+                { page: PAGES.purchasesByItem, label: "Purchases by item", desc: "Item quantity and spend by vendor and department" },
+              ] as const
+            ).map((item) => (
+              <button
+                key={item.page}
+                type="button"
+                onClick={() => onNavigate?.(item.page)}
+                className="text-left rounded-xl border border-slate-200 p-4 hover:border-indigo-300 hover:bg-indigo-50/40 transition"
+              >
+                <div className="flex items-center gap-2 text-indigo-800 font-semibold text-sm">
+                  <Receipt className="w-4 h-4 shrink-0" />
                   {item.label}
                 </div>
                 <p className="text-xs text-slate-600 mt-1">{item.desc}</p>

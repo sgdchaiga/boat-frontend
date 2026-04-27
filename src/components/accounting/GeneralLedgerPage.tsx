@@ -5,6 +5,7 @@ import { PageNotes } from "../common/PageNotes";
 import { formatDrCrCell } from "../../lib/accountingReportExport";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 
 type GLAccount = { id: string; account_code: string; account_name: string; account_type: string };
 type LedgerLine = {
@@ -75,7 +76,7 @@ export function GeneralLedgerPage() {
     const { data: accData, error: e3 } = await filterByOrganizationId(
       supabase
         .from("gl_accounts")
-        .select("id, account_code, account_name, account_type")
+        .select("*")
         .order("account_code"),
       orgId,
       superAdmin
@@ -88,7 +89,13 @@ export function GeneralLedgerPage() {
       return;
     }
 
-    setAccounts((accData || []) as GLAccount[]);
+    const normalizedAccounts = normalizeGlAccountRows((accData || []) as unknown[]).map((row) => ({
+      id: row.id,
+      account_code: row.account_code,
+      account_name: row.account_name,
+      account_type: row.account_type,
+    }));
+    setAccounts(normalizedAccounts as GLAccount[]);
 
     const ledger: LedgerLine[] = (linesData || []).map((l: {
       id: string;

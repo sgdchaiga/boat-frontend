@@ -1,0 +1,5 @@
+id,code,name,type,parent_code,is_active
+,1000,Cash on Hand,Asset,,1
+,1100,Bank Account,Asset,1000,1
+,4000,Sales Revenue,Income,,1
+,5000,Cost of Goods Sold,Expense,,1

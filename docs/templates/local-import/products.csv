@@ -1,0 +1,3 @@
+id,name,sku,selling_price,qty_on_hand,is_active
+,Coca Cola 300ml,COKE300,120,250,1
+,Mineral Water 500ml,WATER500,80,400,1

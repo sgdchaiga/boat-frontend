@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Plus, Edit2, CheckCircle2, XCircle, Save } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -41,9 +41,13 @@ export function GLAccountsPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
-  const canManageChartOfAccounts = canApprove("chart_of_accounts", user?.role);
+  const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+  const roleKey = String(user?.role || "").toLowerCase();
+  const localDesktopRoleCanManage = localAuthEnabled && ["admin", "manager", "accountant"].includes(roleKey);
+  const canManageChartOfAccounts = localAuthEnabled || localDesktopRoleCanManage || canApprove("chart_of_accounts", user?.role);
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<GLAccount | null>(null);
@@ -67,7 +71,9 @@ export function GLAccountsPage() {
       .from("gl_accounts")
       .select("*")
       .order("account_code");
-    q = filterByOrganizationId(q, orgId, superAdmin);
+    if (!localAuthEnabled) {
+      q = filterByOrganizationId(q, orgId, superAdmin);
+    }
     const { data, error } = await q;
 
     if (error) {
@@ -76,7 +82,23 @@ export function GLAccountsPage() {
       return;
     }
 
-    setAccounts((data || []) as GLAccount[]);
+    const normalized = ((data || []) as Array<Record<string, unknown>>).map((row) => {
+      const typeRaw = String(row.account_type ?? row.type ?? "income").toLowerCase();
+      const accountType: GLAccount["account_type"] = ["asset", "liability", "equity", "income", "expense"].includes(typeRaw)
+        ? (typeRaw as GLAccount["account_type"])
+        : "income";
+      return {
+        id: String(row.id ?? ""),
+        account_code: String(row.account_code ?? row.code ?? ""),
+        account_name: String(row.account_name ?? row.name ?? ""),
+        account_type: accountType,
+        category: row.category == null ? null : String(row.category),
+        parent_id: row.parent_id == null ? null : String(row.parent_id),
+        is_active: Boolean(row.is_active ?? true),
+        created_at: String(row.created_at ?? new Date().toISOString()),
+      } as GLAccount;
+    });
+    setAccounts(normalized);
     setLoading(false);
   };
 
@@ -168,6 +190,22 @@ export function GLAccountsPage() {
     fetchAccounts();
   };
 
+  const filteredAccounts = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return accounts;
+    return accounts.filter((acc) => {
+      const haystack = [
+        acc.account_code,
+        acc.account_name,
+        acc.account_type,
+        acc.category || "",
+      ]
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(q);
+    });
+  }, [accounts, searchQuery]);
+
   if (loading) {
     return <div className="p-6 md:p-8">Loading Chart of Accounts...</div>;
   }
@@ -196,6 +234,15 @@ export function GLAccountsPage() {
       </div>
 
       {/* TABLE */}
+      <div className="mb-3">
+        <input
+          type="text"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search by code, name, type, or category"
+          className="w-full md:w-96 border border-slate-300 rounded-lg px-3 py-2 text-sm"
+        />
+      </div>
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
@@ -209,7 +256,7 @@ export function GLAccountsPage() {
             </tr>
           </thead>
           <tbody>
-            {accounts.map((acc) => (
+            {filteredAccounts.map((acc) => (
               <tr key={acc.id} className="border-t border-slate-200">
                 <td className="p-2 font-mono">{acc.account_code}</td>
                 <td className="p-2">{acc.account_name}</td>
@@ -245,13 +292,15 @@ export function GLAccountsPage() {
                 </td>
               </tr>
             ))}
-            {accounts.length === 0 && (
+            {filteredAccounts.length === 0 && (
               <tr>
                 <td
                   className="p-4 text-center text-slate-500"
                   colSpan={6}
                 >
-                  No GL accounts yet. Click &quot;Add Account&quot; to create one.
+                  {accounts.length === 0
+                    ? "No GL accounts yet. Click \"Add Account\" to create one."
+                    : "No accounts match your search."}
                 </td>
               </tr>
             )}

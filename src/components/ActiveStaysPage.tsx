@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { DoorOpen, LogOut, Printer } from 'lucide-react';
+import { DoorOpen, LogOut, Printer, Edit } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { GuestBill } from './GuestBill';
 import { useAuth } from '../contexts/AuthContext';
@@ -19,9 +19,14 @@ export function ActiveStaysPage() {
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const [stays, setStays] = useState<Stay[]>([]);
+  const [checkedOutStays, setCheckedOutStays] = useState<Stay[]>([]);
+  const [customers, setCustomers] = useState<Array<{ id: string; first_name: string; last_name: string }>>([]);
   const [loading, setLoading] = useState(true);
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [billStay, setBillStay] = useState<Stay | null>(null);
+  const [editStay, setEditStay] = useState<Stay | null>(null);
+  const [editCustomerId, setEditCustomerId] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
     fetchActiveStays();
@@ -33,25 +38,86 @@ export function ActiveStaysPage() {
       setStays([]);
       return;
     }
-    const { data, error } = await filterByOrganizationId(
-      supabase
-        .from("stays")
-        .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
-        .is("actual_check_out", null)
-        .order("actual_check_in", { ascending: false }),
-      orgId,
-      superAdmin
-    );
+    const [activeRes, checkedOutRes, customersRes] = await Promise.all([
+      filterByOrganizationId(
+        supabase
+          .from("stays")
+          .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
+          .is("actual_check_out", null)
+          .order("actual_check_in", { ascending: false }),
+        orgId,
+        superAdmin
+      ),
+      filterByOrganizationId(
+        supabase
+          .from("stays")
+          .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
+          .not("actual_check_out", "is", null)
+          .order("actual_check_out", { ascending: false })
+          .limit(30),
+        orgId,
+        superAdmin
+      ),
+      filterByOrganizationId(
+        supabase.from("hotel_customers").select("id, first_name, last_name").order("first_name", { ascending: true }),
+        orgId,
+        superAdmin
+      ),
+    ]);
 
-    if (error) throw error;
+    if (activeRes.error) throw activeRes.error;
+    if (checkedOutRes.error) throw checkedOutRes.error;
+    if (customersRes.error) throw customersRes.error;
 
-    setStays(data || []);
+    setStays((activeRes.data || []) as Stay[]);
+    setCheckedOutStays((checkedOutRes.data || []) as Stay[]);
+    setCustomers((customersRes.data || []) as Array<{ id: string; first_name: string; last_name: string }>);
   } catch (error) {
     console.error("Error fetching stays:", error);
   } finally {
     setLoading(false);
   }
 };
+  const openEditCustomer = (stay: Stay) => {
+    setEditStay(stay);
+    setEditCustomerId(stay.property_customer_id ?? "");
+  };
+
+  const saveCustomerCorrection = async () => {
+    if (!editStay || !editCustomerId || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      const { error } = await filterByOrganizationId(
+        supabase
+          .from("stays")
+          .update({ property_customer_id: editCustomerId })
+          .eq("id", editStay.id),
+        orgId,
+        superAdmin
+      );
+      if (error) throw error;
+      if (editStay.reservation_id) {
+        await filterByOrganizationId(
+          supabase
+            .from("reservations")
+            .update({ property_customer_id: editCustomerId })
+            .eq("id", editStay.reservation_id),
+          orgId,
+          superAdmin
+        );
+      }
+      setEditStay(null);
+      setEditCustomerId("");
+      await fetchActiveStays();
+    } catch (error: unknown) {
+      const msg = error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: string }).message)
+        : 'Failed to update customer';
+      alert(msg);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
   const handleCheckOut = async (stay: Stay) => {
     if (!stay.rooms || !user) return;
 
@@ -224,6 +290,76 @@ export function ActiveStaysPage() {
           <DoorOpen className="w-16 h-16 text-slate-300 mx-auto mb-4" />
           <p className="text-slate-500 text-lg">No active stays</p>
           <p className="text-slate-400 text-sm mt-2">All rooms are currently vacant</p>
+        </div>
+      )}
+
+      <div className="mt-10">
+        <h2 className="text-xl font-semibold text-slate-900 mb-3">Recently Checked Out</h2>
+        {checkedOutStays.length === 0 ? (
+          <p className="text-slate-500 text-sm">No checked-out entries yet.</p>
+        ) : (
+          <div className="space-y-3">
+            {checkedOutStays.map((stay) => (
+              <div key={stay.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium text-slate-900">
+                    {stay.hotel_customers ? `${stay.hotel_customers.first_name} ${stay.hotel_customers.last_name}` : "Unknown customer"}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    Room {stay.rooms?.room_number || "N/A"} · Checked out {stay.actual_check_out ? new Date(stay.actual_check_out).toLocaleString() : "—"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => openEditCustomer(stay)}
+                  className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm flex items-center gap-2"
+                >
+                  <Edit className="w-4 h-4" />
+                  Edit customer
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {editStay && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-3">Correct checked-out customer</h3>
+            <p className="text-sm text-slate-600 mb-3">Select the correct customer for this stay entry.</p>
+            <select
+              className="w-full border border-slate-300 rounded-lg px-3 py-2"
+              value={editCustomerId}
+              onChange={(e) => setEditCustomerId(e.target.value)}
+              disabled={savingEdit}
+            >
+              <option value="">Select customer...</option>
+              {customers.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.first_name} {c.last_name}
+                </option>
+              ))}
+            </select>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !savingEdit && setEditStay(null)}
+                className="px-4 py-2 border border-slate-300 rounded-lg"
+                disabled={savingEdit}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveCustomerCorrection()}
+                disabled={savingEdit || !editCustomerId}
+                className="px-4 py-2 bg-brand-700 text-white rounded-lg disabled:opacity-50"
+              >
+                {savingEdit ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

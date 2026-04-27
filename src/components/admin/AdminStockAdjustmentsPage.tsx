@@ -3,6 +3,7 @@ import { Plus, Save } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { randomUuid } from "../../lib/randomUuid";
 import { PageNotes } from "../common/PageNotes";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 
 interface Product {
   id: string;
@@ -24,6 +25,14 @@ interface AdjustmentRow {
   qtyDelta: string;
 }
 
+interface AdjustmentHistoryRow {
+  source_id: string;
+  movement_date: string;
+  note: string | null;
+  lines: number;
+  totalAmount: number;
+}
+
 export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { highlightAdjustmentSourceId?: string }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [currentStock, setCurrentStock] = useState<Record<string, number>>({});
@@ -42,6 +51,56 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
   ]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [history, setHistory] = useState<AdjustmentHistoryRow[]>([]);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+
+  const loadStockSnapshot = async () => {
+    const { data: moves } = await supabase
+      .from("product_stock_movements")
+      .select("product_id, quantity_in, quantity_out");
+    const stock: Record<string, number> = {};
+    (moves || []).forEach((m: any) => {
+      const pid = m.product_id as string;
+      const delta = Number(m.quantity_in) - Number(m.quantity_out);
+      stock[pid] = (stock[pid] || 0) + delta;
+    });
+    setCurrentStock(stock);
+    return stock;
+  };
+
+  const loadAdjustmentHistory = async () => {
+    const { data } = await supabase
+      .from("product_stock_movements")
+      .select("source_id,movement_date,note,quantity_in,quantity_out")
+      .eq("source_type", "adjustment")
+      .not("source_id", "is", null)
+      .order("movement_date", { ascending: false });
+    const grouped = new Map<string, AdjustmentHistoryRow>();
+    (data || []).forEach((row: any) => {
+      const sourceId = String(row.source_id || "");
+      if (!sourceId) return;
+      const qtyDelta = Number(row.quantity_in || 0) - Number(row.quantity_out || 0);
+      const prev = grouped.get(sourceId) || {
+        source_id: sourceId,
+        movement_date: String(row.movement_date || new Date().toISOString()),
+        note: (row.note as string | null) ?? null,
+        lines: 0,
+        totalAmount: 0,
+      };
+      prev.lines += 1;
+      prev.totalAmount += qtyDelta;
+      if (new Date(row.movement_date).getTime() > new Date(prev.movement_date).getTime()) {
+        prev.movement_date = row.movement_date;
+      }
+      grouped.set(sourceId, prev);
+    });
+    setHistory(
+      Array.from(grouped.values()).sort(
+        (a, b) => new Date(b.movement_date).getTime() - new Date(a.movement_date).getTime()
+      )
+    );
+  };
 
   useEffect(() => {
     const loadData = async () => {
@@ -52,14 +111,18 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
           .select("product_id, quantity_in, quantity_out"),
         supabase
           .from("gl_accounts")
-          .select("id, account_code, account_name, account_type")
-          .eq("account_type", "asset")
+          .select("*")
           .order("account_code"),
       ]);
       setProducts((productsData || []) as Product[]);
-      setGlAccounts(
-        (glData || []) as GLAccount[]
-      );
+      const normalizedGl = normalizeGlAccountRows((glData || []) as unknown[])
+        .filter((row) => row.account_type === "asset")
+        .map((row) => ({
+          id: row.id,
+          account_code: row.account_code,
+          account_name: row.account_name,
+        }));
+      setGlAccounts(normalizedGl as GLAccount[]);
       const stock: Record<string, number> = {};
       (moves || []).forEach((m: any) => {
         const pid = m.product_id as string;
@@ -67,6 +130,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
         stock[pid] = (stock[pid] || 0) + delta;
       });
       setCurrentStock(stock);
+      await loadAdjustmentHistory();
       setLoading(false);
     };
     loadData();
@@ -126,6 +190,41 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
     ]);
   };
 
+  const openAdjustmentDetails = async (sourceId: string) => {
+    const { data } = await supabase
+      .from("product_stock_movements")
+      .select("id,product_id,movement_date,note,quantity_in,quantity_out")
+      .eq("source_type", "adjustment")
+      .eq("source_id", sourceId)
+      .order("movement_date", { ascending: true });
+    const rowsData = (data || []) as Array<{
+      product_id: string;
+      movement_date: string;
+      note: string | null;
+      quantity_in: number;
+      quantity_out: number;
+    }>;
+    if (rowsData.length === 0) return;
+    const stock = await loadStockSnapshot();
+    setSelectedSourceId(sourceId);
+    setEditingSourceId(sourceId);
+    setDate(new Date(rowsData[0].movement_date).toISOString().slice(0, 10));
+    setReason(String(rowsData[0].note || "").replace(/^GL .*?\| /, ""));
+    setRows(
+      rowsData.map((row) => {
+        const qtyDelta = Number(row.quantity_in || 0) - Number(row.quantity_out || 0);
+        const currentQty = (stock[row.product_id] || 0) - qtyDelta;
+        return {
+          id: randomUuid(),
+          product_id: row.product_id,
+          currentQty,
+          newQty: (currentQty + qtyDelta).toString(),
+          qtyDelta: qtyDelta.toString(),
+        };
+      })
+    );
+  };
+
   const handleSave = async () => {
     const validRows = rows.filter((r) => {
       const delta = Number(r.qtyDelta);
@@ -142,6 +241,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
     }
     setSaving(true);
     try {
+      const sourceId = editingSourceId || randomUuid();
       const payload = validRows.map((r) => {
         const delta = Number(r.qtyDelta);
         return {
@@ -150,7 +250,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
             ? new Date(date).toISOString()
             : new Date().toISOString(),
           source_type: "adjustment",
-          source_id: null,
+          source_id: sourceId,
           quantity_in: delta > 0 ? delta : 0,
           quantity_out: delta < 0 ? Math.abs(delta) : 0,
           unit_cost: null,
@@ -162,19 +262,18 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
               : "") + (reason.trim() || "Manual adjustment"),
         };
       });
+      if (editingSourceId) {
+        await supabase
+          .from("product_stock_movements")
+          .delete()
+          .eq("source_type", "adjustment")
+          .eq("source_id", editingSourceId);
+      }
       await supabase.from("product_stock_movements").insert(payload);
       alert("Stock adjusted.");
       // Refresh current stock and reset rows
-      const { data: moves } = await supabase
-        .from("product_stock_movements")
-        .select("product_id, quantity_in, quantity_out");
-      const stock: Record<string, number> = {};
-      (moves || []).forEach((m: any) => {
-        const pid = m.product_id as string;
-        const delta = Number(m.quantity_in) - Number(m.quantity_out);
-        stock[pid] = (stock[pid] || 0) + delta;
-      });
-      setCurrentStock(stock);
+      await loadStockSnapshot();
+      await loadAdjustmentHistory();
       setRows([
         {
           id: randomUuid(),
@@ -184,6 +283,8 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
           qtyDelta: "",
         },
       ]);
+      setSelectedSourceId(null);
+      setEditingSourceId(null);
     } catch (e) {
       console.error(e);
       alert("Failed to save adjustments.");
@@ -198,7 +299,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
     <div className="space-y-6">
       {highlightAdjustmentSourceId && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Adjustment deep-link received ({highlightAdjustmentSourceId}), but this page currently has no adjustment history list to auto-highlight a specific row.
+          Adjustment deep-link received ({highlightAdjustmentSourceId}). Click the linked amount in history to open details.
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -209,6 +310,32 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 overflow-x-auto max-w-5xl">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-base font-semibold text-slate-900">
+            {editingSourceId ? `Edit adjustment ${editingSourceId.slice(0, 8)}` : "New adjustment"}
+          </h3>
+          {editingSourceId ? (
+            <button
+              type="button"
+              className="px-3 py-1.5 text-sm border border-slate-300 rounded-lg hover:bg-slate-50"
+              onClick={() => {
+                setEditingSourceId(null);
+                setSelectedSourceId(null);
+                setRows([
+                  {
+                    id: randomUuid(),
+                    product_id: "",
+                    currentQty: 0,
+                    newQty: "",
+                    qtyDelta: "",
+                  },
+                ]);
+              }}
+            >
+              Cancel edit
+            </button>
+          ) : null}
+        </div>
         <div className="flex flex-wrap gap-4 mb-2">
           <div>
             <label className="block text-sm font-medium mb-1">Date</label>
@@ -316,6 +443,47 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
             {saving ? "Saving…" : "Save adjustments"}
           </button>
         </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl p-6 overflow-x-auto max-w-5xl">
+        <h3 className="text-base font-semibold text-slate-900 mb-3">Adjustments history</h3>
+        {history.length === 0 ? (
+          <p className="text-sm text-slate-500">No saved adjustments yet.</p>
+        ) : (
+          <table className="w-full text-sm min-w-[720px]">
+            <thead className="bg-slate-50 border-b border-slate-200">
+              <tr>
+                <th className="p-2 text-left">Date</th>
+                <th className="p-2 text-left">Reference</th>
+                <th className="p-2 text-left">Reason</th>
+                <th className="p-2 text-right">Lines</th>
+                <th className="p-2 text-right">Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history.map((h) => (
+                <tr
+                  key={h.source_id}
+                  className={`border-t border-slate-100 ${selectedSourceId === h.source_id ? "bg-amber-50" : ""}`}
+                >
+                  <td className="p-2">{new Date(h.movement_date).toLocaleString()}</td>
+                  <td className="p-2 font-mono text-xs">{h.source_id.slice(0, 8)}</td>
+                  <td className="p-2">{h.note || "Manual adjustment"}</td>
+                  <td className="p-2 text-right">{h.lines}</td>
+                  <td className="p-2 text-right">
+                    <button
+                      type="button"
+                      className="text-blue-700 hover:underline"
+                      onClick={() => void openAdjustmentDetails(h.source_id)}
+                    >
+                      {h.totalAmount.toFixed(2)}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );

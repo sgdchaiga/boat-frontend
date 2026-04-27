@@ -3,6 +3,7 @@ import { Pencil, Plus, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { enqueueSyncOutbox } from "../../lib/syncOutbox";
 import { PageNotes } from "../common/PageNotes";
+import { randomUuid } from "../../lib/randomUuid";
 
 interface Vendor {
   id: string;
@@ -19,6 +20,15 @@ interface VendorWithFinance extends Vendor {
   payments: number;
   returns: number;
   balance: number;
+}
+
+function formatErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object") {
+    const err = e as { message?: string; details?: string; hint?: string; error?: string };
+    return err.message || err.details || err.hint || err.error || JSON.stringify(err);
+  }
+  return String(e);
 }
 
 function fmtMoney(n: number) {
@@ -155,26 +165,32 @@ export function VendorsPage({ highlightVendorId }: { highlightVendorId?: string 
       };
 
       if (editingId) {
-        const { data: updated, error } = await supabase.from("vendors").update(payload).eq("id", editingId).select("*").single();
+        const { error } = await supabase.from("vendors").update(payload).eq("id", editingId);
         if (error) throw error;
-        if (updated) {
+        try {
           await enqueueSyncOutbox(supabase, {
             tableName: "vendors",
             operation: "UPDATE",
             recordId: editingId,
-            payload: updated as Record<string, unknown>,
+            payload: { id: editingId, ...payload } as Record<string, unknown>,
           });
+        } catch (syncErr) {
+          console.warn("Vendor updated but sync queue enqueue failed:", syncErr);
         }
       } else {
-        const { data: inserted, error } = await supabase.from("vendors").insert(payload).select("*").single();
+        const newId = randomUuid();
+        const insertPayload = { id: newId, ...payload };
+        const { error } = await supabase.from("vendors").insert(insertPayload);
         if (error) throw error;
-        if (inserted) {
+        try {
           await enqueueSyncOutbox(supabase, {
             tableName: "vendors",
             operation: "INSERT",
-            recordId: inserted.id,
-            payload: inserted as Record<string, unknown>,
+            recordId: newId,
+            payload: insertPayload as Record<string, unknown>,
           });
+        } catch (syncErr) {
+          console.warn("Vendor saved but sync queue enqueue failed:", syncErr);
         }
       }
       setShowModal(false);
@@ -182,7 +198,7 @@ export function VendorsPage({ highlightVendorId }: { highlightVendorId?: string 
       void fetchVendors();
     } catch (e) {
       console.error("Error saving vendor:", e);
-      alert("Failed: " + (e instanceof Error ? e.message : String(e)));
+      alert("Failed: " + formatErrorMessage(e));
     } finally {
       setSaving(false);
     }

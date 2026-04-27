@@ -17,7 +17,7 @@
 
 param(
   [string]$DatabaseUrl = "",
-  [string]$Host = "127.0.0.1",
+  [string]$PgHost = "127.0.0.1",
   [int]$Port = 5432,
   [string]$Database = "boat",
   [string]$User = "postgres"
@@ -48,7 +48,7 @@ foreach ($f in $files) {
   if ($DatabaseUrl) {
     & psql $DatabaseUrl -v ON_ERROR_STOP=1 -f $f.FullName
   } else {
-    $env:PGHOST = $Host
+    $env:PGHOST = $PgHost
     $env:PGPORT = "$Port"
     $env:PGDATABASE = $Database
     $env:PGUSER = $User

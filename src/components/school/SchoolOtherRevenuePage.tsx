@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 
 type RevenueRow = {
   id: string;
@@ -48,14 +49,20 @@ export function SchoolOtherRevenuePage({ readOnly }: Props) {
         .order("received_at", { ascending: false }),
       supabase
         .from("gl_accounts")
-        .select("id,account_code,account_name,account_type")
-        .eq("is_active", true)
-        .in("account_type", ["income", "revenue"])
+        .select("*")
         .order("account_code", { ascending: true }),
     ]);
     setErr(revRes.error?.message ?? glRes.error?.message ?? null);
     setRows((revRes.data as RevenueRow[]) || []);
-    setRevenueTypes((glRes.data as RevenueTypeOpt[]) || []);
+    const normalizedRevenueTypes = normalizeGlAccountRows((glRes.data || []) as unknown[])
+      .filter((row) => row.is_active && (row.account_type === "income" || row.account_type === "revenue"))
+      .map((row) => ({
+        id: row.id,
+        account_code: row.account_code,
+        account_name: row.account_name,
+        account_type: row.account_type,
+      }));
+    setRevenueTypes(normalizedRevenueTypes as RevenueTypeOpt[]);
     setLoading(false);
   }, [user?.organization_id]);
 

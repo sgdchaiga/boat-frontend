@@ -23,6 +23,7 @@ import {
 } from "../lib/dashboardPaymentFilters";
 import { PageNotes } from "./common/PageNotes";
 import { fetchKitchenOrderIdsForPayments } from "../lib/dashboardKitchenLookup";
+import { FeatureFlagsSummary } from "./common/FeatureFlagsSummary";
 
 interface Stats {
   totalRooms: number;
@@ -30,12 +31,12 @@ interface Stats {
   occupiedRooms: number;
   maintenanceRooms: number;
   cleaningRooms: number;
-  activeStays: number;
-  todayCheckIns: number;
-  todayCheckOuts: number;
-  pendingReservations: number;
-  totalGuests: number;
-  pendingHousekeeping: number;
+  periodStays: number;
+  periodCheckIns: number;
+  periodCheckOuts: number;
+  periodReservations: number;
+  periodGuests: number;
+  periodHousekeeping: number;
   occupancyRate: number;
 }
 interface HotelRevenueStats {
@@ -76,12 +77,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
     occupiedRooms: 0,
     maintenanceRooms: 0,
     cleaningRooms: 0,
-    activeStays: 0,
-    todayCheckIns: 0,
-    todayCheckOuts: 0,
-    pendingReservations: 0,
-    totalGuests: 0,
-    pendingHousekeeping: 0,
+    periodStays: 0,
+    periodCheckIns: 0,
+    periodCheckOuts: 0,
+    periodReservations: 0,
+    periodGuests: 0,
+    periodHousekeeping: 0,
     occupancyRate: 0,
   });
   const [hotelRev, setHotelRev] = useState<HotelRevenueStats>({
@@ -112,12 +113,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           occupiedRooms: 0,
           maintenanceRooms: 0,
           cleaningRooms: 0,
-          activeStays: 0,
-          todayCheckIns: 0,
-          todayCheckOuts: 0,
-          pendingReservations: 0,
-          totalGuests: 0,
-          pendingHousekeeping: 0,
+          periodStays: 0,
+          periodCheckIns: 0,
+          periodCheckOuts: 0,
+          periodReservations: 0,
+          periodGuests: 0,
+          periodHousekeeping: 0,
           occupancyRate: 0,
         });
         setHotelRev({
@@ -133,8 +134,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         setLoadError("Missing organization on your staff profile. Contact admin to link your account.");
         return;
       }
-      const today = businessTodayISO();
-
       const { from: revFrom, to: revTo } = computeRangeInTimezone(revenueRange, "", "");
       const { from: prFrom, to: prTo } = computeRangeInTimezone(priorRevenueRangeKey(revenueRange), "", "");
 
@@ -144,16 +143,16 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       let roomsPromise = supabase.from("rooms").select("status");
       roomsPromise = filterByOrganizationId(roomsPromise, orgId, superAdmin);
 
-      let staysPromise = supabase.from("stays").select("actual_check_out, reservations(status)");
+      let staysPromise = supabase.from("stays").select("actual_check_in, actual_check_out");
       staysPromise = filterByOrganizationId(staysPromise, orgId, superAdmin);
 
-      let reservationsPromise = supabase.from("reservations").select("status, check_in_date, check_out_date");
+      let reservationsPromise = supabase.from("reservations").select("status, check_in_date, check_out_date, created_at");
       reservationsPromise = filterByOrganizationId(reservationsPromise, orgId, superAdmin);
 
-      let customersPromise = supabase.from("hotel_customers").select("id");
+      let customersPromise = supabase.from("hotel_customers").select("id, created_at");
       customersPromise = filterByOrganizationId(customersPromise, orgId, superAdmin);
 
-      let housekeepingPromise = supabase.from("housekeeping_tasks").select("status").eq("status", "pending");
+      let housekeepingPromise = supabase.from("housekeeping_tasks").select("status, created_at");
       housekeepingPromise = filterByOrganizationId(housekeepingPromise, orgId, superAdmin);
 
       let paymentsPromise = supabase
@@ -175,7 +174,8 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       let kitchenQueuePromise = supabase
         .from("kitchen_orders")
         .select("id", { count: "exact", head: true })
-        .in("order_status", ["pending", "preparing"]);
+        .gte("created_at", revFrom.toISOString())
+        .lt("created_at", revTo.toISOString());
       kitchenQueuePromise = filterByOrganizationId(kitchenQueuePromise, orgId, superAdmin);
 
       const [
@@ -258,27 +258,39 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         totalRooms - occupiedRooms - maintenanceRooms - cleaningRooms
       );
       type StayRow = {
+        actual_check_in: string | null;
         actual_check_out: string | null;
-        reservations?: { status?: string } | null;
       };
-      const activeStays = (stays as StayRow[]).filter((s) => {
-        if (s.actual_check_out) return false;
-        const rs = s.reservations?.status;
-        return rs !== "cancelled";
+      const periodStays = (stays as StayRow[]).filter((s) => {
+        const checkIn = s.actual_check_in ? new Date(s.actual_check_in).getTime() : NaN;
+        const checkOut = s.actual_check_out ? new Date(s.actual_check_out).getTime() : Number.POSITIVE_INFINITY;
+        if (!Number.isFinite(checkIn)) return false;
+        return checkIn < revTo.getTime() && checkOut >= revFrom.getTime();
       }).length;
-      const todayCheckIns = reservations.filter(
-        (r) =>
-          r.check_in_date === today &&
-          r.status !== "cancelled" &&
-          (r.status === "confirmed" || r.status === "checked_in")
-      ).length;
-      const todayCheckOuts = reservations.filter(
-        (r) =>
-          r.check_out_date === today &&
-          r.status !== "cancelled" &&
-          (r.status === "checked_in" || r.status === "checked_out")
-      ).length;
-      const pendingReservations = reservations.filter((r) => r.status === "pending").length;
+      const periodCheckIns = reservations.filter((r) => {
+        if (r.status === "cancelled") return false;
+        const t = r.check_in_date ? new Date(`${r.check_in_date}T12:00:00`).getTime() : NaN;
+        return Number.isFinite(t) && t >= revFrom.getTime() && t < revTo.getTime();
+      }).length;
+      const periodCheckOuts = reservations.filter((r) => {
+        if (r.status === "cancelled") return false;
+        const t = r.check_out_date ? new Date(`${r.check_out_date}T12:00:00`).getTime() : NaN;
+        return Number.isFinite(t) && t >= revFrom.getTime() && t < revTo.getTime();
+      }).length;
+      const periodReservations = reservations.filter((r) => {
+        if (r.status === "cancelled") return false;
+        const t = r.created_at ? new Date(r.created_at).getTime() : NaN;
+        return Number.isFinite(t) && t >= revFrom.getTime() && t < revTo.getTime();
+      }).length;
+      const periodGuests = customers.filter((c) => {
+        const t = c.created_at ? new Date(c.created_at).getTime() : NaN;
+        return Number.isFinite(t) && t >= revFrom.getTime() && t < revTo.getTime();
+      }).length;
+      const periodHousekeeping = housekeeping.filter((h) => {
+        if (h.status !== "pending") return false;
+        const t = h.created_at ? new Date(h.created_at).getTime() : NaN;
+        return Number.isFinite(t) && t >= revFrom.getTime() && t < revTo.getTime();
+      }).length;
       const occupancyRate = totalRooms > 0 ? (occupiedRooms / totalRooms) * 100 : 0;
 
       setStats({
@@ -287,12 +299,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         occupiedRooms,
         maintenanceRooms,
         cleaningRooms,
-        activeStays,
-        todayCheckIns,
-        todayCheckOuts,
-        pendingReservations,
-        totalGuests: customers.length,
-        pendingHousekeeping: housekeeping.length,
+        periodStays,
+        periodCheckIns,
+        periodCheckOuts,
+        periodReservations,
+        periodGuests,
+        periodHousekeeping,
         occupancyRate,
       });
 
@@ -320,7 +332,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
   const rangeLabel =
     revenueRange === "today" ? "Today" : revenueRange === "this_week" ? "This week" : "This month";
-
   const breakdownRows = useMemo(
     () => [
       { key: "posHotel", label: "Hotel POS (pay now)", amount: hotelRev.posHotel, color: "bg-emerald-500" },
@@ -352,6 +363,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+            <FeatureFlagsSummary compact />
             <PageNotes ariaLabel="Dashboard help">
               <p>Hotel operations, occupancy, and hospitality revenue.</p>
             </PageNotes>
@@ -370,11 +382,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           </select>
         </div>
       </div>
+      <p className="mb-4 text-xs text-slate-500">All dashboard cards reflect: <span className="font-medium text-slate-700">{rangeLabel}</span>.</p>
 
       {loadError && (
         <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{loadError}</div>
       )}
-
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
         <div className="app-card-interactive p-6">
           <div className="flex items-center justify-between mb-4">
@@ -399,11 +411,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <DoorOpen className="w-6 h-6 text-green-600" />
             </div>
             <div className="text-right">
-              <p className="text-2xl font-bold text-slate-900">{stats.activeStays}</p>
+              <p className="text-2xl font-bold text-slate-900">{stats.periodStays}</p>
               <p className="text-sm text-slate-500">Active</p>
             </div>
           </div>
-          <p className="text-slate-700 font-medium">Current Stays</p>
+          <p className="text-slate-700 font-medium">Stays in period</p>
           <div className="flex items-center gap-2 mt-1">
             <TrendingUp className="w-4 h-4 text-green-600" />
             <p className="text-xs text-slate-500">{stats.occupancyRate.toFixed(1)}% occupancy</p>
@@ -416,13 +428,13 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <Calendar className="w-6 h-6 text-amber-600" />
             </div>
             <div className="text-right">
-              <p className="text-2xl font-bold text-slate-900">{stats.pendingReservations}</p>
+              <p className="text-2xl font-bold text-slate-900">{stats.periodReservations}</p>
               <p className="text-sm text-slate-500">Pending</p>
             </div>
           </div>
-          <p className="text-slate-700 font-medium">Reservations</p>
+          <p className="text-slate-700 font-medium">Reservations in period</p>
           <p className="text-xs text-slate-500 mt-1">
-            {stats.todayCheckIns} check-ins, {stats.todayCheckOuts} check-outs today
+            {stats.periodCheckIns} check-ins, {stats.periodCheckOuts} check-outs ({rangeLabel.toLowerCase()})
           </p>
         </div>
 
@@ -462,12 +474,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <Users className="w-6 h-6 text-violet-600" />
             </div>
             <div className="text-right">
-              <p className="text-2xl font-bold text-slate-900">{stats.totalGuests}</p>
-              <p className="text-sm text-slate-500">Total</p>
+              <p className="text-2xl font-bold text-slate-900">{stats.periodGuests}</p>
+              <p className="text-sm text-slate-500">{rangeLabel}</p>
             </div>
           </div>
-          <p className="text-slate-700 font-medium">Guest Records</p>
-          <p className="text-xs text-slate-500 mt-1">All registered guests</p>
+          <p className="text-slate-700 font-medium">Guest records created</p>
+          <p className="text-xs text-slate-500 mt-1">Created in selected period</p>
         </div>
 
         <div className="app-card-interactive p-6">
@@ -476,12 +488,12 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               <Sparkles className="w-6 h-6 text-pink-600" />
             </div>
             <div className="text-right">
-              <p className="text-2xl font-bold text-slate-900">{stats.pendingHousekeeping}</p>
-              <p className="text-sm text-slate-500">Pending</p>
+              <p className="text-2xl font-bold text-slate-900">{stats.periodHousekeeping}</p>
+              <p className="text-sm text-slate-500">{rangeLabel}</p>
             </div>
           </div>
-          <p className="text-slate-700 font-medium">Housekeeping</p>
-          <p className="text-xs text-slate-500 mt-1">Tasks awaiting completion</p>
+          <p className="text-slate-700 font-medium">Pending housekeeping created</p>
+          <p className="text-xs text-slate-500 mt-1">Created in selected period</p>
         </div>
 
         <div className="app-card-interactive p-6">
@@ -491,11 +503,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
             </div>
             <div className="text-right">
               <p className="text-2xl font-bold text-slate-900">{kitchenOrdersActive}</p>
-              <p className="text-sm text-slate-500">Queue</p>
+              <p className="text-sm text-slate-500">{rangeLabel}</p>
             </div>
           </div>
-          <p className="text-slate-700 font-medium">Kitchen orders</p>
-          <p className="text-xs text-slate-500 mt-1">Pending + preparing</p>
+          <p className="text-slate-700 font-medium">Kitchen orders created</p>
+          <p className="text-xs text-slate-500 mt-1">Created in selected period</p>
         </div>
 
         <div className="app-card-interactive p-6">
@@ -553,7 +565,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
               (yesterday / last week / last month).
             </li>
             <li>
-              • <strong className="text-slate-800">Room & folio charges</strong> sum posted billing lines for the same period (may differ
+              • <strong className="text-slate-800">Room & folio charges</strong> sum posted billing lines for the selected period (may differ
               from cash timing).
             </li>
             <li>

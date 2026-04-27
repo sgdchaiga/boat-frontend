@@ -9,6 +9,7 @@ import { GlAccountPicker, type GlAccountOption } from "../common/GlAccountPicker
 import { PageNotes } from "../common/PageNotes";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { randomUuid } from "../../lib/randomUuid";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 
 type GLAccount = {
   id: string;
@@ -62,15 +63,15 @@ export function ManualJournalsPage() {
       filterByOrganizationId(
         supabase
           .from("gl_accounts")
-          .select("id, account_code, account_name, account_type")
-          .eq("is_active", true)
+          .select("*")
           .order("account_code"),
         orgId,
         superAdmin
       ),
       fetchExpenseGlAccountPreferenceOrder(orgId, superAdmin),
     ]);
-    setAccounts((accRes.data || []) as GLAccount[]);
+    const normalized = normalizeGlAccountRows((accRes.data || []) as unknown[]).filter((row) => row.is_active);
+    setAccounts(normalized as GLAccount[]);
     setExpenseGlPreferenceOrder(prefOrder);
     setLoading(false);
   };

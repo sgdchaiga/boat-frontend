@@ -6,6 +6,7 @@ import { createJournalEntry, getDefaultGlAccounts } from "@/lib/journal";
 import { supabase } from "@/lib/supabase";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { businessTodayISO } from "@/lib/timezone";
+import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
@@ -130,12 +131,14 @@ export async function fetchTellerGlAccountPickList(
   isSuperAdmin?: boolean
 ): Promise<TellerGlAccountPickRow[]> {
   const { data, error } = await filterByOrganizationId(
-    sb.from("gl_accounts").select("id, account_code, account_name").eq("is_active", true).order("account_code"),
+    sb.from("gl_accounts").select("*").order("account_code"),
     organizationId,
     isSuperAdmin
   );
   if (error) throw error;
-  return (data ?? []) as TellerGlAccountPickRow[];
+  return normalizeGlAccountRows((data || []) as unknown[])
+    .filter((row) => row.is_active)
+    .map((row) => ({ id: row.id, account_code: row.account_code, account_name: row.account_name }));
 }
 
 function isMissingTellerSchemaError(err: unknown): boolean {

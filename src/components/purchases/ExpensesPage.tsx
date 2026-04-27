@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { Eye, EyeOff, Pencil, Plus, Trash2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import {
   createJournalForExpenseWithLines,
@@ -83,6 +83,16 @@ function localDateISO(d = new Date()) {
 
 const PAGE_SIZE_OPTIONS = [10, 20, 30, 50, 100] as const;
 
+function normalizeGlAccount(row: Record<string, unknown>): GlAccount {
+  return {
+    id: String(row.id ?? ""),
+    account_code: String(row.account_code ?? row.code ?? ""),
+    account_name: String(row.account_name ?? row.name ?? ""),
+    account_type: String(row.account_type ?? row.type ?? "").toLowerCase(),
+    category: row.category == null ? null : String(row.category),
+  };
+}
+
 /** Supabase/PostgREST errors are plain objects — avoid "[object Object]" in alerts. */
 function formatSupabaseError(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -133,43 +143,92 @@ export function ExpensesPage() {
   const [editModalLoading, setEditModalLoading] = useState(false);
   /** Default VAT GL from journal settings — applied to new lines and first line on Add */
   const [defaultVatGlId, setDefaultVatGlId] = useState("");
+  /** Keep line comments hidden by default; expand per row when needed. */
+  const [openCommentRows, setOpenCommentRows] = useState<Record<string, boolean>>({});
 
   const orgId = user?.organization_id ?? null;
+  const isLocalDesktopMode =
+    ((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "true" ||
+      (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "1") &&
+    (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase() === "lan";
 
   const loadGlAccounts = useCallback(async () => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("gl_accounts")
-      .select("id, account_code, account_name, account_type, category")
-      .eq("is_active", true)
-      .order("account_code");
-    setGlAccounts((data || []) as GlAccount[]);
+      .select("*");
+    if (error) {
+      console.error("GL accounts load error:", error.message);
+      setGlAccounts([]);
+      return;
+    }
+    const normalized = ((data || []) as Array<Record<string, unknown>>)
+      .map(normalizeGlAccount)
+      .filter((row) => row.id)
+      .sort((a, b) =>
+        `${a.account_code || ""} ${a.account_name || ""}`.localeCompare(
+          `${b.account_code || ""} ${b.account_name || ""}`
+        )
+      );
+    setGlAccounts(normalized);
   }, []);
 
   const loadVendors = useCallback(async () => {
-    let q = supabase.from("vendors").select("id, name").order("name");
-    if (orgId) q = q.eq("organization_id", orgId);
-    const { data, error } = await q;
+    const loadLocalVendors = async () => {
+      const [owned, legacy] = await Promise.all([
+        supabase.from("vendors").select("id, name").eq("organization_id", orgId),
+        supabase.from("vendors").select("id, name").is("organization_id", null),
+      ]);
+      if (owned.error) return owned;
+      if (legacy.error) return legacy;
+      const merged = [...(owned.data || []), ...(legacy.data || [])];
+      const deduped = Array.from(new Map(merged.map((v: { id: string }) => [v.id, v])).values());
+      return { data: deduped, error: null };
+    };
+
+    const result =
+      orgId && isLocalDesktopMode
+        ? await loadLocalVendors()
+        : await (() => {
+            let base = supabase.from("vendors").select("id, name");
+            if (orgId) {
+              base = base.eq("organization_id", orgId);
+            }
+            return base;
+          })();
+    const { data, error } = result;
     if (error) {
       console.error("Vendors load error:", error.message);
       setVendors([]);
       return;
     }
-    setVendors(data || []);
-  }, [orgId]);
+    setVendors([...(data || [])].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
+  }, [orgId, isLocalDesktopMode]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     setFetchError(null);
     try {
-      const venRes = await (() => {
-        let q = supabase.from("vendors").select("id, name").order("name");
+      const venRes = await (async () => {
+        if (orgId && isLocalDesktopMode) {
+          const [owned, legacy] = await Promise.all([
+            supabase.from("vendors").select("id, name").eq("organization_id", orgId),
+            supabase.from("vendors").select("id, name").is("organization_id", null),
+          ]);
+          if (owned.error) return owned;
+          if (legacy.error) return legacy;
+          const merged = [...(owned.data || []), ...(legacy.data || [])];
+          const deduped = Array.from(new Map(merged.map((v: { id: string }) => [v.id, v])).values());
+          return { data: deduped, error: null };
+        }
+        let q = supabase.from("vendors").select("id, name");
         if (orgId) q = q.eq("organization_id", orgId);
         return q;
       })();
 
       if (venRes.error) console.error("Vendors:", venRes.error.message);
-      setVendors(venRes.data || []);
-      const vMap = new Map((venRes.data || []).map((v) => [v.id, v.name]));
+      const venList = (venRes.data || []) as Array<{ id: string; name: string }>;
+      setVendors([...venList].sort((a, b) => (a.name || "").localeCompare(b.name || "")));
+      const vMap = new Map<string, string>(venList.map((v) => [v.id, v.name]));
 
       const fromIdx = page * pageSize;
       const toIdx = fromIdx + pageSize - 1;
@@ -184,7 +243,7 @@ export function ExpensesPage() {
           console.error("Expense lines GL filter:", glErr.message);
           throw glErr;
         }
-        glFilteredExpenseIds = [...new Set((glLines || []).map((r) => (r as { expense_id: string }).expense_id))];
+        glFilteredExpenseIds = [...new Set((glLines || []).map((r: { expense_id: string }) => r.expense_id))];
         if (glFilteredExpenseIds.length === 0) {
           setTotalCount(0);
           setExpenses([]);
@@ -256,9 +315,10 @@ export function ExpensesPage() {
           if (glIds.size > 0) {
             const { data: glRows } = await supabase
               .from("gl_accounts")
-              .select("id, account_name")
+              .select("*")
               .in("id", [...glIds]);
-            nameByGlId = new Map((glRows || []).map((g) => [(g as { id: string }).id, (g as { account_name: string }).account_name]));
+            const normalizedRows = ((glRows || []) as Array<Record<string, unknown>>).map(normalizeGlAccount);
+            nameByGlId = new Map(normalizedRows.map((g) => [g.id, g.account_name || g.account_code || "Unnamed account"]));
           }
           for (const r of lineRows || []) {
             const row = r as { expense_id: string; expense_gl_account_id: string };
@@ -289,7 +349,7 @@ export function ExpensesPage() {
     } finally {
       setLoading(false);
     }
-  }, [orgId, filterDateFrom, filterDateTo, filterVendorId, filterExpenseGlAccountId, page, pageSize]);
+  }, [orgId, isLocalDesktopMode, filterDateFrom, filterDateTo, filterVendorId, filterExpenseGlAccountId, page, pageSize]);
 
   useEffect(() => {
     void fetchData();
@@ -366,6 +426,12 @@ export function ExpensesPage() {
 
   const removeRow = (key: string) => {
     setLines((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.key !== key)));
+    setOpenCommentRows((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
   };
 
   const lineTotals = useMemo(() => {
@@ -540,6 +606,7 @@ export function ExpensesPage() {
 
       setShowModal(false);
       setEditingExpenseId(null);
+      setOpenCommentRows({});
       setExistingSourceDocuments([]);
       setExpenseDate(localDateISO());
       setVatRatePercent("18");
@@ -557,6 +624,7 @@ export function ExpensesPage() {
 
   const openModal = () => {
     setEditingExpenseId(null);
+    setOpenCommentRows({});
     setExistingSourceDocuments([]);
     setExpenseAttachmentFiles([]);
     setExpenseDate(localDateISO());
@@ -581,6 +649,7 @@ export function ExpensesPage() {
     if (saving) return;
     setShowModal(false);
     setEditingExpenseId(null);
+    setOpenCommentRows({});
     setExistingSourceDocuments([]);
     setExpenseAttachmentFiles([]);
     setVatRatePercent("18");
@@ -640,33 +709,44 @@ export function ExpensesPage() {
       }
       setVatRatePercent(String(inferredRate));
 
-      setLines(
-        (lineRows || []).map((lr) => {
-          const l = lr as {
-            vendor_id: string | null;
-            expense_gl_account_id: string;
-            source_cash_gl_account_id: string;
-            amount: number;
-            vat_amount: number;
-            vat_gl_account_id: string | null;
-            comment: string | null;
-          };
-          const net = Number(l.amount) || 0;
-          const vat = Number(l.vat_amount) || 0;
-          return {
-            key: randomUuid(),
-            vendor_id: l.vendor_id ?? "",
-            expense_gl_account_id: l.expense_gl_account_id,
-            source_cash_gl_account_id: l.source_cash_gl_account_id,
-            amount: net > 0 ? String(net) : "",
-            vat_enabled: vat > 0,
-            vat_gl_account_id: l.vat_gl_account_id ?? "",
-            comment: l.comment ?? "",
-          };
-        })
+      const mappedRows = (lineRows || []).map((lr: {
+        vendor_id: string | null;
+        expense_gl_account_id: string;
+        source_cash_gl_account_id: string;
+        amount: number;
+        vat_amount: number;
+        vat_gl_account_id: string | null;
+        comment: string | null;
+      }) => {
+        const l = lr as {
+          vendor_id: string | null;
+          expense_gl_account_id: string;
+          source_cash_gl_account_id: string;
+          amount: number;
+          vat_amount: number;
+          vat_gl_account_id: string | null;
+          comment: string | null;
+        };
+        const net = Number(l.amount) || 0;
+        const vat = Number(l.vat_amount) || 0;
+        return {
+          key: randomUuid(),
+          vendor_id: l.vendor_id ?? "",
+          expense_gl_account_id: l.expense_gl_account_id,
+          source_cash_gl_account_id: l.source_cash_gl_account_id,
+          amount: net > 0 ? String(net) : "",
+          vat_enabled: vat > 0,
+          vat_gl_account_id: l.vat_gl_account_id ?? "",
+          comment: l.comment ?? "",
+        };
+      });
+      setLines(mappedRows);
+      setOpenCommentRows(
+        Object.fromEntries(mappedRows.map((line: LineDraft) => [line.key, Boolean(line.comment.trim())]))
       );
-      if (!lineRows?.length) {
+      if (!mappedRows.length) {
         setLines([emptyLine()]);
+        setOpenCommentRows({});
       }
     } catch (e) {
       console.error("Load expense for edit:", e);
@@ -1098,20 +1178,37 @@ export function ExpensesPage() {
                           >
                             <Trash2 className="w-4 h-4" />
                           </button>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setOpenCommentRows((prev) => ({ ...prev, [row.key]: !prev[row.key] }))
+                            }
+                            className="mt-2 inline-flex items-center justify-center rounded p-1.5 text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                            title={openCommentRows[row.key] ? "Hide comment" : "Show comment"}
+                            aria-label={openCommentRows[row.key] ? "Hide comment" : "Show comment"}
+                          >
+                            {openCommentRows[row.key] ? (
+                              <EyeOff className="h-3.5 w-3.5" />
+                            ) : (
+                              <Eye className="h-3.5 w-3.5" />
+                            )}
+                          </button>
                         </td>
                       </tr>
-                      <tr className="border-b border-slate-200 bg-slate-50/50">
-                        <td colSpan={9} className="px-2 pb-3 pt-0">
-                          <label className="text-xs font-medium text-slate-500 block mb-1">Comment</label>
-                          <input
-                            value={row.comment}
-                            onChange={(e) => updateLine(row.key, { comment: e.target.value })}
-                            onMouseDown={(e) => e.stopPropagation()}
-                            className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
-                            placeholder="Optional note for this line"
-                          />
-                        </td>
-                      </tr>
+                      {openCommentRows[row.key] ? (
+                        <tr className="border-b border-slate-200 bg-slate-50/50">
+                          <td colSpan={9} className="px-2 pb-3 pt-0">
+                            <label className="text-xs font-medium text-slate-500 block mb-1">Comment</label>
+                            <input
+                              value={row.comment}
+                              onChange={(e) => updateLine(row.key, { comment: e.target.value })}
+                              onMouseDown={(e) => e.stopPropagation()}
+                              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                              placeholder="Optional note for this line"
+                            />
+                          </td>
+                        </tr>
+                      ) : null}
                     </Fragment>
                     );
                   })}

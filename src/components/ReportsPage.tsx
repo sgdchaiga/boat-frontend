@@ -524,8 +524,44 @@ function HotelRetailReportsPage() {
 
 export function ReportsPage({ onNavigate }: { onNavigate?: (page: string) => void }) {
   const { user } = useAuth();
-  if ((user?.business_type || "").toLowerCase() === "school") {
+  const businessType = (user?.business_type || "").toLowerCase();
+  const isSchool = businessType === "school";
+
+  if (isSchool) {
     return <SchoolReportsOverview onNavigate={onNavigate} />;
   }
-  return <HotelRetailReportsPage />;
+
+  return (
+    <div className="space-y-6">
+      <div className="px-6 md:px-8 pt-6">
+        <div className="bg-white rounded-xl border border-slate-200 p-4 md:p-5">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <h2 className="text-base md:text-lg font-semibold text-slate-900">Item Reports</h2>
+              <p className="text-sm text-slate-600 mt-1">
+                Analyze sales and purchases by item with date and department filters.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => onNavigate?.("reports_sales_by_item")}
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm hover:bg-slate-50"
+              >
+                Sales by item
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate?.("reports_purchases_by_item")}
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm hover:bg-slate-50"
+              >
+                Purchases by item
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <HotelRetailReportsPage />
+    </div>
+  );
 }

@@ -1,4 +1,4 @@
-import { ReactNode, useState, useMemo } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   Hotel,
   LayoutDashboard,
@@ -26,6 +26,7 @@ import {
   Wallet,
   Factory,
   MessageSquare,
+  Smartphone,
 } from 'lucide-react';
 import { APP_SHORT_NAME } from '../constants/branding';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
@@ -35,6 +36,8 @@ import { PAYROLL_PAGE } from '@/lib/payrollPages';
 import { HOTEL_PAGE } from '@/lib/hotelPages';
 import { useAuth } from '../contexts/AuthContext';
 import { getModuleAccess, pageToModuleId } from '../lib/moduleAccess';
+import { desktopApi } from '@/lib/desktopApi';
+import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncPush';
 
 interface LayoutProps {
   children: ReactNode;
@@ -134,6 +137,10 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   /** Collapsible subgroups under Reports (e.g. Sales, Operations). Undefined = expand if current page is in group. */
   const [reportSubgroupExpanded, setReportSubgroupExpanded] = useState<Record<string, boolean | undefined>>({});
+  const [pendingSyncCount, setPendingSyncCount] = useState(0);
+  const [syncLastAttemptAt, setSyncLastAttemptAt] = useState<number | null>(null);
+  const [syncLastSuccessAt, setSyncLastSuccessAt] = useState<number | null>(null);
+  const [syncLastError, setSyncLastError] = useState<string | null>(null);
 
   const toggleSection = (key: string) => setExpandedSections((s) => ({ ...s, [key]: !s[key] }));
 
@@ -154,9 +161,19 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   ];
 
   const enableFixedAssets = user?.enable_fixed_assets === true;
+  const enablePayroll = user?.enable_payroll !== false;
+  const enableBudget = user?.enable_budget !== false;
+  const retailOnly = businessType === "retail";
+  const allowCommunications = !retailOnly && user?.enable_communications !== false;
+  const allowWallet = !retailOnly && user?.enable_wallet !== false;
+  const allowPayroll = !retailOnly && enablePayroll;
+  const allowBudget = !retailOnly && enableBudget;
+  const allowAgent = !retailOnly && user?.enable_agent !== false;
 
   const hotelNavigation: NavItem[] = useMemo(() => {
     const showHotelFrontDesk = businessType === 'hotel' || businessType === 'mixed';
+    const showHotelPosFlows = businessType === 'hotel' || businessType === 'mixed' || businessType === 'restaurant';
+    const showHotelDashboardNav = currentPage !== 'agent_hub';
     const frontDeskNav: NavItem | null = showHotelFrontDesk
       ? {
           name: 'Front Desk',
@@ -174,8 +191,9 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       : null;
 
     return [
-    { name: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' },
-    { name: 'Communications', icon: MessageSquare, page: 'communications' },
+    ...(showHotelDashboardNav ? [{ name: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' } as NavItem] : []),
+    { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
+    ...(allowCommunications ? [{ name: 'Communications', icon: MessageSquare, page: 'communications' } as NavItem] : []),
     { name: 'Retail Dashboard', icon: LayoutDashboard, page: 'retail_dashboard' },
     ...(frontDeskNav ? [frontDeskNav] : []),
     {
@@ -190,11 +208,15 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           : businessType === 'retail' || businessType === 'restaurant'
             ? [{ name: 'Customers', page: 'retail_customers' as const }]
             : [{ name: 'Customers', page: 'hotel_customers' as const }]),
-        { name: 'POS (Waiter/Cashier)', page: HOTEL_PAGE.posWaiter },
-        { name: 'Kitchen/Bar Screen', page: HOTEL_PAGE.posKitchenBar },
-        { name: 'Supervisor Dashboard', page: HOTEL_PAGE.posSupervisor },
-        { name: 'Reports & Analytics', page: HOTEL_PAGE.posReports },
+        ...(showHotelPosFlows
+          ? [
+              { name: 'POS (Waiter/Cashier)', page: HOTEL_PAGE.posWaiter },
+              { name: 'POS Orders', page: HOTEL_PAGE.posKitchenBar },
+              { name: 'Supervisor Dashboard', page: HOTEL_PAGE.posSupervisor },
+            ]
+          : []),
         { name: 'Retail POS', page: 'retail_pos' },
+        { name: 'Retail POS Orders', page: 'retail_pos_orders' },
         { name: 'Invoices', page: 'retail_credit_invoices' },
         { name: 'Cash receipts', page: 'cash_receipts' },
         { name: 'Debtor payments', page: 'payments' },
@@ -218,6 +240,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       icon: FileText,
       children: [
         { name: 'Products', page: 'Products' },
+        { name: 'Barcodes', page: 'inventory_barcodes' },
         { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
         { name: 'Stock Balances', page: 'inventory_stock_balances' },
         { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
@@ -245,15 +268,19 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
       ],
     },
-    {
-      name: 'Budget',
-      icon: FileText,
-      children: [
-        { name: 'Budgeting', page: 'accounting_budgeting' },
-        { name: 'Budget variance', page: 'reports_budget_variance' },
-      ],
-    },
-    { name: 'Wallet', icon: Wallet, page: 'wallet' },
+    ...(allowBudget
+      ? [
+          {
+            name: 'Budget',
+            icon: FileText,
+            children: [
+              { name: 'Budgeting', page: 'accounting_budgeting' },
+              { name: 'Budget variance', page: 'reports_budget_variance' },
+            ],
+          } as NavItem,
+        ]
+      : []),
+    ...(allowWallet ? [{ name: 'Wallet', icon: Wallet, page: 'wallet' } as NavItem] : []),
     {
       name: 'Reports',
       icon: FileText,
@@ -265,6 +292,9 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
             { name: 'Daily Sales Report', page: 'reports_daily_sales' },
             { name: 'Daily summary', page: 'reports_daily_summary' },
             { name: 'Credit Sales Report', page: 'retail_credit_sales_report' },
+            { name: 'POS Analytics', page: 'reports_retail_sales_insights' },
+            { name: 'Shift Variance Report', page: 'reports_retail_shift_variance' },
+            { name: 'Sales by item', page: 'reports_sales_by_item' },
           ],
         },
         {
@@ -277,7 +307,10 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         },
         {
           group: 'Purchases',
-          items: [{ name: 'Daily Purchases Summary', page: 'reports_daily_purchases_summary' }],
+          items: [
+            { name: 'Daily Purchases Summary', page: 'reports_daily_purchases_summary' },
+            { name: 'Purchases by item', page: 'reports_purchases_by_item' },
+          ],
         },
         {
           group: 'Inventory',
@@ -294,27 +327,32 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         },
       ],
     },
-    {
-      name: 'Payroll',
-      icon: Wallet,
-      children: [
-        { name: 'Overview', page: PAYROLL_PAGE.hub },
-        { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
-        { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
-        { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
-        { name: 'Periods', page: PAYROLL_PAGE.periods },
-        { name: 'Process & post', page: PAYROLL_PAGE.run },
-        { name: 'Audit trail', page: PAYROLL_PAGE.audit },
-      ],
-    },
+    ...(allowPayroll
+      ? [
+          {
+            name: 'Payroll',
+            icon: Wallet,
+            children: [
+              { name: 'Overview', page: PAYROLL_PAGE.hub },
+              { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
+              { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
+              { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
+              { name: 'Periods', page: PAYROLL_PAGE.periods },
+              { name: 'Process & post', page: PAYROLL_PAGE.run },
+              { name: 'Audit trail', page: PAYROLL_PAGE.audit },
+            ],
+          } as NavItem,
+        ]
+      : []),
     { name: 'Staff', icon: UsersRound, page: 'staff' },
     { name: 'Admin', icon: Settings, page: 'admin' },
   ];
-  }, [businessType, enableFixedAssets]);
+  }, [businessType, enableFixedAssets, allowCommunications, allowBudget, allowWallet, allowPayroll, currentPage]);
 
   const saccoNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: SACCOPRO_PAGE.dashboard },
+      { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
       { name: 'Overview', icon: Home, page: SACCOPRO_PAGE.overview },
       {
@@ -358,14 +396,18 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
         ],
       },
-      {
-        name: 'Budget',
-        icon: FileText,
-        children: [
-          { name: 'Budgeting', page: 'accounting_budgeting' },
-          { name: 'Budget variance', page: 'reports_budget_variance' },
-        ],
-      },
+      ...(enableBudget
+        ? [
+            {
+              name: 'Budget',
+              icon: FileText,
+              children: [
+                { name: 'Budgeting', page: 'accounting_budgeting' },
+                { name: 'Budget variance', page: 'reports_budget_variance' },
+              ],
+            } as NavItem,
+          ]
+        : []),
       { name: 'Wallet', icon: Wallet, page: 'wallet' },
       {
         name: 'Reports',
@@ -382,28 +424,33 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           },
         ],
       },
-      {
-        name: 'Payroll',
-        icon: Wallet,
-        children: [
-          { name: 'Overview', page: PAYROLL_PAGE.hub },
-          { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
-          { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
-          { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
-          { name: 'Periods', page: PAYROLL_PAGE.periods },
-          { name: 'Process & post', page: PAYROLL_PAGE.run },
-        { name: 'Audit trail', page: PAYROLL_PAGE.audit },
-        ],
-      },
+      ...(enablePayroll
+        ? [
+            {
+              name: 'Payroll',
+              icon: Wallet,
+              children: [
+                { name: 'Overview', page: PAYROLL_PAGE.hub },
+                { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
+                { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
+                { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
+                { name: 'Periods', page: PAYROLL_PAGE.periods },
+                { name: 'Process & post', page: PAYROLL_PAGE.run },
+                { name: 'Audit trail', page: PAYROLL_PAGE.audit },
+              ],
+            } as NavItem,
+          ]
+        : []),
       { name: 'Staff', icon: UsersRound, page: 'staff' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
-    [enableFixedAssets]
+    [enableFixedAssets, enableBudget, enablePayroll]
   );
 
   const schoolNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: GraduationCap, page: SCHOOL_PAGE.dashboard },
+      { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
         name: 'School catalog',
@@ -464,11 +511,18 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           },
           {
             group: 'Purchases',
-            items: [{ name: 'Daily Purchases Summary', page: 'reports_daily_purchases_summary' }],
+            items: [
+              { name: 'Daily Purchases Summary', page: 'reports_daily_purchases_summary' },
+              { name: 'Purchases by item', page: 'reports_purchases_by_item' },
+            ],
           },
           {
             group: 'Inventory',
             items: [{ name: 'Stock Movement', page: 'reports_stock_movement' }],
+          },
+          {
+            group: 'Sales',
+            items: [{ name: 'Sales by item', page: 'reports_sales_by_item' }],
           },
           {
             group: 'Financial statements',
@@ -498,6 +552,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         icon: FileText,
         children: [
           { name: 'Products', page: 'Products' },
+          { name: 'Barcodes', page: 'inventory_barcodes' },
           { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
           { name: 'Stock Balances', page: 'inventory_stock_balances' },
           { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
@@ -525,37 +580,46 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
           ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
         ],
       },
-      {
-        name: 'Budget',
-        icon: FileText,
-        children: [
-          { name: 'Budgeting', page: 'accounting_budgeting' },
-          { name: 'Budget variance', page: 'reports_budget_variance' },
-        ],
-      },
+      ...(enableBudget
+        ? [
+            {
+              name: 'Budget',
+              icon: FileText,
+              children: [
+                { name: 'Budgeting', page: 'accounting_budgeting' },
+                { name: 'Budget variance', page: 'reports_budget_variance' },
+              ],
+            } as NavItem,
+          ]
+        : []),
       { name: 'Wallet', icon: Wallet, page: 'wallet' },
-      {
-        name: 'Payroll',
-        icon: Wallet,
-        children: [
-          { name: 'Overview', page: PAYROLL_PAGE.hub },
-          { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
-          { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
-          { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
-          { name: 'Periods', page: PAYROLL_PAGE.periods },
-          { name: 'Process & post', page: PAYROLL_PAGE.run },
-        { name: 'Audit trail', page: PAYROLL_PAGE.audit },
-        ],
-      },
+      ...(enablePayroll
+        ? [
+            {
+              name: 'Payroll',
+              icon: Wallet,
+              children: [
+                { name: 'Overview', page: PAYROLL_PAGE.hub },
+                { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
+                { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
+                { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
+                { name: 'Periods', page: PAYROLL_PAGE.periods },
+                { name: 'Process & post', page: PAYROLL_PAGE.run },
+                { name: 'Audit trail', page: PAYROLL_PAGE.audit },
+              ],
+            } as NavItem,
+          ]
+        : []),
       { name: 'Staff', icon: UsersRound, page: 'staff' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
-    [enableFixedAssets]
+    [enableFixedAssets, enableBudget, enablePayroll]
   );
 
   const vslaNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: VSLA_PAGE.dashboard },
+      { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
         name: 'Members',
@@ -622,6 +686,101 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
     : isSuperAdmin
       ? `${user?.role ?? 'staff'} · platform`
       : user?.role;
+  const localAuth = (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase();
+  const deploymentMode = (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase();
+  const appModeLabel =
+    localAuth === "true" || localAuth === "1" || localAuth === "yes"
+      ? "LOCAL"
+      : deploymentMode === "online"
+        ? "ADMIN CLOUD"
+        : "CLOUD";
+  const appModeClass =
+    appModeLabel === "LOCAL"
+      ? "bg-emerald-500/20 text-emerald-200 border-emerald-500/40"
+      : "bg-violet-500/20 text-violet-200 border-violet-500/40";
+
+  const formatGraceRemaining = (ms: number) => {
+    const totalHours = Math.max(0, Math.ceil(ms / (60 * 60 * 1000)));
+    const days = Math.floor(totalHours / 24);
+    const hours = totalHours % 24;
+    if (days <= 0) return `${hours}h`;
+    if (hours === 0) return `${days}d`;
+    return `${days}d ${hours}h`;
+  };
+
+  const showValidationWarning =
+    !!user &&
+    user.subscription_validation_stale !== true &&
+    typeof user.subscription_grace_ms_remaining === "number" &&
+    user.subscription_grace_ms_remaining > 0 &&
+    user.subscription_grace_ms_remaining < 24 * 60 * 60 * 1000;
+
+  const showValidationExpired =
+    !!user &&
+    user.subscription_validation_stale === true &&
+    user.subscription_status === "expired";
+  const showLicenseSeatBlocked = !!user && user.license_device_allowed === false;
+  const showLocalSyncStatus = !!user && canRunLocalSyncWorker();
+
+  useEffect(() => {
+    if (!showLocalSyncStatus || !desktopApi.isAvailable()) {
+      setPendingSyncCount(0);
+      setSyncLastAttemptAt(null);
+      setSyncLastError(null);
+      setSyncLastSuccessAt(null);
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const [pendingRows] = await Promise.all([desktopApi.listPendingSyncQueue()]);
+        if (cancelled) return;
+        const status = readLocalSyncStatus();
+        setPendingSyncCount((pendingRows || []).length);
+        setSyncLastAttemptAt(status.lastAttemptAt);
+        setSyncLastSuccessAt(status.lastSuccessAt);
+        setSyncLastError(status.lastError);
+      } catch {
+        if (!cancelled) {
+          setSyncLastError("Unable to read local sync status.");
+        }
+      }
+    };
+    void load();
+    const timer = window.setInterval(() => {
+      void load();
+    }, 30_000);
+    const syncEventName = localSyncStatusEventName();
+    const onSyncStatus = () => {
+      void load();
+    };
+    window.addEventListener(syncEventName, onSyncStatus);
+    window.addEventListener("online", onSyncStatus);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener(syncEventName, onSyncStatus);
+      window.removeEventListener("online", onSyncStatus);
+    };
+  }, [showLocalSyncStatus, user?.id]);
+
+  const syncStatusLevel: "healthy" | "warning" | "error" = syncLastError
+    ? "error"
+    : pendingSyncCount > 0
+      ? "warning"
+      : "healthy";
+  const syncStatusClass =
+    syncStatusLevel === "error"
+      ? "border-red-200 bg-red-50 text-red-700"
+      : syncStatusLevel === "warning"
+        ? "border-amber-200 bg-amber-50 text-amber-700"
+        : "border-emerald-200 bg-emerald-50 text-emerald-700";
+  const syncStatusText =
+    syncStatusLevel === "error"
+      ? "Sync issue"
+      : syncStatusLevel === "warning"
+        ? "Sync pending"
+        : "Sync healthy";
 
   const canShowPage = (page: string) => {
     const moduleId = pageToModuleId(page);
@@ -631,8 +790,15 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       businessType,
       subscriptionStatus,
       enableFixedAssets: user?.enable_fixed_assets === true,
-      enableCommunications: user?.enable_communications !== false,
-      enableWallet: user?.enable_wallet !== false,
+      enableCommunications: allowCommunications,
+      enableWallet: allowWallet,
+      enablePayroll: allowPayroll,
+      enableBudget: allowBudget,
+      enableAgent: allowAgent,
+      enableReports: user?.enable_reports !== false,
+      enableAccounting: user?.enable_accounting !== false,
+      enableInventory: user?.enable_inventory !== false,
+      enablePurchases: user?.enable_purchases !== false,
       schoolEnableReports: user?.school_enable_reports === true,
       schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
       schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -648,8 +814,15 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       businessType,
       subscriptionStatus,
       enableFixedAssets: user?.enable_fixed_assets === true,
-      enableCommunications: user?.enable_communications !== false,
-      enableWallet: user?.enable_wallet !== false,
+      enableCommunications: allowCommunications,
+      enableWallet: allowWallet,
+      enablePayroll: allowPayroll,
+      enableBudget: allowBudget,
+      enableAgent: allowAgent,
+      enableReports: user?.enable_reports !== false,
+      enableAccounting: user?.enable_accounting !== false,
+      enableInventory: user?.enable_inventory !== false,
+      enablePurchases: user?.enable_purchases !== false,
       schoolEnableReports: user?.school_enable_reports === true,
       schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
       schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -686,6 +859,11 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
               </div>
               <div className="min-w-0">
                 <h1 className="font-semibold text-sm text-slate-100 leading-tight truncate">{APP_SHORT_NAME}</h1>
+                <p>
+                  <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-semibold tracking-wide ${appModeClass}`}>
+                    {appModeLabel}
+                  </span>
+                </p>
                 <p className="text-[11px] text-slate-500 leading-tight truncate">{headerSubtitle}</p>
                 {!!businessType && (
                   <p className="text-[10px] text-slate-600 capitalize leading-tight truncate">
@@ -981,6 +1159,61 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
 
       <div className="lg:pl-64">
         <main className="pt-14 lg:pt-0">
+          {showLocalSyncStatus && (
+            <div className="px-4 lg:px-8 pt-3">
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">
+                <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold ${syncStatusClass}`}>
+                  {syncStatusText}
+                </span>
+                <span>
+                  Pending sync: <span className="font-semibold">{pendingSyncCount}</span>
+                </span>
+                <span>
+                  Last attempt:{" "}
+                  <span className="font-semibold">
+                    {syncLastAttemptAt ? new Date(syncLastAttemptAt).toLocaleString() : "Not yet"}
+                  </span>
+                </span>
+                <span>
+                  Last success:{" "}
+                  <span className="font-semibold">
+                    {syncLastSuccessAt ? new Date(syncLastSuccessAt).toLocaleString() : "Not yet"}
+                  </span>
+                </span>
+                <span className={syncLastError ? "text-red-700" : "text-emerald-700"}>
+                  {syncLastError ? `Last error: ${syncLastError}` : "Sync status: healthy"}
+                </span>
+              </div>
+            </div>
+          )}
+          {(showValidationWarning || showValidationExpired || showLicenseSeatBlocked) && (
+            <div className="px-4 lg:px-8 pt-3">
+              <div
+                className={`rounded-lg border px-4 py-3 text-sm ${
+                  showValidationExpired || showLicenseSeatBlocked
+                    ? "border-red-300 bg-red-50 text-red-800"
+                    : "border-amber-300 bg-amber-50 text-amber-800"
+                }`}
+              >
+                {showLicenseSeatBlocked ? (
+                  <p>{user?.license_device_reason || "This device is not licensed for the current BOAT subscription."}</p>
+                ) : showValidationExpired ? (
+                  <p>
+                    Subscription validation expired while offline. BOAT is in read-only mode until this device reconnects
+                    to the internet and validates your subscription.
+                  </p>
+                ) : (
+                  <p>
+                    Offline subscription grace remaining:{" "}
+                    <span className="font-semibold">
+                      {formatGraceRemaining(user?.subscription_grace_ms_remaining ?? 0)}
+                    </span>
+                    . Reconnect to the internet to keep full access.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
           {children}
         </main>
       </div>

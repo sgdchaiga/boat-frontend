@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Clock } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Database } from "../lib/database.types";
@@ -63,6 +63,11 @@ export function KitchenOrdersPage() {
   const [payMethod, setPayMethod] = useState<PaymentMethodCode>("cash");
   const [payDate, setPayDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [savingPayment, setSavingPayment] = useState(false);
+  const [productOptions, setProductOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editingOrderDate, setEditingOrderDate] = useState("");
+  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
+  const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">("all");
 
   useEffect(() => {
     fetchOrders();
@@ -119,6 +124,9 @@ export function KitchenOrdersPage() {
       const productMap = Object.fromEntries(
         ((productsRes?.data || []) as { id: string; name: string; department_id: string | null; sales_price: number | null }[])
           .map((p) => [p.id, p])
+      );
+      setProductOptions(
+        ((productsRes?.data || []) as { id: string; name: string }[]).map((p) => ({ id: p.id, name: p.name }))
       );
       const kitchenDeps = departments.filter((d) => {
         const n = d.name.toLowerCase();
@@ -221,6 +229,63 @@ export function KitchenOrdersPage() {
     setPayDate(new Date().toISOString().slice(0, 10));
   };
 
+  const paymentBucket = (order: KitchenOrder): "paid" | "unpaid" | "partially_paid" => {
+    const { total, paid } = getOrderTotals(order);
+    if (paid <= 0.01) return "unpaid";
+    if (paid + 0.01 < total) return "partially_paid";
+    return "paid";
+  };
+
+  const startEditOrder = (order: KitchenOrder) => {
+    setEditingOrderId(order.id);
+    setEditingOrderDate(new Date(order.created_at).toISOString().slice(0, 16));
+    setEditingOrderItems(
+      (order.kitchen_order_items || []).map((item) => ({
+        product_id: String((item as any).product_id || ""),
+        quantity: Number(item.quantity || 1),
+        notes: String(item.notes || ""),
+      }))
+    );
+  };
+
+  const addEditingOrderItem = () => {
+    const fallbackProductId = productOptions[0]?.id || "";
+    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, notes: "" }]);
+  };
+
+  const saveEditedOrder = async () => {
+    if (!editingOrderId) return;
+    try {
+      const iso = new Date(editingOrderDate).toISOString();
+      const { error: orderErr } = await supabase
+        .from("kitchen_orders")
+        .update({ created_at: iso })
+        .eq("id", editingOrderId);
+      if (orderErr) throw orderErr;
+      const { error: delErr } = await supabase.from("kitchen_order_items").delete().eq("order_id", editingOrderId);
+      if (delErr) throw delErr;
+      const nextItems = editingOrderItems
+        .filter((item) => item.product_id && Number(item.quantity) > 0)
+        .map((item) => ({
+          order_id: editingOrderId,
+          product_id: item.product_id,
+          quantity: Number(item.quantity),
+          notes: item.notes.trim() || null,
+        }));
+      if (nextItems.length > 0) {
+        const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
+        if (insErr) throw insErr;
+      }
+      setEditingOrderId(null);
+      setEditingOrderDate("");
+      setEditingOrderItems([]);
+      await fetchOrders();
+      alert("Order updated.");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to update order.");
+    }
+  };
+
   const savePaymentForOrder = async () => {
     if (!payingOrder) return;
     const amount = Number(payAmount);
@@ -255,6 +320,17 @@ export function KitchenOrdersPage() {
       setSavingPayment(false);
     }
   };
+
+  const filteredOrders = useMemo(
+    () =>
+      orders.filter((o) => {
+        const bucket = paymentBucket(o);
+        if (paymentFilter === "all") return true;
+        if (paymentFilter === "outstanding") return bucket !== "paid";
+        return bucket === paymentFilter;
+      }),
+    [orders, paymentFilter]
+  );
 
   return (
     <div className="p-6 bg-slate-50 min-h-screen">
@@ -293,6 +369,17 @@ export function KitchenOrdersPage() {
             <option value="last_year">Last Year</option>
             <option value="custom">Custom</option>
           </select>
+          <select
+            value={paymentFilter}
+            onChange={(e) => setPaymentFilter(e.target.value as typeof paymentFilter)}
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          >
+            <option value="all">All payments</option>
+            <option value="outstanding">Outstanding</option>
+            <option value="partially_paid">Partially paid</option>
+            <option value="paid">Paid</option>
+            <option value="unpaid">Unpaid</option>
+          </select>
           {dateRange === "custom" && (
             <div className="flex gap-2 items-center">
               <input
@@ -315,11 +402,11 @@ export function KitchenOrdersPage() {
 
       {loading ? (
         <p className="text-slate-500 text-sm">Loading kitchen orders...</p>
-      ) : orders.length === 0 ? (
+      ) : filteredOrders.length === 0 ? (
         <p className="text-slate-500 text-sm">No kitchen orders for this period.</p>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6">
-          {orders.map((order) => (
+          {filteredOrders.map((order) => (
             <div
               key={order.id}
               className="bg-white rounded-xl shadow p-4 border"
@@ -337,6 +424,9 @@ export function KitchenOrdersPage() {
                   {getElapsed(order.created_at)}
                 </div>
               </div>
+              <p className="text-xs text-slate-500 mb-2">
+                Transaction date: {new Date(order.created_at).toLocaleString()}
+              </p>
 
               <div className="space-y-2 mb-4">
                 {order.kitchen_order_items.map((item, i) => (
@@ -372,6 +462,13 @@ export function KitchenOrdersPage() {
                           Pay Outstanding
                         </button>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => startEditOrder(order)}
+                        className="mt-2 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-800 hover:bg-slate-100"
+                      >
+                        Edit
+                      </button>
                     </>
                   );
                 })()}
@@ -380,6 +477,101 @@ export function KitchenOrdersPage() {
           ))}
         </div>
       )}
+
+      {editingOrderId ? (
+        <div className="mt-8 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
+          <div className="flex items-center justify-between gap-3 mb-4">
+            <h2 className="text-lg font-bold text-slate-900">Edit Kitchen Order</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingOrderId(null);
+                setEditingOrderDate("");
+                setEditingOrderItems([]);
+              }}
+              className="px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
+            >
+              Cancel
+            </button>
+          </div>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-slate-700 mb-1">Order date & time</label>
+            <input
+              type="datetime-local"
+              value={editingOrderDate}
+              onChange={(e) => setEditingOrderDate(e.target.value)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </div>
+          <div className="space-y-3">
+            {editingOrderItems.map((item, index) => (
+              <div key={`${editingOrderId}-${index}`} className="grid grid-cols-1 md:grid-cols-[1.5fr_120px_1fr_auto] gap-2 items-center">
+                <select
+                  value={item.product_id}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, product_id: e.target.value } : row))
+                    )
+                  }
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                >
+                  <option value="">Select product</option>
+                  {productOptions.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  min={1}
+                  value={item.quantity}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, quantity: Number(e.target.value || 1) } : row))
+                    )
+                  }
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <input
+                  type="text"
+                  value={item.notes}
+                  onChange={(e) =>
+                    setEditingOrderItems((prev) =>
+                      prev.map((row, i) => (i === index ? { ...row, notes: e.target.value } : row))
+                    )
+                  }
+                  placeholder="Notes"
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEditingOrderItems((prev) => prev.filter((_, i) => i !== index))}
+                  className="px-3 py-2 border border-red-200 text-red-700 rounded-lg hover:bg-red-50 text-sm"
+                >
+                  Remove
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={addEditingOrderItem}
+              className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
+            >
+              Add item
+            </button>
+            <button
+              type="button"
+              onClick={() => void saveEditedOrder()}
+              className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm"
+            >
+              Save changes
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       {payingOrder && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !savingPayment && setPayingOrder(null)}>

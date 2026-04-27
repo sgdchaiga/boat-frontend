@@ -1,6 +1,8 @@
+import { canApprove as canApprovePermission } from "./permissions";
+
 /**
- * Approval rights configuration - which roles can approve or manage different areas.
- * Stored in localStorage. Configurable in Admin > Approval Rights.
+ * Backward-compatible wrapper around unified permissions.
+ * New source of truth is Admin > Permissions.
  */
 
 export type ApprovalType =
@@ -113,11 +115,7 @@ export function saveApprovalRights(config: ApprovalRightsConfig): void {
 }
 
 export function canApprove(type: ApprovalType, role?: string | null): boolean {
-  if (!role) return false;
-  const config = loadApprovalRights();
-  const allowed = config[type];
-  const rl = role.toLowerCase();
-  return Array.isArray(allowed) && allowed.some((r) => String(r).toLowerCase() === rl);
+  return canApprovePermission(type, role);
 }
 
 /** Label for a role key in UI (fallback when org-defined names are not loaded). */

@@ -7,6 +7,7 @@ import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import type { BusinessType } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import {
   type AccountTotal,
   type IncomeStatementMode,
@@ -17,6 +18,7 @@ import {
   getIncomeStatementMode,
 } from "../../lib/incomeStatementLayout";
 import { LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
+import { Info } from "lucide-react";
 
 type TrendPoint = { period: string; revenue: number; expenses: number };
 type ExpenseSlice = { name: string; value: number };
@@ -46,6 +48,8 @@ type TotalsSnapshot = {
   expenseBreakdown: ExpenseSlice[];
 };
 
+const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense"] as const;
+
 export function IncomeStatementPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
@@ -68,10 +72,16 @@ export function IncomeStatementPage() {
   const [totalOpex, setTotalOpex] = useState(0);
   const [totalExpenses, setTotalExpenses] = useState(0);
   const [compareRange, setCompareRange] = useState<"none" | "previous_period" | "same_period_last_year">("none");
+  const [basis, setBasis] = useState<"accrual" | "cash">("accrual");
+  const [showBasisHelp, setShowBasisHelp] = useState(false);
   const [previousTotalRevenue, setPreviousTotalRevenue] = useState(0);
   const [previousTotalExpenses, setPreviousTotalExpenses] = useState(0);
   const [previousTotalCogs, setPreviousTotalCogs] = useState(0);
   const [previousTotalOpex, setPreviousTotalOpex] = useState(0);
+  const [previousRevenueRows, setPreviousRevenueRows] = useState<AccountTotal[]>([]);
+  const [previousExpenseRows, setPreviousExpenseRows] = useState<AccountTotal[]>([]);
+  const [previousCogsRows, setPreviousCogsRows] = useState<AccountTotal[]>([]);
+  const [previousOpexRows, setPreviousOpexRows] = useState<AccountTotal[]>([]);
   const [previousSacco, setPreviousSacco] = useState<SaccoStatementNumbers | null>(null);
   const [previousLabel, setPreviousLabel] = useState("Previous");
   const [companyName, setCompanyName] = useState("Business");
@@ -145,7 +155,7 @@ export function IncomeStatementPage() {
 
   useEffect(() => {
     fetchData();
-  }, [dateRange, debouncedCustomFrom, debouncedCustomTo, compareRange, user?.business_type]);
+  }, [dateRange, debouncedCustomFrom, debouncedCustomTo, compareRange, basis, user?.business_type]);
 
   useEffect(() => {
     if (dateRange !== "custom") {
@@ -208,7 +218,7 @@ export function IncomeStatementPage() {
 
     const fetchTotalsForRange = async (fromDate: string, toDate: string, businessType: BusinessType | null | undefined) => {
       const mode = getIncomeStatementMode(businessType);
-      const cacheKey = [orgId || "platform", superAdmin ? "super" : "tenant", fromDate, toDate, mode].join("|");
+      const cacheKey = [orgId || "platform", superAdmin ? "super" : "tenant", fromDate, toDate, mode, basis].join("|");
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
@@ -221,15 +231,16 @@ export function IncomeStatementPage() {
         .lte("journal_entries.entry_date", toDate)
         .eq("journal_entries.is_posted", true)
         .in("gl_accounts.account_type", ["income", "expense"]);
+      if (basis === "cash") {
+        linesQuery.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+      }
 
       const [linesRes, accRes] = await Promise.all([
         filterJournalLinesByOrganizationId(linesQuery, orgId, superAdmin),
         filterByOrganizationId(
           supabase
             .from("gl_accounts")
-            .select("id, account_code, account_name, account_type, category")
-            .in("account_type", ["income", "expense"])
-            .eq("is_active", true)
+            .select("*")
             .order("account_code"),
           orgId,
           superAdmin
@@ -246,7 +257,15 @@ export function IncomeStatementPage() {
         account_type: string;
         category?: string | null;
       };
-      const accounts = (accRes.data || []) as AccRow[];
+      const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+        .filter((row) => row.is_active && (row.account_type === "income" || row.account_type === "expense"))
+        .map((row) => ({
+          id: row.id,
+          account_code: row.account_code,
+          account_name: row.account_name,
+          account_type: row.account_type,
+          category: row.category,
+        }));
       const accMap: Record<string, AccRow> = Object.fromEntries(accounts.map((a) => [a.id, a]));
       const byAccount: Record<string, number> = {};
       (linesRes.data || []).forEach((l: {
@@ -401,6 +420,10 @@ export function IncomeStatementPage() {
         setPreviousTotalExpenses(0);
         setPreviousTotalCogs(0);
         setPreviousTotalOpex(0);
+        setPreviousRevenueRows([]);
+        setPreviousExpenseRows([]);
+        setPreviousCogsRows([]);
+        setPreviousOpexRows([]);
         setPreviousSacco(null);
         setPreviousLabel("Previous");
         return;
@@ -426,6 +449,10 @@ export function IncomeStatementPage() {
       setPreviousTotalExpenses(prevRes.totalExpenses);
       setPreviousTotalCogs(prevRes.totalCogs);
       setPreviousTotalOpex(prevRes.totalOpex);
+      setPreviousRevenueRows(prevRes.revenueRows);
+      setPreviousExpenseRows(prevRes.expenseRows);
+      setPreviousCogsRows(prevRes.cogsRows);
+      setPreviousOpexRows(prevRes.opexRows);
       setPreviousSacco(prevRes.sacco);
     } catch (e) {
       if (requestSeq !== requestSeqRef.current) return;
@@ -434,6 +461,10 @@ export function IncomeStatementPage() {
       setPreviousTotalExpenses(0);
       setPreviousTotalCogs(0);
       setPreviousTotalOpex(0);
+      setPreviousRevenueRows([]);
+      setPreviousExpenseRows([]);
+      setPreviousCogsRows([]);
+      setPreviousOpexRows([]);
       setPreviousSacco(null);
     } finally {
       if (requestSeq !== requestSeqRef.current) return;
@@ -466,6 +497,22 @@ export function IncomeStatementPage() {
     () => previousTotalRevenue - previousTotalCogs,
     [previousTotalRevenue, previousTotalCogs]
   );
+  const previousRevenueById = useMemo(
+    () => new Map(previousRevenueRows.map((r) => [r.account_id, r.total])),
+    [previousRevenueRows]
+  );
+  const previousExpenseById = useMemo(
+    () => new Map(previousExpenseRows.map((r) => [r.account_id, r.total])),
+    [previousExpenseRows]
+  );
+  const previousCogsById = useMemo(
+    () => new Map(previousCogsRows.map((r) => [r.account_id, r.total])),
+    [previousCogsRows]
+  );
+  const previousOpexById = useMemo(
+    () => new Map(previousOpexRows.map((r) => [r.account_id, r.total])),
+    [previousOpexRows]
+  );
 
   const hasNegativeRevenue = revenue.some((r) => r.total < 0);
   const hasNegativeExpense =
@@ -481,8 +528,9 @@ export function IncomeStatementPage() {
 
   const periodLabel = useMemo(() => {
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-    return `${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)}`;
-  }, [dateRange, customFrom, customTo]);
+    const basisLabel = basis === "cash" ? "Cash basis" : "Accrual basis";
+    return `${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)} (${basisLabel})`;
+  }, [dateRange, customFrom, customTo, basis]);
 
   const fileStamp = useMemo(() => computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10), [dateRange, customFrom, customTo]);
   const pieColors = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#14b8a6", "#6366f1", "#84cc16", "#ec4899", "#22c55e", "#f97316", "#64748b"];
@@ -508,6 +556,9 @@ export function IncomeStatementPage() {
         .lte("journal_entries.entry_date", toStr)
         .eq("journal_entries.is_posted", true)
         .order("entry_date", { ascending: false, referencedTable: "journal_entries" });
+      if (basis === "cash") {
+        q.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+      }
       const { data, error } = await filterJournalLinesByOrganizationId(q, orgId, superAdmin);
       if (error) throw new Error(error.message);
       const rows = ((data || []) as Array<{
@@ -720,6 +771,18 @@ export function IncomeStatementPage() {
           {hasNegativeExpense ? "expense" : ""} accounts. Please review source journals for potential posting errors.
         </div>
       )}
+      {!fetchError && basis === "cash" && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-900" role="status">
+          Cash basis view is enabled. This report is generated from posted journal entries.
+        </div>
+      )}
+      {!fetchError && showBasisHelp && (
+        <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700" role="status">
+          Basis help: accrual includes all posted journals for the period. Cash includes posted journals with reference types:
+          <code className="text-xs"> payment</code>, <code className="text-xs">pos</code>, <code className="text-xs">vendor_payment</code>,{" "}
+          <code className="text-xs">expense</code>.
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
         <div className="flex flex-wrap gap-4 items-center">
@@ -746,6 +809,19 @@ export function IncomeStatementPage() {
             <option value="previous_period">Compare with previous period</option>
             <option value="same_period_last_year">Compare with same period last year</option>
           </select>
+          <select value={basis} onChange={(e) => setBasis(e.target.value as "accrual" | "cash")} className="border rounded-lg px-3 py-2">
+            <option value="accrual">Accrual basis</option>
+            <option value="cash">Cash basis</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => setShowBasisHelp((v) => !v)}
+            className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50"
+            title={showBasisHelp ? "Hide basis help" : "Show basis help"}
+            aria-label={showBasisHelp ? "Hide basis help" : "Show basis help"}
+          >
+            <Info className="h-4 w-4" />
+          </button>
           <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -787,7 +863,8 @@ export function IncomeStatementPage() {
           </div>
         </div>
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-w-3xl">
+        <div className={`grid grid-cols-1 gap-6 items-start ${compareRange !== "none" ? "xl:grid-cols-[minmax(0,3fr)_minmax(320px,2fr)]" : ""}`}>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-w-3xl">
           {refreshing && (
             <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
               Refreshing report...
@@ -850,6 +927,7 @@ export function IncomeStatementPage() {
                     <th className="p-3 text-left">Account</th>
                     <th className="p-3 text-right">% of income</th>
                     <th className="p-3 text-right">Amount</th>
+                    {compareRange !== "none" && <th className="p-3 text-right">{previousLabel}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -869,18 +947,19 @@ export function IncomeStatementPage() {
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}
                       </td>
                       <td className={`p-3 text-right ${r.total < 0 ? "text-rose-700 font-medium" : ""}`}>{fmtUgx(r.total)}</td>
+                      {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousRevenueById.get(r.account_id) ?? 0)}</td>}
                     </tr>
                   ))}
                   {revenue.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No income accounts
                       </td>
                     </tr>
                   )}
                   {revenue.length > 0 && revenueDisplayed.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No non-zero income accounts (turn on &quot;Show zero-balance accounts&quot; to list all).
                       </td>
                     </tr>
@@ -888,10 +967,11 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={3} className="p-3 text-right">
+                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
                       Total income
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
+                    {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousTotalRevenue)}</td>}
                   </tr>
                 </tfoot>
               </table>
@@ -903,6 +983,7 @@ export function IncomeStatementPage() {
                     <th className="p-3 text-left">Account</th>
                     <th className="p-3 text-right">% of expenditure</th>
                     <th className="p-3 text-right">Amount</th>
+                    {compareRange !== "none" && <th className="p-3 text-right">{previousLabel}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -922,18 +1003,19 @@ export function IncomeStatementPage() {
                         {totalExpenses !== 0 ? `${((e.total / totalExpenses) * 100).toFixed(1)}%` : "0.0%"}
                       </td>
                       <td className={`p-3 text-right ${e.total < 0 ? "text-rose-700 font-medium" : ""}`}>{fmtUgx(e.total)}</td>
+                      {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousExpenseById.get(e.account_id) ?? 0)}</td>}
                     </tr>
                   ))}
                   {expenses.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No expenditure accounts
                       </td>
                     </tr>
                   )}
                   {expenses.length > 0 && expensesDisplayed.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No non-zero expenditure accounts (turn on &quot;Show zero-balance accounts&quot; to list all).
                       </td>
                     </tr>
@@ -941,10 +1023,11 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={3} className="p-3 text-right">
+                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
                       Total expenditure
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalExpenses)}</td>
+                    {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousTotalExpenses)}</td>}
                   </tr>
                 </tfoot>
               </table>
@@ -962,6 +1045,7 @@ export function IncomeStatementPage() {
                     <th className="p-3 text-left">Account</th>
                     <th className="p-3 text-right">% of revenue</th>
                     <th className="p-3 text-right">Amount</th>
+                    {compareRange !== "none" && <th className="p-3 text-right">{previousLabel}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -981,18 +1065,19 @@ export function IncomeStatementPage() {
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}
                       </td>
                       <td className={`p-3 text-right ${r.total < 0 ? "text-rose-700 font-medium" : ""}`}>{fmtUgx(r.total)}</td>
+                      {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousRevenueById.get(r.account_id) ?? 0)}</td>}
                     </tr>
                   ))}
                   {revenue.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No revenue accounts
                       </td>
                     </tr>
                   )}
                   {revenue.length > 0 && revenueDisplayed.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No non-zero revenue accounts (turn on &quot;Show zero-balance accounts&quot; to list all).
                       </td>
                     </tr>
@@ -1000,10 +1085,11 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={3} className="p-3 text-right">
+                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
                       Total revenue
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
+                    {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousTotalRevenue)}</td>}
                   </tr>
                 </tfoot>
               </table>
@@ -1015,6 +1101,7 @@ export function IncomeStatementPage() {
                     <th className="p-3 text-left">Account</th>
                     <th className="p-3 text-right">% of revenue</th>
                     <th className="p-3 text-right">Amount</th>
+                    {compareRange !== "none" && <th className="p-3 text-right">{previousLabel}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1034,18 +1121,19 @@ export function IncomeStatementPage() {
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}
                       </td>
                       <td className={`p-3 text-right ${r.total < 0 ? "text-rose-700 font-medium" : ""}`}>{fmtUgx(r.total)}</td>
+                      {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousCogsById.get(r.account_id) ?? 0)}</td>}
                     </tr>
                   ))}
                   {cogsRows.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No COGS accounts (tag direct costs in your chart).
                       </td>
                     </tr>
                   )}
                   {cogsRows.length > 0 && cogsDisplayed.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No non-zero COGS lines (turn on &quot;Show zero-balance accounts&quot; to list all).
                       </td>
                     </tr>
@@ -1053,10 +1141,11 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={3} className="p-3 text-right">
+                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
                       Total cost of goods sold
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalCogs)}</td>
+                    {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousTotalCogs)}</td>}
                   </tr>
                 </tfoot>
               </table>
@@ -1088,6 +1177,7 @@ export function IncomeStatementPage() {
                     <th className="p-3 text-left">Account</th>
                     <th className="p-3 text-right">% of revenue</th>
                     <th className="p-3 text-right">Amount</th>
+                    {compareRange !== "none" && <th className="p-3 text-right">{previousLabel}</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -1107,18 +1197,19 @@ export function IncomeStatementPage() {
                         {totalRevenue !== 0 ? `${((e.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}
                       </td>
                       <td className={`p-3 text-right ${e.total < 0 ? "text-rose-700 font-medium" : ""}`}>{fmtUgx(e.total)}</td>
+                      {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousOpexById.get(e.account_id) ?? 0)}</td>}
                     </tr>
                   ))}
                   {opexRows.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No operating expense accounts
                       </td>
                     </tr>
                   )}
                   {opexRows.length > 0 && opexDisplayed.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-slate-500">
+                      <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No non-zero operating expenses (turn on &quot;Show zero-balance accounts&quot; to list all).
                       </td>
                     </tr>
@@ -1126,10 +1217,11 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={3} className="p-3 text-right">
+                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
                       Total operating expenses
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalOpex)}</td>
+                    {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousTotalOpex)}</td>}
                   </tr>
                 </tfoot>
               </table>
@@ -1138,92 +1230,93 @@ export function IncomeStatementPage() {
               </div>
             </>
           )}
-        </div>
-      )}
-      {!fetchError && compareRange !== "none" && !initialLoading && (
-        <div className="mt-6 bg-white rounded-xl border border-slate-200 overflow-hidden max-w-2xl">
-          {refreshing && (
-            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
-              Refreshing comparison...
+          </div>
+          {!fetchError && compareRange !== "none" && (
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-w-2xl xl:max-w-none">
+              {refreshing && (
+                <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-xs text-slate-600">
+                  Refreshing comparison...
+                </div>
+              )}
+              <div className="p-4 border-b bg-slate-50 font-medium">Comparison ({previousLabel})</div>
+              <table className="w-full text-sm">
+                <thead className="bg-slate-100">
+                  <tr>
+                    <th className="p-3 text-left">Metric</th>
+                    <th className="p-3 text-right">Current</th>
+                    <th className="p-3 text-right">{previousLabel}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {statementMode === "sacco" && saccoSummary ? (
+                    <>
+                      <tr className="border-t">
+                        <td className="p-3">Total income</td>
+                        <td className="p-3 text-right">{fmtUgx(saccoSummary.totalIncome)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousSacco?.totalIncome ?? 0)}</td>
+                      </tr>
+                      <tr className="border-t">
+                        <td className="p-3">Total expenses</td>
+                        <td className="p-3 text-right">{fmtUgx(saccoSummary.totalExpenditure)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousSacco?.totalExpenditure ?? 0)}</td>
+                      </tr>
+                      <tr className="border-t font-medium bg-slate-50">
+                        <td className="p-3">Profit for the year</td>
+                        <td className="p-3 text-right">{fmtUgx(netIncome)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousNetIncome)}</td>
+                      </tr>
+                    </>
+                  ) : statementMode === "school" ? (
+                    <>
+                      <tr className="border-t">
+                        <td className="p-3">Income</td>
+                        <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousTotalRevenue)}</td>
+                      </tr>
+                      <tr className="border-t">
+                        <td className="p-3">Expenditure</td>
+                        <td className="p-3 text-right">{fmtUgx(totalExpenses)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousTotalExpenses)}</td>
+                      </tr>
+                      <tr className="border-t font-medium bg-slate-50">
+                        <td className="p-3">Net income</td>
+                        <td className="p-3 text-right">{fmtUgx(netIncome)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousNetIncome)}</td>
+                      </tr>
+                    </>
+                  ) : (
+                    <>
+                      <tr className="border-t">
+                        <td className="p-3">Revenue</td>
+                        <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousTotalRevenue)}</td>
+                      </tr>
+                      <tr className="border-t">
+                        <td className="p-3">Cost of goods sold</td>
+                        <td className="p-3 text-right">{fmtUgx(totalCogs)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousTotalCogs)}</td>
+                      </tr>
+                      <tr className="border-t font-medium bg-slate-50">
+                        <td className="p-3">Gross profit</td>
+                        <td className="p-3 text-right">{fmtUgx(grossProfit)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousGrossProfit)}</td>
+                      </tr>
+                      <tr className="border-t">
+                        <td className="p-3">Operating expenses</td>
+                        <td className="p-3 text-right">{fmtUgx(totalOpex)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousTotalOpex)}</td>
+                      </tr>
+                      <tr className="border-t font-medium bg-slate-50">
+                        <td className="p-3">Net income</td>
+                        <td className="p-3 text-right">{fmtUgx(netIncome)}</td>
+                        <td className="p-3 text-right">{fmtUgx(previousNetIncome)}</td>
+                      </tr>
+                    </>
+                  )}
+                </tbody>
+              </table>
             </div>
           )}
-          <div className="p-4 border-b bg-slate-50 font-medium">Comparison ({previousLabel})</div>
-          <table className="w-full text-sm">
-            <thead className="bg-slate-100">
-              <tr>
-                <th className="p-3 text-left">Metric</th>
-                <th className="p-3 text-right">Current</th>
-                <th className="p-3 text-right">{previousLabel}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {statementMode === "sacco" && saccoSummary ? (
-                <>
-                  <tr className="border-t">
-                    <td className="p-3">Total income</td>
-                    <td className="p-3 text-right">{fmtUgx(saccoSummary.totalIncome)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousSacco?.totalIncome ?? 0)}</td>
-                  </tr>
-                  <tr className="border-t">
-                    <td className="p-3">Total expenses</td>
-                    <td className="p-3 text-right">{fmtUgx(saccoSummary.totalExpenditure)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousSacco?.totalExpenditure ?? 0)}</td>
-                  </tr>
-                  <tr className="border-t font-medium bg-slate-50">
-                    <td className="p-3">Profit for the year</td>
-                    <td className="p-3 text-right">{fmtUgx(netIncome)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousNetIncome)}</td>
-                  </tr>
-                </>
-              ) : statementMode === "school" ? (
-                <>
-                  <tr className="border-t">
-                    <td className="p-3">Income</td>
-                    <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousTotalRevenue)}</td>
-                  </tr>
-                  <tr className="border-t">
-                    <td className="p-3">Expenditure</td>
-                    <td className="p-3 text-right">{fmtUgx(totalExpenses)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousTotalExpenses)}</td>
-                  </tr>
-                  <tr className="border-t font-medium bg-slate-50">
-                    <td className="p-3">Net income</td>
-                    <td className="p-3 text-right">{fmtUgx(netIncome)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousNetIncome)}</td>
-                  </tr>
-                </>
-              ) : (
-                <>
-                  <tr className="border-t">
-                    <td className="p-3">Revenue</td>
-                    <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousTotalRevenue)}</td>
-                  </tr>
-                  <tr className="border-t">
-                    <td className="p-3">Cost of goods sold</td>
-                    <td className="p-3 text-right">{fmtUgx(totalCogs)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousTotalCogs)}</td>
-                  </tr>
-                  <tr className="border-t font-medium bg-slate-50">
-                    <td className="p-3">Gross profit</td>
-                    <td className="p-3 text-right">{fmtUgx(grossProfit)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousGrossProfit)}</td>
-                  </tr>
-                  <tr className="border-t">
-                    <td className="p-3">Operating expenses</td>
-                    <td className="p-3 text-right">{fmtUgx(totalOpex)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousTotalOpex)}</td>
-                  </tr>
-                  <tr className="border-t font-medium bg-slate-50">
-                    <td className="p-3">Net income</td>
-                    <td className="p-3 text-right">{fmtUgx(netIncome)}</td>
-                    <td className="p-3 text-right">{fmtUgx(previousNetIncome)}</td>
-                  </tr>
-                </>
-              )}
-            </tbody>
-          </table>
         </div>
       )}
       {!initialLoading && !fetchError && (

@@ -12,6 +12,7 @@ import {
   type RoomChargeGlOverrides,
 } from "../lib/journal";
 import { resolveJournalAccountSettings } from "../lib/journalAccountSettings";
+import { normalizeGlAccountRows } from "../lib/glAccountNormalize";
 import {
   insertPaymentWithMethodCompat,
   normalizePaymentMethod,
@@ -306,11 +307,18 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
     void (async () => {
       const { data, error } = await supabase
         .from("gl_accounts")
-        .select("id, account_code, account_name, account_type")
-        .eq("is_active", true)
+        .select("*")
         .order("account_code");
       if (cancelled || error) return;
-      setGlAccounts((data || []) as PosGlAccountRow[]);
+      const normalized = normalizeGlAccountRows((data || []) as unknown[])
+        .filter((row) => row.is_active)
+        .map((row) => ({
+          id: row.id,
+          account_code: row.account_code,
+          account_name: row.account_name,
+          account_type: row.account_type,
+        }));
+      setGlAccounts(normalized as PosGlAccountRow[]);
     })();
     return () => {
       cancelled = true;
@@ -1425,7 +1433,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
       const cartDescription = cart
         .map((i) => `${i.quantity}× ${i.product.name}${i.note ? ` (${i.note})` : ""}${i.menuType && i.menuType !== "all" ? ` [${i.menuType}]` : ""}`)
         .join(", ") + (promoEnabled && promoCode.trim() ? ` [PROMO:${promoCode.trim().toUpperCase()}]` : "");
-      const entryDate = businessTodayISO();
+      const entryDate = queueDate || businessTodayISO();
 
       if (action === "bill_to_room" && selectedStay) {
         const { data: billingRow } = await supabase
@@ -1436,6 +1444,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
             description: cartDescription,
             amount: payableTotal,
             charge_type: "food",
+            charged_at: `${entryDate}T12:00:00`,
             created_by: staffRow?.id || null,
           })
           .select("id, charged_at")
@@ -1464,6 +1473,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
             payment_source: "pos_hotel",
             amount: payableTotal,
             payment_status: action === "credit_sale" ? "pending" : "completed",
+            paid_at: `${entryDate}T12:00:00`,
             transaction_id: orderData.id,
             processed_by: staffRow?.id ?? null,
           },

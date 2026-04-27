@@ -18,6 +18,7 @@ import {
 } from "../../lib/fixedAssetCategoryGlSettings";
 import { GlAccountPicker, type GlAccountOption } from "../common/GlAccountPicker";
 import { PageNotes } from "../common/PageNotes";
+import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 
 type GLAccount = { id: string; account_code: string; account_name: string; account_type: string };
 
@@ -122,14 +123,20 @@ export function AdminJournalAccountsPage() {
     setAccountsError(null);
     const { data, error } = await supabase
       .from("gl_accounts")
-      .select("id, account_code, account_name, account_type")
+      .select("*")
       .order("account_code");
     if (error) {
       console.error("gl_accounts load error:", error);
       setAccountsError(error.message);
       setAccounts([]);
     } else {
-      setAccounts((data || []) as GLAccount[]);
+      const normalized = normalizeGlAccountRows((data || []) as unknown[]).map((row) => ({
+        id: row.id,
+        account_code: row.account_code,
+        account_name: row.account_name,
+        account_type: row.account_type,
+      }));
+      setAccounts(normalized as GLAccount[]);
     }
     if (orgId) {
       const fromDb = await fetchJournalGlSettings(orgId);

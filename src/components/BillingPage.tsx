@@ -1,15 +1,18 @@
 import { useEffect, useMemo, useState } from "react";
-import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon } from "lucide-react";
+import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { createJournalForRoomCharge } from "../lib/journal";
+import { businessTodayISO } from "../lib/timezone";
 import {
   type ActiveStayOption,
   type BillingWithCustomer,
   type BillingRangePreset,
+  BILLING_RANGE_STORAGE_KEY,
   billingRangeToDates,
   guestDisplayName,
+  parseBillingRangePreset,
 } from "../lib/billingShared";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
@@ -44,9 +47,19 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   const [chargeType, setChargeType] = useState("room");
   const [amount, setAmount] = useState("");
   const [chargeStayId, setChargeStayId] = useState<string>("");
+  const [chargeDate, setChargeDate] = useState<string>(() => businessTodayISO());
+  const [editBilling, setEditBilling] = useState<BillingWithCustomer | null>(null);
+  const [editDescription, setEditDescription] = useState("");
+  const [editChargeType, setEditChargeType] = useState("room");
+  const [editAmount, setEditAmount] = useState("");
+  const [editChargeDate, setEditChargeDate] = useState<string>(() => businessTodayISO());
+  const [savingEdit, setSavingEdit] = useState(false);
 
   const [billingSort, setBillingSort] = useState<{ key: BillingSortKey; dir: "asc" | "desc" } | null>(null);
-  const [billingRange, setBillingRange] = useState<BillingRangePreset>("all");
+  const [billingRange, setBillingRange] = useState<BillingRangePreset>(() => {
+    if (typeof window === "undefined") return "all";
+    return parseBillingRangePreset(window.localStorage.getItem(BILLING_RANGE_STORAGE_KEY));
+  });
   const [nightAuditBusy, setNightAuditBusy] = useState(false);
   const [nightAuditOverrideDate, setNightAuditOverrideDate] = useState("");
   const [nightAuditBanner, setNightAuditBanner] = useState<string | null>(null);
@@ -54,6 +67,11 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
     () => billingRangeToDates(billingRange),
     [billingRange]
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(BILLING_RANGE_STORAGE_KEY, billingRange);
+  }, [billingRange]);
 
   const filteredBillings = useMemo(() => {
     if (!billingDateFrom && !billingDateTo) return billings;
@@ -211,6 +229,8 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
         charge_type: chargeType,
         amount: Number(amount),
         stay_id: chargeStayId,
+        charged_at: `${chargeDate || businessTodayISO()}T12:00:00`,
+        stay_night_date: chargeType === "room" ? chargeDate || businessTodayISO() : null,
       };
 
       const { data: inserted, error } = await supabase.from("billing").insert(payload).select("id, charged_at").single();
@@ -235,17 +255,84 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
       setChargeType("room");
       setAmount("");
       setChargeStayId("");
+      setChargeDate(businessTodayISO());
       setShowAddCharge(false);
       fetchData();
     } catch (error) {
       console.error("Error adding charge:", error);
-      alert("Failed to add charge: " + (error instanceof Error ? error.message : String(error)));
+      alert(friendlyErrorMessage(error, "Failed to add charge"));
     } finally {
       setSavingCharge(false);
     }
   };
 
   const smartRoomChargesOn = user?.hotel_enable_smart_room_charges !== false;
+  const role = (user?.role || "").toLowerCase();
+  const canEditBillingByRole = superAdmin || ["admin", "manager", "accountant", "supervisor"].includes(role);
+  const canEditBilling = !readOnly && canEditBillingByRole;
+  const permissionDeniedMessage = "You are not authorized to perform this action.";
+
+  const friendlyErrorMessage = (error: unknown, fallback: string) => {
+    const msg = error instanceof Error ? error.message : String(error ?? "");
+    const lower = msg.toLowerCase();
+    if (
+      lower.includes("row-level security") ||
+      lower.includes("permission denied") ||
+      lower.includes("not authorized")
+    ) {
+      return permissionDeniedMessage;
+    }
+    return `${fallback}: ${msg || "Unknown error"}`;
+  };
+
+  const openEditBilling = (row: BillingWithCustomer) => {
+    setEditBilling(row);
+    setEditDescription(row.description || "");
+    setEditChargeType(row.charge_type || "room");
+    setEditAmount(String(Number(row.amount ?? 0)));
+    const isoDate = row.charged_at ? new Date(row.charged_at).toISOString().slice(0, 10) : businessTodayISO();
+    setEditChargeDate(isoDate);
+  };
+
+  const closeEditBilling = () => {
+    if (savingEdit) return;
+    setEditBilling(null);
+    setEditDescription("");
+    setEditChargeType("room");
+    setEditAmount("");
+    setEditChargeDate(businessTodayISO());
+  };
+
+  const handleSaveEditBilling = async () => {
+    if (!editBilling || savingEdit || readOnly) return;
+    if (!canEditBillingByRole) {
+      alert("You are not authorized to edit billing charges.");
+      return;
+    }
+    if (!editDescription.trim() || !editAmount.trim()) {
+      alert("Please fill description and amount.");
+      return;
+    }
+    setSavingEdit(true);
+    try {
+      const payload = {
+        description: editDescription.trim(),
+        charge_type: editChargeType,
+        amount: Number(editAmount),
+        charged_at: `${editChargeDate || businessTodayISO()}T12:00:00`,
+        stay_night_date: editChargeType === "room" ? editChargeDate || businessTodayISO() : null,
+      };
+      const { error } = await supabase.from("billing").update(payload).eq("id", editBilling.id);
+      if (error) throw error;
+      await fetchData();
+      closeEditBilling();
+    } catch (error) {
+      console.error("Error editing charge:", error);
+      alert(friendlyErrorMessage(error, "Failed to edit charge"));
+    } finally {
+      setSavingEdit(false);
+    }
+  };
 
   const runNightAudit = async () => {
     if (readOnly || nightAuditBusy) return;
@@ -399,6 +486,12 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
           </button>
         )}
       </div>
+      {!readOnly && !canEditBillingByRole && (
+        <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          Billing edit is read-only for your role ({role || "staff"}). Authorized roles include Super User, Admin,
+          Manager, Accountant, and Supervisor.
+        </div>
+      )}
 
       <div className="bg-white p-6 rounded-xl border mb-4 max-w-md">
         <div className="flex items-center gap-2 mb-2">
@@ -446,6 +539,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
               {billTh("stay_night_date", "Folio night")}
               {billTh("auto_charge_source", "Source")}
               {billTh("charged_at", "Date")}
+              <th className="p-3 text-left font-semibold text-slate-700">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -465,6 +559,18 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
                 <td className="p-3 text-sm">{b.stay_night_date || "—"}</td>
                 <td className="p-3 text-sm capitalize">{b.auto_charge_source ?? "manual"}</td>
                 <td className="p-3">{new Date(b.charged_at).toLocaleDateString()}</td>
+                <td className="p-3">
+                  <button
+                    type="button"
+                    onClick={() => openEditBilling(b)}
+                    disabled={!canEditBilling}
+                    className="inline-flex items-center gap-1.5 rounded border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={canEditBilling ? "Edit charge" : "Not authorized to edit"}
+                  >
+                    <Pencil className="h-3.5 w-3.5" />
+                    Edit
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
@@ -524,12 +630,80 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
                 onChange={(e) => setAmount(e.target.value)}
               />
 
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Charge date</label>
+                <input
+                  type="date"
+                  className="w-full border p-2 rounded"
+                  value={chargeDate}
+                  onChange={(e) => setChargeDate(e.target.value)}
+                />
+              </div>
+
               <button
                 onClick={handleAddCharge}
                 disabled={readOnly || savingCharge}
                 className="bg-brand-700 text-white w-full py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {savingCharge ? "Saving..." : "Save Charge"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editBilling && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-10">
+          <div className="bg-white rounded-xl p-6 w-96">
+            <div className="flex justify-between mb-4">
+              <h2 className="text-lg font-semibold">Edit Charge</h2>
+              <X className={`cursor-pointer ${savingEdit ? "opacity-40 pointer-events-none" : ""}`} onClick={closeEditBilling} />
+            </div>
+
+            <div className="space-y-3">
+              <input
+                type="text"
+                placeholder="Description"
+                className="w-full border p-2 rounded"
+                value={editDescription}
+                onChange={(e) => setEditDescription(e.target.value)}
+              />
+
+              <select
+                className="w-full border p-2 rounded"
+                value={editChargeType}
+                onChange={(e) => setEditChargeType(e.target.value)}
+              >
+                <option value="room">Room</option>
+                <option value="food">Food</option>
+                <option value="service">Service</option>
+                <option value="other">Other</option>
+              </select>
+
+              <input
+                type="number"
+                placeholder="Amount"
+                className="w-full border p-2 rounded"
+                value={editAmount}
+                onChange={(e) => setEditAmount(e.target.value)}
+              />
+
+              <div>
+                <label className="block text-xs text-slate-500 mb-1">Charge date</label>
+                <input
+                  type="date"
+                  className="w-full border p-2 rounded"
+                  value={editChargeDate}
+                  onChange={(e) => setEditChargeDate(e.target.value)}
+                />
+              </div>
+
+              <button
+                onClick={handleSaveEditBilling}
+                disabled={readOnly || savingEdit}
+                className="bg-brand-700 text-white w-full py-2 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {savingEdit ? "Saving..." : "Save Changes"}
               </button>
             </div>
           </div>

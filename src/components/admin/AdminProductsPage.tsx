@@ -18,6 +18,7 @@ interface Product {
   sales_price: number;
   cost_price?: number;
   department_id: string | null;
+  barcode?: string | null;
   active?: boolean;
   departments?: { name: string } | null;
 }
@@ -47,6 +48,7 @@ export function AdminProductsPage() {
   const [productSalesPrice, setProductSalesPrice] = useState("");
   const [productCostPrice, setProductCostPrice] = useState("");
   const [productDeptId, setProductDeptId] = useState("");
+  const [productBarcode, setProductBarcode] = useState("");
 
   useEffect(() => {
     fetchData();
@@ -57,7 +59,10 @@ export function AdminProductsPage() {
     const [deptRes, prodRes] = await Promise.all([
       filterByOrganizationId(supabase.from("departments").select("id, name, pos_catalog_mode").order("name"), orgId, superAdmin),
       filterByOrganizationId(
-        supabase.from("products").select("id, name, sales_price, cost_price, department_id, active").order("name"),
+        supabase
+          .from("products")
+          .select("id, name, sales_price, cost_price, department_id, barcode, active")
+          .order("name"),
         orgId,
         superAdmin
       ),
@@ -93,16 +98,21 @@ export function AdminProductsPage() {
     if (editingDept) {
       const { error } = await supabase
         .from("departments")
-        .update({ name: deptName.trim() })
+        .update({ name: deptName.trim(), pos_catalog_mode: deptPosCatalog })
         .eq("id", editingDept.id);
       if (error) {
         alert(error.message);
         return;
       }
     } else {
+      const payload: { name: string; pos_catalog_mode: PosCatalogMode; organization_id?: string } = {
+        name: deptName.trim(),
+        pos_catalog_mode: deptPosCatalog,
+      };
+      if (orgId) payload.organization_id = orgId;
       const { error } = await supabase
         .from("departments")
-        .insert({ name: deptName.trim() });
+        .insert(payload);
       if (error) {
         alert(error.message);
         return;
@@ -123,12 +133,43 @@ export function AdminProductsPage() {
     fetchData();
   };
 
+  const backfillDepartmentOrganizationIds = async () => {
+    if (!orgId) {
+      alert("Organization context is missing for this user.");
+      return;
+    }
+    const { data: legacyRows, error: listError } = await supabase
+      .from("departments")
+      .select("id")
+      .is("organization_id", null);
+    if (listError) {
+      alert(listError.message);
+      return;
+    }
+    const ids = (legacyRows || []).map((r) => r.id as string).filter(Boolean);
+    if (ids.length === 0) {
+      alert("No legacy departments found.");
+      return;
+    }
+    const { error: updateError } = await supabase
+      .from("departments")
+      .update({ organization_id: orgId })
+      .in("id", ids);
+    if (updateError) {
+      alert(updateError.message);
+      return;
+    }
+    alert(`Backfilled organization for ${ids.length} department(s).`);
+    fetchData();
+  };
+
   const openProductModal = (p?: Product) => {
     setEditingProduct(p || null);
     setProductName(p?.name ?? "");
     setProductSalesPrice(p ? String(p.sales_price) : "");
     setProductCostPrice(p && p.cost_price != null ? String(p.cost_price) : "");
     setProductDeptId(p?.department_id ?? departments[0]?.id ?? "");
+    setProductBarcode(p?.barcode ?? "");
     setShowProductModal(true);
   };
 
@@ -142,6 +183,7 @@ export function AdminProductsPage() {
       sales_price: Number(productSalesPrice),
       cost_price: productCostPrice ? Number(productCostPrice) : 0,
       department_id: productDeptId || null,
+      barcode: productBarcode.trim() || null,
       active: true,
     };
     if (editingProduct) {
@@ -210,13 +252,23 @@ export function AdminProductsPage() {
         <>
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-semibold text-slate-900">Departments</h2>
-            <button
-              onClick={() => openDeptModal()}
-              className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800"
-            >
-              <Plus className="w-4 h-4" />
-              Add Department
-            </button>
+            <div className="flex items-center gap-2">
+              {orgId ? (
+                <button
+                  onClick={() => void backfillDepartmentOrganizationIds()}
+                  className="px-3 py-2 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-50 text-sm"
+                >
+                  Fix legacy departments
+                </button>
+              ) : null}
+              <button
+                onClick={() => openDeptModal()}
+                className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800"
+              >
+                <Plus className="w-4 h-4" />
+                Add Department
+              </button>
+            </div>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {departments.map((d) => (
@@ -283,6 +335,7 @@ export function AdminProductsPage() {
                   <th className="text-left py-3 px-4 font-medium">Product</th>
                   <th className="text-right py-3 px-4 font-medium">Sales Price</th>
                   <th className="text-right py-3 px-4 font-medium">Cost</th>
+                  <th className="text-left py-3 px-4 font-medium">Barcode</th>
                   <th className="text-left py-3 px-4 font-medium">Department</th>
                   <th className="text-center py-3 px-4 font-medium">Active</th>
                   <th className="text-right py-3 px-4 font-medium">Actions</th>
@@ -298,6 +351,7 @@ export function AdminProductsPage() {
                     <td className="py-3 px-4 text-right">
                       {Number(p.cost_price ?? 0).toFixed(2)}
                     </td>
+                    <td className="py-3 px-4 text-slate-600">{p.barcode || "—"}</td>
                     <td className="py-3 px-4 text-slate-600">
                       {p.department_id
                         ? departments.find((d) => d.id === p.department_id)?.name ?? "—"
@@ -427,6 +481,17 @@ export function AdminProductsPage() {
                     className="border rounded-lg px-3 py-2 w-full"
                   />
                 </div>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">
+                  Barcode
+                </label>
+                <input
+                  value={productBarcode}
+                  onChange={(e) => setProductBarcode(e.target.value)}
+                  className="border rounded-lg px-3 py-2 w-full"
+                  placeholder="Scan or type barcode"
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">

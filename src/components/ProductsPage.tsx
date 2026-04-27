@@ -6,8 +6,13 @@ import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 
 type Product = Database["public"]["Tables"]["products"]["Row"];
-type GLAccount = Database["public"]["Tables"]["gl_accounts"]["Row"];
 type Department = Database["public"]["Tables"]["departments"]["Row"];
+type GlAccountOption = {
+  id: string;
+  account_code: string;
+  account_name: string;
+  is_active: boolean;
+};
 
 interface ProductsPageProps {
   readOnly?: boolean;
@@ -30,7 +35,7 @@ function marginFromPrices(cost: number | null | undefined, sale: number | null |
 export default function ProductsPage({ readOnly = false }: ProductsPageProps = {}) {
   const [products, setProducts] = useState<Product[]>([]);
   const [balanceByProduct, setBalanceByProduct] = useState<Record<string, number>>({});
-  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
+  const [glAccounts, setGlAccounts] = useState<GlAccountOption[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
@@ -63,7 +68,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
   async function loadProductsAndBalances() {
     const [prodRes, movesRes] = await Promise.all([
-      supabase.from("products").select("*").order("name"),
+      supabase.from("products").select("*"),
       supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out"),
     ]);
 
@@ -71,7 +76,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       console.error(prodRes.error);
       return;
     }
-    const list = (prodRes.data || []) as Product[];
+    const list = ((prodRes.data || []) as Product[]).sort((a, b) =>
+      (a.name || "").localeCompare(b.name || "")
+    );
     setProducts(list);
 
     const bal: Record<string, number> = {};
@@ -89,13 +96,37 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   }
 
   async function loadAccounts() {
-    const { data } = await supabase.from("gl_accounts").select("*").order("account_name");
-    if (data) setGlAccounts(data);
+    const { data, error } = await supabase.from("gl_accounts").select("*");
+    if (error) {
+      console.error("Failed to load GL accounts:", error);
+      setGlAccounts([]);
+      return;
+    }
+    if (!data) return;
+    const normalized = (data as Array<Record<string, unknown>>)
+      .map((row) => ({
+        id: String(row.id ?? ""),
+        account_code: String(row.account_code ?? row.code ?? ""),
+        account_name: String(row.account_name ?? row.name ?? ""),
+        is_active:
+          row.is_active === false || row.is_active === 0 || row.is_active === "0"
+            ? false
+            : true,
+      }))
+      .filter((row) => row.id)
+      .sort((a, b) =>
+        `${a.account_code} ${a.account_name}`.localeCompare(`${b.account_code} ${b.account_name}`)
+      );
+    setGlAccounts(normalized);
   }
 
   async function loadDepartments() {
-    const { data } = await supabase.from("departments").select("*").order("name");
-    if (data) setDepartments(data);
+    const { data } = await supabase.from("departments").select("*");
+    if (data) {
+      setDepartments(
+        [...data].sort((a, b) => (a.name || "").localeCompare(b.name || ""))
+      );
+    }
   }
 
   function resetForm() {
@@ -441,7 +472,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   <option value="">Select sales account</option>
                   {glAccounts.map((acc) => (
                     <option key={acc.id} value={acc.id}>
-                      {acc.account_name}
+                      {[acc.account_code, acc.account_name].filter(Boolean).join(" - ") || "Unnamed account"}
                     </option>
                   ))}
                 </select>
@@ -457,7 +488,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   <option value="">Select purchases account</option>
                   {glAccounts.map((acc) => (
                     <option key={acc.id} value={acc.id}>
-                      {acc.account_name}
+                      {[acc.account_code, acc.account_name].filter(Boolean).join(" - ") || "Unnamed account"}
                     </option>
                   ))}
                 </select>
@@ -473,7 +504,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   <option value="">Select stock account</option>
                   {glAccounts.map((acc) => (
                     <option key={acc.id} value={acc.id}>
-                      {acc.account_name}
+                      {[acc.account_code, acc.account_name].filter(Boolean).join(" - ") || "Unnamed account"}
                     </option>
                   ))}
                 </select>

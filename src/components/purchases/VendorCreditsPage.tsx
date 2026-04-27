@@ -120,7 +120,7 @@ export function VendorCreditsPage({ readOnly = false }: VendorCreditsPageProps =
             </PageNotes>
           </div>
         </div>
-        {canAddVendorCredit && (
+        {(canAddVendorCredit || !readOnly) && (
           <button type="button" onClick={() => !readOnly && setShowModal(true)} disabled={readOnly} className="bg-brand-700 hover:bg-brand-800 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg flex items-center gap-2">
             <Plus className="w-5 h-5" /> Add return / credit
           </button>

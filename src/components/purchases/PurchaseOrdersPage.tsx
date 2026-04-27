@@ -7,6 +7,8 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { createJournalForBill } from "../../lib/journal";
 import { businessTodayISO } from "../../lib/timezone";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { desktopApi } from "../../lib/desktopApi";
 
 interface LineItem {
   id?: string;
@@ -42,6 +44,12 @@ interface PurchaseOrdersPageProps {
 export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrdersPageProps = {}) {
   const { user } = useAuth();
   const canApprovePO = canApprove("purchase_orders", user?.role);
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
+  const isLocalDesktopMode =
+    ((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "true" ||
+      (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "1") &&
+    (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase() === "lan";
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
   const [billsByPoId, setBillsByPoId] = useState<Record<string, string>>({}); // purchase_order_id -> bill id
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
@@ -65,21 +73,148 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const fetchData = async () => {
     setLoading(true);
     try {
+      if (isLocalDesktopMode && desktopApi.isAvailable()) {
+        const [ordersRes, vendorsRes, departmentsRes, productsRes, posProductsRes] = await Promise.all([
+          desktopApi.localSelect({
+            table: "purchase_orders",
+            orderBy: { column: "order_date", ascending: false },
+            limit: 500,
+          }),
+          desktopApi.localSelect({
+            table: "vendors",
+            orderBy: { column: "name", ascending: true },
+            limit: 1000,
+          }),
+          desktopApi.localSelect({
+            table: "departments",
+            orderBy: { column: "name", ascending: true },
+            limit: 1000,
+          }),
+          desktopApi.localSelect({
+            table: "products",
+            orderBy: { column: "name", ascending: true },
+            limit: 2000,
+          }),
+          desktopApi.listPosProducts(),
+        ]);
+
+        const localOrders = ((ordersRes.rows || []) as Array<Record<string, unknown>>).map((row) => ({
+          id: String(row.id || ""),
+          vendor_id: (row.vendor_id as string | null) ?? null,
+          department_id: (row.department_id as string | null) ?? null,
+          order_date: (row.order_date as string | null) ?? null,
+          status: (row.status as string | null) ?? "pending",
+          total_amount: Number(row.total_amount ?? 0),
+          approved_at: (row.approved_at as string | null) ?? null,
+          created_at: (row.created_at as string | undefined) || undefined,
+        })) as PurchaseOrder[];
+
+        const localVendors = ((vendorsRes.rows || []) as Array<Record<string, unknown>>)
+          .map((row) => ({
+            id: String(row.id || ""),
+            name: String(row.name || ""),
+          }))
+          .filter((row) => row.id && row.name);
+
+        const localDepartments = ((departmentsRes.rows || []) as Array<Record<string, unknown>>)
+          .map((row) => ({
+            id: String(row.id || ""),
+            name: String(row.name || ""),
+          }))
+          .filter((row) => row.id && row.name);
+
+        const productMap = new Map<string, { id: string; name: string; cost_price?: number }>();
+        ((productsRes.rows || []) as Array<Record<string, unknown>>).forEach((row) => {
+          const id = String(row.id || "");
+          const name = String(row.name || "");
+          if (!id || !name) return;
+          productMap.set(id, {
+            id,
+            name,
+            cost_price: row.cost_price == null ? undefined : Number(row.cost_price),
+          });
+        });
+        (posProductsRes || []).forEach((row) => {
+          const id = String(row.id || "");
+          const name = String(row.name || "");
+          if (!id || !name || productMap.has(id)) return;
+          productMap.set(id, {
+            id,
+            name,
+            cost_price: undefined,
+          });
+        });
+
+        const sortedOrders = localOrders.sort(
+          (a, b) => new Date(b.order_date || b.created_at || 0).getTime() - new Date(a.order_date || a.created_at || 0).getTime()
+        );
+        const sortedVendors = localVendors.sort((a, b) => a.name.localeCompare(b.name));
+        const sortedDepartments = localDepartments.sort((a, b) => a.name.localeCompare(b.name));
+        const sortedProducts = Array.from(productMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+
+        setOrders(sortedOrders);
+        setVendors(sortedVendors);
+        setDepartments(sortedDepartments);
+        setProducts(sortedProducts);
+        setBillsByPoId({});
+        return;
+      }
+
+      const loadReferenceRows = async (table: "vendors" | "departments" | "products", columns: string) => {
+        if (!orgId || superAdmin || !isLocalDesktopMode) {
+          return filterByOrganizationId(supabase.from(table).select(columns), orgId, superAdmin);
+        }
+        const [owned, legacy] = await Promise.all([
+          supabase.from(table).select(columns).eq("organization_id", orgId),
+          supabase.from(table).select(columns).is("organization_id", null),
+        ]);
+        if (owned.error) return owned;
+        if (legacy.error) return legacy;
+        const merged = [...(owned.data || []), ...(legacy.data || [])];
+        const deduped = Array.from(
+          new Map(merged.map((row: { id: string }) => [row.id, row])).values()
+        );
+        return { data: deduped, error: null };
+      };
+
       const [ordRes, venRes, deptRes, prodRes, billsRes] = await Promise.all([
-        supabase
-          .from("purchase_orders")
-          .select("*, vendors(name), departments(name), purchase_order_items(*)")
-          .order("order_date", { ascending: false }),
-        supabase.from("vendors").select("id, name").order("name"),
-        supabase.from("departments").select("id, name").order("name"),
-        supabase.from("products").select("id, name, cost_price").order("name"),
-        supabase.from("bills").select("id, purchase_order_id").not("purchase_order_id", "is", null),
+        filterByOrganizationId(
+          supabase.from("purchase_orders").select("*, vendors(name), departments(name), purchase_order_items(*)"),
+          orgId,
+          superAdmin
+        ),
+        loadReferenceRows("vendors", "id, name, organization_id"),
+        loadReferenceRows("departments", "id, name, organization_id"),
+        loadReferenceRows("products", "id, name, cost_price, organization_id"),
+        filterByOrganizationId(
+          supabase.from("bills").select("id, purchase_order_id").not("purchase_order_id", "is", null),
+          orgId,
+          superAdmin
+        ),
       ]);
       if (ordRes.error) throw ordRes.error;
-      setOrders(ordRes.data || []);
-      setVendors(venRes.data || []);
-      setDepartments(deptRes.data || []);
-      setProducts((prodRes.data || []) as { id: string; name: string; cost_price?: number }[]);
+      if (venRes.error) console.warn("Vendors load warning:", venRes.error.message);
+      if (deptRes.error) console.warn("Departments load warning:", deptRes.error.message);
+      if (prodRes.error) console.warn("Products load warning:", prodRes.error.message);
+      if (billsRes.error) console.warn("Bills load warning:", billsRes.error.message);
+
+      const sortedOrders = ((ordRes.data || []) as PurchaseOrder[]).sort(
+        (a, b) => new Date(b.order_date || b.created_at || 0).getTime() - new Date(a.order_date || a.created_at || 0).getTime()
+      );
+      const sortedVendors = ((venRes.data || []) as Array<{ id: string; name: string }>).sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "")
+      );
+      const sortedDepartments = ((deptRes.data || []) as Array<{ id: string; name: string }>).sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "")
+      );
+      const sortedProducts = ((prodRes.data || []) as { id: string; name: string; cost_price?: number }[]).sort((a, b) =>
+        (a.name || "").localeCompare(b.name || "")
+      );
+
+      setOrders(sortedOrders);
+      setVendors(sortedVendors);
+      setDepartments(sortedDepartments);
+      setProducts(sortedProducts);
       const byPo: Record<string, string> = {};
       (billsRes.data || []).forEach((b: { id: string; purchase_order_id?: string | null }) => {
         if (b.purchase_order_id) byPo[b.purchase_order_id] = b.id;

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { PieChart } from "lucide-react";
 import { supabase } from "@/lib/supabase";
+import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { budgetPeriodRange, budgetVariance } from "@/lib/budgetActuals";
@@ -72,10 +73,10 @@ export function BudgetVarianceReportPage() {
   const loadAccounts = useCallback(async () => {
     const { data } = await supabase
       .from("gl_accounts")
-      .select("id,account_code,account_name,account_type")
-      .eq("is_active", true)
+      .select("*")
       .order("account_code");
-    setAccounts((data as GLPick[]) || []);
+    const normalized = normalizeGlAccountRows((data || []) as unknown[]).filter((row) => row.is_active);
+    setAccounts(normalized as GLPick[]);
   }, []);
 
   const accountTypeById = useMemo(() => new Map(accounts.map((a) => [a.id, a.account_type])), [accounts]);

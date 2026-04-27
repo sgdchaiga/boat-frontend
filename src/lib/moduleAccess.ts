@@ -28,8 +28,10 @@ export type ModuleId =
   | "school_fixed_deposit"
   | "vsla"
   | "payroll"
+  | "budget"
   | "wallet"
-  | "communications";
+  | "communications"
+  | "agent";
 
 type ModuleAudience = "hotel" | "retail" | "both" | "sacco" | "school" | "manufacturing" | "vsla";
 
@@ -67,8 +69,10 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   school_fixed_deposit: "school",
   vsla: "vsla",
   payroll: "both",
+  budget: "both",
   wallet: "both",
   communications: "both",
+  agent: "both",
 };
 
 const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
@@ -97,8 +101,10 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   school_fixed_deposit: true,
   vsla: true,
   payroll: true,
+  budget: true,
   wallet: true,
   communications: false,
+  agent: false,
 };
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
@@ -106,7 +112,7 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
   if (audience === "manufacturing") return businessType === "manufacturing";
   if (audience === "vsla") return businessType === "vsla";
   if (audience === "school") return businessType === "school";
-  if (businessType === "school") return audience === "both" || audience === "school";
+  if (businessType === "school") return audience === "both";
   if (audience === "sacco") return businessType === "sacco";
   if (businessType === "sacco") return audience === "both";
   if (businessType === "mixed" && audience === "hotel") return true;
@@ -125,6 +131,16 @@ export function getModuleAccess(input: {
   enableCommunications?: boolean;
   /** Platform: Wallet module. */
   enableWallet?: boolean;
+  /** Platform: Payroll module toggle. */
+  enablePayroll?: boolean;
+  /** Platform: Budget module toggle. */
+  enableBudget?: boolean;
+  /** Platform: Agent hub toggle. */
+  enableAgent?: boolean;
+  enableReports?: boolean;
+  enableAccounting?: boolean;
+  enableInventory?: boolean;
+  enablePurchases?: boolean;
   /** School org: superuser toggles for BOAT-linked areas (ignored for non-school). */
   schoolEnableReports?: boolean;
   schoolEnableFixedDeposit?: boolean;
@@ -139,6 +155,13 @@ export function getModuleAccess(input: {
     enableFixedAssets,
     enableCommunications,
     enableWallet,
+    enablePayroll,
+    enableBudget,
+    enableAgent,
+    enableReports,
+    enableAccounting,
+    enableInventory,
+    enablePurchases,
     schoolEnableReports,
     schoolEnableFixedDeposit,
     schoolEnableAccounting,
@@ -188,6 +211,38 @@ export function getModuleAccess(input: {
     }
   }
 
+  if (moduleId === "reports" && enableReports !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Reports are not enabled for this organization. Ask a platform admin to turn them on.",
+    };
+  }
+
+  if (moduleId === "accounting" && enableAccounting !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Accounting is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "inventory" && enableInventory !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Inventory is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "purchases" && enablePurchases !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Purchases are not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
   if (moduleId === "fixed_assets" && enableFixedAssets !== true) {
     return {
       visible: false,
@@ -212,6 +267,30 @@ export function getModuleAccess(input: {
     };
   }
 
+  if (moduleId === "payroll" && enablePayroll !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Payroll is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "budget" && enableBudget !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Budget is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "agent" && enableAgent !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Agent Hub is not enabled for this organization.",
+    };
+  }
+
   if (!MODULE_REQUIRES_SUBSCRIPTION[moduleId]) {
     return { visible: true, readOnly: false };
   }
@@ -231,6 +310,7 @@ const SCHOOL_PAGE_VALUES = new Set(Object.values(SCHOOL_PAGE) as string[]);
 
 export function pageToModuleId(page: string): ModuleId | null {
   if (page === "communications") return "communications";
+  if (page === "agent_hub") return "agent";
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
   if (SCHOOL_PAGE_VALUES.has(page)) return "school";
   if (["dashboard"].includes(page)) return "dashboard";
@@ -241,12 +321,12 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (["rooms", "reservations", "checkin", "stays", "housekeeping", "hotel_rooms_setup"].includes(page))
     return "frontdesk";
   if (["POS", "hotel_pos_waiter", "hotel_pos_supervisor"].includes(page)) return "hotel_pos";
-  if (page === "retail_pos") return "retail_pos";
+  if (["retail_pos", "retail_pos_orders"].includes(page)) return "retail_pos";
   if (["kitchen_display", "Kitchen Orders", "Bar Orders", "kitchen_menu", "hotel_pos_kitchen_bar"].includes(page)) return "kitchen_ops";
   if (page === "billing") return "billing";
   if (page === "payments" || page === "cash_receipts") return "payments_received";
   if (["transactions"].includes(page)) return "transactions";
-  if (["Products", "inventory_stock_adjustments", "inventory_store_requisitions", "inventory_stock_balances"].includes(page)) return "inventory";
+  if (["Products", "inventory_barcodes", "inventory_stock_adjustments", "inventory_store_requisitions", "inventory_stock_balances"].includes(page)) return "inventory";
   if ([
     "manufacturing",
     "manufacturing_bom",
@@ -259,10 +339,13 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports",
     "reports_daily_sales",
     "reports_daily_summary",
+    "reports_retail_sales_insights",
     "reports_financial_revenue_by_type",
     "reports_financial_payments_by_method",
     "reports_financial_payments_by_charge_type",
     "reports_daily_purchases_summary",
+    "reports_purchases_by_item",
+    "reports_sales_by_item",
     "reports_stock_movement",
     "reports_school_fee_collections",
     "reports_school_outstanding",
@@ -283,9 +366,8 @@ export function pageToModuleId(page: string): ModuleId | null {
     "accounting_income",
     "accounting_balance",
     "accounting_cashflow",
-    "accounting_budgeting",
-    "reports_budget_variance",
   ].includes(page)) return "accounting";
+  if (["accounting_budgeting", "reports_budget_variance"].includes(page)) return "budget";
   if (page === "fixed_assets") return "fixed_assets";
   if (page.startsWith("payroll_")) return "payroll";
   if (page === "wallet") return "wallet";

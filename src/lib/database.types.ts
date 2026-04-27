@@ -48,6 +48,8 @@ export interface Database {
           role_key: string
           display_name: string
           sort_order: number
+          can_edit_pos_orders: boolean
+          can_edit_cash_receipts: boolean
           created_at: string
         }
         Insert: {
@@ -56,6 +58,8 @@ export interface Database {
           role_key: string
           display_name: string
           sort_order?: number
+          can_edit_pos_orders?: boolean
+          can_edit_cash_receipts?: boolean
           created_at?: string
         }
         Update: {
@@ -64,7 +68,67 @@ export interface Database {
           role_key?: string
           display_name?: string
           sort_order?: number
+          can_edit_pos_orders?: boolean
+          can_edit_cash_receipts?: boolean
           created_at?: string
+        }
+      }
+      organization_permissions: {
+        Row: {
+          id: string
+          organization_id: string
+          role_key: string
+          permission_key: string
+          allowed: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          role_key: string
+          permission_key: string
+          allowed?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          role_key?: string
+          permission_key?: string
+          allowed?: boolean
+          created_at?: string
+          updated_at?: string
+        }
+      }
+      staff_permission_overrides: {
+        Row: {
+          id: string
+          organization_id: string
+          staff_id: string
+          permission_key: string
+          allowed: boolean
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          staff_id: string
+          permission_key: string
+          allowed: boolean
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          staff_id?: string
+          permission_key?: string
+          allowed?: boolean
+          created_at?: string
+          updated_at?: string
         }
       }
       room_types: {

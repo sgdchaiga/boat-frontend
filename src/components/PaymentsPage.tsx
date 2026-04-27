@@ -41,6 +41,14 @@ type OutstandingInvoice = {
   balance: number;
   issue_date: string;
   customer_name: string;
+  matchSource: "linked" | "name";
+};
+
+type HotelFolioBalance = {
+  stayId: string;
+  roomNumber: string;
+  checkedOut: boolean;
+  balance: number;
 };
 
 function buildDebtorTransactionNumber(paymentDate: string): string {
@@ -155,6 +163,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
   const [allocationInputs, setAllocationInputs] = useState<Record<string, string>>({});
   const [outstandingInvoices, setOutstandingInvoices] = useState<OutstandingInvoice[]>([]);
   const [loadingInvoices, setLoadingInvoices] = useState(false);
+  const [folioBalances, setFolioBalances] = useState<HotelFolioBalance[]>([]);
+  const [loadingFolios, setLoadingFolios] = useState(false);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethodCode>("cash");
   const [transactionId, setTransactionId] = useState("");
   /** Calendar date for `paid_at` (journal + list). Defaults to today when opening the modal. */
@@ -200,7 +210,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
   }, [hotelCustomers, retailCustomers]);
 
   const loadOutstandingInvoices = useCallback(
-    async (kind: "hc" | "rc", customerId: string) => {
+    async (kind: "hc" | "rc", customerId: string, customerNameHint?: string) => {
       if (!customerId) {
         setOutstandingInvoices([]);
         return;
@@ -214,9 +224,6 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
           orgId ?? undefined,
           superAdmin
         );
-        if (kind === "hc") invQ = invQ.eq("property_customer_id", customerId);
-        else invQ = invQ.eq("customer_id", customerId);
-
         const invRes = await invQ.order("issue_date", { ascending: false });
 
         const payQ = filterByOrganizationId(
@@ -231,6 +238,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
 
         const payRows = (payRes.data || []) as Array<{ invoice_allocations?: unknown; payment_status?: string }>;
 
+        const hint = (customerNameHint || "").trim().toLowerCase();
         const out: OutstandingInvoice[] = [];
         for (const row of invRes.data || []) {
           const inv = row as {
@@ -240,7 +248,17 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
             issue_date: string;
             customer_name: string;
             status: string;
+            customer_id: string | null;
+            property_customer_id: string | null;
           };
+          const linkedMatch =
+            kind === "hc" ? inv.property_customer_id === customerId : inv.customer_id === customerId;
+          const unlinkedNameMatch =
+            !inv.property_customer_id &&
+            !inv.customer_id &&
+            hint.length > 0 &&
+            String(inv.customer_name || "").trim().toLowerCase() === hint;
+          if (!linkedMatch && !unlinkedNameMatch) continue;
           if (inv.status === "void" || inv.status === "paid") continue;
           const paid = totalAllocatedToInvoice(payRows, inv.id);
           const total = Number(inv.total) || 0;
@@ -253,6 +271,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
             balance,
             issue_date: inv.issue_date,
             customer_name: inv.customer_name,
+            matchSource: linkedMatch ? "linked" : "name",
           });
         }
         setOutstandingInvoices(out);
@@ -266,13 +285,112 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
     [orgId, superAdmin]
   );
 
+  const customerNameHint = useMemo(() => {
+    if (!customerParsed) return "";
+    if (customerParsed.kind === "hc") {
+      const c = hotelCustomers.find((x) => x.id === customerParsed.id);
+      return c ? `${c.first_name} ${c.last_name}`.trim() : "";
+    }
+    const c = retailCustomers.find((x) => x.id === customerParsed.id);
+    return c?.name?.trim() || "";
+  }, [customerParsed, hotelCustomers, retailCustomers]);
+
   useEffect(() => {
     if (!showRecordPayment || !customerParsed) {
       if (!showRecordPayment) setOutstandingInvoices([]);
       return;
     }
-    void loadOutstandingInvoices(customerParsed.kind, customerParsed.id);
-  }, [showRecordPayment, customerParsed, loadOutstandingInvoices]);
+    void loadOutstandingInvoices(customerParsed.kind, customerParsed.id, customerNameHint);
+  }, [showRecordPayment, customerParsed, customerNameHint, loadOutstandingInvoices]);
+
+  const loadHotelFolioBalances = useCallback(
+    async (propertyCustomerId: string) => {
+      if (!propertyCustomerId) {
+        setFolioBalances([]);
+        return;
+      }
+      setLoadingFolios(true);
+      try {
+        const staysRes = await filterByOrganizationId(
+          supabase
+            .from("stays")
+            .select("id, actual_check_out, rooms(room_number)")
+            .eq("property_customer_id", propertyCustomerId)
+            .order("actual_check_in", { ascending: false })
+            .limit(120),
+          orgId ?? undefined,
+          superAdmin
+        );
+        if (staysRes.error) throw staysRes.error;
+        const stays = (staysRes.data || []) as Array<{
+          id: string;
+          actual_check_out: string | null;
+          rooms: { room_number: string } | null;
+        }>;
+        if (stays.length === 0) {
+          setFolioBalances([]);
+          return;
+        }
+        const stayIds = stays.map((s) => s.id);
+        const [billingRes, payRes] = await Promise.all([
+          filterByOrganizationId(
+            supabase.from("billing").select("stay_id, amount").in("stay_id", stayIds),
+            orgId ?? undefined,
+            superAdmin
+          ),
+          filterByOrganizationId(
+            supabase.from("payments").select("stay_id, amount").in("stay_id", stayIds).eq("payment_status", "completed"),
+            orgId ?? undefined,
+            superAdmin
+          ),
+        ]);
+        if (billingRes.error) throw billingRes.error;
+        if (payRes.error) throw payRes.error;
+
+        const chargesByStay = new Map<string, number>();
+        for (const b of billingRes.data || []) {
+          const stayId = String(b.stay_id || "");
+          if (!stayId) continue;
+          chargesByStay.set(stayId, (chargesByStay.get(stayId) || 0) + Number(b.amount || 0));
+        }
+        const paidByStay = new Map<string, number>();
+        for (const p of payRes.data || []) {
+          const stayId = String(p.stay_id || "");
+          if (!stayId) continue;
+          paidByStay.set(stayId, (paidByStay.get(stayId) || 0) + Number(p.amount || 0));
+        }
+
+        const rows: HotelFolioBalance[] = [];
+        for (const s of stays) {
+          const charges = Number(chargesByStay.get(s.id) || 0);
+          const paid = Number(paidByStay.get(s.id) || 0);
+          const balance = Math.max(0, Math.round((charges - paid) * 100) / 100);
+          if (balance <= 0.001) continue;
+          rows.push({
+            stayId: s.id,
+            roomNumber: s.rooms?.room_number || "—",
+            checkedOut: !!s.actual_check_out,
+            balance,
+          });
+        }
+        setFolioBalances(rows);
+      } catch (e) {
+        console.error("Hotel folio balances:", e);
+        setFolioBalances([]);
+      } finally {
+        setLoadingFolios(false);
+      }
+    },
+    [orgId, superAdmin]
+  );
+
+  useEffect(() => {
+    if (!showRecordPayment || customerParsed?.kind !== "hc") {
+      if (!showRecordPayment) setFolioBalances([]);
+      return;
+    }
+    void loadHotelFolioBalances(customerParsed.id);
+  }, [showRecordPayment, customerParsed, loadHotelFolioBalances]);
 
   useEffect(() => {
     if (!detailPayment) {
@@ -428,9 +546,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
           supabase
             .from("stays")
             .select(
-              "id, room_id, property_customer_id, actual_check_in, rooms(room_number), hotel_customers(first_name, last_name)"
+              "id, room_id, property_customer_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)"
             )
-            .is("actual_check_out", null)
             .order("actual_check_in", { ascending: false }),
           orgId ?? undefined,
           superAdmin
@@ -585,7 +702,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
       if (!ok) return;
     }
 
-    if (parsed.kind === "hc" && paymentStayId) {
+        if (parsed.kind === "hc" && paymentStayId) {
       const stay = activeStays.find((s) => s.id === paymentStayId);
       if (stay && stay.property_customer_id && stay.property_customer_id !== parsed.id) {
         alert("Selected stay does not belong to this customer.");
@@ -977,14 +1094,17 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                     No customers found for this organization. Add them under <strong>Customers</strong> or <strong>Retail customers</strong> first.
                   </p>
                 ) : null}
+                <p className="text-xs text-slate-500 mt-2">
+                  `(Hotel)` / `(Retail)` are display tags only; matching uses the selected customer record.
+                </p>
               </div>
 
               {customerParsed?.kind === "hc" ? (
                 <div>
-                  <label className="block text-sm font-medium text-slate-700 mb-1">Active stay (optional)</label>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Stay (optional)</label>
                   {staysForCustomer.length === 0 ? (
                     <p className="text-sm text-slate-600 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50">
-                      No active stay for this customer. You can still record the payment against the customer and invoices.
+                      No stay found for this customer. You can still record the payment against the customer and invoices.
                     </p>
                   ) : (
                     <SearchableCombobox
@@ -1001,6 +1121,56 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                 </div>
               ) : customerParsed?.kind === "rc" ? (
                 <p className="text-xs text-slate-500">Retail customers are not linked to hotel stays.</p>
+              ) : null}
+
+              {customerParsed?.kind === "hc" ? (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Open hotel folio balances</label>
+                  {loadingFolios ? (
+                    <p className="text-sm text-slate-500 py-2">Loading folio balances…</p>
+                  ) : folioBalances.length === 0 ? (
+                    <p className="text-xs text-slate-500 border border-slate-200 rounded-lg px-3 py-2 bg-slate-50">
+                      No outstanding room/folio balances found for this customer.
+                    </p>
+                  ) : (
+                    <div className="rounded-lg border border-slate-200 overflow-x-auto">
+                      <table className="min-w-full text-sm">
+                        <thead className="bg-slate-50">
+                          <tr>
+                            <th className="text-left p-2 font-medium">Stay</th>
+                            <th className="text-left p-2 font-medium">Room</th>
+                            <th className="text-right p-2 font-medium">Balance</th>
+                            <th className="text-right p-2 font-medium">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {folioBalances.map((f) => (
+                            <tr key={f.stayId} className="border-t border-slate-100">
+                              <td className="p-2 font-mono text-xs">{f.stayId.slice(0, 8)}</td>
+                              <td className="p-2">
+                                {f.roomNumber}
+                                <p className="text-[11px] text-slate-500">{f.checkedOut ? "Checked out" : "Active"}</p>
+                              </td>
+                              <td className="p-2 text-right tabular-nums">{f.balance.toFixed(2)}</td>
+                              <td className="p-2 text-right">
+                                <button
+                                  type="button"
+                                  className="text-xs px-2 py-1 rounded border border-slate-300 hover:bg-slate-50"
+                                  onClick={() => {
+                                    setPaymentStayId(f.stayId);
+                                    setPaymentAmount(f.balance.toFixed(2));
+                                  }}
+                                >
+                                  Use balance
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
               ) : null}
 
               <div>
@@ -1066,6 +1236,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                         <tr>
                           <th className="text-left p-2 font-medium">Invoice #</th>
                           <th className="text-left p-2 font-medium">Issued</th>
+                          <th className="text-left p-2 font-medium">Match</th>
                           <th className="text-right p-2 font-medium">Balance</th>
                           <th className="text-right p-2 font-medium w-32">Apply</th>
                         </tr>
@@ -1076,6 +1247,17 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                             <td className="p-2 font-mono text-xs">{inv.invoice_number}</td>
                             <td className="p-2 whitespace-nowrap">
                               {inv.issue_date ? new Date(inv.issue_date).toLocaleDateString() : "—"}
+                            </td>
+                            <td className="p-2">
+                              {inv.matchSource === "name" ? (
+                                <span className="inline-flex items-center rounded-full bg-amber-100 text-amber-900 px-2 py-0.5 text-xs">
+                                  Matched by name
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full bg-emerald-100 text-emerald-900 px-2 py-0.5 text-xs">
+                                  Linked
+                                </span>
+                              )}
                             </td>
                             <td className="p-2 text-right tabular-nums">{inv.balance.toFixed(2)}</td>
                             <td className="p-2 text-right">
@@ -1096,6 +1278,11 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                     </table>
                   </div>
                 )}
+                {customerParsed && outstandingInvoices.some((i) => i.matchSource === "name") ? (
+                  <p className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-2">
+                    Some invoices are included by exact customer name match because they are not linked to a customer ID.
+                  </p>
+                ) : null}
                 {customerParsed && outstandingInvoices.length > 0 && (
                   <p className="text-xs text-slate-600 mt-2">
                     Allocated to invoices: <span className="font-semibold tabular-nums">{sumAllocated.toFixed(2)}</span>
