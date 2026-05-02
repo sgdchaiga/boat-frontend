@@ -32,6 +32,8 @@ export function AdminHotelPosControlsPage() {
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<VoidLogRow[]>([]);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [advancedModeEnabled, setAdvancedModeEnabled] = useState(true);
+  const [savingAdvancedMode, setSavingAdvancedMode] = useState(false);
 
   const pendingRows = useMemo(() => rows.filter((r) => r.status === "pending"), [rows]);
 
@@ -76,11 +78,32 @@ export function AdminHotelPosControlsPage() {
     }
   };
 
+  const loadAdvancedMode = async () => {
+    if (!orgId) return;
+    try {
+      const { data, error } = await supabase
+        .from("organization_permissions")
+        .select("id,allowed")
+        .eq("organization_id", orgId)
+        .eq("role_key", "__org__")
+        .eq("permission_key", "retail_pos_advanced_mode")
+        .maybeSingle();
+      if (error) throw error;
+      if (typeof data?.allowed === "boolean") {
+        setAdvancedModeEnabled(!!data.allowed);
+      } else {
+        setAdvancedModeEnabled(true);
+      }
+    } catch {
+      setAdvancedModeEnabled(true);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       setLoading(true);
-      await Promise.all([loadPinStatus(), loadVoidLogs()]);
+      await Promise.all([loadPinStatus(), loadVoidLogs(), loadAdvancedMode()]);
       if (!cancelled) setLoading(false);
     })();
     return () => {
@@ -91,8 +114,49 @@ export function AdminHotelPosControlsPage() {
 
   const refresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadPinStatus(), loadVoidLogs()]);
+    await Promise.all([loadPinStatus(), loadVoidLogs(), loadAdvancedMode()]);
     setRefreshing(false);
+  };
+
+  const toggleAdvancedMode = async () => {
+    if (!orgId) return;
+    if (!canManage && !superAdmin) {
+      alert("Only supervisor/manager can change this setting.");
+      return;
+    }
+    setSavingAdvancedMode(true);
+    const next = !advancedModeEnabled;
+    try {
+      const { data, error } = await supabase
+        .from("organization_permissions")
+        .select("id")
+        .eq("organization_id", orgId)
+        .eq("role_key", "__org__")
+        .eq("permission_key", "retail_pos_advanced_mode")
+        .maybeSingle();
+      if (error) throw error;
+      if (data?.id) {
+        const { error: updErr } = await supabase
+          .from("organization_permissions")
+          .update({ allowed: next, updated_at: new Date().toISOString() })
+          .eq("id", data.id);
+        if (updErr) throw updErr;
+      } else {
+        const { error: insErr } = await supabase.from("organization_permissions").insert({
+          organization_id: orgId,
+          role_key: "__org__",
+          permission_key: "retail_pos_advanced_mode",
+          allowed: next,
+        });
+        if (insErr) throw insErr;
+      }
+      setAdvancedModeEnabled(next);
+      alert(`Retail POS advanced mode ${next ? "enabled" : "disabled"}.`);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to update advanced mode setting.");
+    } finally {
+      setSavingAdvancedMode(false);
+    }
   };
 
   const setManagerPin = async () => {
@@ -159,6 +223,27 @@ export function AdminHotelPosControlsPage() {
 
   return (
     <div className="space-y-6">
+      <div className="bg-white border border-slate-200 rounded-xl p-6">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Retail POS Advanced Mode</h2>
+            <p className="text-sm text-slate-600">Enable or disable advanced payment features in Retail POS.</p>
+          </div>
+          <button
+            type="button"
+            onClick={toggleAdvancedMode}
+            disabled={savingAdvancedMode || (!canManage && !superAdmin)}
+            className={`px-3 py-2 rounded-lg text-sm font-semibold border ${
+              advancedModeEnabled
+                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                : "border-slate-300 bg-white text-slate-700"
+            } disabled:opacity-50`}
+          >
+            {savingAdvancedMode ? "Saving..." : advancedModeEnabled ? "On" : "Off"}
+          </button>
+        </div>
+      </div>
+
       <div className="bg-white border border-slate-200 rounded-xl p-6">
         <div className="flex items-center justify-between gap-3 mb-4">
           <div className="flex items-center gap-2">

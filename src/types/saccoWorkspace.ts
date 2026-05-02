@@ -1,6 +1,20 @@
 /** SACCO workspace models shared by AppContext and `lib/saccoDb`. */
 
-export type LoanStatus = "pending" | "approved" | "disbursed" | "closed" | "rejected" | "defaulted";
+export type LoanStatus =
+  | "pending"
+  | "approved"
+  | "disbursed"
+  | "closed"
+  | "rejected"
+  | "defaulted"
+  | "written_off";
+
+export type SaccoLoanModificationType = "reschedule" | "restructure" | "write_off" | "recovery_writeoff";
+
+export interface SaccoLoanPolicy {
+  /** Minimum whole calendar days since first ordinary savings account before loan eligibility & disbursement. */
+  minSavingsDaysBeforeLoan: number;
+}
 
 export interface LoanFees {
   formFee: number;
@@ -50,6 +64,11 @@ export interface Loan {
   lc1ChairmanPhone?: string;
   /** Set when repayments are posted (e.g. from teller/collections). */
   lastPaymentDate?: string;
+  /** Cumulative amount written off (audit). */
+  writtenOffTotal?: number;
+  /** Bad-debt remainder still recoverable; reduced when recoveries post. */
+  writtenOffRemaining?: number;
+  writtenOffAt?: string;
   fees?: {
     formFee: number;
     monitoringFee: number;
@@ -69,6 +88,8 @@ export interface Member {
   savingsBalance: number;
   sharesBalance: number;
   joinDate: string;
+  /** Earliest ordinary (non–share-capital) savings account open date (yyyy-mm-dd); used for loan cooling-off. */
+  firstOrdinarySavingsOpenedAt?: string | null;
   /** From member register; used for guarantor contact on recovery views. */
   phone?: string;
 }

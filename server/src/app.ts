@@ -1,10 +1,15 @@
 import Fastify from "fastify";
 import cors from "@fastify/cors";
+import { createClient } from "@supabase/supabase-js";
 import prismaPlugin from "./plugins/prisma.js";
+import clearingPlugin from "./plugins/clearing.js";
+import { ClearingEngine } from "./clearing/clearingEngine.js";
+import { getClearingEnv } from "./clearing/env.js";
 import { healthRoutes } from "./routes/health.js";
 import { organizationRoutes } from "./routes/organizations.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { messagingWebhookRoutes } from "./routes/messaging-webhooks.js";
+import { clearingRoutes } from "./routes/clearing.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -47,9 +52,23 @@ export async function buildApp() {
 
   await app.register(prismaPlugin);
 
-  app.get("/", async () => ({
-    service: "boat-server",
-    endpoints: {
+  const clearingEnv = getClearingEnv();
+  if (clearingEnv) {
+    const clearingClient = createClient(clearingEnv.url, clearingEnv.serviceRoleKey, {
+      auth: { persistSession: false, autoRefreshToken: false },
+    });
+    const clearingEngine = new ClearingEngine(clearingClient);
+    await app.register(clearingPlugin, { engine: clearingEngine });
+    await app.register(clearingRoutes, { prefix: "/api/v1/clearing" });
+    app.log.info("SACCO clearing engine enabled (isolated Supabase project).");
+  } else {
+    app.log.warn(
+      "SACCO clearing engine disabled: set CLEARING_SUPABASE_URL, CLEARING_SUPABASE_SERVICE_ROLE_KEY, and CLEARING_API_KEY."
+    );
+  }
+
+  app.get("/", async (_req, reply) => {
+    const base = {
       health: "/health",
       ready: "/ready",
       organizations: "/api/v1/organizations",
@@ -58,8 +77,24 @@ export async function buildApp() {
         twilio: "/api/v1/webhooks/twilio",
         metaWhatsapp: "/api/v1/webhooks/meta/whatsapp",
       },
-    },
-  }));
+    };
+    const withClearing =
+      clearingEnv ?
+        {
+          ...base,
+          clearing: {
+            transfersPost: "/api/v1/clearing/transfers",
+            topUpsPost: "/api/v1/clearing/top-ups",
+            saccosPost: "/api/v1/clearing/saccos",
+            ensureOrgPost: "/api/v1/clearing/orgs/:organizationId/ensure-account",
+            activationPost: "/api/v1/clearing/orgs/:organizationId/activation",
+            syncEligiblePost: "/api/v1/clearing/orgs/sync-eligible",
+            settlementGet: "/api/v1/clearing/saccos/:saccoId/settlement",
+          },
+        }
+      : base;
+    return reply.send({ service: "boat-server", endpoints: withClearing });
+  });
 
   await app.register(healthRoutes);
   await app.register(organizationRoutes, { prefix: "/api/v1" });

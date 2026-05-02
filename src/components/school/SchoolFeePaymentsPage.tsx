@@ -6,6 +6,7 @@ import { PageNotes } from "@/components/common/PageNotes";
 import { SchoolFeeReceiptPreviewModal } from "@/components/school/SchoolFeeReceiptPreviewModal";
 import { schoolFeeReceiptDetailFromPayment, type SchoolFeeReceiptDetail } from "@/lib/schoolFeeReceipt";
 import { buildSchoolFeesAutoReference } from "@/lib/autoReference";
+import { postSchoolFeePaymentAccounting } from "@/lib/schoolFeeJournal";
 import { randomUuid } from "@/lib/randomUuid";
 
 type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string };
@@ -320,6 +321,18 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       return;
     }
     if (pay?.id) {
+      const paidAtIso = new Date().toISOString();
+      const { journalMessage } = await postSchoolFeePaymentAccounting({
+        organizationId: orgId,
+        staffUserId: user?.id ?? null,
+        paymentId: pay.id as string,
+        amount: amt,
+        method: form.method,
+        paidAt: paidAtIso,
+        studentId: form.student_id,
+      });
+      if (journalMessage) console.warn("[school payment journal]", journalMessage);
+
       const paidByInvoice = new Map<string, number>();
       for (const a of allocations) {
         paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));

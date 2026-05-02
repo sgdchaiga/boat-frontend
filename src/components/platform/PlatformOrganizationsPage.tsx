@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Plus, Pencil, Copy } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Plus, Pencil, Copy, Search, X } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -21,10 +21,20 @@ type Org = {
   enable_payroll?: boolean | null;
   enable_budget?: boolean | null;
   enable_agent?: boolean | null;
+  enable_hotel_assessment?: boolean | null;
+  enable_manufacturing?: boolean | null;
+  clearing_enabled?: boolean | null;
+  clearing_status?: "inactive" | "active" | "suspended" | "pending" | string | null;
+  clearing_org_sacco_id?: string | null;
+  clearing_default_payer_sacco_id?: string | null;
+  clearing_merchant_sacco_id?: string | null;
+  clearing_synced_at?: string | null;
   enable_reports?: boolean | null;
   enable_accounting?: boolean | null;
   enable_inventory?: boolean | null;
   enable_purchases?: boolean | null;
+  purchases_require_po_approval?: boolean | null;
+  purchases_require_bill_approval?: boolean | null;
   /** Platform: hotel automated room charges (check-in + night audit). */
   hotel_enable_smart_room_charges?: boolean | null;
   desktop_device_limit?: number | null;
@@ -62,6 +72,64 @@ function slugify(s: string) {
     .replace(/[\s_]+/g, "-")
     .replace(/-+/g, "-")
     .slice(0, 80);
+}
+
+/** Shareable filter for the platform orgs table (`?page=platform_organizations&org_q=…`). */
+const ORG_SEARCH_URL_KEY = "org_q";
+
+function readOrgSearchFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return new URLSearchParams(window.location.search).get(ORG_SEARCH_URL_KEY) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function syncOrgSearchToUrl(value: string) {
+  if (typeof window === "undefined") return;
+  try {
+    const url = new URL(window.location.href);
+    const v = value.trim();
+    if (v) url.searchParams.set(ORG_SEARCH_URL_KEY, v);
+    else url.searchParams.delete(ORG_SEARCH_URL_KEY);
+    window.history.replaceState({}, "", url.toString());
+  } catch {
+    /* ignore */
+  }
+}
+
+async function getEdgeInvokeErrorMessage(error: unknown): Promise<string | null> {
+  if (!(error instanceof Error)) return null;
+  const maybeWithContext = error as Error & {
+    context?: { json?: () => Promise<unknown>; text?: () => Promise<string> };
+  };
+  const context = maybeWithContext.context;
+  if (!context) return error.message || null;
+  try {
+    if (typeof context.json === "function") {
+      const payload = (await context.json()) as { message?: string; error?: string } | null;
+      if (payload?.message) return payload.message;
+      if (payload?.error) return payload.error;
+    }
+  } catch {
+    // fall through to text parsing
+  }
+  try {
+    if (typeof context.text === "function") {
+      const raw = await context.text();
+      if (!raw) return error.message || null;
+      try {
+        const payload = JSON.parse(raw) as { message?: string; error?: string };
+        return payload.message || payload.error || error.message || null;
+      } catch {
+        return raw.slice(0, 300);
+      }
+    }
+  } catch {
+    // fall back to base error below
+  }
+  return error.message || null;
 }
 
 export function PlatformOrganizationsPage() {
@@ -112,12 +180,54 @@ export function PlatformOrganizationsPage() {
   const [editEnableAccounting, setEditEnableAccounting] = useState(true);
   const [editEnableInventory, setEditEnableInventory] = useState(true);
   const [editEnablePurchases, setEditEnablePurchases] = useState(true);
+  const [editPurchasesRequirePoApproval, setEditPurchasesRequirePoApproval] = useState(true);
+  const [editPurchasesRequireBillApproval, setEditPurchasesRequireBillApproval] = useState(true);
   const [editHotelSmartRoomCharges, setEditHotelSmartRoomCharges] = useState(true);
+  const [editEnableHotelAssessment, setEditEnableHotelAssessment] = useState(true);
+  const [editEnableManufacturing, setEditEnableManufacturing] = useState(true);
   const [editDesktopDeviceLimit, setEditDesktopDeviceLimit] = useState(1);
+  const [orgSearch, setOrgSearch] = useState(readOrgSearchFromUrl);
+  const [clearingBusyByOrgId, setClearingBusyByOrgId] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    syncOrgSearchToUrl(orgSearch);
+  }, [orgSearch]);
+
+  const filteredOrgs = useMemo(() => {
+    const q = orgSearch.trim().toLowerCase();
+    if (!q) return orgs;
+    const businessTypeLabels = Object.fromEntries(
+      businessTypes.map((b) => [b.code, (b.name || b.code).toLowerCase()])
+    );
+    return orgs.filter((org) => {
+      const sub = latestSub[org.id];
+      const planName = sub?.subscription_plans?.name?.toLowerCase() ?? "";
+      const planCode = sub?.subscription_plans?.code?.toLowerCase() ?? "";
+      const status = (sub?.status ?? "").toLowerCase();
+      const period = (sub?.period_end ?? "").toLowerCase();
+      const btDisplay = businessTypeLabels[org.business_type] ?? org.business_type.toLowerCase();
+      return (
+        org.name.toLowerCase().includes(q) ||
+        (org.slug ?? "").toLowerCase().includes(q) ||
+        org.business_type.toLowerCase().includes(q) ||
+        btDisplay.includes(q) ||
+        org.id.toLowerCase().includes(q) ||
+        planName.includes(q) ||
+        planCode.includes(q) ||
+        status.includes(q) ||
+        period.includes(q)
+      );
+    });
+  }, [orgs, latestSub, orgSearch, businessTypes]);
 
   const toggleOrgModule = async (
     orgId: string,
-    key: "enable_payroll" | "enable_budget" | "enable_agent",
+    key:
+      | "enable_payroll"
+      | "enable_budget"
+      | "enable_agent"
+      | "enable_hotel_assessment"
+      | "enable_manufacturing",
     nextValue: boolean
   ) => {
     setErr(null);
@@ -136,6 +246,58 @@ export function PlatformOrganizationsPage() {
           : o
       )
     );
+  };
+
+  const toggleClearingActivation = async (org: Org, enabled: boolean) => {
+    if (!(org.business_type === "sacco" || org.business_type === "vsla")) {
+      setErr("Clearing activation is only supported for SACCO and VSLA organizations.");
+      return;
+    }
+
+    setErr(null);
+    setClearingBusyByOrgId((prev) => ({ ...prev, [org.id]: true }));
+    try {
+      const { data, error } = await supabase.functions.invoke("clearing-admin-org-activation", {
+        body: {
+          organization_id: org.id,
+          enabled,
+        },
+      });
+      if (error) {
+        throw new Error(error.message || "Failed to invoke clearing admin function.");
+      }
+      const parsed = data as { ok?: boolean; error?: string; message?: string; data?: Partial<Org> } | null;
+      if (!parsed?.ok) {
+        throw new Error(parsed?.message || parsed?.error || "Failed to update clearing activation.");
+      }
+      const row = parsed.data;
+      if (row) {
+        setOrgs((prev) =>
+          prev.map((o) =>
+            o.id === org.id
+              ? {
+                  ...o,
+                  clearing_enabled: row.clearing_enabled ?? o.clearing_enabled,
+                  clearing_status: row.clearing_status ?? o.clearing_status,
+                  clearing_org_sacco_id: row.clearing_org_sacco_id ?? o.clearing_org_sacco_id,
+                  clearing_default_payer_sacco_id:
+                    row.clearing_default_payer_sacco_id ?? o.clearing_default_payer_sacco_id,
+                  clearing_merchant_sacco_id:
+                    row.clearing_merchant_sacco_id ?? o.clearing_merchant_sacco_id,
+                  clearing_synced_at: row.clearing_synced_at ?? o.clearing_synced_at,
+                }
+              : o
+          )
+        );
+      } else {
+        await load();
+      }
+    } catch (e) {
+      const edgeMsg = await getEdgeInvokeErrorMessage(e);
+      setErr(edgeMsg || "Failed to update clearing activation.");
+    } finally {
+      setClearingBusyByOrgId((prev) => ({ ...prev, [org.id]: false }));
+    }
   };
 
   const load = useCallback(async () => {
@@ -357,7 +519,11 @@ export function PlatformOrganizationsPage() {
     setEditEnableAccounting(org.enable_accounting !== false);
     setEditEnableInventory(org.enable_inventory !== false);
     setEditEnablePurchases(org.enable_purchases !== false);
+    setEditPurchasesRequirePoApproval(org.purchases_require_po_approval !== false);
+    setEditPurchasesRequireBillApproval(org.purchases_require_bill_approval !== false);
     setEditHotelSmartRoomCharges(org.hotel_enable_smart_room_charges !== false);
+    setEditEnableHotelAssessment(org.enable_hotel_assessment !== false);
+    setEditEnableManufacturing(org.enable_manufacturing !== false);
     setEditDesktopDeviceLimit(Math.max(1, Number(org.desktop_device_limit ?? 1)));
     setErr(null);
     setModal("sub");
@@ -390,10 +556,14 @@ export function PlatformOrganizationsPage() {
         enable_payroll: editEnablePayroll,
         enable_budget: editEnableBudget,
         enable_agent: editEnableAgent,
+        enable_hotel_assessment: editEnableHotelAssessment,
+        enable_manufacturing: editEnableManufacturing,
         enable_reports: editEnableReports,
         enable_accounting: editEnableAccounting,
         enable_inventory: editEnableInventory,
         enable_purchases: editEnablePurchases,
+        purchases_require_po_approval: editPurchasesRequirePoApproval,
+        purchases_require_bill_approval: editPurchasesRequireBillApproval,
         hotel_enable_smart_room_charges: editHotelSmartRoomCharges,
         desktop_device_limit: Math.max(1, Math.floor(editDesktopDeviceLimit || 1)),
       })
@@ -495,6 +665,51 @@ export function PlatformOrganizationsPage() {
         </button>
       </div>
 
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <label className="relative flex flex-1 min-w-[min(100%,280px)] max-w-xl">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" aria-hidden />
+          <input
+            type="search"
+            value={orgSearch}
+            onChange={(e) => setOrgSearch(e.target.value)}
+            placeholder="Search name, slug, type, plan, status…"
+            className="w-full border border-slate-300 rounded-lg pl-10 pr-10 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 focus:border-brand-500"
+            autoComplete="off"
+            aria-label="Search organizations"
+          />
+          {orgSearch.trim() ? (
+            <button
+              type="button"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-md text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+              aria-label="Clear search"
+              onClick={() => setOrgSearch("")}
+            >
+              <X className="w-4 h-4" aria-hidden />
+            </button>
+          ) : null}
+        </label>
+        {orgSearch.trim() ? (
+          <>
+            <span className="text-sm text-slate-600 tabular-nums">
+              {filteredOrgs.length} of {orgs.length}
+            </span>
+            <button
+              type="button"
+              onClick={() => setOrgSearch("")}
+              className="text-sm text-slate-600 hover:text-slate-900 underline-offset-2 hover:underline"
+            >
+              Clear
+            </button>
+          </>
+        ) : null}
+      </div>
+
+      {err ? (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {err}
+        </div>
+      ) : null}
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
@@ -506,6 +721,9 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Budget</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Agent Hub</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Assessment</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Manufacturing</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Clearing</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Plan</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Status</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Period end</th>
@@ -513,7 +731,16 @@ export function PlatformOrganizationsPage() {
               </tr>
             </thead>
             <tbody>
-              {orgs.map((org) => {
+              {filteredOrgs.length === 0 ? (
+                <tr>
+                  <td colSpan={13} className="p-8 text-center text-slate-600 text-sm">
+                    {orgSearch.trim()
+                      ? "No organizations match your search."
+                      : "No organizations yet."}
+                  </td>
+                </tr>
+              ) : null}
+              {filteredOrgs.map((org) => {
                 const sub = latestSub[org.id];
                 return (
                   <tr key={org.id} className="border-b border-slate-100 hover:bg-slate-50/80">
@@ -577,6 +804,89 @@ export function PlatformOrganizationsPage() {
                           {org.enable_agent === false ? "Turn On" : "Turn Off"}
                         </button>
                       </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_hotel_assessment === false
+                              ? "bg-red-100 text-red-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_hotel_assessment === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleOrgModule(
+                              org.id,
+                              "enable_hotel_assessment",
+                              !(org.enable_hotel_assessment !== false)
+                            )
+                          }
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_hotel_assessment === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_manufacturing === false
+                              ? "bg-red-100 text-red-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_manufacturing === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleOrgModule(
+                              org.id,
+                              "enable_manufacturing",
+                              !(org.enable_manufacturing !== false)
+                            )
+                          }
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_manufacturing === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      {org.business_type === "sacco" || org.business_type === "vsla" ? (
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                              org.clearing_enabled && org.clearing_status === "active"
+                                ? "bg-emerald-100 text-emerald-800"
+                                : "bg-red-100 text-red-800"
+                            }`}
+                          >
+                            {org.clearing_enabled && org.clearing_status === "active" ? "Active" : "Inactive"}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={!!clearingBusyByOrgId[org.id]}
+                            onClick={() =>
+                              void toggleClearingActivation(org, !(org.clearing_enabled && org.clearing_status === "active"))
+                            }
+                            className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50 disabled:opacity-50"
+                          >
+                            {clearingBusyByOrgId[org.id]
+                              ? "Saving…"
+                              : org.clearing_enabled && org.clearing_status === "active"
+                                ? "Deactivate"
+                                : "Activate"}
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-400">N/A</span>
+                      )}
                     </td>
                     <td className="p-3 text-slate-600">
                       {sub?.subscription_plans?.name ?? "—"}
@@ -836,6 +1146,16 @@ export function PlatformOrganizationsPage() {
                 When off, property staff post room revenue only via Billing → Add Charge.
               </label>
             )}
+            {(editBiz === "hotel" || editBiz === "mixed") && (
+              <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableHotelAssessment}
+                  onChange={(e) => setEditEnableHotelAssessment(e.target.checked)}
+                />
+                Hotel / mixed — Assessment & onboarding (prospect tooling and reports)
+              </label>
+            )}
             <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">
               <p className="text-xs font-semibold text-slate-700 uppercase tracking-wide">Core Modules (all org types)</p>
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
@@ -885,6 +1205,35 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnablePurchases(e.target.checked)}
                 />
                 Enable Purchases module
+              </label>
+              <div className="pl-6 space-y-2 border-l-2 border-slate-200 ml-1 py-1">
+                <p className="text-xs font-medium text-slate-600">Purchase order → GRN/bill workflow</p>
+                <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={editPurchasesRequirePoApproval}
+                    onChange={(e) => setEditPurchasesRequirePoApproval(e.target.checked)}
+                  />
+                  <span>Require PO approval before convert to GRN/bill</span>
+                </label>
+                <label className="flex items-start gap-2 text-sm text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={editPurchasesRequireBillApproval}
+                    onChange={(e) => setEditPurchasesRequireBillApproval(e.target.checked)}
+                  />
+                  <span>Require GRN/bill approval after convert from PO</span>
+                </label>
+              </div>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableManufacturing}
+                  onChange={(e) => setEditEnableManufacturing(e.target.checked)}
+                />
+                Enable Manufacturing module (BOM, work orders, production, costing — hotel / restaurant / mixed / dedicated manufacturing orgs)
               </label>
             </div>
             <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">

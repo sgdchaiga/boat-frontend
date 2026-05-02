@@ -15,6 +15,8 @@ import type {
   Member,
   ProvisioningConfig,
   ProvisionRate,
+  SaccoLoanModificationType,
+  SaccoLoanPolicy,
 } from "@/types/saccoWorkspace";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -51,6 +53,9 @@ type DbLoan = {
   lc1_chairman_name?: string | null;
   lc1_chairman_phone?: string | null;
   last_payment_date?: string | null;
+  written_off_remaining?: number | null;
+  written_off_total?: number | null;
+  written_off_at?: string | null;
 };
 
 type DbProduct = {
@@ -94,6 +99,15 @@ export function mapLoanFromRow(row: DbLoan): Loan {
     lc1ChairmanName: row.lc1_chairman_name?.trim() || undefined,
     lc1ChairmanPhone: row.lc1_chairman_phone?.trim() || undefined,
     lastPaymentDate: row.last_payment_date ? String(row.last_payment_date).slice(0, 10) : undefined,
+    writtenOffTotal:
+      row.written_off_total !== undefined && row.written_off_total !== null
+        ? Number(row.written_off_total)
+        : undefined,
+    writtenOffRemaining:
+      row.written_off_remaining !== undefined && row.written_off_remaining !== null
+        ? Number(row.written_off_remaining)
+        : undefined,
+    writtenOffAt: row.written_off_at ? String(row.written_off_at).slice(0, 10) : undefined,
     fees: feesRaw ?? undefined,
   };
 }
@@ -224,6 +238,31 @@ function mapFaFromRow(row: { id: string; name: string; status: string; current_v
   };
 }
 
+const DEFAULT_LOAN_POLICY: SaccoLoanPolicy = { minSavingsDaysBeforeLoan: 30 };
+
+export async function fetchSaccoLoanPolicies(organizationId: string): Promise<SaccoLoanPolicy> {
+  const polRes = await sb.from("sacco_org_loan_policies").select("*").eq("organization_id", organizationId).maybeSingle();
+  if (polRes.error) {
+    if (polRes.error.code !== "PGRST116" && !String(polRes.error.message ?? "").includes("does not exist"))
+      console.warn("[SACCO] loan policies:", polRes.error.message ?? polRes.error);
+    return DEFAULT_LOAN_POLICY;
+  }
+  const row = polRes.data as { min_savings_days_before_loan?: unknown } | null;
+  const raw = row?.min_savings_days_before_loan;
+  if (raw === undefined || raw === null) return DEFAULT_LOAN_POLICY;
+  const n = Number(raw);
+  return { minSavingsDaysBeforeLoan: Number.isFinite(n) ? Math.max(0, Math.round(n)) : DEFAULT_LOAN_POLICY.minSavingsDaysBeforeLoan };
+}
+
+export async function upsertSaccoLoanPolicies(organizationId: string, policy: SaccoLoanPolicy): Promise<void> {
+  const min = Math.max(0, Math.round(policy.minSavingsDaysBeforeLoan ?? 30));
+  const { error } = await sb.from("sacco_org_loan_policies").upsert(
+    { organization_id: organizationId, min_savings_days_before_loan: min },
+    { onConflict: "organization_id" }
+  );
+  if (error) throw error;
+}
+
 export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
   members: Member[];
   loans: Loan[];
@@ -232,6 +271,7 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
   cashbook: CashbookEntry[];
   fixedAssets: FixedAsset[];
   provisioning: ProvisioningConfig | null;
+  saccoLoanPolicies: SaccoLoanPolicy;
 }> {
   const [
     memRes,
@@ -241,6 +281,8 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
     cbRes,
     faRes,
     provRes,
+    polRes,
+    savResFull,
   ] = await Promise.all([
     sb.from("sacco_members").select("*").eq("organization_id", organizationId).order("member_number"),
     sb.from("sacco_loans").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false }),
@@ -253,6 +295,13 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
     sb.from("sacco_cashbook_entries").select("*").eq("organization_id", organizationId).order("entry_date", { ascending: true }),
     sb.from("sacco_fixed_assets").select("*").eq("organization_id", organizationId).order("name"),
     sb.from("sacco_provisioning_settings").select("*").eq("organization_id", organizationId).maybeSingle(),
+    sb.from("sacco_org_loan_policies").select("*").eq("organization_id", organizationId).maybeSingle(),
+    sb
+      .from("sacco_member_savings_accounts")
+      .select(
+        "sacco_member_id, balance, savings_product_code, created_at, date_account_opened"
+      )
+      .eq("organization_id", organizationId),
   ]);
 
   const err =
@@ -265,22 +314,54 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
     provRes.error;
   if (err) throw err;
 
+  let saccoLoanPolicies = DEFAULT_LOAN_POLICY;
+  const polRow = !polRes.error ? (polRes.data as { min_savings_days_before_loan?: unknown } | null) : null;
+  const md = polRow?.min_savings_days_before_loan;
+  if (!polRes.error && md !== undefined && md !== null) {
+    const n = Number(md);
+    if (Number.isFinite(n)) saccoLoanPolicies = { minSavingsDaysBeforeLoan: Math.max(0, Math.round(n)) };
+  } else if (
+    polRes.error &&
+    polRes.error.code !== "PGRST116" &&
+    !String(polRes.error.message ?? "").includes("does not exist")
+  ) {
+    console.warn("[SACCO] Loan policies table:", polRes.error.message ?? polRes.error);
+  }
+
   let savingsByMember = new Map<string, number>();
   let sharesByMember = new Map<string, number>();
-  const savRes = await sb
-    .from("sacco_member_savings_accounts")
-    .select("sacco_member_id, balance, savings_product_code")
-    .eq("organization_id", organizationId);
-  if (savRes.error) {
-    console.warn("[SACCO] Could not load sacco_member_savings_accounts for balance rollup:", savRes.error.message ?? savRes.error);
-  } else if (savRes.data) {
-    for (const row of savRes.data as { sacco_member_id: string; balance: unknown; savings_product_code: string }[]) {
+  let firstOrdinaryOpenByMember = new Map<string, string>();
+  type SavRow = {
+    sacco_member_id: string;
+    balance: unknown;
+    savings_product_code: string;
+    created_at?: string | null;
+    date_account_opened?: string | null;
+  };
+  const savData = savResFull.data as SavRow[] | null | undefined;
+  if (savResFull.error) {
+    console.warn(
+      "[SACCO] Could not load sacco_member_savings_accounts for balance rollup:",
+      savResFull.error.message ?? savResFull.error
+    );
+  } else if (savData) {
+    for (const row of savData) {
       const id = row.sacco_member_id;
       const b = parseAmount(row.balance);
       if (isShareCapitalProductCode(row.savings_product_code)) {
         sharesByMember.set(id, (sharesByMember.get(id) ?? 0) + b);
       } else {
         savingsByMember.set(id, (savingsByMember.get(id) ?? 0) + b);
+        const openIso =
+          row.date_account_opened != null && String(row.date_account_opened).trim()
+            ? String(row.date_account_opened).slice(0, 10)
+            : row.created_at
+              ? String(row.created_at).slice(0, 10)
+              : null;
+        if (openIso) {
+          const prev = firstOrdinaryOpenByMember.get(id);
+          if (!prev || openIso < prev) firstOrdinaryOpenByMember.set(id, openIso);
+        }
       }
     }
   }
@@ -299,6 +380,8 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
       m.savingsBalance = Math.max(sumSav ?? 0, colSav);
       m.sharesBalance = Math.max(sumShr ?? 0, colShr);
     }
+    const fs = firstOrdinaryOpenByMember.get(id);
+    if (fs) m.firstOrdinarySavingsOpenedAt = fs;
     return m;
   });
   const loans = (loanRes.data ?? []).map((r: DbLoan) => mapLoanFromRow(r));
@@ -327,7 +410,68 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
     cashbook,
     fixedAssets,
     provisioning,
+    saccoLoanPolicies,
   };
+}
+
+export async function insertSaccoLoanModification(payload: {
+  sacco_loan_id: string;
+  modification_type: SaccoLoanModificationType;
+  effective_date?: string;
+  notes?: string | null;
+  previous_term_months?: number | null;
+  new_term_months?: number | null;
+  previous_interest_rate?: number | null;
+  new_interest_rate?: number | null;
+  previous_monthly_payment?: number | null;
+  new_monthly_payment?: number | null;
+  previous_balance?: number | null;
+  new_balance?: number | null;
+  amount_money?: number | null;
+}): Promise<void> {
+  const row = {
+    sacco_loan_id: payload.sacco_loan_id,
+    modification_type: payload.modification_type,
+    effective_date: payload.effective_date ?? new Date().toISOString().slice(0, 10),
+    notes: payload.notes ?? null,
+    previous_term_months: payload.previous_term_months ?? null,
+    new_term_months: payload.new_term_months ?? null,
+    previous_interest_rate: payload.previous_interest_rate ?? null,
+    new_interest_rate: payload.new_interest_rate ?? null,
+    previous_monthly_payment: payload.previous_monthly_payment ?? null,
+    new_monthly_payment: payload.new_monthly_payment ?? null,
+    previous_balance: payload.previous_balance ?? null,
+    new_balance: payload.new_balance ?? null,
+    amount_money: payload.amount_money ?? 0,
+  };
+  const { error } = await sb.from("sacco_loan_modifications").insert(row);
+  if (error) throw error;
+}
+
+export async function fetchSaccoLoanModificationsForLoan(loanId: string): Promise<
+  {
+    id: string;
+    modification_type: string;
+    effective_date: string;
+    notes: string | null;
+    amount_money: number | null;
+    created_at: string;
+  }[]
+> {
+  const { data, error } = await sb
+    .from("sacco_loan_modifications")
+    .select("id, modification_type, effective_date, notes, amount_money, created_at")
+    .eq("sacco_loan_id", loanId)
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as {
+    id: string;
+    modification_type: string;
+    effective_date: string;
+    notes: string | null;
+    amount_money: number | null;
+    created_at: string;
+  }[];
 }
 
 export async function insertLoanRow(payload: {
@@ -402,6 +546,12 @@ export async function updateLoanRow(
     approval_stage: number;
     disbursement_date: string | null;
     last_payment_date: string | null;
+    interest_rate: number;
+    term_months: number;
+    monthly_payment: number;
+    written_off_remaining: number;
+    written_off_total: number;
+    written_off_at: string | null;
   }>
 ): Promise<void> {
   const { error } = await sb.from("sacco_loans").update(patch).eq("id", id);

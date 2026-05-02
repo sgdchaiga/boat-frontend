@@ -7,6 +7,7 @@ import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import {
   type PaymentMethodCode,
   PAYMENT_METHOD_SELECT_OPTIONS,
+  formatPaymentMethodLabel,
   insertPaymentWithMethodCompat,
 } from "../lib/paymentMethod";
 import { PageNotes } from "./common/PageNotes";
@@ -28,6 +29,7 @@ type RetailSaleOrder = {
   customer_name: string | null;
   retail_sale_lines: SaleLine[];
   payments_total?: number;
+  payment_methods?: PaymentMethodCode[];
 };
 
 type ProductOption = {
@@ -156,9 +158,10 @@ export function RetailPosOrdersPage() {
       }));
       const orderIds = salesWithLines.map((s) => s.id);
       let paymentsMap: Record<string, number> = {};
+      let paymentMethodsMap: Record<string, PaymentMethodCode[]> = {};
       if (orderIds.length > 0) {
         const { data: paymentsData } = await filterByOrganizationId(
-          supabase.from("payments").select("amount,payment_status,transaction_id").in("transaction_id", orderIds),
+          supabase.from("payments").select("amount,payment_status,transaction_id,payment_method").in("transaction_id", orderIds),
           orgId,
           superAdmin
         );
@@ -166,10 +169,21 @@ export function RetailPosOrdersPage() {
           if (p.payment_status === "completed" && p.transaction_id) {
             const key = p.transaction_id as string;
             paymentsMap[key] = (paymentsMap[key] || 0) + Number(p.amount || 0);
+            const method = (p.payment_method || "cash") as PaymentMethodCode;
+            const existing = paymentMethodsMap[key] || [];
+            if (!existing.includes(method)) {
+              paymentMethodsMap[key] = [...existing, method];
+            }
           }
         });
       }
-      setOrders(salesWithLines.map((s) => ({ ...s, payments_total: paymentsMap[s.id] || 0 })));
+      setOrders(
+        salesWithLines.map((s) => ({
+          ...s,
+          payments_total: paymentsMap[s.id] || 0,
+          payment_methods: paymentMethodsMap[s.id] || [],
+        }))
+      );
       setDepartmentOptions((departmentsRes.data || []) as Array<{ id: string; name: string }>);
       setProductOptions((productsRes.data || []) as ProductOption[]);
     } finally {
@@ -393,6 +407,55 @@ export function RetailPosOrdersPage() {
     }
   };
 
+  const printOrderReceipt = (order: RetailSaleOrder) => {
+    const { total, paid, balance, lines } = getTotals(order, departmentTab === "all" ? undefined : departmentTab);
+    const doc = window.open("", "_blank", "width=420,height=720");
+    if (!doc) return alert("Allow popups to print receipt.");
+    const lineHtml = lines
+      .map(
+        (line) =>
+          `<div style="display:flex;justify-content:space-between;gap:8px;"><span>${Number(line.quantity || 0)}x ${line.description || "Item"}</span><span>${Number(
+            line.line_total || Number(line.quantity || 0) * Number(line.unit_price || 0)
+          ).toFixed(2)}</span></div>`
+      )
+      .join("");
+    const methods =
+      order.payment_methods && order.payment_methods.length > 0
+        ? order.payment_methods.map((m) => formatPaymentMethodLabel(m)).join(", ")
+        : "N/A";
+    const html = `
+      <html>
+      <head>
+        <title>Retail Receipt</title>
+        <style>
+          body{font-family:Arial,sans-serif;padding:12px;max-width:320px;margin:0 auto;color:#0f172a}
+          .row{display:flex;justify-content:space-between;gap:8px}
+          .muted{color:#64748b;font-size:12px}
+          .line{border-top:1px dashed #cbd5e1;margin:8px 0}
+        </style>
+      </head>
+      <body>
+        <h3 style="margin:0 0 6px 0">Retail Receipt (Reprint)</h3>
+        <div class="muted">Order: ${order.id.slice(0, 8)}</div>
+        <div class="muted">Date: ${new Date(order.sale_at).toLocaleString()}</div>
+        <div class="line"></div>
+        ${lineHtml}
+        <div class="line"></div>
+        <div class="row"><strong>Total</strong><strong>${total.toFixed(2)}</strong></div>
+        <div class="row muted"><span>Paid</span><span>${paid.toFixed(2)}</span></div>
+        <div class="row muted"><span>Outstanding</span><span>${balance.toFixed(2)}</span></div>
+        <div class="row muted"><span>Method</span><span>${methods}</span></div>
+        <div class="line"></div>
+        <div class="muted">Customer: ${order.customer_name || "Walk-in customer"}</div>
+      </body>
+      </html>
+    `;
+    doc.document.write(html);
+    doc.document.close();
+    doc.focus();
+    doc.print();
+  };
+
   const tabs = useMemo(() => {
     const deptIds = new Set<string>();
     for (const order of orders) {
@@ -493,9 +556,22 @@ export function RetailPosOrdersPage() {
                 <div className="border-t pt-2 mt-2 text-xs text-slate-700">
                   <p>Total: {total.toFixed(2)}</p>
                   <p>Paid: {paid.toFixed(2)}</p>
+                  <p>
+                    Method:{" "}
+                    {order.payment_methods && order.payment_methods.length > 0
+                      ? order.payment_methods.map((m) => formatPaymentMethodLabel(m)).join(", ")
+                      : "N/A"}
+                  </p>
                   <p className="font-semibold">Outstanding: {balance.toFixed(2)}</p>
                 </div>
                 <div className="mt-3 flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => printOrderReceipt(order)}
+                    className="flex-1 rounded-lg border border-slate-200 bg-white text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-50"
+                  >
+                    Print Receipt
+                  </button>
                   {balance > 0.01 ? (
                     <button type="button" onClick={() => openPayModal(order)} className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-100">
                       Pay Outstanding

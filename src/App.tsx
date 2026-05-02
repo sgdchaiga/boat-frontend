@@ -89,18 +89,24 @@ import SaccoLoanList from './components/sacco/SaccoLoanList';
 import SacoLoanInput from './components/sacco/SacoLoanInput';
 import SaccoLoanApproval from './components/sacco/SaccoLoanApproval';
 import SaccoLoanDashboard from './components/sacco/SaccoLoanDashboard';
-import SaccoLoanReports from './components/sacco/SaccoLoanReports';
+import SaccoLoanReports, { type LoanReportTabId } from './components/sacco/SaccoLoanReports';
 import SaccoLoanRecovery from './components/sacco/SaccoLoanRecovery';
 import SaccoLoanSettings from './components/sacco/SaccoLoanSettings';
 import SaccoLoanInterestCalc from './components/sacco/SaccoLoanInterestCalc';
+import SaccoPerformanceDashboardPage from './components/sacco/SaccoPerformanceDashboardPage';
+import SaccoLoanServicingPage from './components/sacco/SaccoLoanServicingPage';
+import SaccoMemberProfilePage from './components/sacco/SaccoMemberProfilePage';
+import SaccoSavingsStatementsPage from './components/sacco/SaccoSavingsStatementsPage';
+import SaccoFinancialSummariesPage from './components/sacco/SaccoFinancialSummariesPage';
 import SaccoSavingsInterest from './components/sacco/SaccoSavingsInterest';
 import SaccoClientDashboard from './components/sacco/SaccoClientDashboard';
-import { getModuleAccess, pageToModuleId } from './lib/moduleAccess';
+import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from './lib/moduleAccess';
+import { defaultLandingPageForNavRole, isPageAllowedForNavRole } from './lib/navRoleExperience';
 import { SACCOPRO_HOME_PAGE, SACCOPRO_PAGE } from './lib/saccoproPages';
 import { SCHOOL_HOME_PAGE, SCHOOL_PAGE } from './lib/schoolPages';
 import { VSLA_HOME_PAGE, VSLA_PAGE } from './lib/vslaPages';
 import { PAYROLL_PAGE } from './lib/payrollPages';
-import { HOTEL_PAGE } from './lib/hotelPages';
+import { HOTEL_ASSESSMENT_PAGE, HOTEL_PAGE } from './lib/hotelPages';
 import { AdminRoomsPage } from './components/admin/AdminRoomsPage';
 import { PayrollHubPage } from './components/payroll/PayrollHubPage';
 import { PayrollStaffPage } from './components/payroll/PayrollStaffPage';
@@ -156,6 +162,9 @@ import type { CommunicationsTabId } from './components/communications/Communicat
 import { canRunLocalSyncWorker, pushPendingLocalSyncQueue } from './lib/localSyncPush';
 import { canRunLocalBackup, runLocalBackupNow } from './lib/localBackup';
 import { AgentHubPage } from './components/agent/AgentHubPage';
+import { HotelAssessmentDashboardPage } from './components/hotel-assessment/HotelAssessmentDashboardPage';
+import { HotelAssessmentWizardPage } from './components/hotel-assessment/HotelAssessmentWizardPage';
+import { IntegrationsHubPage } from './components/system/IntegrationsHubPage';
 import { loadPermissionSnapshot } from './lib/permissions';
 
 /** Old bookmarks / links: Financial Summary was removed; land on Revenue by Charge Type. */
@@ -198,6 +207,21 @@ const MANAGED_PAGE_STATE_KEYS = [
   "vslaDisburseLoanId",
   "communicationsTab",
   "communicationsContext",
+  "hotelAssessmentId",
+  /** Prefill Receive money (cash_receipts) from hotel checkout / folio */
+  "crSource",
+  "crGuestId",
+  "crGuestName",
+  "crAmount",
+  "crReference",
+  "crDescription",
+  "crStayId",
+  "tellerDesk",
+  "tellerTask",
+  "cashbookView",
+  "loanReportTab",
+  "recoveryView",
+  "memberRegister",
 ] as const;
 
 function getPageStateFromUrl(): Record<string, unknown> {
@@ -255,6 +279,41 @@ function getPageStateFromUrl(): Record<string, unknown> {
   }
   const communicationsContext = qp.get("communicationsContext");
   if (communicationsContext) state.communicationsContext = communicationsContext;
+  const hotelAssessmentId = qp.get("hotelAssessmentId");
+  if (hotelAssessmentId) state.hotelAssessmentId = hotelAssessmentId;
+  const crSource = qp.get("crSource");
+  if (crSource) state.crSource = crSource;
+  const crGuestId = qp.get("crGuestId");
+  if (crGuestId) state.crGuestId = crGuestId;
+  const crGuestName = qp.get("crGuestName");
+  if (crGuestName) state.crGuestName = crGuestName;
+  const crAmount = qp.get("crAmount");
+  if (crAmount) state.crAmount = crAmount;
+  const crReference = qp.get("crReference");
+  if (crReference) state.crReference = crReference;
+  const crDescription = qp.get("crDescription");
+  if (crDescription) state.crDescription = crDescription;
+  const crStayId = qp.get("crStayId");
+  if (crStayId) state.crStayId = crStayId;
+  const tellerDesk = qp.get("tellerDesk");
+  if (tellerDesk) state.tellerDesk = tellerDesk;
+  const tellerTask = qp.get("tellerTask");
+  if (tellerTask) state.tellerTask = tellerTask;
+  const cashbookView = qp.get("cashbookView");
+  if (cashbookView === "journal" || cashbookView === "reconciliation") state.cashbookView = cashbookView;
+  const loanReportTab = qp.get("loanReportTab");
+  if (
+    loanReportTab === "summary" ||
+    loanReportTab === "aging" ||
+    loanReportTab === "disbursement" ||
+    loanReportTab === "collection"
+  ) {
+    state.loanReportTab = loanReportTab;
+  }
+  const recoveryView = qp.get("recoveryView");
+  if (recoveryView === "overdue" || recoveryView === "tracking") state.recoveryView = recoveryView;
+  const memberRegister = qp.get("memberRegister");
+  if (memberRegister === "1" || memberRegister?.toLowerCase() === "true") state.memberRegister = true;
   return state;
 }
 
@@ -264,7 +323,24 @@ function AppContent() {
   const [pageState, setPageState] = useState<Record<string, unknown>>(() => getPageStateFromUrl());
   const navigate = (page: string, state?: Record<string, unknown>) => {
     setCurrentPage(normalizeLegacyPage(page));
-    setPageState(state ?? {});
+    if (!state || Object.keys(state).length === 0) {
+      setPageState({});
+      return;
+    }
+    /** Normalize hotel → Receive money deep-link fields for URL sync */
+    if (String(state.source) === "hotel_checkout") {
+      setPageState({
+        crSource: "hotel_checkout",
+        crGuestId: String(state.guest_id ?? ""),
+        crGuestName: String(state.guest_name ?? ""),
+        crAmount: String(state.amount ?? ""),
+        crReference: String(state.reference ?? ""),
+        crDescription: String(state.description ?? ""),
+        crStayId: String(state.stay_id ?? ""),
+      });
+      return;
+    }
+    setPageState(state);
   };
 
   useEffect(() => {
@@ -339,11 +415,23 @@ function AppContent() {
       setCurrentPage(VSLA_HOME_PAGE);
       return;
     }
-    if (user.business_type === "manufacturing" && currentPage === "dashboard") {
+    if (
+      user.business_type === "manufacturing" &&
+      user.enable_manufacturing === false &&
+      (currentPage === "dashboard" ||
+        currentPage === "retail_dashboard" ||
+        currentPage === "manufacturing" ||
+        currentPage.startsWith("manufacturing_"))
+    ) {
+      setCurrentPage("admin");
+      setPageState({});
+      return;
+    }
+    if (user.business_type === "manufacturing" && user.enable_manufacturing !== false && currentPage === "dashboard") {
       setCurrentPage("manufacturing");
       return;
     }
-    if (user.business_type === "manufacturing" && currentPage === "retail_dashboard") {
+    if (user.business_type === "manufacturing" && user.enable_manufacturing !== false && currentPage === "retail_dashboard") {
       setCurrentPage("manufacturing");
       return;
     }
@@ -351,6 +439,18 @@ function AppContent() {
       setCurrentPage('platform_overview');
     }
   }, [user, isSuperAdmin, isHotelStaff, currentPage]);
+
+  /** Cashier / storekeeper narrowed UX: bounce off deep-linked pages outside role allow‑list */
+  useEffect(() => {
+    if (!user?.id || user.isSuperAdmin) return;
+    const bt = user.business_type ?? null;
+    if (isPageAllowedForNavRole(currentPage, user.role, bt)) return;
+    const next = defaultLandingPageForNavRole(user.role, bt);
+    if (next && next !== currentPage) {
+      setCurrentPage(next);
+      setPageState({});
+    }
+  }, [user, currentPage]);
 
   useEffect(() => {
     if (!user?.id) return;
@@ -447,12 +547,16 @@ function AppContent() {
     if (user?.business_type === "vsla" && currentPage === "dashboard") {
       return <VslaDashboardPage onNavigate={navigate} readOnly={false} />;
     }
-    if (user?.business_type === "manufacturing" && currentPage === "dashboard") {
+    if (
+      user?.business_type === "manufacturing" &&
+      currentPage === "dashboard" &&
+      user?.enable_manufacturing !== false
+    ) {
       return <ManufacturingPage readOnly={false} onNavigate={navigate} />;
     }
 
     const moduleId = pageToModuleId(currentPage);
-    const access = moduleId
+    let access = moduleId
       ? getModuleAccess({
           moduleId,
           businessType: user?.business_type ?? null,
@@ -463,6 +567,10 @@ function AppContent() {
           enablePayroll: user?.enable_payroll !== false,
           enableBudget: user?.enable_budget !== false,
           enableAgent: user?.business_type !== "retail" && user?.enable_agent !== false,
+          enableHotelAssessment:
+            (user?.business_type === "hotel" || user?.business_type === "mixed") &&
+            user?.enable_hotel_assessment !== false,
+          enableManufacturing: user?.enable_manufacturing !== false,
           enableReports: user?.enable_reports !== false,
           enableAccounting: user?.enable_accounting !== false,
           enableInventory: user?.enable_inventory !== false,
@@ -474,6 +582,27 @@ function AppContent() {
           schoolEnablePurchases: user?.school_enable_purchases === true,
         })
       : { visible: true, readOnly: false };
+
+    if (!isPageAllowedForBusinessType(currentPage, user?.business_type ?? null)) {
+      access = {
+        visible: false,
+        readOnly: true,
+        blockedReason: "This workspace is not available for your organization type.",
+      };
+    }
+
+    if (
+      !user?.isSuperAdmin &&
+      access.visible &&
+      !isPageAllowedForNavRole(currentPage, user.role, user?.business_type ?? null)
+    ) {
+      access = {
+        visible: false,
+        readOnly: true,
+        blockedReason: "This workspace is not available for your role.",
+      };
+    }
+
     if (!access.visible) {
       const fallback =
         user?.business_type === "retail" ? (
@@ -484,7 +613,7 @@ function AppContent() {
           <SchoolDashboard onNavigate={navigate} />
         ) : user?.business_type === "vsla" ? (
           <VslaDashboardPage onNavigate={navigate} readOnly={false} />
-        ) : user?.business_type === "manufacturing" ? (
+        ) : user?.business_type === "manufacturing" && user?.enable_manufacturing !== false ? (
           <ManufacturingPage readOnly={false} onNavigate={navigate} />
         ) : (
           <Dashboard onNavigate={setCurrentPage} />
@@ -520,16 +649,45 @@ function AppContent() {
         );
       case 'agent_hub':
         return <AgentHubPage />;
+      case HOTEL_ASSESSMENT_PAGE.home:
+        return <HotelAssessmentDashboardPage onNavigate={navigate} />;
+      case HOTEL_ASSESSMENT_PAGE.run:
+        return (
+          <HotelAssessmentWizardPage
+            onNavigate={navigate}
+            resumeAssessmentId={pageState?.hotelAssessmentId as string | undefined}
+          />
+        );
       case 'dashboard':
         return <Dashboard onNavigate={setCurrentPage} />;
       case 'retail_dashboard':
         return <RetailDashboard onNavigate={setCurrentPage} />;
       case SACCOPRO_PAGE.dashboard:
         return <SaccoDashboard />;
+      case SACCOPRO_PAGE.performanceDashboard:
+        return <SaccoPerformanceDashboardPage />;
       case SACCOPRO_PAGE.overview:
         return <SaccoOverviewPage onNavigate={setCurrentPage} />;
       case SACCOPRO_PAGE.members:
-        return <SaccoMembersPage readOnly={access.readOnly} onNavigate={navigate} />;
+        return (
+          <SaccoMembersPage
+            readOnly={access.readOnly}
+            onNavigate={navigate}
+            openMemberRegisterIntent={
+              pageState.memberRegister === true ||
+              pageState.memberRegister === "true" ||
+              pageState.memberRegister === "1"
+            }
+            onConsumedMemberRegisterIntent={() => navigate(SACCOPRO_PAGE.members, {})}
+          />
+        );
+      case SACCOPRO_PAGE.memberProfile:
+        return (
+          <SaccoMemberProfilePage
+            memberIdFromNav={pageState.memberId as string | undefined}
+            navigate={navigate}
+          />
+        );
       case SACCOPRO_PAGE.savingsSettings:
       case "sacco_members_savings_settings":
         return <SaccoMembersSavingsSettingsPage readOnly={access.readOnly} />;
@@ -543,6 +701,18 @@ function AppContent() {
         );
       case SACCOPRO_PAGE.savingsAccountsList:
         return <SaccoSavingsAccountsListPage onNavigate={navigate} />;
+      case SACCOPRO_PAGE.savingsStatements:
+        return <SaccoSavingsStatementsPage navigate={navigate} />;
+      case SACCOPRO_PAGE.savingsReports:
+        return (
+          <SaccoSavingsStatementsPage
+            navigate={navigate}
+            heading="Savings reports"
+            intro="Balances and movements by member — read-only. Record deposits and withdrawals in Teller (Receive money / Give money)."
+          />
+        );
+      case SACCOPRO_PAGE.financialSummaries:
+        return <SaccoFinancialSummariesPage navigate={navigate} />;
       case SACCOPRO_PAGE.loans:
         return <SaccoLoansPage />;
       case SACCOPRO_PAGE.loanList:
@@ -550,13 +720,27 @@ function AppContent() {
       case SACCOPRO_PAGE.loanInput:
         return <SacoLoanInput />;
       case SACCOPRO_PAGE.loanApproval:
-        return <SaccoLoanApproval />;
+        return <SaccoLoanApproval pipeline="approval_gates" />;
+      case SACCOPRO_PAGE.loanDisbursement:
+        return <SaccoLoanApproval pipeline="disbursement_final" />;
       case SACCOPRO_PAGE.loanDashboard:
         return <SaccoLoanDashboard />;
       case SACCOPRO_PAGE.loanReports:
-        return <SaccoLoanReports />;
+        return (
+          <SaccoLoanReports
+            navigate={navigate}
+            loanReportTab={pageState.loanReportTab as LoanReportTabId | undefined}
+          />
+        );
       case SACCOPRO_PAGE.loanRecovery:
-        return <SaccoLoanRecovery />;
+        return (
+          <SaccoLoanRecovery
+            navigate={navigate}
+            recoveryView={pageState.recoveryView === "overdue" ? "overdue" : undefined}
+          />
+        );
+      case SACCOPRO_PAGE.loanServicing:
+        return <SaccoLoanServicingPage />;
       case SACCOPRO_PAGE.loanSettings:
         return <SaccoLoanSettings />;
       case SACCOPRO_PAGE.loanInterestCalc:
@@ -652,9 +836,20 @@ function AppContent() {
       case SACCOPRO_PAGE.clientDashboard:
         return <SaccoClientDashboard />;
       case SACCOPRO_PAGE.cashbook:
-        return <SaccoCashbookPage />;
+        return (
+          <SaccoCashbookPage
+            cashbookView={(pageState?.cashbookView as "journal" | "reconciliation") || "journal"}
+            navigate={navigate}
+          />
+        );
       case SACCOPRO_PAGE.teller:
-        return <SaccoTellerPage />;
+        return (
+          <SaccoTellerPage
+            tellerDesk={pageState?.tellerDesk as string | undefined}
+            tellerTask={pageState?.tellerTask as string | undefined}
+            onDeskNavigate={navigate}
+          />
+        );
       case 'rooms':
         return <RoomsPage />;
       case HOTEL_PAGE.roomsSetup:
@@ -672,7 +867,9 @@ function AppContent() {
           />
         );
       case 'stays':
-        return <ActiveStaysPage />;
+        return (
+          <ActiveStaysPage highlightGuestId={pageState?.highlightGuestId as string | undefined} onNavigate={navigate} />
+        );
       case 'POS':
       case HOTEL_PAGE.posWaiter:
         return <POSPage readOnly={access.readOnly} compactMode="waiter" />;
@@ -726,7 +923,13 @@ function AppContent() {
           />
         );
       case 'cash_receipts':
-        return <CashReceiptsPage readOnly={access.readOnly} />;
+        return (
+          <CashReceiptsPage
+            readOnly={access.readOnly}
+            pageState={pageState}
+            onNavigate={navigate}
+          />
+        );
       case 'transactions':
         return <TransactionsPage highlightTransactionId={pageState?.highlightTransactionId as string | undefined} />;
       case 'kitchen_display':
@@ -822,12 +1025,14 @@ function AppContent() {
             initialTab={parseAdminTabParam(pageState?.adminTab as string | undefined) ?? null}
           />
         );
+      case 'system_integrations':
+        return <IntegrationsHubPage onNavigate={navigate} />;
       case 'gl_accounts':
         return <GLAccountsPage />;
       case 'purchases_vendors':
         return <VendorsPage highlightVendorId={pageState?.highlightVendorId as string | undefined} />;
       case 'purchases_expenses':
-        return <ExpensesPage />;
+        return <ExpensesPage onNavigate={navigate} />;
       case 'purchases_orders':
         return <PurchaseOrdersPage onNavigate={navigate} readOnly={access.readOnly} />;
       case 'purchases_bills':
@@ -872,7 +1077,7 @@ function AppContent() {
           <SchoolDashboard onNavigate={navigate} />
         ) : user?.business_type === "vsla" ? (
           <VslaDashboardPage onNavigate={navigate} readOnly={false} />
-        ) : user?.business_type === "manufacturing" ? (
+        ) : user?.business_type === "manufacturing" && user?.enable_manufacturing !== false ? (
           <ManufacturingPage readOnly={false} onNavigate={navigate} />
         ) : (
           <Dashboard onNavigate={setCurrentPage} />
@@ -882,7 +1087,7 @@ function AppContent() {
 
   return (
     <AppProvider navigate={(p, state) => navigate(normalizeLegacyPage(p), state)}>
-      <Layout currentPage={currentPage} onNavigate={(page, state) => navigate(page, state)}>
+      <Layout currentPage={currentPage} pageState={pageState} onNavigate={(page, state) => navigate(page, state)}>
         {renderPage()}
       </Layout>
     </AppProvider>

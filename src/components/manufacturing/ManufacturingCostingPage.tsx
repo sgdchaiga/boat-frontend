@@ -4,6 +4,7 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { createJournalForManufacturingCostingEntry } from "../../lib/journal";
 
 export function ManufacturingCostingPage({ readOnly = false }: { readOnly?: boolean }) {
   const { user } = useAuth();
@@ -60,8 +61,29 @@ export function ManufacturingCostingPage({ readOnly = false }: { readOnly?: bool
         overhead_cost: Number(overheadCost || 0),
       };
       if (orgId) payload.organization_id = orgId;
-      const { error: insertError } = await supabase.from("manufacturing_costing_entries").insert(payload);
+      const { data: created, error: insertError } = await supabase
+        .from("manufacturing_costing_entries")
+        .insert(payload)
+        .select("id")
+        .single();
       if (insertError) throw insertError;
+      const totalCost = Number(materialCost || 0) + Number(laborCost || 0) + Number(overheadCost || 0);
+      if (orgId && created?.id && totalCost > 0) {
+        const entryDate = `${period}-01`;
+        const jr = await createJournalForManufacturingCostingEntry(
+          String((created as { id: string }).id),
+          totalCost,
+          product.trim(),
+          period,
+          entryDate,
+          user?.id ?? null,
+          orgId
+        );
+        if (!jr.ok) {
+          console.warn("[manufacturing journal]", jr.error);
+          setError(`Costing saved but GL not posted: ${jr.error}`);
+        }
+      }
       setProduct("");
       setMaterialCost("0");
       setLaborCost("0");
@@ -86,7 +108,10 @@ export function ManufacturingCostingPage({ readOnly = false }: { readOnly?: bool
         <div className="flex items-center gap-2">
           <h1 className="text-3xl font-bold text-slate-900">Costing</h1>
           <PageNotes ariaLabel="Manufacturing costing help">
-            <p>Review and reconcile material, labor, and overhead costs by period.</p>
+            <p>
+              Review material, labor, and overhead by period. When totals are greater than zero, a journal is posted (Dr finished goods · Cr WIP) using{" "}
+              <strong className="text-slate-800">Admin → Journal account settings</strong> — manufacturing finished goods &amp; WIP accounts.
+            </p>
           </PageNotes>
         </div>
         <button type="button" onClick={handleCreate} disabled={readOnly || saving} className="app-btn-primary disabled:cursor-not-allowed">

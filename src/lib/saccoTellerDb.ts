@@ -3,6 +3,7 @@
  * Requires migration `20260426120007_sacco_teller.sql`.
  */
 import { createJournalEntry, getDefaultGlAccounts } from "@/lib/journal";
+import { fetchJournalGlSettings } from "@/lib/journalAccountSettings";
 import { supabase } from "@/lib/supabase";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { businessTodayISO } from "@/lib/timezone";
@@ -1048,4 +1049,29 @@ export function downloadCsv(filename: string, csv: string): void {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/** One round-trip bundle for teller main screen (members, savings, GL, journal teller settings). */
+export type TellerInitData = {
+  members: TellerMemberPickRow[];
+  savingsAccounts: TellerSavingsAccountPickRow[];
+  glAccounts: TellerGlAccountPickRow[];
+  tellerAllowPerTxnCounterpartyGl: boolean;
+  tellerDefaultCounterpartyGlId: string | null;
+};
+
+export async function fetchTellerInitData(organizationId: string, isSuperAdmin: boolean): Promise<TellerInitData> {
+  const [members, savingsAccounts, glAccounts, s] = await Promise.all([
+    fetchTellerMemberPickList(organizationId),
+    fetchTellerSavingsAccountPickList(organizationId),
+    fetchTellerGlAccountPickList(organizationId, isSuperAdmin),
+    fetchJournalGlSettings(organizationId),
+  ]);
+  return {
+    members,
+    savingsAccounts,
+    glAccounts,
+    tellerAllowPerTxnCounterpartyGl: s?.teller_allow_per_transaction_counterparty_gl ?? true,
+    tellerDefaultCounterpartyGlId: s?.teller_default_counterparty_gl_id ?? null,
+  };
 }

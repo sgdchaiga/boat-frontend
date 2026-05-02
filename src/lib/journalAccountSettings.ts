@@ -34,7 +34,9 @@ export type JournalAccountRole =
   | "loss_on_disposal"
   | "retained_earnings"
   | "wallet_liability"
-  | "wallet_clearing";
+  | "wallet_clearing"
+  | "manufacturing_finished_goods"
+  | "manufacturing_wip";
 
 export interface JournalAccountSettings {
   revenue_id: string | null;
@@ -81,6 +83,12 @@ export interface JournalAccountSettings {
   wallet_liability_id: string | null;
   /** Cash/bank clearing contra for wallet deposits and withdrawals. */
   wallet_clearing_id: string | null;
+  /** school: invoice accrual (default) vs revenue on receipt only. */
+  school_accounting_basis: "accrual" | "cash";
+  /** Manufacturing costing capitalization — debit. */
+  manufacturing_finished_goods_id: string | null;
+  /** Manufacturing costing — credit / WIP clearing. */
+  manufacturing_wip_id: string | null;
 }
 
 const DEFAULT_SETTINGS: JournalAccountSettings = {
@@ -116,6 +124,9 @@ const DEFAULT_SETTINGS: JournalAccountSettings = {
   teller_default_counterparty_gl_id: null,
   wallet_liability_id: null,
   wallet_clearing_id: null,
+  school_accounting_basis: "accrual",
+  manufacturing_finished_goods_id: null,
+  manufacturing_wip_id: null,
 };
 
 export function loadJournalAccountSettings(): JournalAccountSettings {
@@ -128,6 +139,7 @@ export function loadJournalAccountSettings(): JournalAccountSettings {
       }
       delete parsed.pos_mobile_money_id;
       const merged = { ...DEFAULT_SETTINGS, ...parsed } as JournalAccountSettings;
+      if (merged.school_accounting_basis !== "cash") merged.school_accounting_basis = "accrual";
       if (merged.default_vat_percent != null && typeof merged.default_vat_percent !== "number") {
         const n = Number(merged.default_vat_percent);
         merged.default_vat_percent = Number.isFinite(n) ? n : null;
@@ -224,6 +236,8 @@ const JOURNAL_GL_SELECT_WITH_TELLER = `${JOURNAL_GL_SELECT_FULL}, teller_allow_p
 
 const JOURNAL_GL_SELECT_WITH_WALLET = `${JOURNAL_GL_SELECT_WITH_TELLER}, wallet_liability_gl_account_id, wallet_clearing_gl_account_id`;
 
+const JOURNAL_GL_SELECT_WITH_WALLET_SCHOOL_MFG = `${JOURNAL_GL_SELECT_WITH_WALLET}, school_accounting_basis, manufacturing_finished_goods_gl_account_id, manufacturing_wip_gl_account_id`;
+
 function mapJournalGlRowToSettings(d: {
   revenue_gl_account_id: string | null;
   cash_gl_account_id: string | null;
@@ -257,6 +271,9 @@ function mapJournalGlRowToSettings(d: {
   teller_default_counterparty_gl_account_id?: string | null;
   wallet_liability_gl_account_id?: string | null;
   wallet_clearing_gl_account_id?: string | null;
+  school_accounting_basis?: string | null;
+  manufacturing_finished_goods_gl_account_id?: string | null;
+  manufacturing_wip_gl_account_id?: string | null;
 }): JournalAccountSettings {
   const dv = d.default_vat_percent;
   const defaultVatPct =
@@ -297,7 +314,28 @@ function mapJournalGlRowToSettings(d: {
     teller_default_counterparty_gl_id: d.teller_default_counterparty_gl_account_id ?? null,
     wallet_liability_id: d.wallet_liability_gl_account_id ?? null,
     wallet_clearing_id: d.wallet_clearing_gl_account_id ?? null,
+    school_accounting_basis:
+      typeof d.school_accounting_basis === "string" && d.school_accounting_basis.toLowerCase() === "cash" ? "cash" : "accrual",
+    manufacturing_finished_goods_id: d.manufacturing_finished_goods_gl_account_id ?? null,
+    manufacturing_wip_id: d.manufacturing_wip_gl_account_id ?? null,
   };
+}
+
+function isLikelyMissingSchoolManufacturingJournalCols(err: {
+  message?: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+} | null): boolean {
+  if (!err) return false;
+  const m = postgrestErrorText(err);
+  const c = String(err.code || "");
+  return (
+    c === "PGRST204" ||
+    m.includes("school_accounting_basis") ||
+    m.includes("manufacturing_finished_goods_gl_account_id") ||
+    m.includes("manufacturing_wip_gl_account_id")
+  );
 }
 
 /** Load org-scoped settings from Supabase; returns null if no row. */
@@ -316,9 +354,22 @@ function isLikelyMissingWalletColumnError(err: { message?: string; details?: str
 export async function fetchJournalGlSettings(organizationId: string): Promise<JournalAccountSettings | null> {
   let res = await supabase
     .from("journal_gl_settings")
-    .select(JOURNAL_GL_SELECT_WITH_WALLET)
+    .select(JOURNAL_GL_SELECT_WITH_WALLET_SCHOOL_MFG)
     .eq("organization_id", organizationId)
     .maybeSingle();
+
+  if (res.error && isLikelyMissingSchoolManufacturingJournalCols(res.error)) {
+    res = await supabase
+      .from("journal_gl_settings")
+      .select(JOURNAL_GL_SELECT_WITH_WALLET)
+      .eq("organization_id", organizationId)
+      .maybeSingle();
+    if (!res.error) {
+      console.warn(
+        "[journal_gl_settings] Loaded without school accounting / manufacturing columns. Apply migration 20260502104500_school_accounting_basis_manufacturing_journal.sql."
+      );
+    }
+  }
 
   if (res.error && isLikelyMissingWalletColumnError(res.error)) {
     res = await supabase
@@ -443,7 +494,23 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
     wallet_clearing_gl_account_id: settings.wallet_clearing_id,
   };
 
-  let { error } = await supabase.from("journal_gl_settings").upsert(payloadWithWallet, { onConflict: "organization_id" });
+  const payloadWithSchoolMfg = {
+    ...payloadWithWallet,
+    school_accounting_basis: settings.school_accounting_basis === "cash" ? "cash" : "accrual",
+    manufacturing_finished_goods_gl_account_id: settings.manufacturing_finished_goods_id,
+    manufacturing_wip_gl_account_id: settings.manufacturing_wip_id,
+  };
+
+  let { error } = await supabase.from("journal_gl_settings").upsert(payloadWithSchoolMfg, { onConflict: "organization_id" });
+
+  if (error && isLikelyMissingSchoolManufacturingJournalCols(error)) {
+    ({ error } = await supabase.from("journal_gl_settings").upsert(payloadWithWallet, { onConflict: "organization_id" }));
+    if (!error) {
+      console.warn(
+        "[journal_gl_settings] Saved without school accounting / manufacturing columns. Apply migration 20260502104500_school_accounting_basis_manufacturing_journal.sql."
+      );
+    }
+  }
 
   if (error && isLikelyMissingWalletColumnError(error)) {
     ({ error } = await supabase.from("journal_gl_settings").upsert(payloadWithTeller, { onConflict: "organization_id" }));
@@ -557,6 +624,16 @@ export const JOURNAL_ACCOUNT_ROLES: { id: JournalAccountRole; label: string; acc
   { id: "retained_earnings", label: "Retained earnings (OCI recycling on disposal)", accountType: "equity" },
   { id: "wallet_liability", label: "Wallet — customer liability (customer wallet balances)", accountType: "liability" },
   { id: "wallet_clearing", label: "Wallet — clearing / cash (contra for deposits & withdrawals)", accountType: "asset" },
+  {
+    id: "manufacturing_finished_goods",
+    label: "Manufacturing — finished goods inventory (debit when capitalizing costing)",
+    accountType: "asset",
+  },
+  {
+    id: "manufacturing_wip",
+    label: "Manufacturing — WIP / production clearing (credit when capitalizing costing)",
+    accountType: "asset",
+  },
 ];
 
 /** Row for admin UI — may omit hotel-only POS buckets for retail. */
@@ -671,10 +748,16 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
       "purchases_inventory",
       "pos_cogs_kitchen",
       "pos_inventory_kitchen",
+      "manufacturing_finished_goods",
+      "manufacturing_wip",
     ]);
     const mfgRows = JOURNAL_ACCOUNT_ROLES.filter((r) => mfgSet.has(r.id)).map((r) => {
       const group =
-        r.id === "purchases_inventory" || r.id === "pos_cogs_kitchen" || r.id === "pos_inventory_kitchen"
+        r.id === "purchases_inventory" ||
+        r.id === "pos_cogs_kitchen" ||
+        r.id === "pos_inventory_kitchen" ||
+        r.id === "manufacturing_finished_goods" ||
+        r.id === "manufacturing_wip"
           ? "Manufacturing / inventory"
           : "Core accounting";
       const label =

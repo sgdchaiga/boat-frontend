@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Banknote, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { Banknote, ArrowUp, ArrowDown, ArrowUpDown, Plus, ShoppingCart, UtensilsCrossed } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
+import { createJournalForPayment } from "../lib/journal";
 import {
   formatPaymentMethodLabel,
+  insertPaymentWithMethodCompat,
   PAYMENT_METHOD_SELECT_OPTIONS,
   type PaymentMethodCode,
 } from "../lib/paymentMethod";
@@ -16,6 +18,15 @@ import { SourceDocumentsCell } from "./common/SourceDocumentsCell";
 
 interface CashReceiptsPageProps {
   readOnly?: boolean;
+  /** From App URL / navigate state (hotel checkout prefill) */
+  pageState?: Record<string, unknown>;
+  onNavigate?: (page: string, state?: Record<string, unknown>) => void;
+}
+
+function buildDebtorTransactionNumber(paymentDate: string): string {
+  const ymd = (paymentDate || new Date().toISOString().slice(0, 10)).replace(/-/g, "");
+  const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `DBT-${ymd}-${suffix}`;
 }
 
 type SortKey = "transaction_id" | "amount" | "payment_method" | "paid_at";
@@ -42,8 +53,16 @@ function formatSupabaseError(e: unknown): string {
   }
 }
 
-export function CashReceiptsPage({ readOnly = false }: CashReceiptsPageProps) {
+export function CashReceiptsPage({
+  readOnly = false,
+  pageState,
+  onNavigate,
+}: CashReceiptsPageProps) {
   const { user } = useAuth();
+  const businessType = user?.business_type ?? null;
+  const showHotelPosShortcut =
+    businessType === "hotel" || businessType === "restaurant" || businessType === "mixed";
+  const showRetailPosShortcut = businessType === "retail" || businessType === "mixed";
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
   const [rows, setRows] = useState<PaymentWithCustomer[]>([]);
@@ -67,6 +86,92 @@ export function CashReceiptsPage({ readOnly = false }: CashReceiptsPageProps) {
   const role = (user?.role || "").toLowerCase();
   const [canEditCashReceiptsByRole, setCanEditCashReceiptsByRole] = useState<boolean>(!!user?.isSuperAdmin);
   const canReverse = canEditCashReceiptsByRole;
+
+  const isHotelCheckout = String(pageState?.crSource ?? "") === "hotel_checkout";
+
+  const [hotelAmount, setHotelAmount] = useState("");
+  const [hotelMethod, setHotelMethod] = useState<PaymentMethodCode>("cash");
+  const [hotelDate, setHotelDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [hotelReference, setHotelReference] = useState("");
+  const [hotelGuestName, setHotelGuestName] = useState("");
+  const [hotelDescription, setHotelDescription] = useState("");
+  const [hotelGuestId, setHotelGuestId] = useState("");
+  const [hotelStayId, setHotelStayId] = useState("");
+  const [hotelSaving, setHotelSaving] = useState(false);
+
+  useEffect(() => {
+    if (!isHotelCheckout) return;
+    setHotelGuestId(String(pageState?.crGuestId ?? ""));
+    setHotelGuestName(String(pageState?.crGuestName ?? ""));
+    const a = pageState?.crAmount;
+    const num = typeof a === "number" ? a : parseFloat(String(a ?? ""));
+    setHotelAmount(Number.isFinite(num) && num > 0 ? String(num) : "");
+    setHotelReference(String(pageState?.crReference ?? ""));
+    setHotelDescription(String(pageState?.crDescription ?? ""));
+    setHotelStayId(String(pageState?.crStayId ?? ""));
+    setHotelDate(new Date().toISOString().slice(0, 10));
+  }, [
+    isHotelCheckout,
+    pageState?.crGuestId,
+    pageState?.crAmount,
+    pageState?.crReference,
+    pageState?.crDescription,
+    pageState?.crGuestName,
+    pageState?.crStayId,
+  ]);
+
+  const clearHotelCheckoutState = () => {
+    onNavigate?.("cash_receipts", {});
+  };
+
+  const saveHotelGuestPayment = async () => {
+    if (readOnly || !onNavigate) return;
+    if (!hotelGuestId.trim()) {
+      alert("Guest is not linked to this payment. Open the stay from Active stays and try again.");
+      return;
+    }
+    const amt = parseFloat(hotelAmount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+    setHotelSaving(true);
+    try {
+      const { data: staffRow } = await supabase.from("staff").select("id").eq("id", user?.id).maybeSingle();
+      const dateStr = hotelDate.trim() || new Date().toISOString().slice(0, 10);
+      const paidAtIso = new Date(`${dateStr}T12:00:00`).toISOString();
+      const txId = hotelReference.trim() || buildDebtorTransactionNumber(dateStr);
+
+      const insertPayload: Record<string, unknown> = {
+        stay_id: hotelStayId.trim() || null,
+        property_customer_id: hotelGuestId.trim(),
+        payment_source: "debtor",
+        ...(orgId ? { organization_id: orgId } : {}),
+        amount: amt,
+        payment_status: "completed",
+        paid_at: paidAtIso,
+        transaction_id: txId,
+        processed_by: staffRow?.id ?? null,
+      };
+
+      const { data: inserted, error } = await insertPaymentWithMethodCompat(supabase, insertPayload, hotelMethod);
+      if (error) throw error;
+      if (!inserted?.id) throw new Error("Payment insert returned no row.");
+
+      const paidAt = (inserted as { paid_at?: string }).paid_at ?? paidAtIso;
+      const jr = await createJournalForPayment(String(inserted.id), amt, paidAt, user?.id ?? null);
+      if (!jr.ok) {
+        alert(`Payment saved but journal was not posted: ${jr.error}`);
+      }
+
+      const gid = hotelGuestId.trim();
+      onNavigate("stays", { highlightGuestId: gid });
+    } catch (e) {
+      alert(`Could not save payment: ${formatSupabaseError(e)}`);
+    } finally {
+      setHotelSaving(false);
+    }
+  };
 
   useEffect(() => {
     const loadRolePermission = async () => {
@@ -433,16 +538,141 @@ export function CashReceiptsPage({ readOnly = false }: CashReceiptsPageProps) {
       {readOnly && <ReadOnlyNotice />}
 
       <div className="mb-8">
-        <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-3xl font-bold">Cash receipts</h1>
-          <PageNotes ariaLabel="Cash receipts help">
-            <p>
-              Immediate takings from <strong>Point of sale</strong> (pay now). Invoice balances, guest folio payments, and other debtor receipts are on{" "}
-              <strong>Debtor payments</strong>.
-            </p>
-          </PageNotes>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex flex-wrap items-center gap-2 min-w-0">
+            <h1 className="text-3xl font-bold">Receive money</h1>
+            <PageNotes ariaLabel="Cash receipts help">
+              <p>
+                Immediate takings from <strong>Point of sale</strong> (pay now). Invoice balances, guest folio payments, and other debtor receipts are on{" "}
+                <strong>Debtor payments</strong>.
+              </p>
+            </PageNotes>
+          </div>
+          {!readOnly && onNavigate ? (
+            <div className="flex flex-wrap gap-2 shrink-0">
+              {showHotelPosShortcut ? (
+                <button
+                  type="button"
+                  onClick={() => onNavigate("hotel_pos_waiter")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  <Plus className="w-4 h-4 text-emerald-600" aria-hidden />
+                  <UtensilsCrossed className="w-4 h-4 text-slate-500" aria-hidden />
+                  Hotel POS
+                </button>
+              ) : null}
+              {showRetailPosShortcut ? (
+                <button
+                  type="button"
+                  onClick={() => onNavigate("retail_pos")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  <Plus className="w-4 h-4 text-violet-600" aria-hidden />
+                  <ShoppingCart className="w-4 h-4 text-slate-500" aria-hidden />
+                  Retail POS
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
+
+      {isHotelCheckout ? (
+        <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 md:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Receiving payment for</p>
+              <p className="text-lg font-semibold text-slate-900 mt-1">
+                {hotelGuestName || "Guest"}{hotelDescription ? ` – ${hotelDescription}` : ""}
+              </p>
+              <p className="text-sm text-slate-700 mt-1">
+                Amount:{" "}
+                <span className="font-bold tabular-nums">
+                  {hotelAmount ? Number(hotelAmount).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 2 }) : "—"}
+                </span>
+                {hotelReference ? (
+                  <span className="text-slate-500 ml-2">
+                    · Ref: <span className="font-mono text-xs">{hotelReference}</span>
+                  </span>
+                ) : null}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={clearHotelCheckoutState}
+              className="shrink-0 text-sm text-slate-600 hover:text-slate-900 underline"
+            >
+              Dismiss
+            </button>
+          </div>
+          {!hotelGuestId.trim() ? (
+            <p className="text-sm text-amber-900 bg-amber-100/80 rounded-lg px-3 py-2 border border-amber-200">
+              Guest link is missing — reopen the bill from <strong>Active stays</strong> and use <strong>Receive payment</strong>.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+              <div className="sm:col-span-1">
+                <label className="block text-xs font-medium text-slate-600 mb-1">Amount</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={hotelAmount}
+                  onChange={(e) => setHotelAmount(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm tabular-nums"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Method</label>
+                <select
+                  value={hotelMethod}
+                  onChange={(e) => setHotelMethod(e.target.value as PaymentMethodCode)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  {PAYMENT_METHOD_SELECT_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Date received</label>
+                <input
+                  type="date"
+                  value={hotelDate}
+                  onChange={(e) => setHotelDate(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-600 mb-1">Reference / folio</label>
+                <input
+                  type="text"
+                  value={hotelReference}
+                  onChange={(e) => setHotelReference(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+                  placeholder="FOLIO-…"
+                />
+              </div>
+              <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={readOnly || hotelSaving}
+                  onClick={() => void saveHotelGuestPayment()}
+                  className="app-btn-primary px-5 disabled:opacity-50"
+                >
+                  {hotelSaving ? "Saving…" : "Save guest payment"}
+                </button>
+                <p className="text-xs text-slate-600 self-center">
+                  Posts to the guest account (debtor), then returns you to <strong>Active stays</strong>.
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
+
       {!canEditCashReceiptsByRole ? (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           Cash receipt edits are disabled for your role ({role || "staff"}). Ask an admin/super admin to grant cash receipt edit permission.

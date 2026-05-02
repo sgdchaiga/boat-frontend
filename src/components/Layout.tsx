@@ -2,7 +2,6 @@ import { ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   Hotel,
   LayoutDashboard,
-  BedDouble,
   CreditCard,
   Receipt,
   FileText,
@@ -17,9 +16,7 @@ import {
   Building2,
   Shield,
   PiggyBank,
-  BookMarked,
   Banknote,
-  Home,
   TrendingUp,
   GraduationCap,
   BookOpen,
@@ -27,31 +24,80 @@ import {
   Factory,
   MessageSquare,
   Smartphone,
+  Plug,
+  BarChart3,
+  AlertTriangle,
 } from 'lucide-react';
+import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
 import { SCHOOL_PAGE } from '@/lib/schoolPages';
 import { VSLA_PAGE } from '@/lib/vslaPages';
 import { PAYROLL_PAGE } from '@/lib/payrollPages';
-import { HOTEL_PAGE } from '@/lib/hotelPages';
 import { useAuth } from '../contexts/AuthContext';
-import { getModuleAccess, pageToModuleId } from '../lib/moduleAccess';
+import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from '../lib/moduleAccess';
+import { isPageAllowedForNavRole } from '@/lib/navRoleExperience';
+import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
 import { desktopApi } from '@/lib/desktopApi';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncPush';
 
 interface LayoutProps {
   children: ReactNode;
   currentPage: string;
+  /** Mirrors `pageState` / query string for active nav on pages with sub-views (e.g. SACCO Teller). */
+  pageState?: Record<string, unknown>;
   onNavigate: (page: string, state?: Record<string, unknown>) => void;
 }
 
 type NavLeaf = { name: string; icon: typeof FileText; page: string };
-/** Single link or a labeled subgroup (used under Reports). */
+type NavDivider = { kind: 'divider'; id: string };
+type NavSectionHeader = { kind: 'section-header'; id: string; title: string };
+/** Single link or a labeled subgroup (used under Reports). Optional `state` syncs to URL (e.g. SACCO Teller desk). */
 export type NavChild =
-  | { name: string; page: string }
-  | { group: string; items: { name: string; page: string }[] };
+  | { name: string; page: string; state?: Record<string, unknown> }
+  | { group: string; items: { name: string; page: string; state?: Record<string, unknown> }[] };
+
+/** Active when every key in required `state` matches `pageState` (defaults: tellerDesk receive, cashbookView journal). */
+function isSidebarLeafActive(
+  leaf: { page: string; state?: Record<string, unknown> },
+  currentPage: string,
+  pageState: Record<string, unknown>
+): boolean {
+  if (currentPage !== leaf.page) return false;
+
+  /** Loan reports: sidebar “Portfolio summary” uses `summary`; deep links may omit tab. */
+  if (leaf.page === SACCOPRO_PAGE.loanReports) {
+    const want = (leaf.state?.loanReportTab as string | undefined) ?? "summary";
+    const pv = pageState.loanReportTab as string | undefined;
+    if (want === "summary") return pv === undefined || pv === null || String(pv) === "" || pv === "summary";
+    return pv === want;
+  }
+
+  /** Arrears & recovery workspace: default view is recovery tracking follow-up list. */
+  if (leaf.page === SACCOPRO_PAGE.loanRecovery) {
+    const want = (leaf.state?.recoveryView as string | undefined) ?? "tracking";
+    const pv = pageState.recoveryView as string | undefined;
+    if (want === "tracking") return pv === undefined || pv === null || String(pv) === "" || pv === "tracking";
+    return pv === want;
+  }
+
+  const req = leaf.state;
+  /** Sidebar leaf with no scoped state highlights whenever that page route is active (URL may carry unrelated query keys). */
+  if (!req || Object.keys(req).length === 0) return true;
+  return Object.entries(req).every(([k, v]) => {
+    const pv = pageState[k];
+    const empty = pv === undefined || pv === null || String(pv) === "";
+    if (empty) {
+      if (k === "tellerDesk" && v === "receive") return true;
+      if (k === "cashbookView" && v === "journal") return true;
+    }
+    return pv === v;
+  });
+}
 type NavItem =
   | NavLeaf
+  | NavDivider
+  | NavSectionHeader
   | {
       name: string;
       icon: typeof FileText;
@@ -116,6 +162,62 @@ function navSectionAccent(sectionName: string) {
       activeChild: 'bg-emerald-500 text-white shadow-sm',
       groupHeader: 'text-emerald-100 bg-slate-800/50 border-l-2 border-emerald-500',
     },
+    'POS (Sales)': {
+      activeChild: 'bg-emerald-500 text-white shadow-sm',
+      groupHeader: 'text-emerald-100 bg-slate-800/50 border-l-2 border-emerald-500',
+    },
+    'Orders / Kitchen': {
+      activeChild: 'bg-orange-500 text-white shadow-sm',
+      groupHeader: 'text-orange-100 bg-slate-800/50 border-l-2 border-orange-500',
+    },
+    'POS / Orders': {
+      activeChild: 'bg-orange-500 text-white shadow-sm',
+      groupHeader: 'text-orange-100 bg-slate-800/50 border-l-2 border-orange-500',
+    },
+    'Cash & Bank': {
+      activeChild: 'bg-teal-500 text-white shadow-sm',
+      groupHeader: 'text-teal-100 bg-slate-800/50 border-l-2 border-teal-500',
+    },
+    'Money spent': {
+      activeChild: 'bg-amber-500 text-white shadow-sm',
+      groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
+    },
+    'Money In': {
+      activeChild: 'bg-teal-500 text-white shadow-sm',
+      groupHeader: 'text-teal-100 bg-slate-800/50 border-l-2 border-teal-500',
+    },
+    'Money Out': {
+      activeChild: 'bg-amber-500 text-white shadow-sm',
+      groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
+    },
+    Stock: {
+      activeChild: 'bg-violet-500 text-white shadow-sm',
+      groupHeader: 'text-violet-100 bg-slate-800/50 border-l-2 border-violet-500',
+    },
+    Settings: {
+      activeChild: 'bg-slate-500 text-white shadow-sm',
+      groupHeader: 'text-slate-200 bg-slate-800/50 border-l-2 border-slate-500',
+    },
+    Management: {
+      activeChild: 'bg-violet-500 text-white shadow-sm',
+      groupHeader: 'text-violet-100 bg-slate-800/50 border-l-2 border-violet-500',
+    },
+    '📑 Reports': {
+      activeChild: 'bg-rose-500 text-white shadow-sm',
+      groupHeader: 'text-rose-100 bg-slate-800/50 border-l-2 border-rose-500',
+    },
+    '⚠️ Arrears': {
+      activeChild: 'bg-amber-500 text-white shadow-sm',
+      groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
+    },
+    '🧾 System (restricted)': {
+      activeChild: 'bg-slate-500 text-white shadow-sm',
+      groupHeader: 'text-slate-200 bg-slate-800/50 border-l-2 border-slate-500',
+    },
+    Analytics: {
+      activeChild: 'bg-indigo-500 text-white shadow-sm',
+      groupHeader: 'text-indigo-100 bg-slate-800/50 border-l-2 border-indigo-500',
+    },
   };
   return (
     map[sectionName] ?? {
@@ -128,7 +230,7 @@ function navSectionAccent(sectionName: string) {
 const singleNavActive = 'bg-brand-600 text-white shadow-sm';
 const singleNavIdle = 'text-slate-400 hover:bg-slate-800/80 hover:text-white';
 
-export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
+export function Layout({ children, currentPage, pageState = {}, onNavigate }: LayoutProps) {
   const { user, signOut, isSuperAdmin, isHotelStaff } = useAuth();
   const businessType = user?.business_type ?? null;
   const subscriptionStatus = user?.subscription_status ?? "none";
@@ -169,259 +271,106 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
   const allowPayroll = !retailOnly && enablePayroll;
   const allowBudget = !retailOnly && enableBudget;
   const allowAgent = !retailOnly && user?.enable_agent !== false;
+  const allowHotelAssessment =
+    (businessType === "hotel" || businessType === "mixed") && user?.enable_hotel_assessment !== false;
+  const allowManufacturing = user?.enable_manufacturing !== false;
 
-  const hotelNavigation: NavItem[] = useMemo(() => {
-    const showHotelFrontDesk = businessType === 'hotel' || businessType === 'mixed';
-    const showHotelPosFlows = businessType === 'hotel' || businessType === 'mixed' || businessType === 'restaurant';
-    const showHotelDashboardNav = currentPage !== 'agent_hub';
-    const frontDeskNav: NavItem | null = showHotelFrontDesk
-      ? {
-          name: 'Front Desk',
-          icon: BedDouble,
-          children: [
-            { name: 'Rooms', page: 'rooms' },
-            { name: 'Reservations', page: 'reservations' },
-            { name: 'Check-In', page: 'checkin' },
-            { name: 'Active Stays', page: 'stays' },
-            { name: 'Housekeeping', page: 'housekeeping' },
-            { name: 'Billing', page: 'billing' },
-            { name: 'Room types & setup', page: HOTEL_PAGE.roomsSetup },
-          ],
-        }
-      : null;
+  const saccoSystemCashbookNav = Boolean(
+    isSuperAdmin ||
+      ["admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase())
+  );
 
-    return [
-    ...(showHotelDashboardNav ? [{ name: 'Dashboard', icon: LayoutDashboard, page: 'dashboard' } as NavItem] : []),
-    { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
-    ...(allowCommunications ? [{ name: 'Communications', icon: MessageSquare, page: 'communications' } as NavItem] : []),
-    { name: 'Retail Dashboard', icon: LayoutDashboard, page: 'retail_dashboard' },
-    ...(frontDeskNav ? [frontDeskNav] : []),
-    {
-      name: 'Sales',
-      icon: Receipt,
-      children: [
-        ...(businessType === 'mixed'
-          ? [
-              { name: 'Retail customers', page: 'retail_customers' as const },
-              { name: 'Customers', page: 'hotel_customers' as const },
-            ]
-          : businessType === 'retail' || businessType === 'restaurant'
-            ? [{ name: 'Customers', page: 'retail_customers' as const }]
-            : [{ name: 'Customers', page: 'hotel_customers' as const }]),
-        ...(showHotelPosFlows
-          ? [
-              { name: 'POS (Waiter/Cashier)', page: HOTEL_PAGE.posWaiter },
-              { name: 'POS Orders', page: HOTEL_PAGE.posKitchenBar },
-              { name: 'Supervisor Dashboard', page: HOTEL_PAGE.posSupervisor },
-            ]
-          : []),
-        { name: 'Retail POS', page: 'retail_pos' },
-        { name: 'Retail POS Orders', page: 'retail_pos_orders' },
-        { name: 'Invoices', page: 'retail_credit_invoices' },
-        { name: 'Cash receipts', page: 'cash_receipts' },
-        { name: 'Debtor payments', page: 'payments' },
-        { name: 'Transactions', page: 'transactions' },
-      ],
-    },
-    {
-      name: 'Purchases',
-      icon: ShoppingCart,
-      children: [
-        { name: 'Vendors', page: 'purchases_vendors' },
-        { name: 'Purchase Orders', page: 'purchases_orders' },
-        { name: 'GRN/Bills', page: 'purchases_bills' },
-        { name: 'Payments Made', page: 'purchases_payments' },
-        { name: 'Return to supplier', page: 'purchases_credits' },
-        { name: 'Expenses', page: 'purchases_expenses' },
-      ],
-    },
-    {
-      name: 'Inventory',
-      icon: FileText,
-      children: [
-        { name: 'Products', page: 'Products' },
-        { name: 'Barcodes', page: 'inventory_barcodes' },
-        { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
-        { name: 'Stock Balances', page: 'inventory_stock_balances' },
-        { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
-      ],
-    },
-    {
-      name: 'Manufacturing',
-      icon: Factory,
-      children: [
-        { name: 'Overview', page: 'manufacturing' },
-        { name: 'Bill of Materials', page: 'manufacturing_bom' },
-        { name: 'Work Orders', page: 'manufacturing_work_orders' },
-        { name: 'Production Entries', page: 'manufacturing_production_entries' },
-        { name: 'Costing', page: 'manufacturing_costing' },
-      ],
-    },
-    {
-      name: 'Accounting',
-      icon: FileText,
-      children: [
-        { name: 'Chart of Accounts', page: 'gl_accounts' },
-        { name: 'Journal Entries', page: 'accounting_journal' },
-        { name: 'Manual Journals', page: 'accounting_manual' },
-        { name: 'General Ledger', page: 'accounting_gl' },
-        ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
-      ],
-    },
-    ...(allowBudget
-      ? [
-          {
-            name: 'Budget',
-            icon: FileText,
-            children: [
-              { name: 'Budgeting', page: 'accounting_budgeting' },
-              { name: 'Budget variance', page: 'reports_budget_variance' },
-            ],
-          } as NavItem,
-        ]
-      : []),
-    ...(allowWallet ? [{ name: 'Wallet', icon: Wallet, page: 'wallet' } as NavItem] : []),
-    {
-      name: 'Reports',
-      icon: FileText,
-      children: [
-        { name: 'Overview', page: 'reports' },
-        {
-          group: 'Sales',
-          items: [
-            { name: 'Daily Sales Report', page: 'reports_daily_sales' },
-            { name: 'Daily summary', page: 'reports_daily_summary' },
-            { name: 'Credit Sales Report', page: 'retail_credit_sales_report' },
-            { name: 'POS Analytics', page: 'reports_retail_sales_insights' },
-            { name: 'Shift Variance Report', page: 'reports_retail_shift_variance' },
-            { name: 'Sales by item', page: 'reports_sales_by_item' },
-          ],
-        },
-        {
-          group: 'Operations',
-          items: [
-            { name: 'Revenue by Charge Type', page: 'reports_financial_revenue_by_type' },
-            { name: 'Payments by Method', page: 'reports_financial_payments_by_method' },
-            { name: 'Payments by Charge Type', page: 'reports_financial_payments_by_charge_type' },
-          ],
-        },
-        {
-          group: 'Purchases',
-          items: [
-            { name: 'Daily Purchases Summary', page: 'reports_daily_purchases_summary' },
-            { name: 'Purchases by item', page: 'reports_purchases_by_item' },
-          ],
-        },
-        {
-          group: 'Inventory',
-          items: [{ name: 'Stock Movement', page: 'reports_stock_movement' }],
-        },
-        {
-          group: 'Financial statements',
-          items: [
-            { name: 'Trial Balance', page: 'accounting_trial' },
-            { name: 'Income Statement', page: 'accounting_income' },
-            { name: 'Balance Sheet', page: 'accounting_balance' },
-            { name: 'Cash Flow', page: 'accounting_cashflow' },
-          ],
-        },
-      ],
-    },
-    ...(allowPayroll
-      ? [
-          {
-            name: 'Payroll',
-            icon: Wallet,
-            children: [
-              { name: 'Overview', page: PAYROLL_PAGE.hub },
-              { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
-              { name: 'Settings & GL', page: PAYROLL_PAGE.settings },
-              { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
-              { name: 'Periods', page: PAYROLL_PAGE.periods },
-              { name: 'Process & post', page: PAYROLL_PAGE.run },
-              { name: 'Audit trail', page: PAYROLL_PAGE.audit },
-            ],
-          } as NavItem,
-        ]
-      : []),
-    { name: 'Staff', icon: UsersRound, page: 'staff' },
-    { name: 'Admin', icon: Settings, page: 'admin' },
-  ];
-  }, [businessType, enableFixedAssets, allowCommunications, allowBudget, allowWallet, allowPayroll, currentPage]);
+  const simpleNavigation: NavItem[] = useMemo(
+    () =>
+      buildSimpleOrgNavigation({
+        businessType,
+        dashboardPage: retailOnly ? "retail_dashboard" : "dashboard",
+        allowWallet,
+        allowPayroll,
+        allowCommunications,
+        allowManufacturing,
+        allowBudget,
+      }),
+    [
+      businessType,
+      retailOnly,
+      allowWallet,
+      allowPayroll,
+      allowCommunications,
+      allowManufacturing,
+      allowBudget,
+    ]
+  );
 
   const saccoNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: SACCOPRO_PAGE.dashboard },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
-      { name: 'Overview', icon: Home, page: SACCOPRO_PAGE.overview },
       {
-        name: 'Members',
+        name: '👥 Members',
         icon: UsersRound,
         children: [
-          { name: 'Member register', page: SACCOPRO_PAGE.members },
-          /** Must match `?page=` and App.tsx switch (avoid stale bundle missing SACCOPRO_PAGE.savingsSettings). */
-          { name: 'Savings settings', page: 'sacco_members_savings_settings' },
-          { name: 'Open savings account', page: SACCOPRO_PAGE.savingsAccountOpen },
-          { name: 'Savings accounts', page: SACCOPRO_PAGE.savingsAccountsList },
-          { name: 'Client dashboard', page: SACCOPRO_PAGE.clientDashboard },
+          { name: 'Member list', page: SACCOPRO_PAGE.members },
+          { name: 'Member profile', page: SACCOPRO_PAGE.memberProfile },
         ],
       },
       {
-        name: 'Loans',
-        icon: PiggyBank,
+        name: '💰 Teller',
+        icon: Banknote,
         children: [
-          { name: 'Intro & GL', page: SACCOPRO_PAGE.loans },
-          { name: 'Loan dashboard', page: SACCOPRO_PAGE.loanDashboard },
-          { name: 'Loan list', page: SACCOPRO_PAGE.loanList },
-          { name: 'New application', page: SACCOPRO_PAGE.loanInput },
-          { name: 'Approval', page: SACCOPRO_PAGE.loanApproval },
-          { name: 'Reports', page: SACCOPRO_PAGE.loanReports },
-          { name: 'Loan recovery', page: SACCOPRO_PAGE.loanRecovery },
-          { name: 'Settings', page: SACCOPRO_PAGE.loanSettings },
-          { name: 'Interest calculator', page: SACCOPRO_PAGE.loanInterestCalc },
+          { name: 'Receive money', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'receive' } },
+          { name: 'Give money', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'give' } },
+          { name: 'Transfers', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'transfer' } },
+          { name: 'Daily summary', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
         ],
       },
-      { name: 'Savings interest', icon: TrendingUp, page: SACCOPRO_PAGE.savingsInterest },
-      { name: 'Cashbook', icon: BookMarked, page: SACCOPRO_PAGE.cashbook },
-      { name: 'Teller', icon: Banknote, page: SACCOPRO_PAGE.teller },
       {
-        name: 'Accounting',
-        icon: FileText,
+        name: '🏦 Loans',
+        icon: Building2,
         children: [
-          { name: 'Chart of Accounts', page: 'gl_accounts' },
-          { name: 'Journal Entries', page: 'accounting_journal' },
-          { name: 'Manual Journals', page: 'accounting_manual' },
-          { name: 'General Ledger', page: 'accounting_gl' },
-          ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
+          { name: 'Dashboard', page: SACCOPRO_PAGE.loanDashboard },
+          { name: 'Applications', page: SACCOPRO_PAGE.loanInput },
+          { name: 'Approvals', page: SACCOPRO_PAGE.loanApproval },
+          { name: 'Disbursement', page: SACCOPRO_PAGE.loanDisbursement },
+          { name: 'Loan accounts', page: SACCOPRO_PAGE.loanList },
         ],
       },
-      ...(enableBudget
-        ? [
-            {
-              name: 'Budget',
-              icon: FileText,
-              children: [
-                { name: 'Budgeting', page: 'accounting_budgeting' },
-                { name: 'Budget variance', page: 'reports_budget_variance' },
-              ],
-            } as NavItem,
-          ]
-        : []),
-      { name: 'Wallet', icon: Wallet, page: 'wallet' },
       {
-        name: 'Reports',
-        icon: FileText,
+        name: '💵 Savings',
+        icon: Wallet,
         children: [
+          { name: 'Accounts', page: SACCOPRO_PAGE.savingsAccountsList },
+          { name: 'Statements', page: SACCOPRO_PAGE.savingsStatements },
+          { name: 'Interest', page: SACCOPRO_PAGE.savingsInterest },
+        ],
+      },
+      { kind: 'section-header', id: 'sacco-mgmt', title: 'Management' },
+      {
+        name: '📈 Performance',
+        icon: TrendingUp,
+        page: SACCOPRO_PAGE.performanceDashboard,
+      },
+      {
+        name: '📑 Reports',
+        icon: BarChart3,
+        children: [
+          { name: 'Loan reports', page: SACCOPRO_PAGE.loanReports, state: { loanReportTab: 'summary' } },
+          { name: 'Savings reports', page: SACCOPRO_PAGE.savingsReports },
+          { name: 'Financial summaries', page: SACCOPRO_PAGE.financialSummaries },
+        ],
+      },
+      {
+        name: '⚠️ Arrears',
+        icon: AlertTriangle,
+        children: [
+          { name: 'Overdue loans', page: SACCOPRO_PAGE.loanRecovery, state: { recoveryView: 'overdue' } },
           {
-            group: 'Financial statements',
-            items: [
-              { name: 'Trial Balance', page: 'accounting_trial' },
-              { name: 'Income Statement', page: 'accounting_income' },
-              { name: 'Balance Sheet', page: 'accounting_balance' },
-              { name: 'Cash Flow', page: 'accounting_cashflow' },
-            ],
+            name: 'Aging',
+            page: SACCOPRO_PAGE.loanReports,
+            state: { loanReportTab: 'aging' },
           },
+          { name: 'Recovery tracking', page: SACCOPRO_PAGE.loanRecovery, state: { recoveryView: 'tracking' } },
         ],
       },
       ...(enablePayroll
@@ -441,10 +390,69 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
             } as NavItem,
           ]
         : []),
+      { name: 'Wallet', icon: Wallet, page: 'wallet' },
       { name: 'Staff', icon: UsersRound, page: 'staff' },
-      { name: 'Admin', icon: Settings, page: 'admin' },
+      ...(saccoSystemCashbookNav
+        ? [
+            {
+              name: '🧾 System (restricted)',
+              icon: Shield,
+              children: [
+                {
+                  group: 'Accounting',
+                  items: [
+                    { name: 'Chart of accounts', page: 'gl_accounts' },
+                    { name: 'Journal entries', page: 'accounting_journal' },
+                    { name: 'Manual journals', page: 'accounting_manual' },
+                    { name: 'General ledger', page: 'accounting_gl' },
+                    ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
+                  ],
+                },
+                {
+                  group: 'Books & treasury',
+                  items: [
+                    { name: 'Cashbook — journal', page: SACCOPRO_PAGE.cashbook, state: { cashbookView: 'journal' } },
+                    {
+                      name: 'Reconciliation',
+                      page: SACCOPRO_PAGE.cashbook,
+                      state: { cashbookView: 'reconciliation' },
+                    },
+                  ],
+                },
+                { name: 'Trial balance', page: 'accounting_trial' },
+                ...(enableBudget
+                  ? [
+                      {
+                        group: 'Budget & planning',
+                        items: [
+                          { name: 'Budget', page: 'accounting_budgeting' },
+                          { name: 'Budget variance', page: 'reports_budget_variance' },
+                        ],
+                      } as NavChild,
+                    ]
+                  : []),
+                {
+                  group: 'Configuration',
+                  items: [
+                    { name: 'Settings', page: 'admin' },
+                    { name: 'Loan products', page: SACCOPRO_PAGE.loanSettings },
+                    { name: 'Savings numbering', page: 'sacco_members_savings_settings' },
+                    { name: 'Interest rules', page: SACCOPRO_PAGE.savingsInterest },
+                    { name: 'GL mapping', page: 'gl_accounts' },
+                  ],
+                },
+              ],
+            } as NavItem,
+          ]
+        : []),
     ],
-    [enableFixedAssets, enableBudget, enablePayroll]
+    [
+      businessType,
+      enableFixedAssets,
+      enableBudget,
+      enablePayroll,
+      saccoSystemCashbookNav,
+    ]
   );
 
   const schoolNavigation: NavItem[] = useMemo(
@@ -540,51 +548,55 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         icon: ShoppingCart,
         children: [
           { name: 'Vendors', page: 'purchases_vendors' },
-          { name: 'Purchase Orders', page: 'purchases_orders' },
+          { name: 'Record Purchases', page: 'purchases_orders' },
           { name: 'GRN/Bills', page: 'purchases_bills' },
           { name: 'Payments Made', page: 'purchases_payments' },
           { name: 'Return to supplier', page: 'purchases_credits' },
-          { name: 'Expenses', page: 'purchases_expenses' },
+          { name: 'Spend money', page: 'purchases_expenses' },
         ],
       },
-      {
-        name: 'Inventory',
-        icon: FileText,
-        children: [
-          { name: 'Products', page: 'Products' },
-          { name: 'Barcodes', page: 'inventory_barcodes' },
-          { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
-          { name: 'Stock Balances', page: 'inventory_stock_balances' },
-          { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
+    {
+      name: 'Inventory',
+      icon: FileText,
+      children: [
+        { name: 'Items', page: 'Products' },
+        { name: 'Barcodes', page: 'inventory_barcodes' },
+        { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
+        { name: 'Stock Balances', page: 'inventory_stock_balances' },
+        { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
       ],
     },
+    ...(allowManufacturing
+      ? [
+          {
+            name: 'Manufacturing',
+            icon: Factory,
+            children: [
+              { name: 'Overview', page: 'manufacturing' },
+              { name: 'Bill of Materials', page: 'manufacturing_bom' },
+              { name: 'Work Orders', page: 'manufacturing_work_orders' },
+              { name: 'Production Entries', page: 'manufacturing_production_entries' },
+              { name: 'Costing', page: 'manufacturing_costing' },
+            ],
+          } as NavItem,
+        ]
+      : []),
     {
-      name: 'Manufacturing',
-      icon: Factory,
+      name: 'Accounting',
+      icon: FileText,
       children: [
-        { name: 'Overview', page: 'manufacturing' },
-        { name: 'Bill of Materials', page: 'manufacturing_bom' },
-        { name: 'Work Orders', page: 'manufacturing_work_orders' },
-        { name: 'Production Entries', page: 'manufacturing_production_entries' },
-        { name: 'Costing', page: 'manufacturing_costing' },
-        ],
-      },
-      {
-        name: 'Accounting',
-        icon: FileText,
-        children: [
-          { name: 'Chart of Accounts', page: 'gl_accounts' },
-          { name: 'Journal Entries', page: 'accounting_journal' },
-          { name: 'Manual Journals', page: 'accounting_manual' },
-          { name: 'General Ledger', page: 'accounting_gl' },
-          ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
-        ],
-      },
-      ...(enableBudget
-        ? [
-            {
-              name: 'Budget',
-              icon: FileText,
+        { name: 'Chart of Accounts', page: 'gl_accounts' },
+        { name: 'Journal Entries', page: 'accounting_journal' },
+        { name: 'Manual Journals', page: 'accounting_manual' },
+        { name: 'General Ledger', page: 'accounting_gl' },
+        ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
+      ],
+    },
+    ...(enableBudget
+      ? [
+          {
+            name: 'Budget',
+            icon: FileText,
               children: [
                 { name: 'Budgeting', page: 'accounting_budgeting' },
                 { name: 'Budget variance', page: 'reports_budget_variance' },
@@ -613,7 +625,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       { name: 'Staff', icon: UsersRound, page: 'staff' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
-    [enableFixedAssets, enableBudget, enablePayroll]
+    [enableFixedAssets, enableBudget, enablePayroll, allowManufacturing]
   );
 
   const vslaNavigation: NavItem[] = useMemo(
@@ -676,7 +688,7 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         ? schoolNavigation
         : businessType === 'vsla'
           ? vslaNavigation
-          : hotelNavigation;
+          : simpleNavigation;
 
   const showPlatform = isSuperAdmin;
   const showHotel = !isSuperAdmin || isHotelStaff;
@@ -783,6 +795,8 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
         : "Sync healthy";
 
   const canShowPage = (page: string) => {
+    if (!user?.isSuperAdmin && !isPageAllowedForNavRole(page, user?.role, businessType)) return false;
+    if (!isPageAllowedForBusinessType(page, businessType)) return false;
     const moduleId = pageToModuleId(page);
     if (!moduleId) return true;
     return getModuleAccess({
@@ -795,6 +809,8 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       enablePayroll: allowPayroll,
       enableBudget: allowBudget,
       enableAgent: allowAgent,
+      enableHotelAssessment: allowHotelAssessment,
+      enableManufacturing: allowManufacturing,
       enableReports: user?.enable_reports !== false,
       enableAccounting: user?.enable_accounting !== false,
       enableInventory: user?.enable_inventory !== false,
@@ -819,6 +835,8 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
       enablePayroll: allowPayroll,
       enableBudget: allowBudget,
       enableAgent: allowAgent,
+      enableHotelAssessment: allowHotelAssessment,
+      enableManufacturing: allowManufacturing,
       enableReports: user?.enable_reports !== false,
       enableAccounting: user?.enable_accounting !== false,
       enableInventory: user?.enable_inventory !== false,
@@ -914,6 +932,20 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                     </li>
                   )}
                   {mainNavigation.map((item) => {
+                    if ('kind' in item && item.kind === 'divider') {
+                      return (
+                        <li key={item.id} className="list-none px-3 py-2" aria-hidden role="presentation">
+                          <div className="h-px bg-gradient-to-r from-transparent via-slate-600 to-transparent opacity-80" />
+                        </li>
+                      );
+                    }
+                    if ('kind' in item && item.kind === 'section-header') {
+                      return (
+                        <li key={item.id} className="list-none px-3 pt-4 pb-0.5 mt-1 first:pt-2">
+                          <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">{item.title}</div>
+                        </li>
+                      );
+                    }
                     const Icon = item.icon;
                     if ('children' in item) {
                       const visibleChildren: NavChild[] = [];
@@ -988,14 +1020,18 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                                           {reportSubOpen && (
                                             <ul className="space-y-0 ml-1 border-l border-slate-700/80 pl-1.5 mt-0.5">
                                               {child.items.map((sub) => {
-                                                const isChildActive = currentPage === sub.page;
+                                                const isChildActive = isSidebarLeafActive(
+                                                  { page: sub.page, state: 'state' in sub ? sub.state : undefined },
+                                                  currentPage,
+                                                  pageState
+                                                );
                                                 const readOnly = isReadOnlyPage(sub.page);
                                                 return (
-                                                  <li key={sub.page}>
+                                                  <li key={`${sub.page}-${sub.name}`}>
                                                     <button
                                                       type="button"
                                                       onClick={() => {
-                                                        onNavigate(sub.page);
+                                                        onNavigate(sub.page, 'state' in sub ? sub.state : undefined);
                                                         setSidebarOpen(false);
                                                       }}
                                                       className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${
@@ -1028,14 +1064,18 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                                           </p>
                                           <ul className="space-y-0">
                                             {child.items.map((sub) => {
-                                              const isChildActive = currentPage === sub.page;
+                                              const isChildActive = isSidebarLeafActive(
+                                                { page: sub.page, state: 'state' in sub ? sub.state : undefined },
+                                                currentPage,
+                                                pageState
+                                              );
                                               const readOnly = isReadOnlyPage(sub.page);
                                               return (
-                                                <li key={sub.page}>
+                                                <li key={`${sub.page}-${sub.name}`}>
                                                   <button
                                                     type="button"
                                                     onClick={() => {
-                                                      onNavigate(sub.page);
+                                                      onNavigate(sub.page, 'state' in sub ? sub.state : undefined);
                                                       setSidebarOpen(false);
                                                     }}
                                                     className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${
@@ -1065,14 +1105,18 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                                   );
                                 }
                                 if (!('page' in child) || !child.page) return null;
-                                const isChildActive = currentPage === child.page;
+                                const isChildActive = isSidebarLeafActive(
+                                  { page: child.page, state: 'state' in child ? child.state : undefined },
+                                  currentPage,
+                                  pageState
+                                );
                                 const readOnly = isReadOnlyPage(child.page);
                                 return (
-                                  <li key={child.page}>
+                                  <li key={`${child.page}-${JSON.stringify('state' in child ? child.state : {})}`}>
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        onNavigate(child.page);
+                                        onNavigate(child.page, 'state' in child ? child.state : undefined);
                                         setSidebarOpen(false);
                                       }}
                                       className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${
@@ -1184,6 +1228,11 @@ export function Layout({ children, currentPage, onNavigate }: LayoutProps) {
                   {syncLastError ? `Last error: ${syncLastError}` : "Sync status: healthy"}
                 </span>
               </div>
+            </div>
+          )}
+          {businessType === "sacco" && user && !showPlatform && (
+            <div className="sticky top-0 z-20 flex justify-end items-center gap-2 px-4 sm:px-8 py-2 border-b border-slate-200/90 bg-white/90 backdrop-blur-sm">
+              <SaccoNewTransactionFab onNavigate={onNavigate} />
             </div>
           )}
           {(showValidationWarning || showValidationExpired || showLicenseSeatBlocked) && (

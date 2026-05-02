@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { UserPlus, Users, Pencil, CheckCircle2, XCircle, Loader2, Wallet } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -36,9 +36,17 @@ export type SaccoMemberRow = {
 interface SaccoMembersPageProps {
   readOnly?: boolean;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
+  /** Opens the registration modal once (usually from Quick “Register member”). */
+  openMemberRegisterIntent?: boolean;
+  onConsumedMemberRegisterIntent?: () => void;
 }
 
-export function SaccoMembersPage({ readOnly = false, onNavigate }: SaccoMembersPageProps) {
+export function SaccoMembersPage({
+  readOnly = false,
+  onNavigate,
+  openMemberRegisterIntent = false,
+  onConsumedMemberRegisterIntent,
+}: SaccoMembersPageProps) {
   const { user } = useAuth();
   const { refreshSaccoWorkspace } = useAppContext();
   const orgId = user?.organization_id ?? null;
@@ -90,6 +98,16 @@ export function SaccoMembersPage({ readOnly = false, onNavigate }: SaccoMembersP
     void load();
   }, [load]);
 
+  const intentOpenOnceRef = useRef(false);
+
+  const closeRegistrationModal = () => {
+    setShowModal(false);
+    if (openMemberRegisterIntent) {
+      intentOpenOnceRef.current = false;
+      onConsumedMemberRegisterIntent?.();
+    }
+  };
+
   const openNew = async () => {
     setEditing(null);
     setFullName("");
@@ -123,6 +141,17 @@ export function SaccoMembersPage({ readOnly = false, onNavigate }: SaccoMembersP
     }
     setShowModal(true);
   };
+
+  useEffect(() => {
+    if (!openMemberRegisterIntent) {
+      intentOpenOnceRef.current = false;
+      return;
+    }
+    if (intentOpenOnceRef.current) return;
+    intentOpenOnceRef.current = true;
+    void openNew();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openMemberRegisterIntent]);
 
   const openEdit = (r: SaccoMemberRow) => {
     setEditing(r);
@@ -188,7 +217,7 @@ export function SaccoMembersPage({ readOnly = false, onNavigate }: SaccoMembersP
         }
         if (lastErr) throw lastErr;
       }
-      setShowModal(false);
+      closeRegistrationModal();
       await load();
       await refreshSaccoWorkspace();
     } catch (e: unknown) {
@@ -327,16 +356,26 @@ export function SaccoMembersPage({ readOnly = false, onNavigate }: SaccoMembersP
                     <td className="p-3.5 text-right">
                       <div className="flex flex-wrap items-center justify-end gap-1.5">
                         {onNavigate ? (
-                          <button
-                            type="button"
-                            onClick={() => onNavigate(SACCOPRO_PAGE.savingsAccountOpen, { memberId: r.id })}
-                            disabled={readOnly}
-                            className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50/80 px-2 py-1 text-xs font-medium text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
-                            title="Open savings account for this member"
-                          >
-                            <Wallet className="w-3.5 h-3.5" />
-                            Savings
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => onNavigate(SACCOPRO_PAGE.memberProfile, { memberId: r.id })}
+                              className="inline-flex items-center gap-1 rounded-md border border-indigo-200 bg-indigo-50/80 px-2 py-1 text-xs font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                              title="Loans, savings, and transactions for this member"
+                            >
+                              Profile
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => onNavigate(SACCOPRO_PAGE.savingsAccountOpen, { memberId: r.id })}
+                              disabled={readOnly}
+                              className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50/80 px-2 py-1 text-xs font-medium text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+                              title="Open savings account for this member"
+                            >
+                              <Wallet className="w-3.5 h-3.5" />
+                              Savings
+                            </button>
+                          </>
                         ) : null}
                         <button
                           type="button"
@@ -529,7 +568,7 @@ export function SaccoMembersPage({ readOnly = false, onNavigate }: SaccoMembersP
             <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
               <button
                 type="button"
-                onClick={() => setShowModal(false)}
+                onClick={() => closeRegistrationModal()}
                 className="px-4 py-2 rounded-lg border border-slate-200 text-slate-700 text-sm font-medium hover:bg-slate-50"
               >
                 Cancel

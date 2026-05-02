@@ -10,11 +10,18 @@ import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
 type Stay = Database['public']['Tables']['stays']['Row'] & {
   /** Returned from `select('*')` on stays; used for printed guest bill header. */
   organization_id?: string | null;
+  property_customer_id?: string | null;
   hotel_customers: { first_name: string; last_name: string; email: string | null } | null;
   rooms: { id: string; room_number: string } | null;
 };
 
-export function ActiveStaysPage() {
+type ActiveStaysPageProps = {
+  /** Scroll / ring the stay card for this guest (property customer id) after Money In */
+  highlightGuestId?: string;
+  onNavigate?: (page: string, state?: Record<string, unknown>) => void;
+};
+
+export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPageProps) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -31,6 +38,18 @@ export function ActiveStaysPage() {
   useEffect(() => {
     fetchActiveStays();
   }, [orgId, superAdmin]);
+
+  useEffect(() => {
+    if (!highlightGuestId || loading) return;
+    const el = document.getElementById(`stay-guest-${highlightGuestId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-brand-500", "rounded-xl");
+    const t = window.setTimeout(() => {
+      el.classList.remove("ring-2", "ring-brand-500", "rounded-xl");
+    }, 4500);
+    return () => window.clearTimeout(t);
+  }, [highlightGuestId, loading, stays]);
 
   const fetchActiveStays = async () => {
   try {
@@ -217,7 +236,11 @@ export function ActiveStaysPage() {
 
       <div className="space-y-4">
         {stays.map((stay) => (
-          <div key={stay.id} className="bg-white rounded-xl border border-slate-200 p-6 hover:shadow-lg transition">
+          <div
+            key={stay.id}
+            id={stay.property_customer_id ? `stay-guest-${stay.property_customer_id}` : undefined}
+            className="bg-white rounded-xl border border-slate-200 p-6 hover:shadow-lg transition"
+          >
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
               <div className="flex-1">
                 <div className="flex items-center gap-3 mb-3">
@@ -277,10 +300,7 @@ export function ActiveStaysPage() {
       {billStay && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <GuestBill
-              stay={billStay}
-              onClose={() => setBillStay(null)}
-            />
+            <GuestBill stay={billStay} onClose={() => setBillStay(null)} onNavigate={onNavigate} />
           </div>
         </div>
       )}

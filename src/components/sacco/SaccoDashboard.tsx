@@ -61,11 +61,20 @@ const Dashboard: React.FC = () => {
 
   const recentTransactions = cashbook.slice(-5).reverse();
 
-  const stats = [
+  const stats: {
+    label: string;
+    value: string;
+    change: string;
+    up: boolean;
+    icon: React.ReactNode;
+    color: string;
+    page: string;
+    state?: Record<string, unknown>;
+  }[] = [
     { label: 'Total Members', value: activeMembers.toString(), change: '+3 this month', up: true, icon: <Users size={22} />, color: 'bg-blue-500', page: SACCOPRO_PAGE.members },
-    { label: 'Total Savings', value: formatCurrency(totalSavings), change: '+8.2%', up: true, icon: <PiggyBank size={22} />, color: 'bg-emerald-500', page: SACCOPRO_PAGE.savingsInterest },
+    { label: 'Total Savings', value: formatCurrency(totalSavings), change: '+8.2%', up: true, icon: <PiggyBank size={22} />, color: 'bg-emerald-500', page: SACCOPRO_PAGE.savingsAccountsList },
     { label: 'Loan Portfolio', value: formatCurrency(totalLoanPortfolio), change: '+12.5%', up: true, icon: <CreditCard size={22} />, color: 'bg-violet-500', page: SACCOPRO_PAGE.loanList },
-    { label: 'Cash Balance', value: formatCurrency(cashBalance), change: '-2.1%', up: false, icon: <DollarSign size={22} />, color: 'bg-amber-500', page: SACCOPRO_PAGE.cashbook },
+    { label: 'Cash Balance', value: formatCurrency(cashBalance), change: '-2.1%', up: false, icon: <DollarSign size={22} />, color: 'bg-amber-500', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
     { label: 'Fixed Deposits', value: formatCurrency(totalFD), change: '+5.3%', up: true, icon: <TrendingUp size={22} />, color: 'bg-cyan-500', page: SACCOPRO_PAGE.fixedDeposit },
     { label: 'Fixed Assets', value: formatCurrency(totalAssets), change: '-1.8%', up: false, icon: <Building2 size={22} />, color: 'bg-rose-500', page: 'fixed_assets' },
   ];
@@ -111,7 +120,7 @@ const Dashboard: React.FC = () => {
       {/* Stats Grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {stats.map((s, i) => (
-          <button key={i} onClick={() => setCurrentPage(s.page)} className="bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all text-left group">
+          <button key={i} onClick={() => setCurrentPage(s.page, s.state)} className="bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all text-left group">
             <div className="flex items-center justify-between mb-3">
               <div className={`${s.color} p-2 rounded-lg text-white`}>{s.icon}</div>
               <span className={`flex items-center gap-0.5 text-xs font-medium ${s.up ? 'text-emerald-600' : 'text-red-500'}`}>
@@ -206,7 +215,7 @@ const Dashboard: React.FC = () => {
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-sm font-semibold text-slate-900">Recent Transactions</h3>
-            <button onClick={() => setCurrentPage(SACCOPRO_PAGE.cashbook)} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">View All</button>
+            <button onClick={() => setCurrentPage(SACCOPRO_PAGE.savingsStatements)} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">View All</button>
           </div>
           <div className="space-y-3">
             {recentTransactions.map(t => (
@@ -236,12 +245,12 @@ const Dashboard: React.FC = () => {
           {[
             { label: 'New Member', icon: <Users size={20} />, page: SACCOPRO_PAGE.members, color: 'bg-blue-50 text-blue-600 hover:bg-blue-100' },
             { label: 'New Loan', icon: <CreditCard size={20} />, page: SACCOPRO_PAGE.loanInput, color: 'bg-violet-50 text-violet-600 hover:bg-violet-100' },
-            { label: 'Cash Entry', icon: <DollarSign size={20} />, page: SACCOPRO_PAGE.cashbook, color: 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' },
+            { label: 'Teller', icon: <DollarSign size={20} />, page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'receive' }, color: 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' },
             { label: 'Fixed Deposit', icon: <PiggyBank size={20} />, page: SACCOPRO_PAGE.fixedDeposit, color: 'bg-cyan-50 text-cyan-600 hover:bg-cyan-100' },
             { label: 'Approve Loans', icon: <CheckCircle size={20} />, page: SACCOPRO_PAGE.loanApproval, color: 'bg-amber-50 text-amber-600 hover:bg-amber-100' },
             { label: 'View Ledger', icon: <Building2 size={20} />, page: 'accounting_gl', color: 'bg-rose-50 text-rose-600 hover:bg-rose-100' },
           ].map((a, i) => (
-            <button key={i} onClick={() => setCurrentPage(a.page)} className={`${a.color} rounded-xl p-4 flex flex-col items-center gap-2 transition-colors`}>
+            <button key={i} onClick={() => setCurrentPage(a.page, 'state' in a ? a.state : undefined)} className={`${a.color} rounded-xl p-4 flex flex-col items-center gap-2 transition-colors`}>
               {a.icon}
               <span className="text-xs font-medium">{a.label}</span>
             </button>

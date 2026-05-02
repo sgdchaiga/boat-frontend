@@ -18,12 +18,15 @@ type OrgRow = {
 };
 
 export function AdminHotelConfigPage() {
-  const { user } = useAuth();
+  const { user, refreshUserFlags } = useAuth();
   const organizationId = user?.organization_id ?? null;
   const [config, setConfig] = useState<HotelConfig>(DEFAULT_CONFIG);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [organization, setOrganization] = useState<OrgRow | null>(null);
+  const [purchasesRequirePoApproval, setPurchasesRequirePoApproval] = useState(true);
+  const [purchasesRequireBillApproval, setPurchasesRequireBillApproval] = useState(true);
+  const [workflowSaving, setWorkflowSaving] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +43,7 @@ export function AdminHotelConfigPage() {
       }
       const { data, error } = await supabase
         .from("organizations")
-        .select("id,name,slug,address")
+        .select("id,name,slug,address,purchases_require_po_approval,purchases_require_bill_approval")
         .eq("id", organizationId)
         .maybeSingle();
       if (cancelled) return;
@@ -53,6 +56,8 @@ export function AdminHotelConfigPage() {
       }
       const row = data as OrgRow | null;
       setOrganization(row);
+      setPurchasesRequirePoApproval((data as { purchases_require_po_approval?: boolean | null }).purchases_require_po_approval !== false);
+      setPurchasesRequireBillApproval((data as { purchases_require_bill_approval?: boolean | null }).purchases_require_bill_approval !== false);
       setConfig(mergeHotelConfigWithOrg(base, row));
       setLoading(false);
     }
@@ -72,6 +77,28 @@ export function AdminHotelConfigPage() {
       console.error(e);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSavePurchaseWorkflow = async () => {
+    if (!organizationId) return;
+    setWorkflowSaving(true);
+    try {
+      const { error } = await supabase.rpc("update_organization_purchase_workflow", {
+        p_require_po_approval: purchasesRequirePoApproval,
+        p_require_bill_approval: purchasesRequireBillApproval,
+      });
+      if (error) throw error;
+      await refreshUserFlags();
+      alert("Purchase workflow settings saved.");
+    } catch (e) {
+      alert(
+        e instanceof Error
+          ? e.message
+          : "Could not save. Ensure your database has the latest migration, and that your role is admin or manager."
+      );
+    } finally {
+      setWorkflowSaving(false);
     }
   };
 
@@ -218,6 +245,55 @@ export function AdminHotelConfigPage() {
           </div>
         </div>
       </div>
+
+      {user?.enable_purchases !== false && organizationId && (
+        <div className="border border-slate-200 rounded-xl p-6 space-y-4 bg-slate-50/50">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-semibold text-slate-900">Purchase workflow</h3>
+            <button
+              type="button"
+              onClick={() => void handleSavePurchaseWorkflow()}
+              disabled={workflowSaving}
+              className="text-sm bg-brand-700 text-white px-3 py-1.5 rounded-lg hover:bg-brand-800 disabled:opacity-50"
+            >
+              {workflowSaving ? "Saving…" : "Save workflow"}
+            </button>
+          </div>
+          <p className="text-sm text-slate-600">
+            Control optional approval steps between purchase orders and GRN/bills. Platform admins can also set these in{" "}
+            <span className="font-medium">Organizations</span>.
+          </p>
+          <label className="flex items-start gap-2 text-sm text-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={purchasesRequirePoApproval}
+              onChange={(e) => setPurchasesRequirePoApproval(e.target.checked)}
+            />
+            <span>
+              Require purchase order approval before converting to GRN/bill
+              <span className="block text-xs text-slate-500 mt-0.5">
+                When off, staff can convert a pending PO directly to a GRN/bill (PO is marked approved when converted).
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={purchasesRequireBillApproval}
+              onChange={(e) => setPurchasesRequireBillApproval(e.target.checked)}
+            />
+            <span>
+              Require GRN/bill approval after converting from a purchase order
+              <span className="block text-xs text-slate-500 mt-0.5">
+                When off, the GRN/bill is finalized on convert (journal and stock-in run immediately). Manual GRN/bills
+                created outside the PO flow still follow normal approval rules.
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
 
       <p className="text-xs text-slate-500">
         Display, address, and currency settings are stored in your browser for this organization. Name and address are

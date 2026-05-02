@@ -48,7 +48,7 @@ type TotalsSnapshot = {
   expenseBreakdown: ExpenseSlice[];
 };
 
-const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense"] as const;
+const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense", "school_payment"] as const;
 
 export function IncomeStatementPage() {
   const { user } = useAuth();

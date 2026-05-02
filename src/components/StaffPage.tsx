@@ -121,6 +121,8 @@ export function StaffPage({ readOnly = false }: StaffPageProps = {}) {
       case "admin": return "bg-red-100 text-red-800 border-red-200";
       case "manager": return "bg-blue-100 text-blue-800 border-blue-200";
       case "receptionist": return "bg-green-100 text-green-800 border-green-200";
+      case "cashier": return "bg-violet-100 text-violet-800 border-violet-200";
+      case "storekeeper": return "bg-cyan-100 text-cyan-800 border-cyan-200";
       case "housekeeping": return "bg-amber-100 text-amber-800 border-amber-200";
       default: return "bg-slate-100 text-slate-800 border-slate-200";
     }

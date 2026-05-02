@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 import { useAppContext, LoanProduct } from '@/contexts/AppContext';
+import { upsertSaccoLoanPolicies } from '@/lib/saccoDb';
 import { toast } from '@/components/ui/use-toast';
 import {
   Settings, CreditCard, Shield, Plus, Pencil, Trash2, Save, X,
-  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp, PiggyBank, Percent
+  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp, PiggyBank, Percent, Timer
 } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
 
@@ -42,9 +44,26 @@ const productToForm = (p: LoanProduct): ProductFormData => ({
 });
 
 const LoanSettings: React.FC = () => {
-  const { loanProducts, setLoanProducts, provisioningConfig, setProvisioningConfig, formatCurrency, loans } = useAppContext();
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? null;
+  const {
+    loanProducts,
+    setLoanProducts,
+    provisioningConfig,
+    setProvisioningConfig,
+    formatCurrency,
+    loans,
+    saccoLoanPolicies,
+    refreshSaccoWorkspace,
+  } = useAppContext();
 
-  const [activeTab, setActiveTab] = useState<'products' | 'provisioning'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'provisioning' | 'orgRules'>('products');
+  const [minSavDraft, setMinSavDraft] = useState(String(saccoLoanPolicies.minSavingsDaysBeforeLoan));
+  const [policySaving, setPolicySaving] = useState(false);
+
+  useEffect(() => {
+    setMinSavDraft(String(saccoLoanPolicies.minSavingsDaysBeforeLoan));
+  }, [saccoLoanPolicies.minSavingsDaysBeforeLoan]);
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState<ProductFormData>(emptyForm);
@@ -99,7 +118,9 @@ const LoanSettings: React.FC = () => {
 
   const handleDeleteProduct = (id: string) => {
     const product = loanProducts.find(p => p.id === id);
-    const activeLoans = loans.filter(l => l.loanType === product?.name && ['pending', 'approved', 'disbursed'].includes(l.status));
+    const activeLoans = loans.filter(l =>
+      l.loanType === product?.name && ['pending', 'approved', 'disbursed', 'written_off', 'defaulted'].includes(l.status)
+    );
     if (activeLoans.length > 0) {
       toast({ title: 'Cannot Delete', description: `${product?.name} has ${activeLoans.length} active loan(s). Deactivate instead.` });
       return;
@@ -302,6 +323,7 @@ const LoanSettings: React.FC = () => {
       <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
         {[
           { id: 'products' as const, label: 'Loan Products & Fees', icon: <CreditCard size={16} /> },
+          { id: 'orgRules' as const, label: 'Org lending rules', icon: <Timer size={16} /> },
           { id: 'provisioning' as const, label: 'Loan Provisioning', icon: <Shield size={16} /> },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
@@ -373,7 +395,9 @@ const LoanSettings: React.FC = () => {
               const isEditing = editingProduct === product.id;
               const isExpanded = expandedProduct === product.id;
               const productLoans = loans.filter(l => l.loanType === product.name);
-              const activeLoansCount = productLoans.filter(l => ['pending', 'approved', 'disbursed'].includes(l.status)).length;
+              const activeLoansCount = productLoans.filter(l =>
+                ['pending', 'approved', 'disbursed', 'written_off', 'defaulted'].includes(l.status)
+              ).length;
               const totalDisbursed = productLoans.filter(l => l.status === 'disbursed').reduce((s, l) => s + l.amount, 0);
 
               if (isEditing) return <div key={product.id}>{renderProductForm(true, product.id)}</div>;
@@ -535,6 +559,59 @@ const LoanSettings: React.FC = () => {
               );
             })}
           </div>
+        </div>
+      )}
+
+      {activeTab === 'orgRules' && (
+        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 max-w-xl space-y-4">
+          <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
+            <Timer size={18} /> Minimum savings tenure before lending
+          </h3>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Counted from the <strong>earliest ordinary (non-share) savings account</strong> opened for each member—aligned with SACCO onboarding.
+            Applies to applications and final disbursement.
+          </p>
+          <label className="block text-xs font-medium text-slate-700">Whole calendar days required</label>
+          <input
+            type="number"
+            min={0}
+            max={3650}
+            value={minSavDraft}
+            onChange={e => setMinSavDraft(e.target.value)}
+            className="w-full max-w-[200px] px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+          />
+          <button
+            type="button"
+            disabled={!orgId || policySaving}
+            onClick={() => void (async () => {
+              if (!orgId) {
+                toast({ title: 'Error', description: 'No organization loaded.' });
+                return;
+              }
+              const n = parseInt(minSavDraft, 10);
+              if (!Number.isFinite(n) || n < 0 || n > 3650) {
+                toast({ title: 'Invalid value', description: 'Use a non-negative integer up to 3650.' });
+                return;
+              }
+              setPolicySaving(true);
+              try {
+                await upsertSaccoLoanPolicies(orgId, { minSavingsDaysBeforeLoan: n });
+                await refreshSaccoWorkspace();
+                toast({ title: 'Saved', description: `Members need ${n} full day(s) after first ordinary savings before loans.` });
+              } catch (e) {
+                toast({
+                  title: 'Save failed',
+                  description: e instanceof Error ? e.message : String(e),
+                });
+              } finally {
+                setPolicySaving(false);
+              }
+            })()}
+            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+          >
+            {policySaving ? 'Saving…' : 'Save policy'}
+          </button>
+          {!orgId && <p className="text-xs text-amber-700">Sign in to persist org lending rules.</p>}
         </div>
       )}
 

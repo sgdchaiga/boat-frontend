@@ -8,6 +8,8 @@ interface ImportMetaEnv {
   readonly VITE_API_URL?: string;
   /** boat-server base URL for SMS/WhatsApp (e.g. http://localhost:3001). */
   readonly VITE_BOAT_API_URL?: string;
+  /** When `true`, completed retail POS sales invoke Edge Function `clearing-retail-settlement` → boat-server clearing API. */
+  readonly VITE_CLEARING_RETAIL_SETTLEMENT?: string;
   /** `online` (default) or `lan` (on-prem + optional cloud sync queue). */
   readonly VITE_DEPLOYMENT_MODE: string;
   /** Same uuid as `tenant_settings.cloud_tenant_id` on the LAN DB / cloud tenancy. */

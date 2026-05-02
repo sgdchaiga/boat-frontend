@@ -31,9 +31,18 @@ export type ModuleId =
   | "budget"
   | "wallet"
   | "communications"
-  | "agent";
+  | "agent"
+  | "hotel_assessment";
 
-type ModuleAudience = "hotel" | "retail" | "both" | "sacco" | "school" | "manufacturing" | "vsla";
+type ModuleAudience =
+  | "hotel"
+  | "retail"
+  | "both"
+  | "sacco"
+  | "school"
+  | "manufacturing"
+  | "production"
+  | "vsla";
 
 export interface ModuleAccess {
   visible: boolean;
@@ -51,13 +60,15 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   retail_credit_sales_report: "both",
   frontdesk: "hotel",
   hotel_pos: "hotel",
+  /** Item / barcode till for standalone retail tenants; hotels use waiter POS (`hotel_pos` module routes). Mixed orgs get both hospitality + retail modules. */
   retail_pos: "retail",
   kitchen_ops: "hotel",
   billing: "hotel",
   payments_received: "both",
   transactions: "both",
   inventory: "both",
-  manufacturing: "manufacturing",
+  /** Hotels, restaurants, mixed, and dedicated manufacturers (not pure retail-only). */
+  manufacturing: "production",
   purchases: "both",
   reports: "both",
   accounting: "both",
@@ -73,6 +84,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   wallet: "both",
   communications: "both",
   agent: "both",
+  hotel_assessment: "hotel",
 };
 
 const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
@@ -105,10 +117,19 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   wallet: true,
   communications: false,
   agent: false,
+  hotel_assessment: false,
 };
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
   if (!businessType || businessType === "other") return audience === "both";
+  if (audience === "production") {
+    return (
+      businessType === "hotel" ||
+      businessType === "mixed" ||
+      businessType === "restaurant" ||
+      businessType === "manufacturing"
+    );
+  }
   if (audience === "manufacturing") return businessType === "manufacturing";
   if (audience === "vsla") return businessType === "vsla";
   if (audience === "school") return businessType === "school";
@@ -116,6 +137,8 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
   if (audience === "sacco") return businessType === "sacco";
   if (businessType === "sacco") return audience === "both";
   if (businessType === "mixed" && audience === "hotel") return true;
+  /** Lodging-plus-retail tenants use both waiter POS surfaces and retail counter routes. */
+  if (businessType === "mixed" && audience === "retail") return true;
   const normalized: ModuleAudience =
     businessType === "mixed" ? "both" : businessType === "restaurant" ? "retail" : businessType;
   return audience === "both" || audience === normalized;
@@ -137,6 +160,10 @@ export function getModuleAccess(input: {
   enableBudget?: boolean;
   /** Platform: Agent hub toggle. */
   enableAgent?: boolean;
+  /** Platform: Hotel assessment & onboarding. */
+  enableHotelAssessment?: boolean;
+  /** Platform: Manufacturing module. */
+  enableManufacturing?: boolean;
   enableReports?: boolean;
   enableAccounting?: boolean;
   enableInventory?: boolean;
@@ -158,6 +185,8 @@ export function getModuleAccess(input: {
     enablePayroll,
     enableBudget,
     enableAgent,
+    enableHotelAssessment,
+    enableManufacturing,
     enableReports,
     enableAccounting,
     enableInventory,
@@ -291,6 +320,24 @@ export function getModuleAccess(input: {
     };
   }
 
+  if (moduleId === "hotel_assessment" && enableHotelAssessment !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason:
+        "Assessment & onboarding is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "manufacturing" && enableManufacturing !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason:
+        "Manufacturing is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
   if (!MODULE_REQUIRES_SUBSCRIPTION[moduleId]) {
     return { visible: true, readOnly: false };
   }
@@ -308,9 +355,83 @@ export function getModuleAccess(input: {
 
 const SCHOOL_PAGE_VALUES = new Set(Object.values(SCHOOL_PAGE) as string[]);
 
+/**
+ * Routes for shop / retail-counter workflows (standalone POS, debtor retail, retail analytics).
+ * Hidden for lodging-only and other non–shop-first org profiles so sidebar and deep links stay aligned.
+ */
+const RETAIL_EXCLUSIVE_PAGE_IDS = new Set([
+  "retail_dashboard",
+  "retail_pos",
+  "retail_pos_orders",
+  "retail_credit_invoices",
+  "retail_credit_sales_report",
+  "retail_customers",
+  "reports_retail_sales_insights",
+  "reports_retail_shift_variance",
+]);
+
+/** Lodging front office + hotel/restaurant POS surface + guest-facing hotel assessment. */
+const HOTEL_EXCLUSIVE_PAGE_IDS = new Set([
+  "rooms",
+  "reservations",
+  "checkin",
+  "stays",
+  "housekeeping",
+  "hotel_rooms_setup",
+  "billing",
+  "hotel_pos_waiter",
+  "hotel_pos_kitchen_bar",
+  "hotel_pos_supervisor",
+  "hotel_pos_reports",
+  "kitchen_display",
+  "Kitchen Orders",
+  "Bar Orders",
+  "kitchen_menu",
+  "hotel_assessment",
+  "hotel_assessment_run",
+  "hotel_customers",
+]);
+
+/** Rooms & stay ops only (kitchen / bar POS still allowed). */
+const HOTEL_LODGING_ONLY_PAGE_IDS = new Set([
+  "rooms",
+  "reservations",
+  "checkin",
+  "stays",
+  "housekeeping",
+  "hotel_rooms_setup",
+  "billing",
+  "hotel_assessment",
+  "hotel_assessment_run",
+]);
+
+/** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
+export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  if (!businessType || businessType === "mixed") return true;
+
+  const nonRetailLodgingProfiles: BusinessType[] = ["hotel", "school", "sacco", "vsla", "manufacturing"];
+  if (nonRetailLodgingProfiles.includes(businessType) && RETAIL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
+
+  if (businessType === "manufacturing" && HOTEL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
+
+  if (businessType === "retail") {
+    if (HOTEL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
+    return true;
+  }
+
+  if (businessType === "restaurant") {
+    if (HOTEL_LODGING_ONLY_PAGE_IDS.has(page)) return false;
+    return true;
+  }
+
+  return true;
+}
+
 export function pageToModuleId(page: string): ModuleId | null {
+  if (page === "system_integrations") return null;
   if (page === "communications") return "communications";
   if (page === "agent_hub") return "agent";
+  if (page === "hotel_assessment" || page === "hotel_assessment_run") return "hotel_assessment";
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
   if (SCHOOL_PAGE_VALUES.has(page)) return "school";
   if (["dashboard"].includes(page)) return "dashboard";
@@ -356,6 +477,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_school_top_defaulters",
     "reports_school_term_performance",
     "hotel_pos_reports",
+    "reports_retail_shift_variance",
   ].includes(page)) return "reports";
   if ([
     "gl_accounts",

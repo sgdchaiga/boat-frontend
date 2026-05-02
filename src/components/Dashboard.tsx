@@ -11,6 +11,11 @@ import {
   UtensilsCrossed,
   Receipt,
   PieChart,
+  Plus,
+  Banknote,
+  CreditCard,
+  ShoppingCart,
+  Package,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { businessTodayISO, computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
@@ -68,6 +73,7 @@ function pctChange(current: number, prior: number): number | null {
 
 export function Dashboard({ onNavigate }: DashboardProps) {
   const { user } = useAuth();
+  const businessType = user?.business_type ?? null;
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
 
@@ -359,28 +365,103 @@ export function Dashboard({ onNavigate }: DashboardProps) {
 
   return (
     <div className="min-h-[calc(100vh-4rem)] p-6 md:p-8 bg-gradient-to-br from-slate-50 via-white to-sky-50/30">
-      <div className="mb-8 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
-            <FeatureFlagsSummary compact />
-            <PageNotes ariaLabel="Dashboard help">
-              <p>Hotel operations, occupancy, and hospitality revenue.</p>
-            </PageNotes>
+      <div className="mb-8">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
+              <FeatureFlagsSummary compact />
+              <PageNotes ariaLabel="Dashboard help">
+                <p>Hotel operations, occupancy, and hospitality revenue.</p>
+              </PageNotes>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-slate-600">Revenue period</label>
+            <select
+              value={revenueRange}
+              onChange={(e) => setRevenueRange(e.target.value as RevenueRange)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+            >
+              <option value="today">Today</option>
+              <option value="this_week">This week</option>
+              <option value="this_month">This month</option>
+            </select>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="text-sm text-slate-600">Revenue period</label>
-          <select
-            value={revenueRange}
-            onChange={(e) => setRevenueRange(e.target.value as RevenueRange)}
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
-          >
-            <option value="today">Today</option>
-            <option value="this_week">This week</option>
-            <option value="this_month">This month</option>
-          </select>
-        </div>
+        {onNavigate ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigate("cash_receipts")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-emerald-600" />
+              <Banknote className="w-4 h-4 text-slate-500" />
+              Receive money
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("purchases_expenses")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-amber-600" />
+              <CreditCard className="w-4 h-4 text-slate-500" />
+              Spend money
+            </button>
+            {businessType === "mixed" ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onNavigate("hotel_pos_waiter")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  <Plus className="w-4 h-4 text-emerald-600" />
+                  <UtensilsCrossed className="w-4 h-4 text-slate-500" />
+                  Hotel POS
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate("retail_pos")}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+                >
+                  <Plus className="w-4 h-4 text-violet-600" />
+                  <ShoppingCart className="w-4 h-4 text-slate-500" />
+                  Retail POS
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() =>
+                  onNavigate(
+                    businessType === "hotel" || businessType === "restaurant" ? "hotel_pos_waiter" : "retail_pos",
+                  )
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+              >
+                <Plus
+                  className={`w-4 h-4 ${businessType === "hotel" || businessType === "restaurant" ? "text-emerald-600" : "text-violet-600"}`}
+                />
+                {businessType === "hotel" || businessType === "restaurant" ? (
+                  <UtensilsCrossed className="w-4 h-4 text-slate-500" />
+                ) : (
+                  <ShoppingCart className="w-4 h-4 text-slate-500" />
+                )}
+                {businessType === "hotel" || businessType === "restaurant" ? "Hotel POS" : "Retail POS"}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate("purchases_orders")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-sky-600" />
+              <Package className="w-4 h-4 text-slate-500" />
+              Add stock
+            </button>
+          </div>
+        ) : null}
       </div>
       <p className="mb-4 text-xs text-slate-500">All dashboard cards reflect: <span className="font-medium text-slate-700">{rangeLabel}</span>.</p>
 

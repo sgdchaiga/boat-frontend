@@ -8,6 +8,10 @@ import {
   Truck,
   BarChart3,
   Store,
+  Plus,
+  Banknote,
+  ShoppingCart,
+  Package,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { computeRangeInTimezone, type DateRangeKey, toBusinessDateString } from "../lib/timezone";
@@ -216,27 +220,69 @@ export function RetailDashboard({ onNavigate }: RetailDashboardProps) {
 
   return (
     <div className="min-h-[calc(100vh-4rem)] p-6 md:p-8 bg-gradient-to-br from-slate-50 via-slate-100/30 to-amber-50/40">
-      <div className="mb-8 flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">Retail Dashboard</h1>
-            <PageNotes ariaLabel="Retail dashboard help">
-              <p>Sales, payment mix, and inventory health.</p>
-            </PageNotes>
+      <div className="mb-8">
+        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-3xl font-bold text-slate-900">Retail Dashboard</h1>
+              <PageNotes ariaLabel="Retail dashboard help">
+                <p>Sales, payment mix, and inventory health.</p>
+              </PageNotes>
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-sm text-slate-600">Sales period</label>
+            <select
+              value={salesRange}
+              onChange={(e) => setSalesRange(e.target.value as SalesRange)}
+              className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+            >
+              <option value="today">Today</option>
+              <option value="this_week">This week</option>
+              <option value="this_month">This month</option>
+            </select>
           </div>
         </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="text-sm text-slate-600">Sales period</label>
-          <select
-            value={salesRange}
-            onChange={(e) => setSalesRange(e.target.value as SalesRange)}
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
-          >
-            <option value="today">Today</option>
-            <option value="this_week">This week</option>
-            <option value="this_month">This month</option>
-          </select>
-        </div>
+        {onNavigate ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigate("cash_receipts")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-emerald-600" />
+              <Banknote className="w-4 h-4 text-slate-500" />
+              Receive money
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("purchases_expenses")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-amber-600" />
+              <CreditCard className="w-4 h-4 text-slate-500" />
+              Spend money
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("retail_pos")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-violet-600" />
+              <ShoppingCart className="w-4 h-4 text-slate-500" />
+              Make sale
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("purchases_orders")}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <Plus className="w-4 h-4 text-sky-600" />
+              <Package className="w-4 h-4 text-slate-500" />
+              Add stock
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {loadError && (

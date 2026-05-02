@@ -18,7 +18,9 @@ export type UserRole =
   | "receptionist"
   | "accountant"
   | "housekeeping"
-  | "barman";
+  | "barman"
+  | "cashier"
+  | "storekeeper";
 
 export type BusinessType = "hotel" | "retail" | "mixed" | "restaurant" | "sacco" | "school" | "manufacturing" | "vsla" | "other";
 export type SubscriptionStatus = "trial" | "active" | "past_due" | "cancelled" | "expired" | "none";
@@ -30,6 +32,8 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   accountant: "Accountant",
   housekeeping: "Housekeeping",
   barman: "Barman",
+  cashier: "Cashier",
+  storekeeper: "Storekeeper",
 };
 
 interface AuthUser {
@@ -60,6 +64,10 @@ interface AuthUser {
   enable_budget?: boolean;
   /** Platform: Agent Hub module toggle. */
   enable_agent?: boolean;
+  /** Platform: Assessment & onboarding module (prospect hotels). */
+  enable_hotel_assessment?: boolean;
+  /** Platform: Manufacturing module (BOM, work orders, costing). */
+  enable_manufacturing?: boolean;
   enable_reports?: boolean;
   enable_accounting?: boolean;
   enable_inventory?: boolean;
@@ -72,6 +80,10 @@ interface AuthUser {
   school_enable_accounting?: boolean;
   school_enable_inventory?: boolean;
   school_enable_purchases?: boolean;
+  /** When false, PO can be converted to GRN/bill without a separate PO approval step. */
+  purchases_require_po_approval?: boolean;
+  /** When false, GRN/bill from PO is finalized on convert (no second approval). Manual bills unchanged. */
+  purchases_require_bill_approval?: boolean;
   license_device_allowed?: boolean;
   license_device_reason?: string | null;
   subscription_last_validated_at?: number | null;
@@ -149,6 +161,8 @@ type TenantProfile = {
   enable_payroll: boolean;
   enable_budget: boolean;
   enable_agent: boolean;
+  enable_hotel_assessment: boolean;
+  enable_manufacturing: boolean;
   enable_reports: boolean;
   enable_accounting: boolean;
   enable_inventory: boolean;
@@ -159,6 +173,8 @@ type TenantProfile = {
   school_enable_accounting: boolean;
   school_enable_inventory: boolean;
   school_enable_purchases: boolean;
+  purchases_require_po_approval: boolean;
+  purchases_require_bill_approval: boolean;
   license_device_allowed: boolean;
   license_device_reason: string | null;
 };
@@ -228,6 +244,8 @@ function localTenantDefaults(): TenantProfile {
     enable_payroll: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_PAYROLL, true),
     enable_budget: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BUDGET, true),
     enable_agent: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_AGENT, true),
+    enable_hotel_assessment: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_HOTEL_ASSESSMENT, true),
+    enable_manufacturing: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_MANUFACTURING, true),
     enable_reports: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_REPORTS, true),
     enable_accounting: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_ACCOUNTING, true),
     enable_inventory: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_INVENTORY, true),
@@ -238,6 +256,8 @@ function localTenantDefaults(): TenantProfile {
     school_enable_accounting: true,
     school_enable_inventory: true,
     school_enable_purchases: true,
+    purchases_require_po_approval: parseLocalBool(import.meta.env.VITE_LOCAL_PURCHASES_REQUIRE_PO_APPROVAL, true),
+    purchases_require_bill_approval: parseLocalBool(import.meta.env.VITE_LOCAL_PURCHASES_REQUIRE_BILL_APPROVAL, true),
     license_device_allowed: true,
     license_device_reason: null,
   };
@@ -373,6 +393,8 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
     enable_payroll: true,
     enable_budget: true,
     enable_agent: true,
+    enable_hotel_assessment: true,
+    enable_manufacturing: true,
     enable_reports: true,
     enable_accounting: true,
     enable_inventory: true,
@@ -383,6 +405,8 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
     school_enable_accounting: false,
     school_enable_inventory: false,
     school_enable_purchases: false,
+    purchases_require_po_approval: true,
+    purchases_require_bill_approval: true,
     license_device_allowed: true,
     license_device_reason: null,
   };
@@ -404,7 +428,7 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
       supabase
         .from("organizations")
         .select(
-          "business_type, desktop_device_limit, enable_fixed_assets, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_agent, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases"
+          "business_type, desktop_device_limit, enable_fixed_assets, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_agent, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -436,6 +460,8 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
       enable_payroll?: boolean | null;
       enable_budget?: boolean | null;
       enable_agent?: boolean | null;
+      enable_hotel_assessment?: boolean | null;
+      enable_manufacturing?: boolean | null;
       enable_reports?: boolean | null;
       enable_accounting?: boolean | null;
       enable_inventory?: boolean | null;
@@ -446,6 +472,8 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
       school_enable_accounting?: boolean | null;
       school_enable_inventory?: boolean | null;
       school_enable_purchases?: boolean | null;
+      purchases_require_po_approval?: boolean | null;
+      purchases_require_bill_approval?: boolean | null;
     } | null;
 
     const deviceLimit = Math.max(1, Number(org?.desktop_device_limit ?? 1));
@@ -467,6 +495,8 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
       enable_payroll: org?.enable_payroll !== false,
       enable_budget: org?.enable_budget !== false,
       enable_agent: org?.enable_agent !== false,
+      enable_hotel_assessment: org?.enable_hotel_assessment !== false,
+      enable_manufacturing: org?.enable_manufacturing !== false,
       enable_reports: org?.enable_reports !== false,
       enable_accounting: org?.enable_accounting !== false,
       enable_inventory: org?.enable_inventory !== false,
@@ -477,6 +507,8 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
       school_enable_accounting: !!org?.school_enable_accounting,
       school_enable_inventory: !!org?.school_enable_inventory,
       school_enable_purchases: !!org?.school_enable_purchases,
+      purchases_require_po_approval: org?.purchases_require_po_approval !== false,
+      purchases_require_bill_approval: org?.purchases_require_bill_approval !== false,
       license_device_allowed: seatCheck.allowed,
       license_device_reason: seatCheck.reason,
     };

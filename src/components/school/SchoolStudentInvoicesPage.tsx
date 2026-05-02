@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -289,11 +290,32 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       };
     });
 
-    const { error } = await supabase.from("student_invoices").insert(invoiceRows);
+    const { data: inserted, error } = await supabase
+      .from("student_invoices")
+      .insert(invoiceRows)
+      .select("id,student_id,total_due,status,invoice_number,academic_year,term_name");
     setBulkRunning(false);
     if (error) {
       setErr(error.message);
       return;
+    }
+    const staffId = user?.id ?? null;
+    const insertedRows = (inserted || []) as Array<{
+      id: string;
+      student_id: string;
+      total_due: number;
+      status: string;
+      invoice_number: string;
+      academic_year?: string | null;
+      term_name?: string | null;
+    }>;
+    for (const inv of insertedRows) {
+      const { journalMessage } = await syncStudentInvoiceAccounting({
+        organizationId: orgId,
+        staffUserId: staffId,
+        invoice: inv,
+      });
+      if (journalMessage) console.warn("[school invoice journal]", journalMessage);
     }
     setBulkSummary(
       `Created ${toCreate.length} invoice${toCreate.length === 1 ? "" : "s"}. Skipped ${skippedDup} (already invoiced for this term).`
@@ -327,22 +349,43 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const total = Math.max(0, subtotal - disc - burs - schol);
     const invNo = `INV-${Date.now().toString(36).toUpperCase()}`;
     setErr(null);
-    const { error } = await supabase.from("student_invoices").insert({
-      student_id: form.student_id,
-      fee_structure_id: fee.id,
-      academic_year: fee.academic_year,
-      term_name: fee.term_name,
-      invoice_number: invNo,
-      subtotal,
-      discount_amount: disc,
-      bursary_amount: burs,
-      scholarship_amount: schol,
-      total_due: total,
-      amount_paid: 0,
-      status: total > 0 ? "sent" : "paid",
-    });
+    const orgId = user?.organization_id;
+    const { data: ins, error } = await supabase
+      .from("student_invoices")
+      .insert({
+        student_id: form.student_id,
+        fee_structure_id: fee.id,
+        academic_year: fee.academic_year,
+        term_name: fee.term_name,
+        invoice_number: invNo,
+        subtotal,
+        discount_amount: disc,
+        bursary_amount: burs,
+        scholarship_amount: schol,
+        total_due: total,
+        amount_paid: 0,
+        status: total > 0 ? "sent" : "paid",
+      })
+      .select("id,student_id,total_due,status,invoice_number,academic_year,term_name")
+      .single();
     if (error) setErr(error.message);
     else {
+      if (orgId && ins) {
+        const { journalMessage } = await syncStudentInvoiceAccounting({
+          organizationId: orgId,
+          staffUserId: user?.id ?? null,
+          invoice: ins as {
+            id: string;
+            student_id: string;
+            total_due: number;
+            status: string;
+            invoice_number: string;
+            academic_year?: string | null;
+            term_name?: string | null;
+          },
+        });
+        if (journalMessage) console.warn("[school invoice journal]", journalMessage);
+      }
       setForm({
         student_id: "",
         fee_structure_id: "",
@@ -400,6 +443,23 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       .eq("id", editingId);
     if (error) setErr(error.message);
     else {
+      const orgId = user?.organization_id;
+      if (orgId) {
+        const { journalMessage } = await syncStudentInvoiceAccounting({
+          organizationId: orgId,
+          staffUserId: user?.id ?? null,
+          invoice: {
+            id: editingId,
+            student_id: row.student_id,
+            invoice_number: row.invoice_number,
+            total_due,
+            status,
+            academic_year: row.academic_year,
+            term_name: row.term_name,
+          },
+        });
+        if (journalMessage) console.warn("[school invoice journal]", journalMessage);
+      }
       cancelEdit();
       load();
     }

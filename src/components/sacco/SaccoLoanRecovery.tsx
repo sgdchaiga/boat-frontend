@@ -1,15 +1,43 @@
 import React, { useMemo } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
-import { Phone, UserRound, Printer } from 'lucide-react';
+import type { Loan } from '@/types/saccoWorkspace';
+import { Phone, UserRound, Printer, Landmark } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
+import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
+
+/** Heuristic “overdue”: defaulted, matured with balance, or weak payment momentum (no repayment schedule rows in MVP). */
+function isLikelyOverdueLoan(l: Loan): boolean {
+  if ((l.status !== 'disbursed' && l.status !== 'defaulted') || l.balance <= 0) return false;
+  if (l.status === 'defaulted') return true;
+  const disb = l.disbursementDate ? new Date(`${l.disbursementDate}T12:00:00`) : null;
+  if (disb && Number.isFinite(disb.getTime())) {
+    const maturity = new Date(disb);
+    maturity.setMonth(maturity.getMonth() + Math.max(1, l.term));
+    if (Date.now() > maturity.getTime()) return true;
+  }
+  const lastPayment = l.lastPaymentDate ? new Date(`${l.lastPaymentDate}T12:00:00`) : null;
+  if (lastPayment && Number.isFinite(lastPayment.getTime())) {
+    const daysSincePay = (Date.now() - lastPayment.getTime()) / 864e5;
+    if (daysSincePay > 45 && l.balance > (l.monthlyPayment || 0)) return true;
+  }
+  if (l.balance > Math.max(l.monthlyPayment * 2, l.amount * 0.08)) return true;
+  return false;
+}
+
+export type LoanRecoveryDeskView = 'overdue' | 'tracking';
 
 /** Outstanding loans for field follow-up: guarantor contacts, LC1 phone, balances. */
-const SaccoLoanRecovery: React.FC = () => {
+const SaccoLoanRecovery: React.FC<{
+  navigate?: (page: string, state?: Record<string, unknown>) => void;
+  recoveryView?: LoanRecoveryDeskView;
+}> = ({ navigate, recoveryView = 'tracking' }) => {
   const { loans, members, formatCurrency } = useAppContext();
 
   const rows = useMemo(() => {
-    return loans.filter((l) => l.status === 'disbursed' && l.balance > 0);
-  }, [loans]);
+    let list = loans.filter((l) => l.status === 'disbursed' && l.balance > 0);
+    if (recoveryView === 'overdue') list = list.filter(isLikelyOverdueLoan);
+    return list;
+  }, [loans, recoveryView]);
 
   const guarantorLines = (guarantorNames: string[]) => {
     return guarantorNames
@@ -24,11 +52,39 @@ const SaccoLoanRecovery: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-start gap-2 text-emerald-950">
+          <Landmark className="shrink-0 mt-0.5 text-emerald-700" size={20} />
+          <div className="text-sm">
+            <p className="font-semibold">Loan repayments are posted only in Teller</p>
+            <p className="text-emerald-900/90 text-xs mt-0.5">
+              Use Receive money → Loan payment after a member brings cash or transfer details. This page is for follow-up contacts
+              only — balances update when treasury posts repayment.
+            </p>
+          </div>
+        </div>
+        {navigate && (
+          <button
+            type="button"
+            onClick={() => navigate(SACCOPRO_PAGE.teller, { tellerDesk: 'receive', tellerTask: 'loan_payment' })}
+            className="shrink-0 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-800"
+          >
+            Open Teller — loan payment
+          </button>
+        )}
+      </div>
+
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-bold text-slate-900">Loan recovery</h1>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {recoveryView === 'overdue' ? 'Overdue loans' : 'Recovery tracking'}
+          </h1>
           <PageNotes ariaLabel="Loan recovery help">
-            <p>Guarantor contacts, LC1 telephone, and balances for active loans with money still owed.</p>
+            <p>
+              {recoveryView === 'overdue'
+                ? 'Loans flagged as overdue or stretched — prioritize contact and restructuring where needed.'
+                : 'Guarantor contacts, LC1 telephone, and balances for active loans with money still owed.'}
+            </p>
           </PageNotes>
         </div>
         <button

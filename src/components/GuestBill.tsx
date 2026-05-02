@@ -8,6 +8,8 @@ interface StayBill {
   id: string;
   /** Present when stay row is loaded with `organization_id` (multi-tenant stays). */
   organization_id?: string | null;
+  /** Links to `hotel_customers` — required for Receive payment → Money In */
+  property_customer_id?: string | null;
   hotel_customers: { first_name: string; last_name: string } | null;
   rooms: { room_number: string } | null;
   check_in_time?: string;
@@ -32,9 +34,10 @@ interface PaymentRow {
 interface GuestBillProps {
   stay: StayBill;
   onClose?: () => void;
+  onNavigate?: (page: string, state?: Record<string, unknown>) => void;
 }
 
-export function GuestBill({ stay, onClose }: GuestBillProps) {
+export function GuestBill({ stay, onClose, onNavigate }: GuestBillProps) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -253,6 +256,29 @@ export function GuestBill({ stay, onClose }: GuestBillProps) {
                 Balance Due: {balanceDue.toFixed(2)}
               </p>
             </div>
+
+            {onNavigate && stay.property_customer_id && balanceDue > 0.001 ? (
+              <div className="flex justify-end print:hidden mt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onNavigate("cash_receipts", {
+                      source: "hotel_checkout",
+                      guest_id: stay.property_customer_id,
+                      guest_name: guestName,
+                      amount: Math.round(balanceDue * 100) / 100,
+                      reference: `FOLIO-${stay.id.replace(/-/g, "").slice(0, 12)}`,
+                      description: `${guestName} – Room ${roomNum} stay`,
+                      stay_id: stay.id,
+                    });
+                    onClose?.();
+                  }}
+                  className="app-btn-primary px-6 py-3 font-semibold"
+                >
+                  Receive payment
+                </button>
+              </div>
+            ) : null}
 
             <p className="text-xs text-slate-500 text-center mt-8">
               Thank you for your stay.

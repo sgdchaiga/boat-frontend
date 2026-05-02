@@ -10,7 +10,7 @@ import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import { Info } from "lucide-react";
 
 type AccountTotal = { account_code: string; account_name: string; total: number };
-const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense"] as const;
+const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense", "school_payment"] as const;
 
 function accountBalanceDelta(
   accountType: string,

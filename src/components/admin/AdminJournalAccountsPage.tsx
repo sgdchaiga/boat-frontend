@@ -470,6 +470,36 @@ export function AdminJournalAccountsPage() {
         </div>
       ) : null}
 
+      {isSchool ? (
+        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500 border-b border-slate-100 pb-2">
+            School fee revenue recognition
+          </h3>
+          <p className="text-sm text-slate-600">
+            <strong>Accrual</strong> (default): journaled when invoices are issued; fee receipts debit cash/clearing and credit receivable.{" "}
+            <strong>Cash basis</strong>: no invoice accrual; receipts debit cash/clearing and credit revenue.
+          </p>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              className="mt-1 rounded border-slate-300"
+              checked={settings.school_accounting_basis === "accrual"}
+              onChange={() => setSettings((p) => ({ ...p, school_accounting_basis: "accrual" }))}
+            />
+            <span className="text-sm text-slate-800">Accrual — recognize on invoice</span>
+          </label>
+          <label className="flex items-start gap-2 cursor-pointer">
+            <input
+              type="radio"
+              className="mt-1 rounded border-slate-300"
+              checked={settings.school_accounting_basis === "cash"}
+              onChange={() => setSettings((p) => ({ ...p, school_accounting_basis: "cash" }))}
+            />
+            <span className="text-sm text-slate-800">Cash — recognize when fees are collected</span>
+          </label>
+        </div>
+      ) : null}
+
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-8">
         {showHotelPosDeptTable ? (
           <div className="space-y-4">

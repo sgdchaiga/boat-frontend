@@ -7,6 +7,13 @@ export function FeatureFlagsSummary({ compact = false }: { compact?: boolean }) 
     const out: string[] = [];
     if (user?.enable_payroll === false) out.push("Payroll");
     if (user?.enable_budget === false) out.push("Budget");
+    if (
+      (user?.business_type === "hotel" || user?.business_type === "mixed") &&
+      user?.enable_hotel_assessment === false
+    ) {
+      out.push("Assessment & onboarding");
+    }
+    if (user?.enable_manufacturing === false) out.push("Manufacturing");
     if (user?.enable_fixed_assets === false) out.push("Fixed assets");
     if (user?.enable_wallet === false) out.push("Wallet");
     if (user?.enable_communications === false) out.push("Communications");

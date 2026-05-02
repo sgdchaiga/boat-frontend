@@ -3,13 +3,19 @@ import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { PageNotes } from "@/components/common/PageNotes";
 
 interface SaccoOverviewPageProps {
-  onNavigate?: (page: string) => void;
+  onNavigate?: (page: string, state?: Record<string, unknown>) => void;
 }
 
 export function SaccoOverviewPage({ onNavigate }: SaccoOverviewPageProps) {
-  const nav = onNavigate ?? (() => {});
+  const nav = onNavigate ?? ((_p?: string, _s?: Record<string, unknown>) => {});
 
-  const tiles = [
+  const tiles: {
+    title: string;
+    value: string;
+    icon: typeof LayoutDashboard;
+    page: string;
+    state?: Record<string, unknown>;
+  }[] = [
     {
       title: "Dashboard",
       value: "—",
@@ -26,13 +32,14 @@ export function SaccoOverviewPage({ onNavigate }: SaccoOverviewPageProps) {
       title: "Loan portfolio",
       value: "—",
       icon: PiggyBank,
-      page: SACCOPRO_PAGE.loans,
+      page: SACCOPRO_PAGE.loanList,
     },
     {
-      title: "Cash position",
+      title: "Teller snapshot",
       value: "—",
       icon: Landmark,
-      page: SACCOPRO_PAGE.cashbook,
+      page: SACCOPRO_PAGE.teller,
+      state: { tellerDesk: "daily" },
     },
     {
       title: "Period income",

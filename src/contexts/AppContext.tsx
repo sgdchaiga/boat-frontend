@@ -18,7 +18,9 @@ import type {
   LoanStatus,
   Member,
   ProvisioningConfig,
+  SaccoLoanPolicy,
 } from "@/types/saccoWorkspace";
+import { memberMeetsLoanDisbursePolicy, loanProductSharesGate } from "@/lib/saccoLoanEligibility";
 import {
   fetchSaccoWorkspaceData,
   insertLoanRow,
@@ -38,6 +40,7 @@ export type {
   ProvisionRate,
   ProvisioningConfig,
   LoanStatus,
+  SaccoLoanPolicy,
 } from "@/types/saccoWorkspace";
 
 export function calculateMonthlyPayment(
@@ -128,6 +131,8 @@ export type AppContextValue = {
   saccoError: string | null;
   /** Reload loans, members, products, etc. from Supabase (e.g. after Members CRUD). */
   refreshSaccoWorkspace: () => Promise<void>;
+  /** Org rule: min calendar days after first ordinary savings before loan application / disbursement. */
+  saccoLoanPolicies: SaccoLoanPolicy;
 };
 
 const AppContext = createContext<AppContextValue | null>(null);
@@ -150,6 +155,7 @@ export function AppProvider({
   const [fixedAssets, setFixedAssets] = useState<FixedAsset[]>([]);
   const [loanProductsInner, setLoanProductsInner] = useState<LoanProduct[]>([]);
   const [provisioningInner, setProvisioningInner] = useState<ProvisioningConfig>(DEFAULT_PROVISIONING);
+  const [saccoLoanPolicies, setSaccoLoanPolicies] = useState<SaccoLoanPolicy>({ minSavingsDaysBeforeLoan: 30 });
 
   const [saccoLoading, setSaccoLoading] = useState(false);
   const [saccoError, setSaccoError] = useState<string | null>(null);
@@ -165,6 +171,7 @@ export function AppProvider({
       setFixedAssets([]);
       setLoanProductsInner([]);
       setProvisioningInner(DEFAULT_PROVISIONING);
+      setSaccoLoanPolicies({ minSavingsDaysBeforeLoan: 30 });
       setSaccoError(null);
       return;
     }
@@ -180,6 +187,7 @@ export function AppProvider({
       setFixedAssets(data.fixedAssets);
       setLoanProductsInner(data.loanProducts);
       setProvisioningInner(data.provisioning ?? DEFAULT_PROVISIONING);
+      setSaccoLoanPolicies(data.saccoLoanPolicies ?? { minSavingsDaysBeforeLoan: 30 });
       persistReadyRef.current = true;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to load SACCO data";
@@ -245,6 +253,14 @@ export function AppProvider({
       };
 
       if (!organizationId || !persistReadyRef.current) {
+        if (loan.approvalStage >= 2) {
+          const member = members.find((m) => m.id === loan.memberId);
+          const d0 = memberMeetsLoanDisbursePolicy(member, saccoLoanPolicies);
+          if (!d0.ok) throw new Error(d0.reason);
+          const prod0 = loanProductsInner.find((p) => p.name === loan.loanType);
+          const shr0 = loanProductSharesGate(member, prod0);
+          if (!shr0.ok) throw new Error(shr0.reason);
+        }
         applyLocal((l) => {
           if (l.approvalStage < 2) return { ...l, approvalStage: l.approvalStage + 1 };
           return {
@@ -263,6 +279,12 @@ export function AppProvider({
           await updateLoanRow(id, { approval_stage: loan.approvalStage + 1 });
           applyLocal((l) => ({ ...l, approvalStage: l.approvalStage + 1 }));
         } else {
+          const member = members.find((m) => m.id === loan.memberId);
+          const d = memberMeetsLoanDisbursePolicy(member, saccoLoanPolicies);
+          if (!d.ok) throw new Error(d.reason);
+          const prod = loanProductsInner.find((p) => p.name === loan.loanType);
+          const shr = loanProductSharesGate(member, prod);
+          if (!shr.ok) throw new Error(shr.reason);
           const today = new Date().toISOString().slice(0, 10);
           await updateLoanRow(id, {
             status: "disbursed",
@@ -280,9 +302,10 @@ export function AppProvider({
         }
       } catch (e) {
         console.error("[SACCO] approveLoan", e);
+        throw e;
       }
     },
-    [loans, organizationId]
+    [loans, organizationId, members, saccoLoanPolicies, loanProductsInner]
   );
 
   const rejectLoan = useCallback(
@@ -326,6 +349,12 @@ export function AppProvider({
       );
 
       if (!organizationId || !persistReadyRef.current) {
+        const member = members.find((m) => m.id === payload.memberId);
+        const d = memberMeetsLoanDisbursePolicy(member, saccoLoanPolicies);
+        if (!d.ok) throw new Error(d.reason);
+        const prod = loanProductsInner.find((p) => p.name === payload.loanType);
+        const shr = loanProductSharesGate(member, prod);
+        if (!shr.ok) throw new Error(shr.reason);
         const newLoan: Loan = {
           id: `local-${Date.now()}`,
           memberId: payload.memberId,
@@ -354,6 +383,12 @@ export function AppProvider({
       }
 
       try {
+        const member = members.find((m) => m.id === payload.memberId);
+        const d = memberMeetsLoanDisbursePolicy(member, saccoLoanPolicies);
+        if (!d.ok) throw new Error(d.reason);
+        const prod = loanProductsInner.find((p) => p.name === payload.loanType);
+        const shr = loanProductSharesGate(member, prod);
+        if (!shr.ok) throw new Error(shr.reason);
         const row = await insertLoanRow({
           sacco_member_id: payload.memberId,
           member_name: payload.memberName,
@@ -380,9 +415,10 @@ export function AppProvider({
         setLoans((prev) => [...prev, row]);
       } catch (e) {
         console.error("[SACCO] addLoan", e);
+        throw e;
       }
     },
-    [organizationId]
+    [organizationId, members, saccoLoanPolicies, loanProductsInner]
   );
 
   const value = useMemo(
@@ -409,6 +445,7 @@ export function AppProvider({
       saccoLoading,
       saccoError,
       refreshSaccoWorkspace,
+      saccoLoanPolicies,
     }),
     [
       members,
@@ -428,6 +465,7 @@ export function AppProvider({
       saccoLoading,
       saccoError,
       refreshSaccoWorkspace,
+      saccoLoanPolicies,
     ]
   );
 

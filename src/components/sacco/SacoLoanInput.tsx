@@ -1,5 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useAppContext, calculateLoanFees, calculateMonthlyPayment } from '@/contexts/AppContext';
+import type { LoanProduct, Member } from '@/types/saccoWorkspace';
+import { toast } from '@/components/ui/use-toast';
+import { tierBandsDescription, tierDefaultDecliningRatePa, tierLabel, sharesToTier } from '@/lib/saccoMemberTier';
+import { calendarDaysElapsedSince, memberMeetsLoanDisbursePolicy } from '@/lib/saccoLoanEligibility';
 import {
   FileText,
   Calculator,
@@ -18,8 +22,14 @@ import { PageNotes } from '@/components/common/PageNotes';
 const SELECT_FIELD =
   'w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white text-slate-900 [color-scheme:light]';
 
+function suggestedAnnualRatePct(m: Member | undefined, lt: LoanProduct | undefined): string {
+  if (!lt) return '12';
+  if (lt.interestBasis !== 'declining') return String(lt.interestRate ?? 12);
+  return String(tierDefaultDecliningRatePa(sharesToTier(m?.sharesBalance ?? 0)));
+}
+
 const LoanInput: React.FC = () => {
-  const { members, addLoan, formatCurrency, loanProducts, refreshSaccoWorkspace } = useAppContext();
+  const { members, addLoan, formatCurrency, loanProducts, refreshSaccoWorkspace, saccoLoanPolicies } = useAppContext();
 
   useEffect(() => {
     void refreshSaccoWorkspace();
@@ -80,7 +90,14 @@ const LoanInput: React.FC = () => {
       hasAmount && amount >= selectedProduct.minAmount && amount <= selectedProduct.maxAmount;
     const amountRangePending = !hasAmount;
     const termOk = term >= 1 && term <= selectedProduct.maxTerm;
-    const allMet = hasSavings && hasShares && withinRange && termOk && hasAmount;
+    const disbursePolicy = memberMeetsLoanDisbursePolicy(selectedMember, saccoLoanPolicies);
+    const coolingMet = disbursePolicy.ok;
+    const daysSince =
+      selectedMember.firstOrdinarySavingsOpenedAt != null
+        ? calendarDaysElapsedSince(selectedMember.firstOrdinarySavingsOpenedAt)
+        : -1;
+    const allMet =
+      hasSavings && hasShares && withinRange && termOk && hasAmount && coolingMet;
     type CheckStatus = 'fulfilled' | 'not_fulfilled' | 'pending';
     const checklist: { key: string; label: string; status: CheckStatus; detail: string }[] = [
       {
@@ -111,6 +128,16 @@ const LoanInput: React.FC = () => {
         status: termOk ? 'fulfilled' : 'not_fulfilled',
         detail: `Maximum ${selectedProduct.maxTerm} months · Requested ${term || '—'} months`,
       },
+      {
+        key: 'cooling',
+        label: `Savings tenure (org rule: ≥ ${saccoLoanPolicies.minSavingsDaysBeforeLoan} full days after first ordinary account)`,
+        status: coolingMet ? 'fulfilled' : 'not_fulfilled',
+        detail: coolingMet
+          ? `Opened ${selectedMember.firstOrdinarySavingsOpenedAt ?? '—'} · elapsed ${daysSince >= 0 ? daysSince : '—'} full day(s)`
+          : !disbursePolicy.ok
+            ? disbursePolicy.reason
+            : '—',
+      },
     ];
     const fulfilledCount = checklist.filter((c) => c.status === 'fulfilled').length;
     const notFulfilledCount = checklist.filter((c) => c.status === 'not_fulfilled').length;
@@ -130,7 +157,7 @@ const LoanInput: React.FC = () => {
       notFulfilledCount,
       pendingCount,
     };
-  }, [selectedProduct, selectedMember, form.amount, form.term, formatCurrency]);
+  }, [selectedProduct, selectedMember, form.amount, form.term, formatCurrency, saccoLoanPolicies]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,7 +165,8 @@ const LoanInput: React.FC = () => {
     if (!eligibility?.allMet) {
       return;
     }
-    await addLoan({
+    try {
+      await addLoan({
       memberId: form.memberId, memberName: form.memberName, loanType: form.loanType,
       amount: parseFloat(form.amount), interestRate: parseFloat(form.interestRate),
       term: parseInt(form.term), applicationDate: form.applicationDate,
@@ -149,6 +177,7 @@ const LoanInput: React.FC = () => {
       lc1ChairmanName: form.lc1ChairmanName.trim() || undefined,
       lc1ChairmanPhone: form.lc1ChairmanPhone.trim() || undefined,
     });
+    toast({ title: 'Application submitted', description: 'Loan queued for approval.' });
     setForm({
       memberId: '', memberName: '', loanType: activeProducts[0]?.name || '',
       amount: '', interestRate: String(activeProducts[0]?.interestRate || 12),
@@ -158,6 +187,13 @@ const LoanInput: React.FC = () => {
       lc1ChairmanName: '',
       lc1ChairmanPhone: '',
     });
+    } catch (err) {
+      toast({
+        title: 'Cannot apply',
+        description: err instanceof Error ? err.message : 'Application failed.',
+        variant: 'destructive',
+      });
+    }
   };
 
   return (
@@ -180,7 +216,13 @@ const LoanInput: React.FC = () => {
                   <label className="block text-xs font-medium text-slate-700 mb-1">Member</label>
                   <select required value={form.memberId} onChange={e => {
                     const m = memberChoices.find(x => x.id === e.target.value);
-                    setForm(p => ({ ...p, memberId: e.target.value, memberName: m?.name || '' }));
+                    const lt = activeProducts.find(p => p.name === form.loanType);
+                    setForm(p => ({
+                      ...p,
+                      memberId: e.target.value,
+                      memberName: m?.name || '',
+                      interestRate: suggestedAnnualRatePct(m, lt ?? selectedProduct ?? undefined),
+                    }));
                   }} className={SELECT_FIELD}>
                     <option value="">Select Member</option>
                     {memberChoices.map(m => (
@@ -189,6 +231,13 @@ const LoanInput: React.FC = () => {
                       </option>
                     ))}
                   </select>
+                  {selectedMember && (
+                    <p className="text-[11px] text-slate-600 mt-1.5">
+                      Membership tier: <span className="font-semibold text-slate-800">{tierLabel(sharesToTier(selectedMember.sharesBalance))}</span>
+                      {' · '}
+                      {tierBandsDescription()} Declining products use the ladder rate (% p.a.) automatically.
+                    </p>
+                  )}
                   {memberChoices.length === 0 && (
                     <p className="text-xs text-amber-700 mt-1">No members loaded. Open Members and ensure your register has members, then refresh.</p>
                   )}
@@ -197,7 +246,9 @@ const LoanInput: React.FC = () => {
                   <label className="block text-xs font-medium text-slate-700 mb-1">Loan Product</label>
                   <select value={form.loanType} onChange={e => {
                     const lt = activeProducts.find(l => l.name === e.target.value);
-                    setForm(p => ({ ...p, loanType: e.target.value, interestRate: String(lt?.interestRate || 12) }));
+                    const m = memberChoices.find(x => x.id === form.memberId);
+                    const rateStr = suggestedAnnualRatePct(m, lt ?? undefined);
+                    setForm(p => ({ ...p, loanType: e.target.value, interestRate: rateStr }));
                   }} className={SELECT_FIELD}>
                     {activeProducts.map(lt => (
                       <option key={lt.id} value={lt.name}>
@@ -230,6 +281,13 @@ const LoanInput: React.FC = () => {
                       Basis: {selectedProduct.interestBasis === 'flat' ? 'Flat Rate' : 'Declining Balance'}
                     </p>
                   )}
+                  {selectedMember &&
+                    selectedProduct?.interestBasis === 'declining' &&
+                    sharesToTier(selectedMember.sharesBalance) === 'silver' && (
+                      <p className="text-[10px] text-amber-700 mt-0.5">
+                        Silver ladder rate defaults to 21% p.a. declining—confirm board-approved rate matches before disbursement.
+                      </p>
+                    )}
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">Application Date</label>

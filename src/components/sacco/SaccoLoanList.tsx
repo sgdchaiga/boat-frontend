@@ -26,9 +26,13 @@ const LoanList: React.FC = () => {
   });
 
   const statusColors: Record<string, string> = {
-    pending: 'bg-amber-100 text-amber-700', approved: 'bg-blue-100 text-blue-700',
-    disbursed: 'bg-emerald-100 text-emerald-700', closed: 'bg-slate-100 text-slate-600',
-    rejected: 'bg-red-100 text-red-700', defaulted: 'bg-red-200 text-red-800',
+    pending: 'bg-amber-100 text-amber-700',
+    approved: 'bg-blue-100 text-blue-700',
+    disbursed: 'bg-emerald-100 text-emerald-700',
+    closed: 'bg-slate-100 text-slate-600',
+    rejected: 'bg-red-100 text-red-700',
+    defaulted: 'bg-red-200 text-red-800',
+    written_off: 'bg-rose-100 text-rose-800 border border-rose-200',
   };
 
   const totalPortfolio = filtered.reduce((s, l) => s + l.balance, 0);
@@ -89,7 +93,9 @@ const LoanList: React.FC = () => {
           <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)}
             className="px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none">
             <option value="all">All Status</option>
-            {['pending', 'approved', 'disbursed', 'closed', 'rejected'].map(s => <option key={s} value={s}>{s}</option>)}
+            {['pending', 'approved', 'disbursed', 'written_off', 'defaulted', 'closed', 'rejected'].map(s => (
+              <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
+            ))}
           </select>
           <select value={typeFilter} onChange={e => setTypeFilter(e.target.value)}
             className="px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none">

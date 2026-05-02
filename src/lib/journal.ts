@@ -30,7 +30,10 @@ export type JournalReferenceType =
   | "fixed_asset_revaluation"
   | "fixed_asset_impairment"
   /** SACCO teller cash deposit / withdrawal — idempotent on teller transaction id. */
-  | "sacco_teller";
+  | "sacco_teller"
+  | "school_invoice"
+  | "school_payment"
+  | "manufacturing_costing";
 
 export interface JournalLine {
   gl_account_id: string;
@@ -730,6 +733,162 @@ export async function createJournalForPayment(
       { gl_account_id: acc.receivable, debit: 0, credit: amount, line_description: "Receivable" },
     ],
     created_by: createdBy,
+  });
+}
+
+/** Posted when school uses accrual basis and an invoice is issued (not draft/cancelled). */
+export async function createJournalForSchoolInvoiceAccrual(
+  invoiceId: string,
+  amount: number,
+  description: string,
+  entryDate: string,
+  createdBy: string | null,
+  organizationId: string,
+  studentId: string | null
+): Promise<JournalPostResult> {
+  const acc = await getDefaultGlAccounts();
+  if (!acc.receivable || !acc.revenue) {
+    return {
+      ok: false,
+      error:
+        "Missing receivable or revenue GL for school invoice accrual. Configure Accounting → Journal account settings.",
+    };
+  }
+  const date = toBusinessDateString(entryDate);
+  const dims = studentId ? { student_id: studentId } : null;
+  return createJournalEntry({
+    entry_date: date,
+    description: `School fees receivable: ${description}`,
+    reference_type: "school_invoice",
+    reference_id: invoiceId,
+    lines: [
+      {
+        gl_account_id: acc.receivable,
+        debit: amount,
+        credit: 0,
+        line_description: "Student fees receivable",
+        dimensions: dims,
+      },
+      {
+        gl_account_id: acc.revenue,
+        debit: 0,
+        credit: amount,
+        line_description: "Fee income (accrual)",
+        dimensions: dims,
+      },
+    ],
+    created_by: createdBy,
+    organizationId,
+  });
+}
+
+function resolveSchoolFeeReceiptGl(
+  method: string,
+  acc: Awaited<ReturnType<typeof getDefaultGlAccounts>>,
+  walletClearingId: string | null | undefined
+): string | null {
+  const m = (method || "").toLowerCase();
+  if (m === "wallet") return walletClearingId ?? acc.cash;
+  if (m === "mobile_money") return acc.posMtnMobileMoney ?? acc.cash;
+  if (m === "bank" || m === "transfer") return acc.posBank ?? acc.cash;
+  return acc.cash;
+}
+
+/**
+ * School fee receipt — accrual: Dr receipt (or wallet clearing) / Cr receivable (or revenue for cash basis).
+ * Wallet flows pair with `wallet_post_transaction` (Dr liability / Cr clearing); this entry completes the tie to AR or revenue.
+ */
+export async function createJournalForSchoolFeePayment(
+  paymentId: string,
+  amount: number,
+  paymentMethod: string,
+  paidAt: string,
+  createdBy: string | null,
+  organizationId: string,
+  basis: "accrual" | "cash",
+  studentId: string | null
+): Promise<JournalPostResult> {
+  const acc = await getDefaultGlAccounts();
+  const j = await resolveJournalAccountSettings(organizationId);
+  const receiptGl = resolveSchoolFeeReceiptGl(paymentMethod, acc, j.wallet_clearing_id);
+  const date = toBusinessDateString(paidAt);
+  const dims = studentId ? { student_id: studentId } : null;
+  if (!receiptGl) {
+    return { ok: false, error: "Missing cash/bank/clearing GL for school fee receipt. Configure journal settings." };
+  }
+  if (basis === "cash") {
+    if (!acc.revenue) {
+      return { ok: false, error: "Missing revenue GL for school cash-basis fee income. Configure journal settings." };
+    }
+    return createJournalEntry({
+      entry_date: date,
+      description: "School fee receipt (cash basis)",
+      reference_type: "school_payment",
+      reference_id: paymentId,
+      lines: [
+        { gl_account_id: receiptGl, debit: amount, credit: 0, line_description: "Fee receipt", dimensions: dims },
+        { gl_account_id: acc.revenue, debit: 0, credit: amount, line_description: "Fee income (cash)", dimensions: dims },
+      ],
+      created_by: createdBy,
+      organizationId,
+    });
+  }
+  if (!acc.receivable) {
+    return {
+      ok: false,
+      error: "Missing receivable GL for school fee allocation (accrual). Configure journal settings.",
+    };
+  }
+  return createJournalEntry({
+    entry_date: date,
+    description: "School fee receipt (accrual — settle receivable)",
+    reference_type: "school_payment",
+    reference_id: paymentId,
+    lines: [
+      { gl_account_id: receiptGl, debit: amount, credit: 0, line_description: "Fee receipt", dimensions: dims },
+      { gl_account_id: acc.receivable, debit: 0, credit: amount, line_description: "Student fees receivable", dimensions: dims },
+    ],
+    created_by: createdBy,
+    organizationId,
+  });
+}
+
+/** Capitalize period manufacturing costs to finished goods: Dr FG / Cr WIP (or production clearing). */
+export async function createJournalForManufacturingCostingEntry(
+  entryId: string,
+  totalCost: number,
+  productName: string,
+  period: string,
+  entryDate: string,
+  createdBy: string | null,
+  organizationId: string
+): Promise<JournalPostResult> {
+  const amt = Math.round(totalCost * 100) / 100;
+  if (amt <= 0) return { ok: false, error: "Manufacturing journal skipped: total cost is zero." };
+  await deleteJournalEntryByReference("manufacturing_costing", entryId);
+  const s = await resolveJournalAccountSettings(organizationId);
+  const fg = s.manufacturing_finished_goods_id;
+  const wip = s.manufacturing_wip_id;
+  if (!fg || !wip) {
+    return {
+      ok: false,
+      error:
+        "Set Manufacturing — finished goods and WIP / production clearing GL accounts under Admin → Journal account settings.",
+    };
+  }
+  const date = toBusinessDateString(entryDate);
+  const label = (productName || "Product").trim() || "Product";
+  return createJournalEntry({
+    entry_date: date,
+    description: `Manufacturing costing: ${label} (${period})`,
+    reference_type: "manufacturing_costing",
+    reference_id: entryId,
+    lines: [
+      { gl_account_id: fg, debit: amt, credit: 0, line_description: `${label} — finished goods` },
+      { gl_account_id: wip, debit: 0, credit: amt, line_description: `${label} — WIP / production clearing` },
+    ],
+    created_by: createdBy,
+    organizationId,
   });
 }
 

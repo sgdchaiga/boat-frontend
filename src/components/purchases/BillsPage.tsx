@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard } from "lucide-react";
+import { FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 import { loadHotelConfig } from "../../lib/hotelConfig";
@@ -7,7 +7,15 @@ import { useAuth } from "../../contexts/AuthContext";
 import { canApprove } from "../../lib/approvalRights";
 import { createJournalForBill } from "../../lib/journal";
 import { businessTodayISO } from "../../lib/timezone";
-import { isBillApproved, parseBillAllocationsJson, syncBillStatusInDb, syncBillStatusesForOrganization } from "../../lib/billStatus";
+import {
+  getTotalPaidForBill,
+  isBillApproved,
+  parseBillAllocationsJson,
+  syncBillStatusInDb,
+  syncBillStatusesForOrganization,
+} from "../../lib/billStatus";
+import { postStockInFromPurchaseOrderForBill } from "../../lib/poGrnStock";
+import { deleteJournalEntryByReference } from "../../lib/journal";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 
@@ -36,11 +44,17 @@ interface BillsPageProps {
 function formatBillStatusLabel(status: string | null | undefined): string {
   const s = (status || "").toLowerCase();
   if (s === "pending_approval" || s === "pending") return "Pending approval";
+  if (s === "rejected") return "Rejected";
+  if (s === "cancelled") return "Cancelled";
   if (s === "approved") return "Approved";
   if (s === "partially_paid") return "Partially paid";
   if (s === "overdue") return "Overdue";
   if (s === "paid") return "Paid";
   return status || "—";
+}
+
+function isRejectedBill(b: Bill): boolean {
+  return (b.status || "").toLowerCase() === "rejected";
 }
 
 export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: BillsPageProps = {}) {
@@ -66,6 +80,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const [description, setDescription] = useState("");
   const [saving, setSaving] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
+  const [rejectingId, setRejectingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const detailPaidTotal = useMemo(() => {
     if (!detailBill) return 0;
@@ -181,102 +197,10 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         }
       }
 
-      // On GRN/Bill approval, post stock-in movements from linked purchase order items.
-      // This ensures stock movement/balances show purchases as IN and sales as OUT.
       if (bill.purchase_order_id) {
-        // Schema-tolerant load:
-        // - Newer schema: has product_id
-        // - Older schema: only description/cost_price/quantity
-        let poItems: any[] = [];
-        const withProduct = await supabase
-          .from("purchase_order_items")
-          .select("product_id, description, quantity, cost_price")
-          .eq("purchase_order_id", bill.purchase_order_id);
-
-        if (withProduct.error) {
-          const msg = String(withProduct.error.message || "").toLowerCase();
-          if (!msg.includes("product_id")) throw withProduct.error;
-          const fallback = await supabase
-            .from("purchase_order_items")
-            .select("description, quantity, cost_price")
-            .eq("purchase_order_id", bill.purchase_order_id);
-          if (fallback.error) throw fallback.error;
-          poItems = (fallback.data || []) as any[];
-        } else {
-          poItems = (withProduct.data || []) as any[];
-        }
-
-        // For rows without product_id, try name-based resolution from products table.
-        const missingDescriptions = Array.from(
-          new Set(
-            poItems
-              .filter((it) => !it.product_id && it.description)
-              .map((it) => String(it.description).trim())
-              .filter(Boolean)
-          )
-        );
-        const productByName = new Map<string, string>();
-        if (missingDescriptions.length > 0) {
-          const { data: productsByName } = await supabase
-            .from("products")
-            .select("id, name")
-            .in("name", missingDescriptions);
-          (productsByName || []).forEach((p: any) => {
-            productByName.set(String(p.name).trim().toLowerCase(), String(p.id));
-          });
-        }
-
-        const movementDate = new Date().toISOString();
-        const unmatchedDescriptions = new Set<string>();
-        const stockInMoves = (poItems || [])
-          .map((it: any) => {
-            const normalizedDesc = String(it.description || "").trim();
-            const productId =
-              (it.product_id as string | null) ||
-              productByName.get(normalizedDesc.toLowerCase()) ||
-              null;
-            const qty = Number(it.quantity) || 0;
-            const unitCost = Number(it.cost_price) || 0;
-            if (!productId) {
-              if (normalizedDesc) unmatchedDescriptions.add(normalizedDesc);
-              return null;
-            }
-            if (qty <= 0) return null;
-            return {
-              product_id: productId,
-              movement_date: movementDate,
-              source_type: "bill",
-              source_id: bill.id,
-              quantity_in: qty,
-              quantity_out: 0,
-              unit_cost: unitCost > 0 ? unitCost : null,
-              location: "default",
-              note: `GRN/Bill approved: ${bill.id}`,
-            };
-          })
-          .filter(Boolean) as Array<{
-            product_id: string;
-            movement_date: string;
-            source_type: string;
-            source_id: string;
-            quantity_in: number;
-            quantity_out: number;
-            unit_cost: number | null;
-            location: string;
-            note: string;
-          }>;
-
-        if (stockInMoves.length > 0) {
-          const { error: stockErr } = await supabase
-            .from("product_stock_movements")
-            .insert(stockInMoves);
-          if (stockErr) throw stockErr;
-        }
-
-        if (unmatchedDescriptions.size > 0) {
-          const list = Array.from(unmatchedDescriptions)
-            .sort((a, b) => a.localeCompare(b))
-            .join("\n- ");
+        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(bill.id, bill.purchase_order_id);
+        if (unmatchedDescriptions.length > 0) {
+          const list = unmatchedDescriptions.join("\n- ");
           alert(
             `Bill approved, but some PO item descriptions were not matched to products.\n` +
               `These lines were skipped for stock-in posting:\n- ${list}\n\n` +
@@ -305,6 +229,81 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
       console.error("Bill approve failed:", e);
     } finally {
       setApprovingId(null);
+    }
+  };
+
+  const ensureCanRejectOrDelete = async (bill: Bill): Promise<string | null> => {
+    if (isBillApproved(bill)) {
+      return "Approved GRN/bills cannot be rejected or deleted. Use vendor credits or accounting adjustments if you need to reverse one.";
+    }
+    const paid = await getTotalPaidForBill(bill.id);
+    if (paid > 0.009) {
+      return `This bill has payments recorded (${paid.toFixed(2)}). Remove or reassign those payments first.`;
+    }
+    return null;
+  };
+
+  const handleReject = async (bill: Bill) => {
+    if (readOnly) return;
+    if (isRejectedBill(bill)) return;
+    const block = await ensureCanRejectOrDelete(bill);
+    if (block) {
+      alert(block);
+      return;
+    }
+    if (!confirm("Reject this GRN/bill? It will be marked rejected and taken out of the approval queue.")) return;
+    setRejectingId(bill.id);
+    try {
+      const jr = await deleteJournalEntryByReference("bill", bill.id);
+      if (!jr.ok) console.warn("[bills] remove journal on reject:", jr.error);
+      let { error } = await supabase
+        .from("bills")
+        .update({
+          status: "rejected",
+          approved_at: null,
+          approved_by: null,
+        })
+        .eq("id", bill.id);
+      if (error) {
+        const msg = String(error.message || "").toLowerCase();
+        if (msg.includes("approved_at") || msg.includes("approved_by")) {
+          ({ error } = await supabase.from("bills").update({ status: "rejected" }).eq("id", bill.id));
+        }
+      }
+      if (error) throw error;
+      fetchData();
+      if (detailBill?.id === bill.id) {
+        const { data: upd } = await supabase.from("bills").select("*, vendors(name)").eq("id", bill.id).maybeSingle();
+        if (upd) setDetailBill(upd as Bill);
+      }
+    } catch (e) {
+      alert("Failed to reject: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setRejectingId(null);
+    }
+  };
+
+  const handleDelete = async (bill: Bill) => {
+    if (readOnly) return;
+    const block = await ensureCanRejectOrDelete(bill);
+    if (block) {
+      alert(block);
+      return;
+    }
+    if (!confirm("Permanently delete this GRN/bill? This cannot be undone.")) return;
+    setDeletingId(bill.id);
+    try {
+      const jr = await deleteJournalEntryByReference("bill", bill.id);
+      if (!jr.ok) console.warn("[bills] remove journal on delete:", jr.error);
+      await supabase.from("product_stock_movements").delete().eq("source_type", "bill").eq("source_id", bill.id);
+      const { error } = await supabase.from("bills").delete().eq("id", bill.id);
+      if (error) throw error;
+      if (detailBill?.id === bill.id) setDetailBill(null);
+      fetchData();
+    } catch (e) {
+      alert("Failed to delete: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -705,9 +704,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
       <div className="flex items-center justify-between mb-8">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">GRN/Bills</h1>
+            <h1 className="text-3xl font-bold text-slate-900">Receive stock</h1>
             <PageNotes ariaLabel="GRN and bills help">
-              <p>Manage GRN/Bills and payables.</p>
+              <p>Manage GRN/Bills and payables. Reject or delete bills that are still pending (no approval, no payments).</p>
             </PageNotes>
           </div>
         </div>
@@ -774,7 +773,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                                 ? "bg-violet-100 text-violet-800"
                                 : b.status === "approved"
                                   ? "bg-sky-100 text-sky-800"
-                                  : "bg-slate-100 text-slate-700"
+                                  : (b.status || "").toLowerCase() === "rejected"
+                                    ? "bg-rose-100 text-rose-800"
+                                    : "bg-slate-100 text-slate-700"
                         }`}
                       >
                         {formatBillStatusLabel(b.status)}
@@ -791,8 +792,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                     </button>
                   </td>
                   <td className="p-3 text-right">
-                    <span className="inline-flex items-center gap-2">
-                      {!isBillApproved(b) && (
+                    <span className="inline-flex items-center gap-1 flex-wrap justify-end">
+                      {!isBillApproved(b) && !isRejectedBill(b) && (
                         <button
                           type="button"
                           onClick={() => openEdit(b)}
@@ -803,7 +804,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                           <Pencil className="w-4 h-4" />
                         </button>
                       )}
-                      {!isBillApproved(b) ? (
+                      {!isBillApproved(b) && !isRejectedBill(b) ? (
                         <button
                           type="button"
                           onClick={() => canApproveBills && !readOnly && handleApprove(b)}
@@ -819,6 +820,29 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                           {approvingId === b.id ? "…" : "Approve"}
                         </button>
                       ) : null}
+                      {!isBillApproved(b) && !isRejectedBill(b) && canApproveBills && !readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => void handleReject(b)}
+                          disabled={rejectingId === b.id}
+                          className="px-2 py-1 rounded border border-rose-200 text-sm font-medium inline-flex items-center gap-1 text-rose-700 bg-white hover:bg-rose-50"
+                          title="Reject GRN/Bill"
+                        >
+                          <Ban className="w-4 h-4" />
+                          {rejectingId === b.id ? "…" : "Reject"}
+                        </button>
+                      )}
+                      {!isBillApproved(b) && canApproveBills && !readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => void handleDelete(b)}
+                          disabled={deletingId === b.id}
+                          className="p-1.5 rounded text-slate-500 hover:text-red-700 hover:bg-red-50"
+                          title={isRejectedBill(b) ? "Delete GRN/Bill" : "Delete GRN/Bill"}
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
                     </span>
                   </td>
                 </tr>
@@ -919,8 +943,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               {isBillApproved(detailBill) && (detailBill.approved_at || detailBill.approved_by) && (
                 <p><span className="font-medium text-slate-500">Approved by:</span> {detailBill.approver?.full_name || staff.find((s) => s.id === detailBill.approved_by)?.full_name || "—"} {detailBill.approved_at ? `on ${new Date(detailBill.approved_at).toLocaleDateString()}` : ""}</p>
               )}
-              {!isBillApproved(detailBill) && detailBill.status !== "paid" && (
-                <div className="pt-2">
+              {!isBillApproved(detailBill) && detailBill.status !== "paid" && !isRejectedBill(detailBill) && (
+                <div className="pt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
                     onClick={() => canApproveBills && !readOnly && handleApprove(detailBill)}
@@ -934,6 +958,30 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                   >
                     <CheckCircle className="w-4 h-4" />
                     {approvingId === detailBill.id ? "Approving…" : "Approve GRN/Bill"}
+                  </button>
+                  {canApproveBills && !readOnly && (
+                    <button
+                      type="button"
+                      onClick={() => void handleReject(detailBill)}
+                      disabled={rejectingId === detailBill.id}
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-rose-200 font-medium text-sm text-rose-700 bg-white hover:bg-rose-50 disabled:opacity-50"
+                    >
+                      <Ban className="w-4 h-4" />
+                      {rejectingId === detailBill.id ? "Rejecting…" : "Reject"}
+                    </button>
+                  )}
+                </div>
+              )}
+              {!isBillApproved(detailBill) && canApproveBills && !readOnly && (
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleDelete(detailBill)}
+                    disabled={deletingId === detailBill.id}
+                    className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-red-50 hover:text-red-800 hover:border-red-200 text-sm font-medium disabled:opacity-50"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    {deletingId === detailBill.id ? "Deleting…" : "Delete permanently"}
                   </button>
                 </div>
               )}
@@ -990,7 +1038,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                     onClick={() => { onNavigate?.("purchases_orders"); setDetailBill(null); }}
                     className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
                   >
-                    <ExternalLink className="w-4 h-4" /> View Purchase Order
+                    <ExternalLink className="w-4 h-4" /> View recorded purchase
                   </button>
                 </p>
               )}

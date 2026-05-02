@@ -8,4 +8,10 @@ export const HOTEL_PAGE = {
   posReports: "hotel_pos_reports",
 } as const;
 
+/** Assessment & onboarding (prospect hotels, scoring, proposals). */
+export const HOTEL_ASSESSMENT_PAGE = {
+  home: "hotel_assessment",
+  run: "hotel_assessment_run",
+} as const;
+
 export type HotelPageId = (typeof HOTEL_PAGE)[keyof typeof HOTEL_PAGE];

@@ -1,11 +1,33 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
 import { Printer } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
+import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
 
-const LoanReports: React.FC = () => {
+export type LoanReportTabId = 'summary' | 'aging' | 'disbursement' | 'collection';
+
+const VALID_TABS = new Set<LoanReportTabId>(['summary', 'aging', 'disbursement', 'collection']);
+
+interface LoanReportsProps {
+  loanReportTab?: LoanReportTabId | null;
+  navigate?: (page: string, state?: Record<string, unknown>) => void;
+}
+
+const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) => {
   const { loans, formatCurrency } = useAppContext();
-  const [reportType, setReportType] = useState<'summary' | 'aging' | 'disbursement' | 'collection'>('summary');
+  const [reportType, setReportType] = useState<LoanReportTabId>(() =>
+    loanReportTab && VALID_TABS.has(loanReportTab) ? loanReportTab : 'summary'
+  );
+
+  useEffect(() => {
+    const next = loanReportTab && VALID_TABS.has(loanReportTab) ? loanReportTab : 'summary';
+    setReportType(next);
+  }, [loanReportTab]);
+
+  const setTab = (id: LoanReportTabId) => {
+    setReportType(id);
+    navigate?.(SACCOPRO_PAGE.loanReports, { loanReportTab: id });
+  };
 
   const active = loans.filter(l => l.status === 'disbursed');
   const totalDisbursed = loans.filter(l => ['disbursed', 'closed'].includes(l.status)).reduce((s, l) => s + l.amount, 0);
@@ -47,7 +69,7 @@ const LoanReports: React.FC = () => {
       <div className="bg-white rounded-xl shadow-sm border border-slate-100">
         <div className="flex border-b border-slate-100 overflow-x-auto">
           {reports.map(r => (
-            <button key={r.id} onClick={() => setReportType(r.id as any)}
+            <button key={r.id} onClick={() => setTab(r.id as LoanReportTabId)}
               className={`px-6 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${reportType === r.id ? 'border-emerald-500 text-emerald-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}>
               {r.label}
             </button>

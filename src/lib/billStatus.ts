@@ -51,8 +51,9 @@ export async function getTotalPaidForBill(billId: string): Promise<number> {
 }
 
 export function isBillApproved(b: { approved_at?: string | null; status?: string | null }): boolean {
-  if (b.approved_at) return true;
   const s = (b.status || "").toLowerCase();
+  if (s === "rejected" || s === "cancelled") return false;
+  if (b.approved_at) return true;
   if (s === "pending_approval" || s === "pending") return false;
   if (s === "approved" || s === "paid" || s === "overdue" || s === "partially_paid") return true;
   return Boolean(s && s !== "pending_approval" && s !== "pending");
@@ -92,6 +93,8 @@ export async function syncBillStatusInDb(billId: string): Promise<void> {
     .eq("id", billId)
     .maybeSingle();
   if (!bill) return;
+  const prevStatus = String((bill as { status?: string | null }).status || "").toLowerCase();
+  if (prevStatus === "rejected" || prevStatus === "cancelled") return;
   const total = await getTotalPaidForBill(billId);
   const approved = isBillApproved(bill as { approved_at?: string | null; status?: string | null });
   const status = computeBillStatus(
@@ -177,6 +180,8 @@ export async function syncBillStatusesForOrganization(organizationId: string): P
       vendor_id?: string | null;
     };
     const id = bill.id;
+    const prevLower = String(bill.status || "").toLowerCase();
+    if (prevLower === "rejected" || prevLower === "cancelled") continue;
     const direct = directByBill.get(id) || 0;
     let fromJson = 0;
     if (bill.vendor_id) {
