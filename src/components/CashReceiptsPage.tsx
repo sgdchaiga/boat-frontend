@@ -62,7 +62,8 @@ export function CashReceiptsPage({
   const businessType = user?.business_type ?? null;
   const showHotelPosShortcut =
     businessType === "hotel" || businessType === "restaurant" || businessType === "mixed";
-  const showRetailPosShortcut = businessType === "retail" || businessType === "mixed";
+  const showRetailPosShortcut =
+    businessType === "retail" || businessType === "mixed" || businessType === "manufacturing";
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
   const [rows, setRows] = useState<PaymentWithCustomer[]>([]);

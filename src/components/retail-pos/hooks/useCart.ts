@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "../../ui/use-toast";
 
 export interface CartProduct {
@@ -17,12 +17,14 @@ export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TP
   const total = useMemo(() => cart.reduce((sum, i) => sum + i.lineTotal, 0), [cart]);
   const [qtyPadProductId, setQtyPadProductId] = useState<string | null>(null);
   const [qtyPadValue, setQtyPadValue] = useState("1");
+  /** After opening the pad, first digit replaces the seeded value (avoids "1"+"6" → "16"). */
+  const qtyPadReplaceNextRef = useRef(false);
 
   const addToCart = (product: TProduct) => {
     setCartByProductId((prev) => {
       const existing = prev[product.id];
       if (existing) {
-        const nextQty = existing.quantity + 1;
+        const nextQty = Number(existing.quantity) + 1;
         const unit = getUnitPrice(product, nextQty);
         return { ...prev, [product.id]: { ...existing, quantity: nextQty, lineTotal: unit * nextQty } };
       }
@@ -51,10 +53,12 @@ export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TP
   const openQtyPad = (productId: string, quantity: number) => {
     setQtyPadProductId(productId);
     setQtyPadValue(String(quantity));
+    qtyPadReplaceNextRef.current = true;
   };
   const closeQtyPad = () => {
     setQtyPadProductId(null);
     setQtyPadValue("1");
+    qtyPadReplaceNextRef.current = false;
   };
   const applyQtyPad = () => {
     if (!qtyPadProductId) return;
@@ -67,7 +71,14 @@ export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TP
     closeQtyPad();
   };
   const qtyPadAppend = (digit: string) => {
-    setQtyPadValue((prev) => (prev === "0" ? digit : `${prev}${digit}`.slice(0, 4)));
+    setQtyPadValue((prev) => {
+      if (qtyPadReplaceNextRef.current) {
+        qtyPadReplaceNextRef.current = false;
+        return digit.slice(0, 6);
+      }
+      if (prev === "0" || prev === "") return digit.slice(0, 6);
+      return `${prev}${digit}`.slice(0, 6);
+    });
   };
   const qtyPadBackspace = () => {
     setQtyPadValue((prev) => (prev.length <= 1 ? "0" : prev.slice(0, -1)));

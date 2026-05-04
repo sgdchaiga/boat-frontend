@@ -11,12 +11,10 @@ export interface PriceContext {
 
 export function getProductPrice(product: PosProductLike, context?: PriceContext): number {
   const base = Number(product.sales_price ?? 0);
-  const qty = Number(context?.quantity ?? 1);
   const tier = context?.customerTier ?? "standard";
-  // Lightweight pricing intelligence hook: bulk + tier discounts.
-  const bulkDiscount = qty >= 12 ? 0.07 : qty >= 6 ? 0.04 : 0;
+  /** Tier-only discounts. Quantity-based bulk tiers were removed: they re-priced the whole line at thresholds (e.g. qty 6) and made POS totals look wrong. */
   const tierDiscount = tier === "wholesale" ? 0.06 : tier === "vip" ? 0.03 : 0;
-  const discount = Math.min(0.2, bulkDiscount + tierDiscount);
+  const discount = Math.min(0.2, tierDiscount);
   return Math.round(base * (1 - discount) * 100) / 100;
 }
 

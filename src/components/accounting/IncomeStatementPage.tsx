@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { downloadXlsx, exportAccountingPdf, formatCurrency, isNonZeroGlAmount } from "../../lib/accountingReportExport";
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
@@ -206,8 +206,9 @@ export function IncomeStatementPage() {
     const effectiveCustomFrom = dateRange === "custom" ? debouncedCustomFrom : customFrom;
     const effectiveCustomTo = dateRange === "custom" ? debouncedCustomTo : customTo;
     const { from, to } = computeRangeInTimezone(dateRange, effectiveCustomFrom, effectiveCustomTo);
-    const fromStr = from.toISOString().slice(0, 10);
-    const toStr = to.toISOString().slice(0, 10);
+    /** Journal `entry_date` is a business calendar date; use Kampala YYYY-MM-DD, not UTC `.slice(0,10)` from ISO (off-by-one vs EAT). */
+    const fromStr = toBusinessDateString(from);
+    const toStrInclusive = toBusinessDateString(new Date(to.getTime() - 1));
 
     if (!orgId && !superAdmin) {
       setFetchError("Missing organization on your staff profile. Contact admin to link your account.");
@@ -216,9 +217,9 @@ export function IncomeStatementPage() {
       return;
     }
 
-    const fetchTotalsForRange = async (fromDate: string, toDate: string, businessType: BusinessType | null | undefined) => {
+    const fetchTotalsForRange = async (fromDate: string, toDateInclusive: string, businessType: BusinessType | null | undefined) => {
       const mode = getIncomeStatementMode(businessType);
-      const cacheKey = [orgId || "platform", superAdmin ? "super" : "tenant", fromDate, toDate, mode, basis].join("|");
+      const cacheKey = [orgId || "platform", superAdmin ? "super" : "tenant", fromDate, toDateInclusive, mode, basis].join("|");
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
@@ -228,7 +229,7 @@ export function IncomeStatementPage() {
           "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date)"
         )
         .gte("journal_entries.entry_date", fromDate)
-        .lte("journal_entries.entry_date", toDate)
+        .lte("journal_entries.entry_date", toDateInclusive)
         .eq("journal_entries.is_posted", true)
         .in("gl_accounts.account_type", ["income", "expense"]);
       if (basis === "cash") {
@@ -399,7 +400,7 @@ export function IncomeStatementPage() {
     };
     try {
       const bt = user?.business_type ?? null;
-      const currentRes = await fetchTotalsForRange(fromStr, toStr, bt);
+      const currentRes = await fetchTotalsForRange(fromStr, toStrInclusive, bt);
 
       if (requestSeq !== requestSeqRef.current) return;
       setStatementMode(currentRes.mode);
@@ -443,7 +444,9 @@ export function IncomeStatementPage() {
         setPreviousLabel("Same period last year");
       }
 
-      const prevRes = await fetchTotalsForRange(prevFrom.toISOString().slice(0, 10), prevTo.toISOString().slice(0, 10), bt);
+      const prevFromStr = toBusinessDateString(prevFrom);
+      const prevToInclusive = toBusinessDateString(new Date(prevTo.getTime() - 1));
+      const prevRes = await fetchTotalsForRange(prevFromStr, prevToInclusive, bt);
       if (requestSeq !== requestSeqRef.current) return;
       setPreviousTotalRevenue(prevRes.totalRevenue);
       setPreviousTotalExpenses(prevRes.totalExpenses);
@@ -529,7 +532,8 @@ export function IncomeStatementPage() {
   const periodLabel = useMemo(() => {
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
     const basisLabel = basis === "cash" ? "Cash basis" : "Accrual basis";
-    return `${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)} (${basisLabel})`;
+    const endInclusive = toBusinessDateString(new Date(to.getTime() - 1));
+    return `${toBusinessDateString(from)} to ${endInclusive} (${basisLabel})`;
   }, [dateRange, customFrom, customTo, basis]);
 
   const fileStamp = useMemo(() => computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10), [dateRange, customFrom, customTo]);
@@ -544,8 +548,8 @@ export function IncomeStatementPage() {
       const effectiveCustomFrom = dateRange === "custom" ? debouncedCustomFrom : customFrom;
       const effectiveCustomTo = dateRange === "custom" ? debouncedCustomTo : customTo;
       const { from, to } = computeRangeInTimezone(dateRange, effectiveCustomFrom, effectiveCustomTo);
-      const fromStr = from.toISOString().slice(0, 10);
-      const toStr = to.toISOString().slice(0, 10);
+      const fromStr = toBusinessDateString(from);
+      const toStrInclusive = toBusinessDateString(new Date(to.getTime() - 1));
       const q = supabase
         .from("journal_entry_lines")
         .select(
@@ -553,7 +557,7 @@ export function IncomeStatementPage() {
         )
         .eq("gl_account_id", account.id)
         .gte("journal_entries.entry_date", fromStr)
-        .lte("journal_entries.entry_date", toStr)
+        .lte("journal_entries.entry_date", toStrInclusive)
         .eq("journal_entries.is_posted", true)
         .order("entry_date", { ascending: false, referencedTable: "journal_entries" });
       if (basis === "cash") {

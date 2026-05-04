@@ -37,6 +37,7 @@ import { FinancialRevenueByChargeTypePage } from './components/reports/Financial
 import { FinancialPaymentsByMethodPage } from './components/reports/FinancialPaymentsByMethodPage';
 import { FinancialPaymentsByChargeTypePage } from './components/reports/FinancialPaymentsByChargeTypePage';
 import { DailyPurchasesSummaryPage } from './components/reports/DailyPurchasesSummaryPage';
+import { ManufacturingDailyProductionReportPage } from './components/reports/ManufacturingDailyProductionReportPage';
 import { DailySummaryReportPage } from './components/reports/DailySummaryReportPage';
 import { RetailShiftVarianceReportPage } from './components/reports/RetailShiftVarianceReportPage';
 import { RetailSalesInsightsPage } from './components/reports/RetailSalesInsightsPage';
@@ -974,6 +975,8 @@ function AppContent() {
         return <PurchasesByItemReportPage />;
       case 'reports_sales_by_item':
         return <SalesByItemReportPage />;
+      case 'reports_manufacturing_daily_production':
+        return <ManufacturingDailyProductionReportPage />;
       case 'inventory_stock_adjustments':
         return <AdminStockAdjustmentsPage highlightAdjustmentSourceId={pageState?.highlightAdjustmentSourceId as string | undefined} />;
       case 'inventory_stock_balances':

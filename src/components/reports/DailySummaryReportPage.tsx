@@ -60,6 +60,17 @@ type StockMoveRow = {
   note: string | null;
 };
 
+/** Invoice lines issued on the report day (for stock qty; may not have product_stock_movements rows). */
+type InvoiceStockLineDay = {
+  id: string;
+  invoice_id: string;
+  invoice_number: string;
+  product_id: string;
+  quantity: number;
+};
+
+const INVOICE_STOCK_SOURCE_KEY = "retail_invoice_issue";
+
 type ExpenseRow = {
   id: string;
   vendor_id: string | null;
@@ -120,6 +131,7 @@ export function DailySummaryReportPage() {
   const [vendorPayDay, setVendorPayDay] = useState<VendorPaymentRow[]>([]);
 
   const [stockMoves, setStockMoves] = useState<StockMoveRow[]>([]);
+  const [invoiceStockLinesDay, setInvoiceStockLinesDay] = useState<InvoiceStockLineDay[]>([]);
   const [productNameById, setProductNameById] = useState<Record<string, string>>({});
 
   const [billingChargesTotal, setBillingChargesTotal] = useState(0);
@@ -139,6 +151,7 @@ export function DailySummaryReportPage() {
         setBillsDay([]);
         setVendorPayDay([]);
         setStockMoves([]);
+        setInvoiceStockLinesDay([]);
         setExpensesRows([]);
         return;
       }
@@ -333,6 +346,53 @@ export function DailySummaryReportPage() {
         const unit = Number(pr?.sales_price ?? 0);
         rPos += outQty * unit;
       }
+
+      const issuedToday = allInv.filter((r) => issueDateKey(r.issue_date) === dateKey);
+      const invNumById = Object.fromEntries(issuedToday.map((r) => [r.id, r.invoice_number || ""]));
+      const invIds = issuedToday.map((r) => r.id).filter(Boolean);
+      const invStockLines: InvoiceStockLineDay[] = [];
+      if (invIds.length > 0) {
+        const { data: invLines, error: invLinesErr } = await filterByOrganizationId(
+          sb
+            .from("retail_invoice_lines")
+            .select("id, invoice_id, product_id, quantity, line_total, unit_price")
+            .in("invoice_id", invIds),
+          orgId,
+          superAdmin
+        );
+        if (invLinesErr) {
+          console.warn("[Daily summary] retail_invoice_lines:", invLinesErr.message);
+        } else {
+          for (const ln of invLines || []) {
+            const row = ln as {
+              id: string;
+              invoice_id: string;
+              product_id: string | null;
+              quantity: number | null;
+              line_total: number | null;
+              unit_price: number | null;
+            };
+            const pr = row.product_id ? pmap[row.product_id] : null;
+            const amt =
+              Number(row.line_total ?? 0) ||
+              Number(row.quantity ?? 0) * Number(row.unit_price ?? pr?.sales_price ?? 0);
+            rPos += amt;
+            const pid = row.product_id;
+            const q = Number(row.quantity ?? 0);
+            if (pid && Number.isFinite(q) && q > 0) {
+              invStockLines.push({
+                id: row.id,
+                invoice_id: row.invoice_id,
+                invoice_number: invNumById[row.invoice_id] || row.invoice_id.slice(0, 8),
+                product_id: pid,
+                quantity: q,
+              });
+            }
+          }
+        }
+      }
+      setInvoiceStockLinesDay(invStockLines);
+
       setRetailPosTotal(rPos);
 
       setExpensesRows((expRes.data || []) as ExpenseRow[]);
@@ -345,6 +405,7 @@ export function DailySummaryReportPage() {
       setBillsDay([]);
       setVendorPayDay([]);
       setStockMoves([]);
+      setInvoiceStockLinesDay([]);
       setExpensesRows([]);
     } finally {
       setLoading(false);
@@ -384,7 +445,7 @@ export function DailySummaryReportPage() {
     return { purchaseAmount, paymentAmount, billCount: billsDay.length, payCount: vendorPayDay.length };
   }, [billsDay, vendorPayDay]);
 
-  const stockAgg = useMemo(() => {
+  const stockMovementsAgg = useMemo(() => {
     let qtyIn = 0;
     let qtyOut = 0;
     const bySource: Record<string, { inQty: number; outQty: number }> = {};
@@ -399,6 +460,29 @@ export function DailySummaryReportPage() {
     }
     return { qtyIn, qtyOut, bySource, lineCount: stockMoves.length };
   }, [stockMoves]);
+
+  const invoiceStockDay = useMemo(() => {
+    const lines = invoiceStockLinesDay.filter((l) => l.product_id && Number(l.quantity) > 0);
+    const totalOut = lines.reduce((s, l) => s + Number(l.quantity), 0);
+    return { lines, totalOut };
+  }, [invoiceStockLinesDay]);
+
+  const stockAgg = useMemo(() => {
+    const invOut = invoiceStockDay.totalOut;
+    const bySource = { ...stockMovementsAgg.bySource };
+    if (invOut > 0) {
+      bySource[INVOICE_STOCK_SOURCE_KEY] = { inQty: 0, outQty: invOut };
+    }
+    return {
+      qtyIn: stockMovementsAgg.qtyIn,
+      qtyOut: stockMovementsAgg.qtyOut + invOut,
+      bySource,
+      moveLineCount: stockMovementsAgg.lineCount,
+      invoiceLineCount: invoiceStockDay.lines.length,
+      invoiceOutQty: invOut,
+      movementQtyOut: stockMovementsAgg.qtyOut,
+    };
+  }, [stockMovementsAgg, invoiceStockDay]);
 
   const expensesTotal = useMemo(
     () => expensesRows.reduce((s, e) => s + Number(e.amount ?? 0), 0),
@@ -423,7 +507,7 @@ export function DailySummaryReportPage() {
     );
     lines.push(["Hotel billing charges (day)", billingChargesTotal, "", ""].map(esc).join(","));
     lines.push(["Kitchen POS (est. retail price)", kitchenPosTotal, "", ""].map(esc).join(","));
-    lines.push(["Retail POS (est. from sale movements)", retailPosTotal, "", ""].map(esc).join(","));
+    lines.push(["Retail POS + invoice lines (est. / issued today)", retailPosTotal, "", ""].map(esc).join(","));
     lines.push([]);
     lines.push(["POS cash receipts", "", ""].map(esc).join(","));
     lines.push(["Paid at", "Amount", "Method", "Transaction"].map(esc).join(","));
@@ -460,7 +544,15 @@ export function DailySummaryReportPage() {
     for (const [k, v] of Object.entries(stockAgg.bySource)) {
       lines.push([k, v.inQty, v.outQty].map(esc).join(","));
     }
-    lines.push(["Total stock lines", stockAgg.lineCount, stockAgg.qtyIn, stockAgg.qtyOut].map(esc).join(","));
+    lines.push(
+      ["Stock movement rows (DB)", stockAgg.moveLineCount, stockAgg.qtyIn, stockAgg.movementQtyOut].map(esc).join(",")
+    );
+    if (stockAgg.invoiceLineCount > 0) {
+      lines.push(
+        ["Invoice lines issued today (qty)", stockAgg.invoiceLineCount, 0, stockAgg.invoiceOutQty].map(esc).join(",")
+      );
+    }
+    lines.push(["Combined qty (movements + invoice)", "", stockAgg.qtyIn, stockAgg.qtyOut].map(esc).join(","));
     lines.push(["Detail", "Product", "Location", "In", "Out", "Source"].map(esc).join(","));
     for (const m of stockMoves) {
       const { inQty, outQty } = effectiveStockMovementInOut(m);
@@ -472,6 +564,20 @@ export function DailySummaryReportPage() {
           inQty,
           outQty,
           m.source_type || "",
+        ]
+          .map(esc)
+          .join(",")
+      );
+    }
+    for (const il of invoiceStockDay.lines) {
+      lines.push(
+        [
+          reportDate,
+          productNameById[il.product_id] || il.product_id.slice(0, 8),
+          "",
+          "",
+          il.quantity,
+          `${INVOICE_STOCK_SOURCE_KEY} ${il.invoice_number}`,
         ]
           .map(esc)
           .join(",")
@@ -504,7 +610,9 @@ export function DailySummaryReportPage() {
             <PageNotes ariaLabel="Daily summary help">
               <p>
                 One-day snapshot across modules (Uganda EAT): sales-related activity, purchases, inventory movements, and expenses. Amounts use
-                different bases (issue date vs payment date vs movement time) — do not sum across sections as a single P&amp;L figure.
+                different bases (issue date vs payment date vs movement time) — do not sum across sections as a single P&amp;L figure. Inventory{" "}
+                <strong className="font-medium text-slate-800">qty out</strong> adds retail invoice line quantities issued that day (product
+                lines) even when no stock movement row exists yet.
               </p>
             </PageNotes>
           </div>
@@ -571,7 +679,7 @@ export function DailySummaryReportPage() {
             </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
               <div className="bg-white p-3 rounded-lg border border-slate-200">
-                <p className="text-xs text-slate-500">Retail POS (est. sales)</p>
+                <p className="text-xs text-slate-500">Retail POS + invoice (issued today)</p>
                 <p className="text-xl font-bold text-slate-900">{formatMoney(retailPosTotal)}</p>
               </div>
               <div className="bg-white p-3 rounded-lg border border-slate-200">
@@ -788,18 +896,32 @@ export function DailySummaryReportPage() {
 
           <section className="mb-10">
             <ModuleHeading label="Inventory" />
-            <div className="grid sm:grid-cols-3 gap-3 mb-4">
+            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
               <div className="bg-white p-3 rounded-lg border border-slate-200">
-                <p className="text-xs text-slate-500">Movement lines</p>
-                <p className="text-xl font-bold text-slate-900">{stockAgg.lineCount}</p>
+                <p className="text-xs text-slate-500">Movement lines (DB)</p>
+                <p className="text-xl font-bold text-slate-900">{stockAgg.moveLineCount}</p>
+              </div>
+              <div className="bg-white p-3 rounded-lg border border-slate-200">
+                <p className="text-xs text-slate-500">Invoice lines (qty, issued today)</p>
+                <p className="text-xl font-bold text-slate-900">{stockAgg.invoiceLineCount}</p>
+                {stockAgg.invoiceOutQty > 0 ? (
+                  <p className="text-[10px] text-slate-500 mt-0.5 tabular-nums">Σ qty out {stockAgg.invoiceOutQty.toFixed(2)}</p>
+                ) : (
+                  <p className="text-[10px] text-slate-400 mt-0.5">No product lines</p>
+                )}
               </div>
               <div className="bg-white p-3 rounded-lg border border-slate-200">
                 <p className="text-xs text-slate-500">Qty in (effective)</p>
                 <p className="text-xl font-bold text-emerald-700">{stockAgg.qtyIn.toFixed(2)}</p>
               </div>
               <div className="bg-white p-3 rounded-lg border border-slate-200">
-                <p className="text-xs text-slate-500">Qty out (effective)</p>
+                <p className="text-xs text-slate-500">Qty out (movements + invoice)</p>
                 <p className="text-xl font-bold text-rose-700">{stockAgg.qtyOut.toFixed(2)}</p>
+                {stockAgg.invoiceOutQty > 0 ? (
+                  <p className="text-[10px] text-slate-500 mt-0.5 tabular-nums">
+                    Movements {stockAgg.movementQtyOut.toFixed(2)} + invoice {stockAgg.invoiceOutQty.toFixed(2)}
+                  </p>
+                ) : null}
               </div>
             </div>
             <div className="bg-white rounded-xl border border-slate-200 overflow-hidden mb-4">
@@ -846,26 +968,41 @@ export function DailySummaryReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {stockMoves.length === 0 ? (
+                  {stockMoves.length === 0 && invoiceStockDay.lines.length === 0 ? (
                     <tr>
                       <td colSpan={6} className="p-4 text-center text-slate-500">
                         None.
                       </td>
                     </tr>
                   ) : (
-                    stockMoves.map((m) => {
-                      const { inQty, outQty } = effectiveStockMovementInOut(m);
-                      return (
-                        <tr key={m.id} className="border-t border-slate-100">
-                          <td className="p-2 whitespace-nowrap text-xs">{new Date(m.movement_date).toLocaleString()}</td>
-                          <td className="p-2 text-xs">{productNameById[m.product_id] || m.product_id.slice(0, 8)}</td>
-                          <td className="p-2 text-xs">{m.location || "—"}</td>
-                          <td className="p-2 text-right">{inQty > 0 ? inQty.toFixed(2) : "—"}</td>
-                          <td className="p-2 text-right">{outQty > 0 ? outQty.toFixed(2) : "—"}</td>
-                          <td className="p-2 font-mono text-xs">{m.source_type || "—"}</td>
+                    <>
+                      {stockMoves.map((m) => {
+                        const { inQty, outQty } = effectiveStockMovementInOut(m);
+                        return (
+                          <tr key={m.id} className="border-t border-slate-100">
+                            <td className="p-2 whitespace-nowrap text-xs">{new Date(m.movement_date).toLocaleString()}</td>
+                            <td className="p-2 text-xs">{productNameById[m.product_id] || m.product_id.slice(0, 8)}</td>
+                            <td className="p-2 text-xs">{m.location || "—"}</td>
+                            <td className="p-2 text-right">{inQty > 0 ? inQty.toFixed(2) : "—"}</td>
+                            <td className="p-2 text-right">{outQty > 0 ? outQty.toFixed(2) : "—"}</td>
+                            <td className="p-2 font-mono text-xs">{m.source_type || "—"}</td>
+                          </tr>
+                        );
+                      })}
+                      {invoiceStockDay.lines.map((il) => (
+                        <tr key={`inv-${il.id}`} className="border-t border-slate-100 bg-sky-50/40">
+                          <td className="p-2 whitespace-nowrap text-xs">{reportDate} (issue)</td>
+                          <td className="p-2 text-xs">{productNameById[il.product_id] || il.product_id.slice(0, 8)}</td>
+                          <td className="p-2 text-xs">—</td>
+                          <td className="p-2 text-right">—</td>
+                          <td className="p-2 text-right tabular-nums">{il.quantity.toFixed(2)}</td>
+                          <td className="p-2 text-xs">
+                            <span className="font-mono text-[11px] text-sky-900">{INVOICE_STOCK_SOURCE_KEY}</span>
+                            <span className="text-slate-600"> · {il.invoice_number}</span>
+                          </td>
                         </tr>
-                      );
-                    })
+                      ))}
+                    </>
                   )}
                 </tbody>
               </table>

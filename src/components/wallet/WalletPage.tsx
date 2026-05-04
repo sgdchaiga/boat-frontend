@@ -279,7 +279,7 @@ export function WalletPage({ readOnly }: Props) {
         orgId,
         isSuperAdmin
       ),
-      supabase.from("retail_customers").select("id,name,email").eq("organization_id", orgId).order("name"),
+      filterByOrganizationId(supabase.from("retail_customers").select("id,name,email").order("name"), orgId, isSuperAdmin),
     ]);
     const listErr = hRes.error?.message ?? rRes.error?.message ?? null;
     const hotels = (hRes.data as HotelCust[]) || [];

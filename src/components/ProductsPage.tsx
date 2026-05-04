@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
+  ChevronUp,
   Edit,
   Plus,
   Save,
@@ -95,6 +96,14 @@ function marginFromPrices(cost: number | null | undefined, sale: number | null |
   return { amount, pct };
 }
 
+function profitSortValue(p: Product): number | null {
+  const m = marginFromPrices(p.cost_price, p.sales_price);
+  return m ? m.amount : null;
+}
+
+type ItemsSortKey = "name" | "profit";
+type ItemsSortDir = "asc" | "desc";
+
 export default function ProductsPage({ readOnly = false }: ProductsPageProps = {}) {
   const [products, setProducts] = useState<Product[]>([]);
   const [balanceByProduct, setBalanceByProduct] = useState<Record<string, number>>({});
@@ -122,6 +131,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   });
 
   const [search, setSearch] = useState("");
+  const [sortKey, setSortKey] = useState<ItemsSortKey>("name");
+  const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
 
   useEffect(() => {
     void loadAll();
@@ -330,6 +341,36 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
   const filteredProducts = products.filter((p) => (p.name || "").toLowerCase().includes(search.toLowerCase()));
 
+  const sortedProducts = useMemo(() => {
+    const rows = [...filteredProducts];
+    rows.sort((a, b) => {
+      if (sortKey === "name") {
+        const cmp = (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+        return sortDir === "asc" ? cmp : -cmp;
+      }
+      const pa = profitSortValue(a);
+      const pb = profitSortValue(b);
+      const aNull = pa === null;
+      const bNull = pb === null;
+      if (aNull && bNull) return (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+      if (aNull) return 1;
+      if (bNull) return -1;
+      const diff = pa - pb;
+      if (diff !== 0) return sortDir === "asc" ? diff : -diff;
+      return (a.name || "").localeCompare(b.name || "", undefined, { sensitivity: "base" });
+    });
+    return rows;
+  }, [filteredProducts, sortKey, sortDir]);
+
+  function onSortHeader(key: ItemsSortKey) {
+    if (sortKey === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDir(key === "profit" ? "desc" : "asc");
+    }
+  }
+
   const getDepartmentName = (departmentId: string | null) => {
     if (!departmentId) return "—";
     const dep = departments.find((d) => d.id === departmentId);
@@ -382,17 +423,49 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
         <table className="w-full text-sm min-w-[640px]">
           <thead className="bg-slate-50">
             <tr>
-              <th className="text-left p-3">Item</th>
+              <th className="text-left p-3">
+                <button
+                  type="button"
+                  onClick={() => onSortHeader("name")}
+                  className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-slate-900 -m-1 px-1 py-0.5 rounded"
+                  aria-sort={sortKey === "name" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+                >
+                  Item
+                  {sortKey === "name" ? (
+                    sortDir === "asc" ? (
+                      <ChevronUp className="w-4 h-4 shrink-0 text-slate-500" aria-hidden />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" aria-hidden />
+                    )
+                  ) : null}
+                </button>
+              </th>
               <th className="text-right p-3 whitespace-nowrap">Stock</th>
               <th className="text-right p-3 whitespace-nowrap">Buy price</th>
               <th className="text-right p-3 whitespace-nowrap">Sell price</th>
-              <th className="text-right p-3 whitespace-nowrap">Profit</th>
+              <th className="text-right p-3 whitespace-nowrap">
+                <button
+                  type="button"
+                  onClick={() => onSortHeader("profit")}
+                  className="inline-flex items-center gap-1 font-semibold text-slate-700 hover:text-slate-900 ml-auto -m-1 px-1 py-0.5 rounded w-full justify-end"
+                  aria-sort={sortKey === "profit" ? (sortDir === "asc" ? "ascending" : "descending") : "none"}
+                >
+                  Profit
+                  {sortKey === "profit" ? (
+                    sortDir === "asc" ? (
+                      <ChevronUp className="w-4 h-4 shrink-0 text-slate-500" aria-hidden />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 shrink-0 text-slate-500" aria-hidden />
+                    )
+                  ) : null}
+                </button>
+              </th>
               <th className="text-left p-3 whitespace-nowrap">Status</th>
               <th className="text-right p-3">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {filteredProducts.map((product) => {
+            {sortedProducts.map((product) => {
               const track = product.track_inventory !== false;
               const bal = balanceByProduct[product.id];
               const m = marginFromPrices(product.cost_price, product.sales_price);
@@ -466,7 +539,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
             })}
           </tbody>
         </table>
-        {filteredProducts.length === 0 && (
+        {sortedProducts.length === 0 && (
           <p className="p-8 text-center text-slate-500">No items match your search.</p>
         )}
       </div>

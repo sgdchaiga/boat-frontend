@@ -86,6 +86,11 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Daily summary", page: "reports_daily_summary" },
     { name: "Sales report", page: "reports_daily_sales" },
     { name: "Purchases report", page: "reports_daily_purchases_summary" },
+    { name: "Sales by item", page: "reports_sales_by_item" },
+    { name: "Purchases by item", page: "reports_purchases_by_item" },
+    ...(businessType === "manufacturing"
+      ? [{ name: "Daily production", page: "reports_manufacturing_daily_production" as const }]
+      : []),
     { name: "Income statement", page: "accounting_income" },
     { name: "Balance sheet", page: "accounting_balance" },
   ];

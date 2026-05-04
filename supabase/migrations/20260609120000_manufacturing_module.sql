@@ -37,9 +37,13 @@ CREATE TABLE IF NOT EXISTS public.manufacturing_production_entries (
   produced_qty numeric(18,3) NOT NULL DEFAULT 0 CHECK (produced_qty >= 0),
   scrap_qty numeric(18,3) NOT NULL DEFAULT 0 CHECK (scrap_qty >= 0),
   posted_at timestamptz NOT NULL DEFAULT now(),
+  posted_by_staff_id uuid REFERENCES public.staff(id) ON DELETE SET NULL,
   note text,
   created_at timestamptz NOT NULL DEFAULT now()
 );
+
+COMMENT ON COLUMN public.manufacturing_production_entries.posted_by_staff_id IS
+  'Staff member responsible for the production entry (shown on daily production reports).';
 
 CREATE TABLE IF NOT EXISTS public.manufacturing_costing_entries (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

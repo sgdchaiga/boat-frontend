@@ -26,6 +26,7 @@ type SaleLine = {
 type RetailSaleOrder = {
   id: string;
   sale_at: string;
+  customer_id: string | null;
   customer_name: string | null;
   retail_sale_lines: SaleLine[];
   payments_total?: number;
@@ -38,6 +39,8 @@ type ProductOption = {
   department_id: string | null;
   sales_price: number | null;
 };
+
+type RetailCustomerOption = { id: string; name: string };
 
 export function RetailPosOrdersPage() {
   const { user } = useAuth();
@@ -52,6 +55,10 @@ export function RetailPosOrdersPage() {
   const [departmentTab, setDepartmentTab] = useState<string>("all");
   const [departmentOptions, setDepartmentOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  const [retailCustomers, setRetailCustomers] = useState<RetailCustomerOption[]>([]);
+  const [editingCustomerId, setEditingCustomerId] = useState<string | null>(null);
+  const [editingCustomerName, setEditingCustomerName] = useState("");
+  const [editOrderSaving, setEditOrderSaving] = useState(false);
   const [payingOrder, setPayingOrder] = useState<RetailSaleOrder | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState<PaymentMethodCode>("cash");
@@ -118,11 +125,11 @@ export function RetailPosOrdersPage() {
     try {
       setLoading(true);
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-      const [salesRes, departmentsRes, productsRes] = await Promise.all([
+      const [salesRes, departmentsRes, productsRes, customersRes] = await Promise.all([
         filterByOrganizationId(
           supabase
             .from("retail_sales")
-            .select("id,sale_at,customer_name")
+            .select("id,sale_at,customer_name,customer_id")
             .gte("sale_at", from.toISOString())
             .lt("sale_at", to.toISOString())
             .order("sale_at", { ascending: false }),
@@ -135,9 +142,15 @@ export function RetailPosOrdersPage() {
           orgId,
           superAdmin
         ),
+        filterByOrganizationId(supabase.from("retail_customers").select("id,name").order("name"), orgId, superAdmin),
       ]);
 
-      const sales = (salesRes.data || []) as Array<{ id: string; sale_at: string; customer_name: string | null }>;
+      const sales = (salesRes.data || []) as Array<{
+        id: string;
+        sale_at: string;
+        customer_name: string | null;
+        customer_id: string | null;
+      }>;
       const saleIds = sales.map((s) => s.id);
       const linesRes = saleIds.length
         ? await supabase
@@ -186,6 +199,7 @@ export function RetailPosOrdersPage() {
       );
       setDepartmentOptions((departmentsRes.data || []) as Array<{ id: string; name: string }>);
       setProductOptions((productsRes.data || []) as ProductOption[]);
+      setRetailCustomers((customersRes.data || []) as RetailCustomerOption[]);
     } finally {
       setLoading(false);
     }
@@ -224,7 +238,7 @@ export function RetailPosOrdersPage() {
         payment_source: "pos_retail",
         transaction_id: payingOrder.id,
         processed_by: user?.id ?? null,
-        retail_customer_id: null,
+        retail_customer_id: payingOrder.customer_id ?? null,
         ...(orgId ? { organization_id: orgId } : {}),
       };
       const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payMethod);
@@ -245,6 +259,8 @@ export function RetailPosOrdersPage() {
       return;
     }
     setEditingOrderId(order.id);
+    setEditingCustomerId(order.customer_id ?? null);
+    setEditingCustomerName(order.customer_name || "");
     setEditingOrderDate(new Date(order.sale_at).toISOString().slice(0, 16));
     setEditingOrderLines(
       (order.retail_sale_lines || []).map((line) => ({
@@ -258,14 +274,25 @@ export function RetailPosOrdersPage() {
   };
 
   const saveEditedOrder = async () => {
-    if (!editingOrderId) return;
+    if (!editingOrderId || editOrderSaving) return;
     if (!canEditPosOrdersByRole) {
       alert("You are not authorized to edit POS orders.");
       return;
     }
+    setEditOrderSaving(true);
     try {
       const saleAt = new Date(editingOrderDate).toISOString();
-      const { error: saleErr } = await supabase.from("retail_sales").update({ sale_at: saleAt }).eq("id", editingOrderId);
+      const trimmedName = editingCustomerName.trim();
+      const linked = editingCustomerId ? retailCustomers.find((c) => c.id === editingCustomerId) : null;
+      const resolvedName = linked?.name || trimmedName || null;
+      const { error: saleErr } = await supabase
+        .from("retail_sales")
+        .update({
+          sale_at: saleAt,
+          customer_id: editingCustomerId || null,
+          customer_name: resolvedName,
+        })
+        .eq("id", editingOrderId);
       if (saleErr) throw saleErr;
       const { error: delErr } = await supabase.from("retail_sale_lines").delete().eq("sale_id", editingOrderId);
       if (delErr) throw delErr;
@@ -289,6 +316,8 @@ export function RetailPosOrdersPage() {
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderLines([]);
+      setEditingCustomerId(null);
+      setEditingCustomerName("");
       await fetchOrders();
       alert("Order updated.");
     } catch (e) {
@@ -298,6 +327,8 @@ export function RetailPosOrdersPage() {
       } else {
         alert(msg);
       }
+    } finally {
+      setEditOrderSaving(false);
     }
   };
 
@@ -377,6 +408,7 @@ export function RetailPosOrdersPage() {
           quantity_in: Number(line.quantity || 0),
           quantity_out: 0,
           note: `POS reversal for order ${order.id.slice(0, 8)}`,
+          ...(orgId ? { organization_id: orgId } : {}),
         }));
       if (restockRows.length > 0) {
         const { error: stockErr } = await supabase.from("product_stock_movements").insert(restockRows);
@@ -387,6 +419,7 @@ export function RetailPosOrdersPage() {
         .from("retail_sales")
         .update({
           payment_status: "refunded",
+          sale_status: "refunded",
           amount_paid: 0,
           amount_due: 0,
           change_amount: 0,
@@ -605,6 +638,8 @@ export function RetailPosOrdersPage() {
                 setEditingOrderId(null);
                 setEditingOrderDate("");
                 setEditingOrderLines([]);
+                setEditingCustomerId(null);
+                setEditingCustomerName("");
               }}
               className="px-3 py-1.5 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm"
             >
@@ -614,6 +649,38 @@ export function RetailPosOrdersPage() {
           <div className="mb-4">
             <label className="block text-sm font-medium text-slate-700 mb-1">Transaction date & time</label>
             <input type="datetime-local" value={editingOrderDate} onChange={(e) => setEditingOrderDate(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Retail customer</label>
+              <select
+                value={editingCustomerId || ""}
+                onChange={(e) => {
+                  const id = e.target.value || null;
+                  setEditingCustomerId(id);
+                  const c = id ? retailCustomers.find((x) => x.id === id) : null;
+                  if (c) setEditingCustomerName(c.name);
+                }}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              >
+                <option value="">Walk-in / no linked customer</option>
+                {retailCustomers.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Customer name on receipt</label>
+              <input
+                type="text"
+                value={editingCustomerName}
+                onChange={(e) => setEditingCustomerName(e.target.value)}
+                placeholder="Walk-in customer"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+              />
+            </div>
           </div>
           <div className="space-y-3">
             {editingOrderLines.map((line, index) => (
@@ -687,8 +754,13 @@ export function RetailPosOrdersPage() {
             <button type="button" onClick={addEditLine} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">
               Add line
             </button>
-            <button type="button" onClick={() => void saveEditedOrder()} className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm">
-              Save changes
+            <button
+              type="button"
+              onClick={() => void saveEditedOrder()}
+              disabled={editOrderSaving}
+              className="px-3 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm disabled:opacity-50"
+            >
+              {editOrderSaving ? "Saving…" : "Save changes"}
             </button>
           </div>
         </div>

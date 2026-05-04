@@ -37,6 +37,8 @@ export type ModuleId =
 type ModuleAudience =
   | "hotel"
   | "retail"
+  /** Counter/barcode POS + orders (same surfaces as standalone retail; also for manufacturers who sell from stock). */
+  | "retail_counter"
   | "both"
   | "sacco"
   | "school"
@@ -60,8 +62,8 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   retail_credit_sales_report: "both",
   frontdesk: "hotel",
   hotel_pos: "hotel",
-  /** Item / barcode till for standalone retail tenants; hotels use waiter POS (`hotel_pos` module routes). Mixed orgs get both hospitality + retail modules. */
-  retail_pos: "retail",
+  /** Item / barcode till: retail, mixed, restaurant, and manufacturing (counter sales alongside production). */
+  retail_pos: "retail_counter",
   kitchen_ops: "hotel",
   billing: "hotel",
   payments_received: "both",
@@ -122,6 +124,14 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
   if (!businessType || businessType === "other") return audience === "both";
+  if (audience === "retail_counter") {
+    return (
+      businessType === "retail" ||
+      businessType === "mixed" ||
+      businessType === "restaurant" ||
+      businessType === "manufacturing"
+    );
+  }
   if (audience === "production") {
     return (
       businessType === "hotel" ||
@@ -393,6 +403,9 @@ const HOTEL_EXCLUSIVE_PAGE_IDS = new Set([
 ]);
 
 /** Rooms & stay ops only (kitchen / bar POS still allowed). */
+/** Manufacturing-only analytics / compliance routes */
+const MANUFACTURING_ONLY_PAGE_IDS = new Set(["reports_manufacturing_daily_production"]);
+
 const HOTEL_LODGING_ONLY_PAGE_IDS = new Set([
   "rooms",
   "reservations",
@@ -410,9 +423,17 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
   if (!businessType || businessType === "mixed") return true;
 
   const nonRetailLodgingProfiles: BusinessType[] = ["hotel", "school", "sacco", "vsla", "manufacturing"];
-  if (nonRetailLodgingProfiles.includes(businessType) && RETAIL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
+  if (nonRetailLodgingProfiles.includes(businessType) && RETAIL_EXCLUSIVE_PAGE_IDS.has(page)) {
+    const manufacturingCounterPos =
+      businessType === "manufacturing" && (page === "retail_pos" || page === "retail_pos_orders");
+    if (!manufacturingCounterPos) return false;
+  }
 
   if (businessType === "manufacturing" && HOTEL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
+
+  if (MANUFACTURING_ONLY_PAGE_IDS.has(page)) {
+    return businessType === "manufacturing";
+  }
 
   if (businessType === "retail") {
     if (HOTEL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
@@ -478,6 +499,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_school_term_performance",
     "hotel_pos_reports",
     "reports_retail_shift_variance",
+    "reports_manufacturing_daily_production",
   ].includes(page)) return "reports";
   if ([
     "gl_accounts",

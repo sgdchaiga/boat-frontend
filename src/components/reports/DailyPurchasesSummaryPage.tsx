@@ -13,6 +13,17 @@ interface VendorSummaryRow {
   balance: number;
 }
 
+interface PurchaseLineDetail {
+  source: "purchase_order" | "bill";
+  dateLabel: string;
+  vendor: string;
+  description: string;
+  quantity: number;
+  rate: number;
+  unit: string;
+  amount: number;
+}
+
 export function DailyPurchasesSummaryPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
@@ -29,6 +40,7 @@ export function DailyPurchasesSummaryPage() {
   const [paymentsMade, setPaymentsMade] = useState(0);
   const [outstanding, setOutstanding] = useState(0);
   const [rows, setRows] = useState<VendorSummaryRow[]>([]);
+  const [lineDetails, setLineDetails] = useState<PurchaseLineDetail[]>([]);
 
   useEffect(() => {
     loadData();
@@ -41,11 +53,11 @@ export function DailyPurchasesSummaryPage() {
       const fromStr = from.toISOString();
       const toStr = to.toISOString();
 
-      const [billsRes, paymentsRes] = await Promise.all([
+      const [billsRes, paymentsRes, poRes] = await Promise.all([
         filterByOrganizationId(
           supabase
             .from("bills")
-            .select("id, vendor_id, amount, status, bill_date, created_at, vendors(name)")
+            .select("id, vendor_id, amount, status, bill_date, created_at, description, purchase_order_id, vendors(name)")
             .gte("created_at", fromStr)
             .lt("created_at", toStr),
           orgId,
@@ -60,6 +72,15 @@ export function DailyPurchasesSummaryPage() {
           orgId,
           superAdmin
         ),
+        filterByOrganizationId(
+          supabase
+            .from("purchase_orders")
+            .select("id, order_date, created_at, vendor_id, vendors(name), purchase_order_items(description, quantity, cost_price)")
+            .gte("created_at", fromStr)
+            .lt("created_at", toStr),
+          orgId,
+          superAdmin
+        ),
       ]);
 
       const bills = (billsRes.data || []) as Array<{
@@ -69,6 +90,8 @@ export function DailyPurchasesSummaryPage() {
         status: string | null;
         bill_date: string | null;
         created_at: string | null;
+        description: string | null;
+        purchase_order_id?: string | null;
         vendors?: { name?: string | null } | null;
       }>;
       const payments = (paymentsRes.data || []) as Array<{
@@ -127,6 +150,56 @@ export function DailyPurchasesSummaryPage() {
         .map((r) => ({ ...r, balance: r.purchaseAmount - r.paymentAmount }))
         .sort((a, b) => b.purchaseAmount - a.purchaseAmount);
 
+      const purchaseOrders = (poRes.data || []) as Array<{
+        id: string;
+        order_date: string | null;
+        created_at: string | null;
+        vendor_id: string | null;
+        vendors?: { name?: string | null } | null;
+        purchase_order_items?: Array<{ description: string; quantity: number | null; cost_price: number | null }> | null;
+      }>;
+
+      const details: PurchaseLineDetail[] = [];
+
+      for (const po of purchaseOrders) {
+        const inPoRange = inRange(po.order_date) || (!po.order_date && inRange(po.created_at));
+        if (!inPoRange) continue;
+        const vendor = po.vendors?.name || "Unknown vendor";
+        const dateLabel = po.order_date || (po.created_at ? po.created_at.slice(0, 10) : "—");
+        for (const it of po.purchase_order_items || []) {
+          const qty = Number(it.quantity ?? 0);
+          const rate = Number(it.cost_price ?? 0);
+          details.push({
+            source: "purchase_order",
+            dateLabel,
+            vendor,
+            description: (it.description || "").trim() || "—",
+            quantity: qty,
+            rate,
+            unit: "ea",
+            amount: qty * rate,
+          });
+        }
+      }
+
+      for (const b of billsInRange) {
+        if (b.purchase_order_id) continue;
+        const amt = Number(b.amount || 0);
+        details.push({
+          source: "bill",
+          dateLabel: b.bill_date || (b.created_at ? b.created_at.slice(0, 10) : "—"),
+          vendor: b.vendors?.name || "Unknown vendor",
+          description: (b.description || "").trim() || "Bill / GRN",
+          quantity: 1,
+          rate: amt,
+          unit: "ea",
+          amount: amt,
+        });
+      }
+
+      details.sort((a, b) => String(b.dateLabel).localeCompare(String(a.dateLabel)));
+      setLineDetails(details);
+
       setTotalBills(billsInRange.length);
       setApprovedBills(approvedCount);
       setPurchaseAmount(billTotal);
@@ -141,6 +214,7 @@ export function DailyPurchasesSummaryPage() {
       setPaymentsMade(0);
       setOutstanding(0);
       setRows([]);
+      setLineDetails([]);
     } finally {
       setLoading(false);
     }
@@ -157,6 +231,17 @@ export function DailyPurchasesSummaryPage() {
       [],
       ["Vendor", "Bills Count", "Purchases", "Payments", "Balance"],
       ...rows.map((r) => [r.vendor, String(r.billsCount), r.purchaseAmount.toFixed(2), r.paymentAmount.toFixed(2), r.balance.toFixed(2)]),
+      [],
+      ["Date", "Vendor", "Description", "Quantity", "Rate", "Unit", "Amount"],
+      ...lineDetails.map((d) => [
+        d.dateLabel,
+        d.vendor.replaceAll(",", " "),
+        d.description.replaceAll(",", " "),
+        String(d.quantity),
+        d.rate.toFixed(4),
+        d.unit,
+        d.amount.toFixed(2),
+      ]),
     ];
     const csv = csvRows.map((r) => r.join(",")).join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
@@ -261,6 +346,46 @@ export function DailyPurchasesSummaryPage() {
                 {rows.length === 0 && (
                   <tr>
                     <td colSpan={5} className="p-6 text-center text-slate-500">No data for selected period.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+
+          <h2 className="text-lg font-semibold text-slate-900 mt-8 mb-3">Line detail</h2>
+          <p className="text-sm text-slate-600 mb-3">
+            Purchase order lines and standalone bills (GRNs without a linked PO are shown once). Columns: description, quantity, rate, unit, amount.
+          </p>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="text-left p-3">Date</th>
+                  <th className="text-left p-3">Vendor</th>
+                  <th className="text-left p-3">Description</th>
+                  <th className="text-right p-3">Quantity</th>
+                  <th className="text-right p-3">Rate</th>
+                  <th className="text-left p-3">Unit</th>
+                  <th className="text-right p-3">Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lineDetails.map((d, i) => (
+                  <tr key={`${d.source}-${i}-${d.dateLabel}-${d.description}`} className="border-t">
+                    <td className="p-3 whitespace-nowrap">{d.dateLabel}</td>
+                    <td className="p-3">{d.vendor}</td>
+                    <td className="p-3">{d.description}</td>
+                    <td className="p-3 text-right tabular-nums">{d.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })}</td>
+                    <td className="p-3 text-right tabular-nums">{d.rate.toFixed(4)}</td>
+                    <td className="p-3">{d.unit}</td>
+                    <td className="p-3 text-right font-medium tabular-nums">{d.amount.toFixed(2)}</td>
+                  </tr>
+                ))}
+                {lineDetails.length === 0 && (
+                  <tr>
+                    <td colSpan={7} className="p-6 text-center text-slate-500">
+                      No purchase lines in this period.
+                    </td>
                   </tr>
                 )}
               </tbody>

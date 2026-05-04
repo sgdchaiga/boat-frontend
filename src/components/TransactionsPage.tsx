@@ -324,7 +324,6 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
 
       const depMap = Object.fromEntries(deptList.map((d) => [d.id, d.name]));
       const transactionRows: TransactionRow[] = [];
-      const kitchenOrderIdSet = new Set<string>(orders.map((o: any) => String(o.id)));
 
       orders.forEach((order) => {
         const customer = order.customer_name || "Walk-in";
@@ -374,7 +373,6 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
 
       // Retail sales must be date-filtered by transaction time (sale_at), not stock movement posting time.
       retailSales.forEach((sale) => {
-        if (kitchenOrderIdSet.has(sale.id)) return;
         const customer = sale.customer_name || "Walk-in";
         const rowDateIso = isCashView ? paymentDateByTransactionId[sale.id] || sale.sale_at : sale.sale_at;
         const lines = sale.retail_sale_lines || [];

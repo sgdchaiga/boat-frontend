@@ -104,8 +104,8 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
-    fetchData();
-  }, []);
+    void fetchData();
+  }, [orgId, superAdmin]);
 
   const setSimpleModePersist = (next: boolean) => {
     setSimpleMode(next);
@@ -274,7 +274,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     }
   };
 
-  const lineTotal = (item: LineItem) => Number(item.cost_price || 0) * Number(item.quantity || 1);
+  const lineTotal = (item: LineItem) => Number(item.cost_price || 0) * Number(item.quantity || 0);
   const grandTotal = lineItems.reduce((sum, i) => sum + lineTotal(i), 0);
 
   const findProductByName = (name: string) => {
@@ -320,7 +320,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
 
   const bumpQty = (idx: number, delta: number) => {
     const next = [...lineItems];
-    const q = Math.max(1, Number(next[idx].quantity || 1) + delta);
+    const q = Math.max(0, Number(next[idx].quantity || 0) + delta);
     next[idx].quantity = q;
     setLineItems(next);
   };
@@ -383,7 +383,9 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       alert(simpleMode ? "Choose who you bought from." : "Select a vendor.");
       return;
     }
-    const validItems = lineItems.filter((i) => (i.description || "").trim() || i.product_id);
+    const validItems = lineItems.filter(
+      (i) => ((i.description || "").trim() || i.product_id) && Number(i.quantity || 0) > 0
+    );
     const withNames = validItems.map((i) => {
       const prod = products.find((p) => p.id === i.product_id);
       const byName = findProductByName(i.description || "");
@@ -411,13 +413,15 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           .eq("id", editingOrder.id);
         if (poErr) throw poErr;
         await supabase.from("purchase_order_items").delete().eq("purchase_order_id", editingOrder.id);
-        for (const i of withNames) {
-          await supabase.from("purchase_order_items").insert({
-            purchase_order_id: editingOrder.id,
-            description: i.description,
-            cost_price: i.cost_price,
-            quantity: i.quantity,
-          });
+        const itemRows = withNames.map((i) => ({
+          purchase_order_id: editingOrder.id,
+          description: i.description,
+          cost_price: i.cost_price,
+          quantity: i.quantity,
+        }));
+        if (itemRows.length > 0) {
+          const { error: itemsErr } = await supabase.from("purchase_order_items").insert(itemRows);
+          if (itemsErr) throw itemsErr;
         }
       } else {
         const { data: poData, error: poErr } = await supabase
@@ -432,13 +436,15 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           .select("id")
           .single();
         if (poErr || !poData) throw poErr || new Error("Failed to create purchase");
-        for (const i of withNames) {
-          await supabase.from("purchase_order_items").insert({
-            purchase_order_id: poData.id,
-            description: i.description,
-            cost_price: i.cost_price,
-            quantity: i.quantity,
-          });
+        const newItemRows = withNames.map((i) => ({
+          purchase_order_id: poData.id,
+          description: i.description,
+          cost_price: i.cost_price,
+          quantity: i.quantity,
+        }));
+        if (newItemRows.length > 0) {
+          const { error: itemsErr } = await supabase.from("purchase_order_items").insert(newItemRows);
+          if (itemsErr) throw itemsErr;
         }
       }
       setShowModal(false);
@@ -793,10 +799,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       )}
 
       {showModal && (
-        <div
-          className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto"
-          onClick={() => !saving && setShowModal(false)}
-        >
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div
             className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[min(90vh,calc(100dvh-1rem))] my-4 sm:my-8 p-6 flex flex-col min-h-0"
             onClick={(e) => e.stopPropagation()}
@@ -905,9 +908,19 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
                             </button>
                             <input
                               type="number"
-                              min={1}
-                              value={item.quantity}
-                              onChange={(e) => updateLineItem(idx, "quantity", parseInt(e.target.value, 10) || 1)}
+                              min={0}
+                              value={Number(item.quantity) > 0 ? item.quantity : ""}
+                              onChange={(e) => {
+                                const raw = e.target.value;
+                                const next = [...lineItems];
+                                if (raw === "") {
+                                  next[idx].quantity = 0;
+                                } else {
+                                  const n = parseInt(raw, 10);
+                                  next[idx].quantity = Number.isFinite(n) ? Math.max(0, n) : 0;
+                                }
+                                setLineItems(next);
+                              }}
                               className="flex-1 min-w-0 border rounded-lg px-2 py-2 text-center text-base font-medium"
                             />
                             <button
