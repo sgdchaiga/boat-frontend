@@ -26,6 +26,7 @@ import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { GlAccountPicker, type GlAccountOption } from "./common/GlAccountPicker";
 import { effectivePosCatalogMode } from "../lib/posCatalogMode";
 import { randomUuid } from "../lib/randomUuid";
+import { incrementActiveAccessTransactions } from "../lib/localAuthStore";
 import { getNextOrderStatus, type ServiceType } from "../lib/hotelPosOrderStatus";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
@@ -574,6 +575,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
       };
       const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payQueueMethod);
       if (error) throw error;
+      incrementActiveAccessTransactions();
       setPayQueueOrder(null);
       await loadData();
     } catch (e) {
@@ -1480,6 +1482,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
           paymentMethod
         );
         if (payInsErr) throw new Error(String((payInsErr as Error)?.message || payInsErr) || "Failed to record payment.");
+        incrementActiveAccessTransactions();
         const deptNameById = new Map(departments.map((d) => [d.id, d.name]));
         const groupedSalesByDepartment = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();
         const groupedCogsByDepartment = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();

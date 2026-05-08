@@ -160,8 +160,11 @@ export async function applyLocalSubscriptionRenewalToken(params: {
   const tokenOrgId = (payload.org_id || "").trim();
   const jti = (payload.jti || "").trim();
   if (!tokenOrgId || !jti) throw new Error("Token is missing org_id or jti.");
-  if (tokenOrgId !== params.organizationId) {
-    throw new Error("Token organization does not match this local organization.");
+  const localOrgId = params.organizationId.trim();
+  if (tokenOrgId.toLowerCase() !== localOrgId.toLowerCase()) {
+    throw new Error(
+      `Token organization does not match this local organization. Token is for org_id ${tokenOrgId}; this install is ${localOrgId}. Mint the token for that org, or set the same UUID in VITE_TENANT_ID and/or VITE_LOCAL_ORGANIZATION_ID (desktop local builds) and rebuild; it must match your cloud organizations.id.`
+    );
   }
   if (!payload.status || !ALLOWED_STATUSES.includes(payload.status)) {
     throw new Error("Token has invalid subscription status.");

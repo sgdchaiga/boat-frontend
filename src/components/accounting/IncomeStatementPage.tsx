@@ -431,8 +431,9 @@ export function IncomeStatementPage() {
       }
 
       const msPerDay = 24 * 60 * 60 * 1000;
-      let prevFrom = new Date(fromStr + "T00:00:00");
-      let prevTo = new Date(toStr + "T00:00:00");
+      /** Mirror `computeRange` half-open [from, to): `to` is exclusive end (same as current-period fetch). */
+      let prevFrom = new Date(from.getTime());
+      let prevTo = new Date(to.getTime());
       if (compareRange === "previous_period") {
         const daySpan = Math.floor((prevTo.getTime() - prevFrom.getTime()) / msPerDay) + 1;
         prevFrom = new Date(prevFrom.getTime() - daySpan * msPerDay);

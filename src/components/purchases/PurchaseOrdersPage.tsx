@@ -12,8 +12,45 @@ import { postStockInFromPurchaseOrderForBill } from "../../lib/poGrnStock";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { desktopApi } from "../../lib/desktopApi";
 import { loadHotelConfig } from "../../lib/hotelConfig";
+import { randomUuid } from "../../lib/randomUuid";
 
 const SIMPLE_MODE_KEY = "boat.record_purchases.simple_mode";
+const DEFAULT_LOCAL_ORG_ID = "00000000-0000-0000-0000-000000000001";
+
+function formatSaveError(e: unknown): string {
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === "object") {
+    const m = (e as { message?: unknown }).message;
+    if (typeof m === "string" && m.trim()) return m;
+    const err = (e as { error?: unknown }).error;
+    if (typeof err === "string" && err.trim()) return err;
+    if (err && typeof err === "object" && "message" in err && typeof (err as { message: string }).message === "string") {
+      return (err as { message: string }).message;
+    }
+  }
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return "Unknown error";
+  }
+}
+
+/** One row per item name for pickers (local merges `products` + legacy POS rows; DB can hold duplicate names). */
+function dedupeProductsByNormalizedName<T extends { id: string; name: string; cost_price?: number }>(list: T[]): T[] {
+  const byKey = new Map<string, T>();
+  const rank = (p: T) => (p.cost_price != null && Number.isFinite(Number(p.cost_price)) ? 2 : 1);
+  for (const p of list) {
+    const k = p.name.trim().toLowerCase();
+    const existing = byKey.get(k);
+    if (!existing) {
+      byKey.set(k, p);
+      continue;
+    }
+    const preferP = rank(p) > rank(existing) || (rank(p) === rank(existing) && p.id < existing.id);
+    byKey.set(k, preferP ? p : existing);
+  }
+  return [...byKey.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
 
 interface LineItem {
   id?: string;
@@ -197,7 +234,9 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
         );
         const sortedVendors = localVendors.sort((a, b) => a.name.localeCompare(b.name));
         const sortedDepartments = localDepartments.sort((a, b) => a.name.localeCompare(b.name));
-        const sortedProducts = Array.from(productMap.values()).sort((a, b) => a.name.localeCompare(b.name));
+        const sortedProducts = dedupeProductsByNormalizedName(Array.from(productMap.values())).sort((a, b) =>
+          a.name.localeCompare(b.name)
+        );
 
         setOrders(sortedOrders);
         setVendors(sortedVendors);
@@ -401,6 +440,71 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     const total = withNames.reduce((s, i) => s + lineTotal(i), 0);
     setSaving(true);
     try {
+      if (isLocalDesktopMode && desktopApi.isAvailable()) {
+        const effectiveOrg =
+          orgId || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || DEFAULT_LOCAL_ORG_ID;
+        if (editingOrder && editingOrder.status !== "pending") {
+          alert("Only pending purchases can be edited in local mode.");
+          return;
+        }
+        const targetPoId = editingOrder?.id ?? randomUuid();
+        const nowIso = new Date().toISOString();
+        if (editingOrder) {
+          await desktopApi.localDelete({
+            table: "purchase_order_items",
+            filters: [{ column: "purchase_order_id", operator: "eq", value: editingOrder.id }],
+          });
+          await desktopApi.localUpsert({
+            table: "purchase_orders",
+            rows: [
+              {
+                id: editingOrder.id,
+                vendor_id: vendorId,
+                department_id: departmentId || null,
+                order_date: orderDate,
+                status: editingOrder.status || "pending",
+                total_amount: total,
+                organization_id: effectiveOrg,
+                approved_at: editingOrder.approved_at ?? null,
+                approved_by: (editingOrder as { approved_by?: string | null }).approved_by ?? null,
+                created_at: editingOrder.created_at || nowIso,
+              },
+            ],
+          });
+        } else {
+          await desktopApi.localUpsert({
+            table: "purchase_orders",
+            rows: [
+              {
+                id: targetPoId,
+                vendor_id: vendorId,
+                department_id: departmentId || null,
+                order_date: orderDate,
+                status: "pending",
+                total_amount: total,
+                organization_id: effectiveOrg,
+                created_at: nowIso,
+              },
+            ],
+          });
+        }
+        const itemRows = withNames.map((i) => ({
+          id: randomUuid(),
+          purchase_order_id: targetPoId,
+          description: i.description,
+          cost_price: i.cost_price,
+          quantity: i.quantity,
+          organization_id: effectiveOrg,
+        }));
+        if (itemRows.length > 0) {
+          await desktopApi.localUpsert({ table: "purchase_order_items", rows: itemRows });
+        }
+        setShowModal(false);
+        resetForm();
+        await fetchData();
+        return;
+      }
+
       if (editingOrder && editingOrder.status === "pending") {
         const { error: poErr } = await supabase
           .from("purchase_orders")
@@ -452,7 +556,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       fetchData();
     } catch (e) {
       console.error("Error saving purchase order:", e);
-      alert("Failed: " + (e instanceof Error ? e.message : String(e)));
+      alert("Failed: " + formatSaveError(e));
     } finally {
       setSaving(false);
     }
@@ -483,7 +587,58 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     if (readOnly) return;
     if (!canConvertToBill(order)) return;
     try {
-      const approvedAt = new Date().toISOString();
+if (isLocalDesktopMode && desktopApi.isAvailable()) {
+ const effectiveOrg =
+        orgId ||
+        (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() ||
+        DEFAULT_LOCAL_ORG_ID;
+
+      const billId = randomUuid();
+
+      await desktopApi.localUpsert({
+        table: "bills",
+        rows: [
+          {
+            id: billId,
+            vendor_id: order.vendor_id,
+            bill_date: businessTodayISO(),
+            amount: Number(order.total_amount || 0),
+            description: "From Purchase Order",
+            purchase_order_id: order.id,
+            status: "approved",
+            organization_id: effectiveOrg,
+            created_at: new Date().toISOString(),
+          },
+        ],
+      });
+
+      // Update PO status
+      await desktopApi.localUpsert({
+        table: "purchase_orders",
+        rows: [
+          {
+            id: order.id,
+            status: "approved",
+            approved_at: new Date().toISOString(),
+          },
+        ],
+      });
+
+      // OPTIONAL: stock movement posting here
+
+      setBillsByPoId((prev) => ({
+        ...prev,
+        [order.id]: billId,
+      }));
+
+      await fetchData();
+
+      alert("Stock received successfully.");
+
+      return;
+    }
+      
+const approvedAt = new Date().toISOString();
       const { data: staffRow } = await supabase.from("staff").select("id").eq("id", user?.id ?? "").maybeSingle();
       const approvedBy = staffRow?.id ? String(staffRow.id) : null;
       const autoFinalizeBill = !requireBillApproval;
@@ -696,7 +851,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
                       <CheckCircle className="w-4 h-4" /> Approve
                     </button>
                   )}
-                  {canConvertToBill(o) && (
+                  {(canConvertToBill(o) || billsByPoId[o.id]) && (
                     <>
                       {billsByPoId[o.id] ? (
                         <button

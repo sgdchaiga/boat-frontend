@@ -104,36 +104,41 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
 
   useEffect(() => {
     const loadData = async () => {
-      const [{ data: productsData }, { data: moves }, { data: glData }] = await Promise.all([
-        supabase.from("products").select("id, name, track_inventory").order("name"),
-        supabase
-          .from("product_stock_movements")
-          .select("product_id, quantity_in, quantity_out"),
-        supabase
-          .from("gl_accounts")
-          .select("*")
-          .order("account_code"),
-      ]);
-      setProducts((productsData || []) as Product[]);
-      const normalizedGl = normalizeGlAccountRows((glData || []) as unknown[])
-        .filter((row) => row.account_type === "asset")
-        .map((row) => ({
-          id: row.id,
-          account_code: row.account_code,
-          account_name: row.account_name,
-        }));
-      setGlAccounts(normalizedGl as GLAccount[]);
-      const stock: Record<string, number> = {};
-      (moves || []).forEach((m: any) => {
-        const pid = m.product_id as string;
-        const delta = Number(m.quantity_in) - Number(m.quantity_out);
-        stock[pid] = (stock[pid] || 0) + delta;
-      });
-      setCurrentStock(stock);
-      await loadAdjustmentHistory();
-      setLoading(false);
+      try {
+        const [{ data: productsData }, { data: moves }, { data: glData }] = await Promise.all([
+          supabase.from("products").select("id, name, track_inventory").order("name"),
+          supabase
+            .from("product_stock_movements")
+            .select("product_id, quantity_in, quantity_out"),
+          supabase
+            .from("gl_accounts")
+            .select("*")
+            .order("account_code"),
+        ]);
+        setProducts((productsData || []) as Product[]);
+        const normalizedGl = normalizeGlAccountRows((glData || []) as unknown[])
+          .filter((row) => row.account_type === "asset")
+          .map((row) => ({
+            id: row.id,
+            account_code: row.account_code,
+            account_name: row.account_name,
+          }));
+        setGlAccounts(normalizedGl as GLAccount[]);
+        const stock: Record<string, number> = {};
+        (moves || []).forEach((m: any) => {
+          const pid = m.product_id as string;
+          const delta = Number(m.quantity_in) - Number(m.quantity_out);
+          stock[pid] = (stock[pid] || 0) + delta;
+        });
+        setCurrentStock(stock);
+        await loadAdjustmentHistory();
+      } catch (e) {
+        console.error("[Stock adjustments] load failed:", e);
+      } finally {
+        setLoading(false);
+      }
     };
-    loadData();
+    void loadData();
   }, []);
 
   const handleProductChange = (id: string, product_id: string) => {

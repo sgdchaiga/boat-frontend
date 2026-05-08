@@ -5,6 +5,7 @@ import {
   localSubscriptionChangedEventName,
   readLocalSubscriptionProfile,
 } from "@/lib/localSubscriptionLicense";
+import { getTenantIdFromEnv } from "@/lib/deployment";
 
 const DEFAULT_LOCAL_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001";
 
@@ -17,9 +18,10 @@ function fmtDate(value: string | null | undefined): string {
 
 export function AdminSubscriptionRenewalPage() {
   const { user, refreshUserFlags } = useAuth();
+  /** Prefer `.env` tenant id so renewal matches JWT even if SQLite `staff.organization_id` is still the dev default. */
   const organizationId =
-    user?.organization_id ||
-    (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() ||
+    getTenantIdFromEnv()?.trim() ||
+    (user?.organization_id || "").trim() ||
     DEFAULT_LOCAL_ORGANIZATION_ID;
   const [tokenInput, setTokenInput] = useState("");
   const [saving, setSaving] = useState(false);

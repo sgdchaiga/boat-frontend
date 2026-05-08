@@ -18,6 +18,7 @@ import {
   type TellerSavingsAccountPickRow,
 } from "@/lib/saccoTellerDb";
 import type { TellerTaskAction } from "@/lib/saccoTellerConfig";
+import { incrementActiveAccessTransactions } from "@/lib/localAuthStore";
 
 export type TellerFieldErrors = { amount?: string; member?: string; account?: string; gl?: string };
 
@@ -241,6 +242,7 @@ export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionA
       setFieldMsg({});
 
       setActionMessage({ kind: "ok", text: successMessageForMode(taskAction, mode) });
+      incrementActiveAccessTransactions();
       await load({ silent: true });
       await refreshSaccoWorkspace();
       return true;

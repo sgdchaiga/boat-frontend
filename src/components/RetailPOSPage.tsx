@@ -26,6 +26,7 @@ import {
 import { toast } from "./ui/use-toast";
 import { getMarginPercent, getProductPrice } from "../services/posService";
 import { desktopApi } from "../lib/desktopApi";
+import { incrementActiveAccessTransactions } from "../lib/localAuthStore";
 import { useCart } from "./retail-pos/hooks/useCart";
 import { usePayments } from "./retail-pos/hooks/usePayments";
 import { useOfflineQueue } from "./retail-pos/hooks/useOfflineQueue";
@@ -134,7 +135,16 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
   const useDesktopLocalMode = localAuthEnabled && desktopApi.isAvailable();
   const scanInputRef = useRef<HTMLInputElement | null>(null);
 
-  const { products, loading, productSearch, setProductSearch, filteredManualProducts } = useProductCatalog<Product>(useDesktopLocalMode, orgId);
+  const {
+    products,
+    loading,
+    catalogLoadingMore,
+    productSearch,
+    setProductSearch,
+    filteredManualProducts,
+    hasMoreProducts,
+    loadMoreProducts,
+  } = useProductCatalog<Product>(useDesktopLocalMode, orgId);
 
   useEffect(() => {
     try {
@@ -844,6 +854,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       await handleOnlineSale(ctx, saleCustomer, verifiedTenders);
       refreshOfflineQueueCount();
       toast({ title: "Retail sale completed" });
+      incrementActiveAccessTransactions();
       setPaymentFeedbackStatus(ctx.shouldUseStkPush ? "success" : "idle");
       setPaymentFeedbackMessage(ctx.shouldUseStkPush ? "Payment successful" : "");
       setRetryPendingTenders([]);
@@ -1206,6 +1217,9 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
           cart={cart}
           updateQty={updateQty}
           scanInputRef={scanInputRef}
+          hasMoreProducts={hasMoreProducts}
+          catalogLoadingMore={catalogLoadingMore}
+          onLoadMoreProducts={() => void loadMoreProducts()}
         />
         <CashierPaymentPanel
           total={total}

@@ -24,6 +24,10 @@ interface CashierCartPanelProps<TProduct extends ProductLike> {
   cart: CartItemLike<TProduct>[];
   updateQty: (productId: string, qty: number) => void;
   scanInputRef?: RefObject<HTMLInputElement | null>;
+  /** Online Supabase catalog only — more rows past the first page. */
+  hasMoreProducts?: boolean;
+  catalogLoadingMore?: boolean;
+  onLoadMoreProducts?: () => void;
 }
 
 export function CashierCartPanel<TProduct extends ProductLike>({
@@ -39,6 +43,9 @@ export function CashierCartPanel<TProduct extends ProductLike>({
   cart,
   updateQty,
   scanInputRef,
+  hasMoreProducts = false,
+  catalogLoadingMore = false,
+  onLoadMoreProducts,
 }: CashierCartPanelProps<TProduct>) {
   const showSearchResults = productSearch.trim().length > 0;
   const searchResultRows = filteredManualProducts.slice(0, 8);
@@ -111,6 +118,16 @@ export function CashierCartPanel<TProduct extends ProductLike>({
             </div>
           </div>
         )}
+        {!showSearchResults && hasMoreProducts && onLoadMoreProducts ? (
+          <button
+            type="button"
+            onClick={onLoadMoreProducts}
+            disabled={catalogLoadingMore}
+            className="w-full text-sm border border-slate-300 rounded-lg px-3 py-2 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {catalogLoadingMore ? "Loading…" : "Load more products"}
+          </button>
+        ) : null}
       </div>
 
       <div className="flex items-center justify-between mb-2">

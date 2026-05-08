@@ -1,21 +1,55 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAppContext } from "@/contexts/AppContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
+import { supabase } from "@/lib/supabase";
 import { PageNotes } from "@/components/common/PageNotes";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Printer } from "lucide-react";
 
 type Props = {
   navigate?: (page: string, state?: Record<string, unknown>) => void;
   /** Sidebar label “Savings reports” uses a board-facing title here. */
   heading?: string;
   intro?: string;
+  memberIdFromNav?: string;
 };
 
 /** Cashbook-derived view of member-facing savings-oriented lines (no new postings). */
-const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savings statements", intro }) => {
+const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savings statements", intro, memberIdFromNav }) => {
+  const { user } = useAuth();
   const { members, cashbook, formatCurrency } = useAppContext();
-  const [memberId, setMemberId] = useState("");
+  const [memberId, setMemberId] = useState(memberIdFromNav ?? "");
   const [search, setSearch] = useState("");
+  const [orgHeader, setOrgHeader] = useState<{ name: string; address: string | null }>({
+    name: "SACCO",
+    address: null,
+  });
+
+  useEffect(() => {
+    if (memberIdFromNav) setMemberId(memberIdFromNav);
+  }, [memberIdFromNav]);
+
+  useEffect(() => {
+    const orgId = user?.organization_id;
+    if (!orgId) return;
+    let alive = true;
+    void supabase
+      .from("organizations")
+      .select("name,address")
+      .eq("id", orgId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!alive) return;
+        const row = data as { name?: string | null; address?: string | null } | null;
+        setOrgHeader({
+          name: row?.name?.trim() || "SACCO",
+          address: row?.address?.trim() ? row.address.trim() : null,
+        });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [user?.organization_id]);
 
   const rows = useMemo(() => {
     let list = cashbook.slice().sort((a, b) => b.date.localeCompare(a.date));
@@ -30,9 +64,49 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
     rows.length > 0
       ? rows.reduce((picked, r) => (r.date >= picked.date ? r : picked), rows[rows.length - 1]).balance
       : 0;
+  const selectedMember = members.find((m) => m.id === memberId) ?? null;
+  const totalDebit = rows.reduce((sum, row) => sum + Number(row.debit || 0), 0);
+  const totalCredit = rows.reduce((sum, row) => sum + Number(row.credit || 0), 0);
 
   return (
     <div className="space-y-6">
+      <style>
+        {`
+          @media print {
+            body * { visibility: hidden; }
+            #sacco-member-statement-print, #sacco-member-statement-print * { visibility: visible; }
+            #sacco-member-statement-print {
+              position: absolute;
+              left: 0;
+              top: 0;
+              width: 100%;
+              background: white;
+              padding: 18mm;
+              color: #0f172a;
+            }
+            #sacco-member-statement-print table { width: 100%; border-collapse: collapse; font-size: 11px; }
+            #sacco-member-statement-print .statement-scroll { overflow: visible !important; }
+            #sacco-member-statement-print .statement-table {
+              min-width: 0 !important;
+              table-layout: fixed;
+              font-size: 9.5px;
+            }
+            #sacco-member-statement-print th,
+            #sacco-member-statement-print td {
+              border-bottom: 1px solid #cbd5e1;
+              padding: 4px;
+              white-space: normal !important;
+              overflow-wrap: anywhere;
+            }
+            #sacco-member-statement-print .col-date { width: 13%; }
+            #sacco-member-statement-print .col-member { width: 18%; }
+            #sacco-member-statement-print .col-details { width: 33%; }
+            #sacco-member-statement-print .col-money { width: 12%; }
+            #sacco-member-statement-print thead { display: table-header-group; }
+            #sacco-member-statement-print tr { break-inside: avoid; }
+          }
+        `}
+      </style>
       <div className="flex flex-wrap items-center gap-2">
         <BookOpen className="text-emerald-600" size={26} />
         <h1 className="text-2xl font-bold text-slate-900">{heading}</h1>
@@ -44,7 +118,16 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
         </PageNotes>
       </div>
 
-      <div className="flex flex-wrap gap-3">
+      <div className="flex flex-wrap gap-3 print:hidden">
+        <button
+          type="button"
+          onClick={() => window.print()}
+          disabled={rows.length === 0}
+          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          <Printer size={16} />
+          Print member statement
+        </button>
         <button
           type="button"
           onClick={() => navigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "receive", tellerTask: "deposit" })}
@@ -61,7 +144,7 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
         </button>
       </div>
 
-      <div className="flex flex-wrap gap-3 rounded-xl border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="flex flex-wrap gap-3 rounded-xl border border-slate-100 bg-white p-4 shadow-sm print:hidden">
         <select
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm min-w-[200px]"
           value={memberId}
@@ -86,17 +169,31 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
         </span>
       </div>
 
-      <div className="rounded-xl border border-slate-100 bg-white shadow-sm overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-[720px]">
+      <div id="sacco-member-statement-print" className="rounded-xl border border-slate-100 bg-white shadow-sm overflow-hidden print:rounded-none print:border-0 print:shadow-none">
+        <div className="hidden border-b border-slate-200 p-4 print:block">
+          <p className="text-xl font-bold text-slate-900">{orgHeader.name}</p>
+          {orgHeader.address ? <p className="mt-1 whitespace-pre-line text-sm text-slate-600">{orgHeader.address}</p> : null}
+          <p className="mt-3 text-base font-bold text-slate-900">Member Statement</p>
+          <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+            <p><strong>Member:</strong> {selectedMember ? selectedMember.name : "All members"}</p>
+            <p><strong>Account:</strong> {selectedMember?.accountNumber ?? "All"}</p>
+            <p><strong>Rows:</strong> {rows.length}</p>
+            <p><strong>Printed:</strong> {new Date().toLocaleString()}</p>
+            <p><strong>Total debit:</strong> {formatCurrency(totalDebit)}</p>
+            <p><strong>Total credit:</strong> {formatCurrency(totalCredit)}</p>
+            <p><strong>Latest balance:</strong> {formatCurrency(lastBalance)}</p>
+          </div>
+        </div>
+        <div className="statement-scroll overflow-x-auto">
+          <table className="statement-table w-full text-sm min-w-[720px]">
             <thead>
               <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-600 uppercase border-b border-slate-100">
-                <th className="px-4 py-3">Date</th>
-                <th className="px-4 py-3">Member</th>
-                <th className="px-4 py-3">Details</th>
-                <th className="px-4 py-3 text-right">Debit</th>
-                <th className="px-4 py-3 text-right">Credit</th>
-                <th className="px-4 py-3 text-right">Balance</th>
+                <th className="col-date px-4 py-3">Date</th>
+                <th className="col-member px-4 py-3">Member</th>
+                <th className="col-details px-4 py-3">Details</th>
+                <th className="col-money px-4 py-3 text-right">Debit</th>
+                <th className="col-money px-4 py-3 text-right">Credit</th>
+                <th className="col-money px-4 py-3 text-right">Balance</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">

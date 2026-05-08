@@ -123,7 +123,10 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
 };
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
-  if (!businessType || businessType === "other") return audience === "both";
+  /** Unknown / catch-all profiles still need counter POS (`retail_counter`) and retail home; local SQLite often has null type until org row exists. */
+  if (!businessType || businessType === "other") {
+    return audience === "both" || audience === "retail" || audience === "retail_counter";
+  }
   if (audience === "retail_counter") {
     return (
       businessType === "retail" ||

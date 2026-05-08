@@ -8,9 +8,22 @@ import {
   readLocalSessionEmail,
   writeLocalSessionEmail,
   localAuthChangedEventName,
+  clearPinFailures,
+  closeActiveAccessSession,
+  isPinChangeDue,
+  lockActiveAccessSession,
+  normalizePin,
+  normalizeStaffCode,
+  readActiveAccessSession,
+  recordPinFailure,
+  startLocalAccessSession,
+  unlockActiveAccessSession,
+  validatePin,
   type LocalAuthAccount,
+  type LocalAccessSession,
 } from "@/lib/localAuthStore";
 import { readLocalSubscriptionProfile } from "@/lib/localSubscriptionLicense";
+import { getTenantIdFromEnv } from "@/lib/deployment";
 
 export type UserRole =
   | "admin"
@@ -98,8 +111,12 @@ interface AuthContextType {
   isHotelStaff: boolean;
   /** True when user landed from password reset email and must set a new password */
   pendingPasswordReset: boolean;
+  accessSession: LocalAccessSession | null;
+  terminalLocked: boolean;
+  pinChangeRequired: boolean;
   refreshUserFlags: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
+  signInWithPin: (staffCode: string, pin: string) => Promise<{ error: Error | null }>;
   signUp: (
     email: string,
     password: string,
@@ -108,6 +125,12 @@ interface AuthContextType {
     phone?: string
   ) => Promise<{ error: Error | null }>;
   signOut: () => Promise<void>;
+  switchUser: () => Promise<void>;
+  clockOut: () => Promise<void>;
+  lockTerminal: (reason?: string) => void;
+  unlockWithPin: (pin: string) => Promise<{ error: Error | null }>;
+  changePin: (currentPin: string, newPin: string) => Promise<{ error: Error | null }>;
+  approveWithSupervisorPin: (pin: string) => Promise<{ error: Error | null; supervisor?: AuthUser }>;
   /** Send password reset email */
   resetPasswordForEmail: (email: string) => Promise<{ error: Error | null }>;
   /** Set new password after recovery link; then completes login */
@@ -123,8 +146,12 @@ const LOCAL_AUTH_ENABLED = (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowe
 const IS_LOCAL_AUTH_MODE =
   LOCAL_AUTH_ENABLED === "true" || LOCAL_AUTH_ENABLED === "1" || LOCAL_AUTH_ENABLED === "yes";
 const LOCAL_BUSINESS_TYPE = (import.meta.env.VITE_LOCAL_BUSINESS_TYPE || "").trim().toLowerCase();
-const LOCAL_ORGANIZATION_ID = (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim();
 const DEFAULT_LOCAL_ORGANIZATION_ID = "00000000-0000-0000-0000-000000000001";
+
+/** Same resolution as `getTenantIdFromEnv()` (VITE_TENANT_ID → VITE_LOCAL_ORGANIZATION_ID → storage override). */
+function resolvedLocalAuthOrganizationId(): string {
+  return getTenantIdFromEnv()?.trim() || DEFAULT_LOCAL_ORGANIZATION_ID;
+}
 const LOCAL_SUPERADMIN_EMAILS = (import.meta.env.VITE_LOCAL_SUPERADMIN_EMAILS || "")
   .split(",")
   .map((v) => v.trim().toLowerCase())
@@ -229,7 +256,7 @@ function forceReadOnlyTenant(tenant: TenantProfile): TenantProfile {
 
 function localTenantDefaults(): TenantProfile {
   const businessType = parseLocalBusinessType(LOCAL_BUSINESS_TYPE);
-  const organizationId = LOCAL_ORGANIZATION_ID || DEFAULT_LOCAL_ORGANIZATION_ID;
+  const organizationId = resolvedLocalAuthOrganizationId();
   const localSubscription = readLocalSubscriptionProfile(organizationId);
   return {
     organization_id: organizationId,
@@ -266,13 +293,20 @@ function localTenantDefaults(): TenantProfile {
 async function ensureLocalSqliteStaffRow(account: LocalAuthAccount) {
   if (!IS_LOCAL_AUTH_MODE || !desktopApi.isAvailable()) return;
   try {
+    const orgId = resolvedLocalAuthOrganizationId();
     const { data: existing } = await supabase
       .from("staff")
-      .select("id")
+      .select("id,organization_id")
       .eq("id", account.id)
       .maybeSingle();
-    if (existing && (existing as { id?: string }).id) return;
-    const orgId = LOCAL_ORGANIZATION_ID || DEFAULT_LOCAL_ORGANIZATION_ID;
+    if (existing && (existing as { id?: string }).id) {
+      const cur = (existing as { organization_id?: string | null }).organization_id;
+      if ((cur || "").trim().toLowerCase() !== orgId.toLowerCase()) {
+        const { error } = await supabase.from("staff").update({ organization_id: orgId }).eq("id", account.id);
+        if (error) console.warn("[BOAT] Local staff org sync failed:", error);
+      }
+      return;
+    }
     const { error } = await supabase.from("staff").insert({
       id: account.id,
       full_name: account.full_name || "",
@@ -418,7 +452,11 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
       .eq("id", userId)
       .maybeSingle();
     if (staffError) throw staffError;
-    const organization_id = (staffRow as { organization_id?: string | null } | null)?.organization_id ?? null;
+    const staffOrgId = (staffRow as { organization_id?: string | null } | null)?.organization_id ?? null;
+    /** Desktop local: `.env` org (VITE_TENANT_ID / VITE_LOCAL_ORGANIZATION_ID) must win over stale SQLite `staff.organization_id` (often the dev default UUID). */
+    const envOrgId = getTenantIdFromEnv()?.trim() || null;
+    const organization_id =
+      IS_LOCAL_AUTH_MODE && envOrgId ? envOrgId : staffOrgId;
     if (!organization_id) {
       writeTenantCache(userId, empty);
       return empty;
@@ -478,9 +516,15 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
 
     const deviceLimit = Math.max(1, Number(org?.desktop_device_limit ?? 1));
     const seatCheck = await enforceDesktopSeatLimit(organization_id, deviceLimit);
-    const effectiveSubscriptionStatus = seatCheck.allowed
-      ? ((sub?.status as SubscriptionStatus | undefined) ?? "none")
-      : "expired";
+    const rawSubStatus = sub?.status as SubscriptionStatus | undefined;
+    /** Local desktop SQLite often has no `organization_subscriptions` row — `none` would make Admin/staff read-only. */
+    const effectiveSubscriptionStatus: SubscriptionStatus = !seatCheck.allowed
+      ? "expired"
+      : IS_LOCAL_AUTH_MODE
+        ? rawSubStatus === "active" || rawSubStatus === "trial"
+          ? rawSubStatus
+          : "active"
+        : rawSubStatus ?? "none";
 
     const resolved: TenantProfile = {
       organization_id,
@@ -525,10 +569,52 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
   }
 }
 
+function subscriptionMetaForUserId(userId: string) {
+  const cached = readTenantCache(userId);
+  if (!cached) {
+    return {
+      subscription_last_validated_at: null as number | null,
+      subscription_validation_stale: true,
+      subscription_grace_ms_remaining: 0,
+    };
+  }
+  const remaining = graceMsRemaining(cached.lastValidatedAt);
+  return {
+    subscription_last_validated_at: cached.lastValidatedAt,
+    subscription_validation_stale: isCacheExpired(cached.lastValidatedAt),
+    subscription_grace_ms_remaining: remaining,
+  };
+}
+
+/** Desktop local auth: merge SQLite org/subscription flags (e.g. purchase approvals) over env defaults. */
+async function buildLocalAuthUserWithTenant(account: LocalAuthAccount): Promise<AuthUser> {
+  const base = toLocalAuthUser(account);
+  if (!desktopApi.isAvailable()) {
+    return { ...base, ...subscriptionMetaForUserId(account.id) };
+  }
+  try {
+    const tenant = await loadTenantProfile(account.id);
+    if (tenant.organization_id) {
+      return {
+        ...base,
+        ...tenant,
+        business_type: (tenant.business_type ?? base.business_type) as TenantProfile["business_type"],
+        ...subscriptionMetaForUserId(account.id),
+      };
+    }
+  } catch {
+    /* keep base */
+  }
+  return { ...base, ...subscriptionMetaForUserId(account.id) };
+}
+
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingPasswordReset, setPendingPasswordReset] = useState(false);
+  const [accessSession, setAccessSession] = useState<LocalAccessSession | null>(null);
+  const [terminalLocked, setTerminalLocked] = useState(false);
+  const [pinChangeRequired, setPinChangeRequired] = useState(false);
 
   const getSubscriptionCacheMeta = useCallback((userId: string) => {
     const cached = readTenantCache(userId);
@@ -575,10 +661,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const sessionEmail = readLocalSessionEmail();
       if (!sessionEmail) {
         setUser(null);
+        setAccessSession(null);
+        setTerminalLocked(false);
+        setPinChangeRequired(false);
         return;
       }
       const account = readLocalAccounts().find((a) => a.email.toLowerCase() === sessionEmail.toLowerCase());
-      setUser(account ? toLocalAuthUser(account) : null);
+      const activeAccess = readActiveAccessSession();
+      setAccessSession(activeAccess);
+      setTerminalLocked(activeAccess?.status === "locked");
+      setPinChangeRequired(!!account && isPinChangeDue(account));
+      setUser(account ? await buildLocalAuthUserWithTenant(account) : null);
       return;
     }
     if (!user?.id) return;
@@ -619,11 +712,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             // keep local account fallback when local DB query fails
           }
         }
-        setUser(effectiveAccount ? toLocalAuthUser(effectiveAccount) : null);
-        setLoading(false);
         if (effectiveAccount) {
           await ensureLocalSqliteStaffRow(effectiveAccount);
         }
+        const activeAccess = readActiveAccessSession();
+        setAccessSession(activeAccess);
+        setTerminalLocked(activeAccess?.status === "locked");
+        setPinChangeRequired(!!effectiveAccount && isPinChangeDue(effectiveAccount));
+        setUser(effectiveAccount ? await buildLocalAuthUserWithTenant(effectiveAccount) : null);
+        setLoading(false);
       };
       void hydrateLocalUser();
       const eventName = localAuthChangedEventName();
@@ -699,12 +796,47 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return { error: new Error("Invalid email or password") };
       }
       writeLocalSessionEmail(account.email);
-      setUser(toLocalAuthUser(account));
-      void ensureLocalSqliteStaffRow(account);
+      await ensureLocalSqliteStaffRow(account);
+      const session = startLocalAccessSession(account, "password");
+      setAccessSession(session);
+      setTerminalLocked(false);
+      setPinChangeRequired(isPinChangeDue(account));
+      setUser(await buildLocalAuthUserWithTenant(account));
       return { error: null };
     }
     const { error } = await supabase.auth.signInWithPassword({ email, password });
     return { error: error as Error | null };
+  };
+
+  const signInWithPin = async (staffCode: string, pin: string) => {
+    if (!IS_LOCAL_AUTH_MODE) {
+      return { error: new Error("Quick PIN login is available in desktop local mode.") };
+    }
+    const code = normalizeStaffCode(staffCode);
+    const enteredPin = normalizePin(pin);
+    const account = readLocalAccounts().find((a) => normalizeStaffCode(a.staff_code || "") === code);
+    if (!account || !account.pin) {
+      return { error: new Error("Invalid staff code or PIN") };
+    }
+    if (account.pin_locked_until && new Date(account.pin_locked_until).getTime() > Date.now()) {
+      return { error: new Error(`PIN locked until ${new Date(account.pin_locked_until).toLocaleTimeString()}.`) };
+    }
+    if (account.pin !== enteredPin) {
+      const failure = recordPinFailure(account.id);
+      if (failure.lockedUntil) {
+        return { error: new Error(`Too many failed attempts. PIN locked until ${new Date(failure.lockedUntil).toLocaleTimeString()}.`) };
+      }
+      return { error: new Error(`Invalid staff code or PIN. ${Math.max(0, 5 - failure.attempts)} attempts remaining.`) };
+    }
+    clearPinFailures(account.id);
+    writeLocalSessionEmail(account.email);
+    await ensureLocalSqliteStaffRow(account);
+    const session = startLocalAccessSession(account, "pin");
+    setAccessSession(session);
+    setTerminalLocked(false);
+    setPinChangeRequired(isPinChangeDue(account));
+    setUser(await buildLocalAuthUserWithTenant(account));
+    return { error: null };
   };
 
   const signUp = async (
@@ -731,8 +863,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       };
       writeLocalAccounts([...accounts, next]);
       writeLocalSessionEmail(next.email);
-      setUser(toLocalAuthUser(next));
-      void ensureLocalSqliteStaffRow(next);
+      await ensureLocalSqliteStaffRow(next);
+      const session = startLocalAccessSession(next, "password");
+      setAccessSession(session);
+      setTerminalLocked(false);
+      setPinChangeRequired(false);
+      setUser(await buildLocalAuthUserWithTenant(next));
       return { error: null };
     }
     const { error } = await supabase.auth.signUp({
@@ -747,15 +883,106 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const signOut = async () => {
     if (IS_LOCAL_AUTH_MODE) {
+      closeActiveAccessSession();
       writeLocalSessionEmail(null);
       setUser(null);
       setPendingPasswordReset(false);
+      setAccessSession(null);
+      setTerminalLocked(false);
+      setPinChangeRequired(false);
       return;
     }
     await supabase.auth.signOut();
     setUser(null);
     setPendingPasswordReset(false);
   };
+
+  const lockTerminal = (reason = "inactivity") => {
+    if (!IS_LOCAL_AUTH_MODE || !user) return;
+    const next = lockActiveAccessSession(reason);
+    setAccessSession(next);
+    setTerminalLocked(true);
+  };
+
+  const switchUser = async () => {
+    if (IS_LOCAL_AUTH_MODE) {
+      closeActiveAccessSession();
+      writeLocalSessionEmail(null);
+      setUser(null);
+      setAccessSession(null);
+      setTerminalLocked(false);
+      setPinChangeRequired(false);
+      return;
+    }
+    await signOut();
+  };
+
+  const clockOut = async () => {
+    await signOut();
+  };
+
+  const unlockWithPin = async (pin: string) => {
+    if (!IS_LOCAL_AUTH_MODE || !user?.id) return { error: new Error("No locked local session found.") };
+    const account = readLocalAccounts().find((a) => a.id === user.id);
+    if (!account?.pin) return { error: new Error("This user does not have a PIN. Switch user and sign in with password.") };
+    if (account.pin !== normalizePin(pin)) {
+      const failure = recordPinFailure(account.id);
+      if (failure.lockedUntil) return { error: new Error(`Too many failed attempts. PIN locked until ${new Date(failure.lockedUntil).toLocaleTimeString()}.`) };
+      return { error: new Error("Incorrect PIN.") };
+    }
+    clearPinFailures(account.id);
+    const session = unlockActiveAccessSession();
+    setAccessSession(session);
+    setTerminalLocked(false);
+    setPinChangeRequired(isPinChangeDue(account));
+    return { error: null };
+  };
+
+  const changePin = async (currentPin: string, newPin: string) => {
+    if (!IS_LOCAL_AUTH_MODE || !user?.id) return { error: new Error("PIN changes are available in desktop local mode.") };
+    const pinError = validatePin(normalizePin(newPin));
+    if (pinError) return { error: new Error(pinError) };
+    const accounts = readLocalAccounts();
+    const account = accounts.find((a) => a.id === user.id);
+    if (!account) return { error: new Error("Local staff account not found.") };
+    if (account.pin && account.pin !== normalizePin(currentPin)) return { error: new Error("Current PIN is incorrect.") };
+    const changedAt = new Date().toISOString();
+    writeLocalAccounts(accounts.map((a) => (a.id === user.id ? {
+      ...a,
+      pin: normalizePin(newPin),
+      pin_set_at: a.pin_set_at ?? changedAt,
+      pin_changed_at: changedAt,
+      pin_change_required: false,
+      pin_failed_attempts: 0,
+      pin_locked_until: null,
+    } : a)));
+    setPinChangeRequired(false);
+    return { error: null };
+  };
+
+  const approveWithSupervisorPin = async (pin: string) => {
+    if (!IS_LOCAL_AUTH_MODE) return { error: new Error("Supervisor PIN approval is available in desktop local mode.") };
+    const supervisorRoles = new Set(["admin", "manager", "accountant"]);
+    const account = readLocalAccounts().find((a) => a.pin === normalizePin(pin) && supervisorRoles.has(String(a.role || "").toLowerCase()));
+    if (!account) return { error: new Error("Supervisor PIN was not approved.") };
+    return { error: null, supervisor: await buildLocalAuthUserWithTenant(account) };
+  };
+
+  useEffect(() => {
+    if (!IS_LOCAL_AUTH_MODE || !user || terminalLocked) return;
+    let timer: number | null = null;
+    const arm = () => {
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => lockTerminal("inactivity"), 10 * 60 * 1000);
+    };
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll"];
+    events.forEach((event) => window.addEventListener(event, arm, { passive: true }));
+    arm();
+    return () => {
+      if (timer) window.clearTimeout(timer);
+      events.forEach((event) => window.removeEventListener(event, arm));
+    };
+  }, [user, terminalLocked]);
 
   const resetPasswordForEmail = async (email: string) => {
     if (IS_LOCAL_AUTH_MODE) {
@@ -796,10 +1023,20 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         isSuperAdmin,
         isHotelStaff,
         pendingPasswordReset,
+        accessSession,
+        terminalLocked,
+        pinChangeRequired,
         refreshUserFlags,
         signIn,
+        signInWithPin,
         signUp,
         signOut,
+        switchUser,
+        clockOut,
+        lockTerminal,
+        unlockWithPin,
+        changePin,
+        approveWithSupervisorPin,
         resetPasswordForEmail,
         setNewPassword,
       }}

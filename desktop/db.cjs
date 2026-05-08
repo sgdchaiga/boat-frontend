@@ -577,6 +577,8 @@ function matchFilterValue(actual, operator, expected) {
   if (operator === "lt") return actual < expected;
   if (operator === "lte") return actual <= expected;
   if (operator === "is") return expected === null ? actual == null : actual === expected;
+  if (operator === "is_not_null") return actual != null && String(actual).trim() !== "";
+  if (operator === "not_in") return Array.isArray(expected) && !expected.includes(String(actual ?? ""));
   if (operator === "in") return Array.isArray(expected) && expected.includes(actual);
   if (operator === "ilike") {
     const a = String(actual ?? "").toLowerCase();

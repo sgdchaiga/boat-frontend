@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Eye, EyeOff, Loader2, AlertCircle, UserCircle, Landmark } from "lucide-react";
+import { Eye, EyeOff, Loader2, AlertCircle, UserCircle, Landmark, KeyRound, Mail } from "lucide-react";
 
 import { APP_NAME, APP_SHORT_NAME } from "@/constants/branding";
 import { useAuth, type UserRole } from "@/contexts/AuthContext";
@@ -7,9 +7,9 @@ import { useAuth, type UserRole } from "@/contexts/AuthContext";
 export const LoginPage: React.FC = () => {
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
 
-  const { signIn, signUp, pendingPasswordReset, resetPasswordForEmail, setNewPassword } = useAuth();
+  const { signIn, signInWithPin, signUp, pendingPasswordReset, resetPasswordForEmail, setNewPassword } = useAuth();
 
-  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "pin" | "signup">("login");
   const [showForgotForm, setShowForgotForm] = useState(false);
   const [forgotSuccess, setForgotSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -25,6 +25,10 @@ export const LoginPage: React.FC = () => {
     fullName: "",
     role: "receptionist" as UserRole
   });
+  const [pinForm, setPinForm] = useState({
+    staffCode: "",
+    pin: "",
+  });
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,6 +39,15 @@ export const LoginPage: React.FC = () => {
 
     if (error) setError(error.message);
 
+    setLoading(false);
+  };
+
+  const handlePinLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    const { error } = await signInWithPin(pinForm.staffCode, pinForm.pin);
+    if (error) setError(error.message);
     setLoading(false);
   };
 
@@ -82,9 +95,10 @@ export const LoginPage: React.FC = () => {
 
     setError(null);
     setShowPassword(false);
+    setPinForm({ staffCode: "", pin: "" });
   };
 
-  const switchMode = (newMode: "login" | "signup") => {
+  const switchMode = (newMode: "login" | "pin" | "signup") => {
     setMode(newMode);
     setShowForgotForm(false);
     setForgotSuccess(false);
@@ -172,14 +186,26 @@ export const LoginPage: React.FC = () => {
           <div className="flex border-b">
             <button
               onClick={() => switchMode("login")}
-              className={`flex-1 py-3 text-sm font-medium border-b-2 ${
+              className={`flex-1 py-3 text-sm font-medium border-b-2 flex items-center justify-center gap-1.5 ${
                 mode === "login"
                   ? "border-emerald-500 text-emerald-600"
                   : "border-transparent text-slate-400"
               }`}
             >
-              Sign In
+              <Mail size={14} /> Full Login
             </button>
+            {localAuthEnabled && (
+              <button
+                onClick={() => switchMode("pin")}
+                className={`flex-1 py-3 text-sm font-medium border-b-2 flex items-center justify-center gap-1.5 ${
+                  mode === "pin"
+                    ? "border-emerald-500 text-emerald-600"
+                    : "border-transparent text-slate-400"
+                }`}
+              >
+                <KeyRound size={14} /> PIN
+              </button>
+            )}
             <button
               onClick={() => switchMode("signup")}
               className={`flex-1 py-3 text-sm font-medium border-b-2 ${
@@ -284,6 +310,43 @@ export const LoginPage: React.FC = () => {
                 </button>
               </>
             )}
+          </form>
+        ) : mode === "pin" ? (
+          <form onSubmit={handlePinLogin} className="p-6 space-y-4">
+            <div>
+              <label className="text-xs font-medium text-slate-700">Staff code</label>
+              <input
+                required
+                value={pinForm.staffCode}
+                onChange={(e) => setPinForm((p) => ({ ...p, staffCode: e.target.value.toUpperCase() }))}
+                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm uppercase"
+                placeholder="e.g. CASH001"
+                autoComplete="username"
+              />
+            </div>
+            <div>
+              <label className="text-xs font-medium text-slate-700">PIN</label>
+              <input
+                type="password"
+                inputMode="numeric"
+                pattern="[0-9]*"
+                minLength={4}
+                maxLength={6}
+                required
+                value={pinForm.pin}
+                onChange={(e) => setPinForm((p) => ({ ...p, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))}
+                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm tracking-[0.3em]"
+                placeholder="4-6 digits"
+                autoComplete="current-password"
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={loading}
+              className="w-full py-3 bg-emerald-600 text-white rounded-lg"
+            >
+              {loading ? <Loader2 size={16} className="animate-spin mx-auto" /> : "Clock In"}
+            </button>
           </form>
         ) : (
         <form
@@ -429,4 +492,3 @@ export const LoginPage: React.FC = () => {
     </div>
   );
 };
-

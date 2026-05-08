@@ -9,6 +9,10 @@ import {
 } from "../../lib/hotelConfig";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
+import { desktopApi } from "../../lib/desktopApi";
+
+const LOCAL_AUTH_ON = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+const USE_LOCAL_SQLITE = LOCAL_AUTH_ON && desktopApi.isAvailable();
 
 type OrgRow = {
   id: string;
@@ -32,34 +36,45 @@ export function AdminHotelConfigPage() {
     let cancelled = false;
     async function load() {
       setLoading(true);
-      const base = loadHotelConfig(organizationId);
-      if (!organizationId) {
-        if (!cancelled) {
-          setConfig(base);
-          setOrganization(null);
-          setLoading(false);
+      try {
+        const base = loadHotelConfig(organizationId);
+        if (!organizationId) {
+          if (!cancelled) {
+            setConfig(base);
+            setOrganization(null);
+          }
+          return;
         }
-        return;
+        const { data, error } = await supabase
+          .from("organizations")
+          .select("id,name,slug,address,purchases_require_po_approval,purchases_require_bill_approval")
+          .eq("id", organizationId)
+          .maybeSingle();
+        if (cancelled) return;
+        if (error) {
+          console.error(error);
+          if (!cancelled) {
+            setConfig(base);
+            setOrganization(null);
+          }
+          return;
+        }
+        const row = data as OrgRow | null;
+        if (!cancelled) {
+          setOrganization(row);
+          setPurchasesRequirePoApproval((data as { purchases_require_po_approval?: boolean | null }).purchases_require_po_approval !== false);
+          setPurchasesRequireBillApproval((data as { purchases_require_bill_approval?: boolean | null }).purchases_require_bill_approval !== false);
+          setConfig(mergeHotelConfigWithOrg(base, row));
+        }
+      } catch (e) {
+        console.error("[Business configuration] load failed:", e);
+        if (!cancelled) {
+          setConfig(loadHotelConfig(organizationId));
+          setOrganization(null);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      const { data, error } = await supabase
-        .from("organizations")
-        .select("id,name,slug,address,purchases_require_po_approval,purchases_require_bill_approval")
-        .eq("id", organizationId)
-        .maybeSingle();
-      if (cancelled) return;
-      if (error) {
-        console.error(error);
-        setConfig(base);
-        setOrganization(null);
-        setLoading(false);
-        return;
-      }
-      const row = data as OrgRow | null;
-      setOrganization(row);
-      setPurchasesRequirePoApproval((data as { purchases_require_po_approval?: boolean | null }).purchases_require_po_approval !== false);
-      setPurchasesRequireBillApproval((data as { purchases_require_bill_approval?: boolean | null }).purchases_require_bill_approval !== false);
-      setConfig(mergeHotelConfigWithOrg(base, row));
-      setLoading(false);
     }
     void load();
     return () => {
@@ -84,6 +99,26 @@ export function AdminHotelConfigPage() {
     if (!organizationId) return;
     setWorkflowSaving(true);
     try {
+      if (USE_LOCAL_SQLITE) {
+        const updated = await desktopApi.localUpdate({
+          table: "organizations",
+          filters: [{ column: "id", operator: "eq", value: organizationId }],
+          patch: {
+            purchases_require_po_approval: purchasesRequirePoApproval,
+            purchases_require_bill_approval: purchasesRequireBillApproval,
+          },
+        });
+        if (!updated.length) {
+          alert(
+            "No organization record found in local data for this tenant. Use Admin → Local import (or seed) so an organizations row exists, then try again."
+          );
+          return;
+        }
+        await refreshUserFlags();
+        alert("Purchase workflow settings saved.");
+        return;
+      }
+
       const { error } = await supabase.rpc("update_organization_purchase_workflow", {
         p_require_po_approval: purchasesRequirePoApproval,
         p_require_bill_approval: purchasesRequireBillApproval,

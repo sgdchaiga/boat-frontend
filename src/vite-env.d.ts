@@ -31,6 +31,8 @@ interface ImportMetaEnv {
   readonly VITE_LOCAL_ENABLE_FIXED_ASSETS?: string;
   /** PEM-encoded RSA public key used to verify offline subscription renewal tokens (RS256). */
   readonly VITE_SUBSCRIPTION_TOKEN_PUBLIC_KEY?: string;
+  /** Dev-only: proxy Supabase Edge Function calls through Vite (same-origin) to avoid net::ERR_FAILED. */
+  readonly VITE_DEV_PROXY_SUPABASE_FUNCTIONS?: string;
 }
 
 interface ImportMeta {

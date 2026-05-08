@@ -2,7 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../../lib/supabase";
 import { desktopApi } from "../../../lib/desktopApi";
 
-const PRODUCT_PAGE_SIZE = 100;
+/** Local SQLite rows often still reference this org id after `VITE_TENANT_ID` was pointed at cloud `organizations.id`. */
+const LEGACY_LOCAL_DEFAULT_ORG_ID = "00000000-0000-0000-0000-000000000001";
+
+/** Remote search (Supabase ilike) cap. */
+const REMOTE_SEARCH_LIMIT = 200;
+/** First page size when loading products from Supabase (online). */
+const ONLINE_INITIAL_FETCH = 2000;
+/** Subsequent pages for online catalog. */
+const ONLINE_LOAD_MORE_CHUNK = 500;
 
 interface ProductCatalogItem {
   id: string;
@@ -21,6 +29,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
   const [productOffset, setProductOffset] = useState(0);
   const [hasMoreProducts, setHasMoreProducts] = useState(true);
   const [loading, setLoading] = useState(true);
+  const [catalogLoadingMore, setCatalogLoadingMore] = useState(false);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [productSearch, setProductSearch] = useState("");
   const [remoteSearchProducts, setRemoteSearchProducts] = useState<TProduct[] | null>(null);
@@ -48,8 +57,13 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
               if (!id || !name) return null;
               const isActive = row.active === false || row.active === 0 || row.active === "0" ? false : true;
               const isSaleable = row.saleable === false || row.saleable === 0 || row.saleable === "0" ? false : true;
-              const rowOrgId = row.organization_id == null ? null : String(row.organization_id);
-              const inOrg = !orgId || !rowOrgId || rowOrgId === orgId;
+              const rowOrgId = row.organization_id == null ? null : String(row.organization_id).trim();
+              const sessionOrg = (orgId || "").trim();
+              const inOrg =
+                !sessionOrg ||
+                !rowOrgId ||
+                rowOrgId.toLowerCase() === sessionOrg.toLowerCase() ||
+                rowOrgId === LEGACY_LOCAL_DEFAULT_ORG_ID;
               if (!isActive || !isSaleable || !inOrg) return null;
               return {
                 id,
@@ -67,9 +81,11 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
 
           if (fromLocalStore.length > 0) {
             const sorted = fromLocalStore.sort((a, b) => a.name.localeCompare(b.name));
-            setProducts(sorted.slice(0, PRODUCT_PAGE_SIZE));
-            setHasMoreProducts(sorted.length > PRODUCT_PAGE_SIZE);
-            setProductOffset(PRODUCT_PAGE_SIZE);
+            // Local SQLite already capped by localSelect limit; do not truncate —
+            // a fixed first page hid everything after ~100 alphabetical names.
+            setProducts(sorted);
+            setHasMoreProducts(false);
+            setProductOffset(sorted.length);
             setLoading(false);
             return;
           }
@@ -95,9 +111,9 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
             .filter((p) => p.id && p.name);
 
             const sorted = fromLegacyPos.sort((a, b) => a.name.localeCompare(b.name));
-            setProducts(sorted.slice(0, PRODUCT_PAGE_SIZE));
-            setHasMoreProducts(sorted.length > PRODUCT_PAGE_SIZE);
-            setProductOffset(PRODUCT_PAGE_SIZE);
+            setProducts(sorted);
+            setHasMoreProducts(false);
+            setProductOffset(sorted.length);
           } else {
             setProducts([]);
             setHasMoreProducts(false);
@@ -111,12 +127,12 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
           .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code")
           .eq("active", true)
           .order("name")
-          .range(0, PRODUCT_PAGE_SIZE - 1);
+          .range(0, ONLINE_INITIAL_FETCH - 1);
 
         if (!rich.error && rich.data) {
           const rows = rich.data as TProduct[];
           setProducts(rows);
-          setHasMoreProducts(rows.length >= PRODUCT_PAGE_SIZE);
+          setHasMoreProducts(rows.length >= ONLINE_INITIAL_FETCH);
           setProductOffset(rows.length);
           localStorage.setItem("boat.retail.products.cache.v1", JSON.stringify(rows));
           return;
@@ -127,7 +143,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
           .select("id,name,sales_price,cost_price,track_inventory")
           .eq("active", true)
           .order("name")
-          .range(0, PRODUCT_PAGE_SIZE - 1);
+          .range(0, ONLINE_INITIAL_FETCH - 1);
 
         if (fallback.error) {
           setProductsError(fallback.error.message);
@@ -141,7 +157,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
           code: null,
         })) as TProduct[];
         setProducts(mapped);
-        setHasMoreProducts(mapped.length >= PRODUCT_PAGE_SIZE);
+        setHasMoreProducts(mapped.length >= ONLINE_INITIAL_FETCH);
         setProductOffset(mapped.length);
         localStorage.setItem("boat.retail.products.cache.v1", JSON.stringify(mapped));
       } catch (error) {
@@ -166,14 +182,15 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
   }, [useDesktopLocalMode, orgId]);
 
   const loadMoreProducts = async () => {
-    if (useDesktopLocalMode || !hasMoreProducts || loading) return;
+    if (!hasMoreProducts || loading || catalogLoadingMore) return;
+    setCatalogLoadingMore(true);
     try {
       const { data, error } = await supabase
         .from("products")
         .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code")
         .eq("active", true)
         .order("name")
-        .range(productOffset, productOffset + PRODUCT_PAGE_SIZE - 1);
+        .range(productOffset, productOffset + ONLINE_LOAD_MORE_CHUNK - 1);
       if (error) throw error;
       const rows = (data || []) as TProduct[];
       if (rows.length === 0) {
@@ -182,9 +199,11 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
       }
       setProducts((prev) => [...prev, ...rows]);
       setProductOffset((prev) => prev + rows.length);
-      if (rows.length < PRODUCT_PAGE_SIZE) setHasMoreProducts(false);
+      if (rows.length < ONLINE_LOAD_MORE_CHUNK) setHasMoreProducts(false);
     } catch (error) {
       console.error("Failed to load more products:", error);
+    } finally {
+      setCatalogLoadingMore(false);
     }
   };
 
@@ -202,7 +221,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
           .eq("active", true)
           .or(`name.ilike.%${q}%,barcode.ilike.%${q}%,sku.ilike.%${q}%,code.ilike.%${q}%`)
           .order("name")
-          .limit(PRODUCT_PAGE_SIZE);
+          .limit(REMOTE_SEARCH_LIMIT);
         setRemoteSearchProducts((data || []) as TProduct[]);
       } catch {
         setRemoteSearchProducts(null);
@@ -224,6 +243,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
     products,
     setProducts,
     loading,
+    catalogLoadingMore,
     productsError,
     hasMoreProducts,
     loadMoreProducts,

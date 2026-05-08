@@ -67,6 +67,42 @@ const resilientFetch: typeof fetch = async (input, init) => {
   }
 };
 
+/**
+ * In `vite` dev, optional same-origin proxy for Edge Functions (see vite.config.ts `/__sb_functions`).
+ * Use when the browser shows net::ERR_FAILED to `*.supabase.co/functions/v1/...` (CORS, TLS inspection, etc.).
+ */
+function createFunctionsDevProxyFetch(inner: typeof fetch): typeof fetch {
+  const enabled =
+    import.meta.env.DEV &&
+    String(import.meta.env.VITE_DEV_PROXY_SUPABASE_FUNCTIONS || "").toLowerCase() === "true";
+  if (!enabled) return inner;
+
+  return (input: RequestInfo | URL, init?: RequestInit) => {
+    if (typeof window === "undefined") return inner(input, init);
+
+    let urlStr: string;
+    if (typeof input === "string") urlStr = input;
+    else if (input instanceof URL) urlStr = input.href;
+    else if (input instanceof Request) urlStr = input.url;
+    else return inner(input, init);
+
+    try {
+      const u = new URL(urlStr);
+      if (u.hostname.endsWith(".supabase.co") && u.pathname.startsWith("/functions/v1")) {
+        const after = u.pathname.slice("/functions/v1".length) + u.search;
+        const proxied = `${window.location.origin}/__sb_functions${after}`;
+        if (input instanceof Request) {
+          return inner(new Request(proxied, input));
+        }
+        return inner(proxied, init);
+      }
+    } catch {
+      /* fall through */
+    }
+    return inner(input, init);
+  };
+}
+
 type LocalFilter = { column: string; operator: string; value: unknown };
 type LocalResult<T = unknown> = Promise<{ data: T; error: { message: string } | null; count?: number | null }>;
 
@@ -141,6 +177,28 @@ class LocalQueryBuilder implements PromiseLike<{ data: unknown; error: { message
   is(column: string, value: unknown) {
     this.filters.push({ column, operator: "is", value });
     return this;
+  }
+  /**
+   * PostgREST-style negation used in a few queries.
+   * - `.not("col", "is", null)` → IS NOT NULL
+   * - `.not("id", "in", "(a,b)")` → NOT IN (used for room pickers)
+   */
+  not(column: string, operator: string, value: unknown) {
+    if (operator === "is" && value === null) {
+      this.filters.push({ column, operator: "is_not_null", value: true });
+      return this;
+    }
+    if (operator === "in") {
+      const raw = String(value ?? "").trim();
+      const inner = raw.replace(/^\(/, "").replace(/\)$/, "");
+      const ids = inner
+        .split(",")
+        .map((s) => s.trim().replace(/^['"]|['"]$/g, ""))
+        .filter(Boolean);
+      this.filters.push({ column, operator: "not_in", value: ids });
+      return this;
+    }
+    throw new Error(`[BOAT] LocalQueryBuilder: unsupported .not("${column}", "${String(operator)}", …)`);
   }
   in(column: string, value: unknown[]) {
     this.filters.push({ column, operator: "in", value });
@@ -254,12 +312,16 @@ function createLocalSupabaseClient() {
  * Regenerate from Supabase (`supabase gen types`) when the schema changes, then you can
  * switch back to `createClient<Database>(...)`.
  */
+const cloudOrResilientFetch =
+  localAuthEnabled && !hasCloudEnv ? cloudDisabledFetch : resilientFetch;
+const browserFetch = createFunctionsDevProxyFetch(cloudOrResilientFetch);
+
 export const supabase: any =
   localAuthEnabled && desktopApi.isAvailable()
     ? createLocalSupabaseClient()
     : createClient(supabaseUrl, supabaseAnonKey, {
         global: {
           // Prevent uncaught `TypeError: Failed to fetch` and return controlled errors instead.
-          fetch: localAuthEnabled && !hasCloudEnv ? cloudDisabledFetch : resilientFetch,
+          fetch: browserFetch,
         },
       });

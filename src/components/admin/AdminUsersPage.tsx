@@ -6,7 +6,7 @@ import type { Database } from "../../lib/database.types";
 import { useAuth, type UserRole } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { desktopApi } from "@/lib/desktopApi";
-import { readLocalAccounts, writeLocalAccounts } from "@/lib/localAuthStore";
+import { generateStaffCode, normalizePin, normalizeStaffCode, readLocalAccounts, validatePin, writeLocalAccounts } from "@/lib/localAuthStore";
 
 type Staff = Database["public"]["Tables"]["staff"]["Row"];
 type OrgRoleType = Database["public"]["Tables"]["organization_role_types"]["Row"];
@@ -56,6 +56,9 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const [isActive, setIsActive] = useState(true);
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [staffCode, setStaffCode] = useState("");
+  const [pin, setPin] = useState("");
+  const [forcePinChange, setForcePinChange] = useState(true);
 
   const [showRoleTypeModal, setShowRoleTypeModal] = useState(false);
   const [editingRoleType, setEditingRoleType] = useState<OrgRoleType | null>(null);
@@ -95,9 +98,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     void fetchAll();
   }, [fetchAll]);
 
-  const roleLabel = (key: string) => roleTypes.find((r) => r.role_key === key)?.display_name ?? key;
-
-  const syncLocalAccountProfile = (staffId: string, patch: Partial<{ full_name: string; phone: string; role: string }>) => {
+  const syncLocalAccountProfile = (staffId: string, patch: Partial<{ full_name: string; phone: string; role: string; staff_code: string; pin: string; pin_change_required: boolean }>) => {
     if (!useLocalDesktopNewStaff) return;
     const accounts = readLocalAccounts();
     const idx = accounts.findIndex((a) => a.id === staffId);
@@ -109,6 +110,15 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       ...(patch.full_name !== undefined ? { full_name: patch.full_name } : {}),
       ...(patch.phone !== undefined ? { phone: patch.phone } : {}),
       ...(patch.role !== undefined ? { role: patch.role } : {}),
+      ...(patch.staff_code !== undefined ? { staff_code: normalizeStaffCode(patch.staff_code) } : {}),
+      ...(patch.pin !== undefined ? {
+        pin: normalizePin(patch.pin),
+        pin_set_at: current.pin_set_at ?? new Date().toISOString(),
+        pin_changed_at: new Date().toISOString(),
+        pin_failed_attempts: 0,
+        pin_locked_until: null,
+      } : {}),
+      ...(patch.pin_change_required !== undefined ? { pin_change_required: patch.pin_change_required } : {}),
     };
     writeLocalAccounts(next);
   };
@@ -122,6 +132,9 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     setIsActive(true);
     setPassword("");
     setConfirmPassword("");
+    setStaffCode(generateStaffCode("", "", readLocalAccounts()));
+    setPin("");
+    setForcePinChange(true);
     setShowStaffModal(true);
   };
 
@@ -132,6 +145,10 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     setPhone(member.phone || "");
     setRole(member.role);
     setIsActive(member.is_active);
+    const account = readLocalAccounts().find((a) => a.id === member.id);
+    setStaffCode(account?.staff_code || "");
+    setPin("");
+    setForcePinChange(account?.pin_change_required ?? false);
     setShowStaffModal(true);
   };
 
@@ -146,6 +163,21 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       return;
     }
     if (editingStaff) {
+      if (useLocalDesktopNewStaff && staffCode.trim()) {
+        const code = normalizeStaffCode(staffCode);
+        const accounts = readLocalAccounts();
+        if (accounts.some((a) => a.id !== editingStaff.id && normalizeStaffCode(a.staff_code || "") === code)) {
+          alert("That staff code is already assigned.");
+          return;
+        }
+      }
+      if (useLocalDesktopNewStaff && pin.trim()) {
+        const pinError = validatePin(normalizePin(pin));
+        if (pinError) {
+          alert(pinError);
+          return;
+        }
+      }
       const { error } = await supabase
         .from("staff")
         .update({
@@ -163,6 +195,9 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         full_name: fullName.trim(),
         phone: phone.trim(),
         role,
+        staff_code: staffCode,
+        ...(pin.trim() ? { pin: normalizePin(pin) } : {}),
+        pin_change_required: forcePinChange,
       });
     } else {
       if (password.length < 6) {
@@ -177,9 +212,21 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       if (useLocalDesktopNewStaff) {
         const normalizedEmail = email.trim().toLowerCase();
         const accounts = readLocalAccounts();
+        const code = normalizeStaffCode(staffCode) || generateStaffCode(fullName, normalizedEmail, accounts);
         if (accounts.some((a) => a.email.toLowerCase() === normalizedEmail)) {
           alert("An account with this email already exists on this computer.");
           return;
+        }
+        if (accounts.some((a) => normalizeStaffCode(a.staff_code || "") === code)) {
+          alert("That staff code is already assigned.");
+          return;
+        }
+        if (pin.trim()) {
+          const pinError = validatePin(normalizePin(pin));
+          if (pinError) {
+            alert(pinError);
+            return;
+          }
         }
         if (!orgId) {
           alert("Organization context is missing. Cannot create local staff.");
@@ -191,6 +238,17 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
           id: newId,
           email: normalizedEmail,
           password,
+          staff_code: code,
+          ...(pin.trim()
+            ? {
+                pin: normalizePin(pin),
+                pin_set_at: createdAt,
+                pin_changed_at: createdAt,
+                pin_change_required: forcePinChange,
+                pin_failed_attempts: 0,
+                pin_locked_until: null,
+              }
+            : {}),
           full_name: fullName.trim(),
           role: role as UserRole,
           phone: phone.trim() || "",
@@ -613,6 +671,45 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                   ))}
                 </select>
               </div>
+              {useLocalDesktopNewStaff && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">Staff code</label>
+                    <input
+                      value={staffCode}
+                      onChange={(e) => setStaffCode(e.target.value.toUpperCase())}
+                      className="border border-slate-300 rounded-lg px-3 py-2 w-full uppercase"
+                      placeholder="CASH001"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-700 mb-1">
+                      {editingStaff ? "Reset PIN" : "PIN"}
+                    </label>
+                    <input
+                      type="password"
+                      inputMode="numeric"
+                      pattern="[0-9]*"
+                      minLength={4}
+                      maxLength={6}
+                      value={pin}
+                      onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                      className="border border-slate-300 rounded-lg px-3 py-2 w-full"
+                      placeholder={editingStaff ? "Leave blank to keep" : "4-6 digits"}
+                      autoComplete="new-password"
+                    />
+                  </div>
+                  <label className="sm:col-span-2 flex items-center gap-2 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={forcePinChange}
+                      onChange={(e) => setForcePinChange(e.target.checked)}
+                      className="rounded border-slate-300"
+                    />
+                    Force PIN change on next sign in or unlock
+                  </label>
+                </div>
+              )}
               {!editingStaff && (
                 <>
                   <div>

@@ -33,6 +33,9 @@ export const SACCOPRO_PAGE = {
   /** Read-only savings movements (from workspace cashbook lines). */
   savingsStatements: "sacco_savings_statements",
   fixedDeposit: "sacco_fixed_deposit",
+  /** Member-facing account app for balances, loans, fixed deposits, and recent activity. */
+  memberApp: "sacco_member_app",
+  /** Legacy route kept for existing bookmarks. */
   clientDashboard: "sacco_client_dashboard",
   cashbook: "sacco_cashbook",
   teller: "sacco_teller",

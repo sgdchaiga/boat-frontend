@@ -703,7 +703,12 @@ function AppContent() {
       case SACCOPRO_PAGE.savingsAccountsList:
         return <SaccoSavingsAccountsListPage onNavigate={navigate} />;
       case SACCOPRO_PAGE.savingsStatements:
-        return <SaccoSavingsStatementsPage navigate={navigate} />;
+        return (
+          <SaccoSavingsStatementsPage
+            navigate={navigate}
+            memberIdFromNav={pageState.memberId as string | undefined}
+          />
+        );
       case SACCOPRO_PAGE.savingsReports:
         return (
           <SaccoSavingsStatementsPage
@@ -834,8 +839,9 @@ function AppContent() {
         return <VslaControlsPage readOnly={access.readOnly} />;
       case VSLA_PAGE.memberStatement:
         return <VslaMemberStatementPage readOnly={access.readOnly} />;
+      case SACCOPRO_PAGE.memberApp:
       case SACCOPRO_PAGE.clientDashboard:
-        return <SaccoClientDashboard />;
+        return <SaccoClientDashboard navigate={navigate} readOnly={access.readOnly} />;
       case SACCOPRO_PAGE.cashbook:
         return (
           <SaccoCashbookPage

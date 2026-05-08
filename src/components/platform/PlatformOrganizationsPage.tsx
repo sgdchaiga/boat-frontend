@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Plus, Pencil, Copy, Search, X } from "lucide-react";
+import { Plus, Pencil, Copy, Search, X, KeyRound } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -132,6 +132,15 @@ async function getEdgeInvokeErrorMessage(error: unknown): Promise<string | null>
   return error.message || null;
 }
 
+function formatSubscriptionRenewalInvokeError(message: string | null): string {
+  const base = message?.trim() || "Could not mint renewal token.";
+  const lower = base.toLowerCase();
+  if (lower.includes("requested function was not found") || lower.includes("function not found")) {
+    return `${base} From the BOAT repo root: npm run supabase -- link --project-ref <your-ref> then npm run supabase:deploy:subscription-renewal-token (uses npx; no global supabase install).`;
+  }
+  return base;
+}
+
 export function PlatformOrganizationsPage() {
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [staffCounts, setStaffCounts] = useState<Record<string, number>>({});
@@ -139,7 +148,7 @@ export function PlatformOrganizationsPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [businessTypes, setBusinessTypes] = useState<BusinessTypeRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [modal, setModal] = useState<"add" | "sub" | "copy" | null>(null);
+  const [modal, setModal] = useState<"add" | "sub" | "copy" | "renewal_token" | null>(null);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -188,6 +197,15 @@ export function PlatformOrganizationsPage() {
   const [editDesktopDeviceLimit, setEditDesktopDeviceLimit] = useState(1);
   const [orgSearch, setOrgSearch] = useState(readOrgSearchFromUrl);
   const [clearingBusyByOrgId, setClearingBusyByOrgId] = useState<Record<string, boolean>>({});
+  const [renewalOrg, setRenewalOrg] = useState<Org | null>(null);
+  const [renewalDeskStatus, setRenewalDeskStatus] = useState("active");
+  const [renewalPlanCode, setRenewalPlanCode] = useState("");
+  const [renewalPeriodStart, setRenewalPeriodStart] = useState("");
+  const [renewalPeriodEnd, setRenewalPeriodEnd] = useState("");
+  const [renewalTokenValidDays, setRenewalTokenValidDays] = useState(90);
+  const [renewalMintedToken, setRenewalMintedToken] = useState("");
+  const [renewalTokenBusy, setRenewalTokenBusy] = useState(false);
+  const [renewalCopied, setRenewalCopied] = useState(false);
 
   useEffect(() => {
     syncOrgSearchToUrl(orgSearch);
@@ -263,9 +281,7 @@ export function PlatformOrganizationsPage() {
           enabled,
         },
       });
-      if (error) {
-        throw new Error(error.message || "Failed to invoke clearing admin function.");
-      }
+      if (error) throw error;
       const parsed = data as { ok?: boolean; error?: string; message?: string; data?: Partial<Org> } | null;
       if (!parsed?.ok) {
         throw new Error(parsed?.message || parsed?.error || "Failed to update clearing activation.");
@@ -297,6 +313,73 @@ export function PlatformOrganizationsPage() {
       setErr(edgeMsg || "Failed to update clearing activation.");
     } finally {
       setClearingBusyByOrgId((prev) => ({ ...prev, [org.id]: false }));
+    }
+  };
+
+  const openRenewalToken = (org: Org) => {
+    const sub = latestSub[org.id];
+    setRenewalOrg(org);
+    setRenewalDeskStatus((sub?.status || "active").toLowerCase());
+    setRenewalPlanCode(sub?.subscription_plans?.code?.trim() || "desktop-local");
+    setRenewalPeriodStart(
+      sub?.period_start ? String(sub.period_start).slice(0, 10) : new Date().toISOString().slice(0, 10)
+    );
+    setRenewalPeriodEnd(sub?.period_end ? String(sub.period_end).slice(0, 10) : "");
+    setRenewalTokenValidDays(90);
+    setRenewalMintedToken("");
+    setRenewalCopied(false);
+    setErr(null);
+    setModal("renewal_token");
+  };
+
+  const mintDesktopRenewalToken = async () => {
+    if (!renewalOrg) return;
+    setRenewalTokenBusy(true);
+    setErr(null);
+    setRenewalCopied(false);
+    try {
+      const { data, error } = await supabase.functions.invoke("subscription-renewal-token", {
+        body: {
+          organization_id: renewalOrg.id,
+          status: renewalDeskStatus,
+          plan_code: renewalPlanCode.trim() || null,
+          period_start: renewalPeriodStart.trim()
+            ? `${renewalPeriodStart.trim()}T00:00:00.000Z`
+            : null,
+          period_end: renewalPeriodEnd.trim()
+            ? `${renewalPeriodEnd.trim()}T23:59:59.999Z`
+            : null,
+          token_valid_days: renewalTokenValidDays,
+        },
+      });
+      if (error) throw error;
+      const parsed = data as {
+        ok?: boolean;
+        token?: string;
+        error?: string;
+        message?: string;
+      } | null;
+      if (!parsed?.ok || !parsed.token) {
+        throw new Error(parsed?.message || parsed?.error || "Could not mint renewal token.");
+      }
+      setRenewalMintedToken(parsed.token);
+    } catch (e) {
+      const edgeMsg = await getEdgeInvokeErrorMessage(e);
+      setErr(formatSubscriptionRenewalInvokeError(edgeMsg));
+      setRenewalMintedToken("");
+    } finally {
+      setRenewalTokenBusy(false);
+    }
+  };
+
+  const copyRenewalMintedToken = async () => {
+    if (!renewalMintedToken.trim()) return;
+    try {
+      await navigator.clipboard.writeText(renewalMintedToken.trim());
+      setRenewalCopied(true);
+      window.setTimeout(() => setRenewalCopied(false), 2000);
+    } catch {
+      setErr("Clipboard copy failed. Select the token and copy manually.");
     }
   };
 
@@ -921,6 +1004,14 @@ export function PlatformOrganizationsPage() {
                         </button>
                         <button
                           type="button"
+                          onClick={() => openRenewalToken(org)}
+                          className="p-2 text-slate-600 hover:bg-slate-200 rounded-lg"
+                          title="Mint desktop subscription renewal JWT (paste in Admin → Subscription renewal)"
+                        >
+                          <KeyRound className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
                           onClick={() => openCopyTemplate(org)}
                           className="p-2 text-slate-600 hover:bg-slate-200 rounded-lg"
                           title="Duplicate settings and chart of accounts only (no transactions or staff)"
@@ -1360,6 +1451,114 @@ export function PlatformOrganizationsPage() {
                 onClick={saveSubscription}
               >
                 {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modal === "renewal_token" && renewalOrg && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto overscroll-contain">
+          <div
+            role="dialog"
+            aria-labelledby="org-renewal-token-title"
+            className="bg-white rounded-xl max-w-lg w-full max-h-[90vh] shadow-xl flex flex-col my-auto"
+          >
+            <div className="px-6 pt-6 pb-2 shrink-0 border-b border-slate-100">
+              <h2 id="org-renewal-token-title" className="text-lg font-bold text-slate-900">
+                Desktop renewal token
+              </h2>
+              <p className="text-sm text-slate-500 mt-1">
+                {renewalOrg.name} — send the JWT to the customer. They paste it under Admin → Subscription renewal on
+                the desktop build (same org ID, public key must match this project).
+              </p>
+              <p className="text-xs text-slate-400 mt-2 font-mono break-all">Org ID: {renewalOrg.id}</p>
+            </div>
+            <div className="px-6 py-4 overflow-y-auto overflow-x-hidden overscroll-contain max-h-[calc(90vh_-_10rem)] min-h-0">
+              {err && <p className="text-red-600 text-sm mb-3">{err}</p>}
+              <label className="block text-sm font-medium text-slate-700 mb-1">Subscription status (in token)</label>
+              <select
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+                value={renewalDeskStatus}
+                onChange={(e) => setRenewalDeskStatus(e.target.value)}
+              >
+                <option value="trial">trial</option>
+                <option value="active">active</option>
+                <option value="past_due">past_due</option>
+                <option value="cancelled">cancelled</option>
+                <option value="expired">expired</option>
+                <option value="none">none</option>
+              </select>
+              <label className="block text-sm font-medium text-slate-700 mb-1">Plan code (in token)</label>
+              <input
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3 font-mono text-sm"
+                value={renewalPlanCode}
+                onChange={(e) => setRenewalPlanCode(e.target.value)}
+                placeholder="e.g. desktop-local"
+              />
+              <label className="block text-sm font-medium text-slate-700 mb-1">Period start (optional)</label>
+              <input
+                type="date"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+                value={renewalPeriodStart}
+                onChange={(e) => setRenewalPeriodStart(e.target.value)}
+              />
+              <label className="block text-sm font-medium text-slate-700 mb-1">Period end (optional)</label>
+              <input
+                type="date"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+                value={renewalPeriodEnd}
+                onChange={(e) => setRenewalPeriodEnd(e.target.value)}
+              />
+              <label className="block text-sm font-medium text-slate-700 mb-1">
+                Token may be pasted for (days)
+              </label>
+              <input
+                type="number"
+                min={1}
+                max={365}
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+                value={renewalTokenValidDays}
+                onChange={(e) => setRenewalTokenValidDays(Math.max(1, Math.min(365, Number(e.target.value) || 90)))}
+              />
+              <button
+                type="button"
+                disabled={renewalTokenBusy}
+                className="w-full px-4 py-2 bg-brand-800 text-white rounded-lg disabled:opacity-50 mb-4"
+                onClick={() => void mintDesktopRenewalToken()}
+              >
+                {renewalTokenBusy ? "Generating…" : "Generate token"}
+              </button>
+              {renewalMintedToken ? (
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">JWT</label>
+                  <textarea
+                    readOnly
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono min-h-[120px] mb-2"
+                    value={renewalMintedToken}
+                  />
+                  <button
+                    type="button"
+                    className="px-4 py-2 border border-slate-300 rounded-lg text-slate-800 hover:bg-slate-50"
+                    onClick={() => void copyRenewalMintedToken()}
+                  >
+                    {renewalCopied ? "Copied" : "Copy to clipboard"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+            <div className="px-6 py-4 border-t border-slate-200 flex gap-2 justify-end shrink-0 bg-slate-50/80">
+              <button
+                type="button"
+                className="px-4 py-2 text-slate-700 hover:bg-slate-100 rounded-lg"
+                onClick={() => {
+                  setModal(null);
+                  setRenewalOrg(null);
+                  setRenewalMintedToken("");
+                  setRenewalCopied(false);
+                }}
+              >
+                Close
               </button>
             </div>
           </div>

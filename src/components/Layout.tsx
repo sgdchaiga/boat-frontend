@@ -7,6 +7,7 @@ import {
   FileText,
   UsersRound,
   LogOut,
+  Lock,
   Menu,
   X,
   ChevronDown,
@@ -24,7 +25,6 @@ import {
   Factory,
   MessageSquare,
   Smartphone,
-  Plug,
   BarChart3,
   AlertTriangle,
 } from 'lucide-react';
@@ -40,6 +40,7 @@ import { isPageAllowedForNavRole } from '@/lib/navRoleExperience';
 import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
 import { desktopApi } from '@/lib/desktopApi';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncPush';
+import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 
 interface LayoutProps {
   children: ReactNode;
@@ -231,7 +232,7 @@ const singleNavActive = 'bg-brand-600 text-white shadow-sm';
 const singleNavIdle = 'text-slate-400 hover:bg-slate-800/80 hover:text-white';
 
 export function Layout({ children, currentPage, pageState = {}, onNavigate }: LayoutProps) {
-  const { user, signOut, isSuperAdmin, isHotelStaff } = useAuth();
+  const { user, clockOut, lockTerminal, accessSession, isSuperAdmin, isHotelStaff } = useAuth();
   const businessType = user?.business_type ?? null;
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -312,6 +313,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
         icon: UsersRound,
         children: [
           { name: 'Member list', page: SACCOPRO_PAGE.members },
+          { name: 'Member app', page: SACCOPRO_PAGE.memberApp },
           { name: 'Member profile', page: SACCOPRO_PAGE.memberProfile },
         ],
       },
@@ -699,9 +701,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
       ? `${user?.role ?? 'staff'} · platform`
       : user?.role;
   const localAuth = (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase();
+  const isLocalAuthMode = localAuth === "true" || localAuth === "1" || localAuth === "yes";
   const deploymentMode = (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase();
   const appModeLabel =
-    localAuth === "true" || localAuth === "1" || localAuth === "yes"
+    isLocalAuthMode
       ? "LOCAL"
       : deploymentMode === "online"
         ? "ADMIN CLOUD"
@@ -1181,14 +1184,29 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
             <div className="px-2 py-1 mb-1">
               <p className="text-xs font-medium text-slate-200 truncate">{user?.full_name}</p>
               <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
+              {accessSession && (
+                <p className="text-[10px] text-slate-500 truncate">
+                  {accessSession.terminal_used} · Txn {accessSession.transactions_processed}
+                </p>
+              )}
             </div>
+            {isLocalAuthMode && (
+              <button
+                type="button"
+                onClick={() => lockTerminal("manual")}
+                className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-slate-300 hover:bg-slate-800 rounded-md transition"
+              >
+                <Lock className="w-4 h-4 shrink-0" />
+                <span className="font-medium">Lock Terminal</span>
+              </button>
+            )}
             <button
               type="button"
-              onClick={signOut}
+              onClick={clockOut}
               className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-red-400 hover:bg-red-950/40 rounded-md transition"
             >
               <LogOut className="w-4 h-4 shrink-0" />
-              <span className="font-medium">Sign Out</span>
+              <span className="font-medium">{isLocalAuthMode ? "Clock Out" : "Sign Out"}</span>
             </button>
           </div>
         </div>
@@ -1266,6 +1284,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
           {children}
         </main>
       </div>
+      <TerminalLockOverlay />
     </div>
   );
 }
