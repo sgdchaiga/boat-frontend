@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Banknote, ArrowUp, ArrowDown, ArrowUpDown, Plus, ShoppingCart, UtensilsCrossed } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -99,6 +99,8 @@ export function CashReceiptsPage({
   const [hotelGuestId, setHotelGuestId] = useState("");
   const [hotelStayId, setHotelStayId] = useState("");
   const [hotelSaving, setHotelSaving] = useState(false);
+  const hotelReceiptInFlightRef = useRef(false);
+  const receiptEditInFlightRef = useRef(false);
 
   useEffect(() => {
     if (!isHotelCheckout) return;
@@ -127,6 +129,7 @@ export function CashReceiptsPage({
 
   const saveHotelGuestPayment = async () => {
     if (readOnly || !onNavigate) return;
+    if (hotelReceiptInFlightRef.current) return;
     if (!hotelGuestId.trim()) {
       alert("Guest is not linked to this payment. Open the stay from Active stays and try again.");
       return;
@@ -136,6 +139,7 @@ export function CashReceiptsPage({
       alert("Enter a valid amount.");
       return;
     }
+    hotelReceiptInFlightRef.current = true;
     setHotelSaving(true);
     try {
       const { data: staffRow } = await supabase.from("staff").select("id").eq("id", user?.id).maybeSingle();
@@ -170,6 +174,7 @@ export function CashReceiptsPage({
     } catch (e) {
       alert(`Could not save payment: ${formatSupabaseError(e)}`);
     } finally {
+      hotelReceiptInFlightRef.current = false;
       setHotelSaving(false);
     }
   };
@@ -471,6 +476,7 @@ export function CashReceiptsPage({
 
   const saveReceiptEdit = async () => {
     if (!editingPayment) return;
+    if (receiptEditInFlightRef.current) return;
     if (!canEditCashReceiptsByRole) {
       alert("You are not authorized to edit cash receipts.");
       return;
@@ -480,6 +486,7 @@ export function CashReceiptsPage({
       alert("Enter a valid amount.");
       return;
     }
+    receiptEditInFlightRef.current = true;
     setSavingEdit(true);
     try {
       const nextDocs =
@@ -526,6 +533,7 @@ export function CashReceiptsPage({
         alert(`Failed to edit receipt: ${msg}`);
       }
     } finally {
+      receiptEditInFlightRef.current = false;
       setSavingEdit(false);
     }
   };

@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useMemo, useState } from 'react';
+import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Hotel,
   LayoutDashboard,
@@ -38,6 +38,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from '../lib/moduleAccess';
 import { isPageAllowedForNavRole } from '@/lib/navRoleExperience';
 import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
+import { isSidebarLeafActive } from '@/lib/navSidebarActiveLeaf';
+import {
+  getSimpleOrgReportHubCategories,
+  isSimpleOrgReportHubRoute,
+} from '@/lib/reportHubCatalog';
 import { desktopApi } from '@/lib/desktopApi';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncPush';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
@@ -58,51 +63,6 @@ export type NavChild =
   | { name: string; page: string; state?: Record<string, unknown> }
   | { group: string; items: { name: string; page: string; state?: Record<string, unknown> }[] };
 
-/** Active when every key in required `state` matches `pageState` (defaults: tellerDesk receive, cashbookView journal). */
-function isSidebarLeafActive(
-  leaf: { page: string; state?: Record<string, unknown> },
-  currentPage: string,
-  pageState: Record<string, unknown>
-): boolean {
-  if (currentPage !== leaf.page) return false;
-
-  /** Loan reports: sidebar “Portfolio summary” uses `summary`; deep links may omit tab. */
-  if (leaf.page === SACCOPRO_PAGE.loanReports) {
-    const want = (leaf.state?.loanReportTab as string | undefined) ?? "summary";
-    const pv = pageState.loanReportTab as string | undefined;
-    if (want === "summary") return pv === undefined || pv === null || String(pv) === "" || pv === "summary";
-    return pv === want;
-  }
-
-  /** Arrears & recovery workspace: default view is recovery tracking follow-up list. */
-  if (leaf.page === SACCOPRO_PAGE.loanRecovery) {
-    const want = (leaf.state?.recoveryView as string | undefined) ?? "tracking";
-    const pv = pageState.recoveryView as string | undefined;
-    if (want === "tracking") return pv === undefined || pv === null || String(pv) === "" || pv === "tracking";
-    return pv === want;
-  }
-
-  /** Credit invoices vs open invoices tab (retail_invoices UI). */
-  if (leaf.page === "retail_credit_invoices") {
-    const want = (leaf.state?.invoiceTab as string | undefined) ?? "invoices";
-    const pv = pageState.invoiceTab as string | undefined;
-    if (want === "invoices") return pv === undefined || pv === null || String(pv) === "" || pv === "invoices";
-    return pv === want;
-  }
-
-  const req = leaf.state;
-  /** Sidebar leaf with no scoped state highlights whenever that page route is active (URL may carry unrelated query keys). */
-  if (!req || Object.keys(req).length === 0) return true;
-  return Object.entries(req).every(([k, v]) => {
-    const pv = pageState[k];
-    const empty = pv === undefined || pv === null || String(pv) === "";
-    if (empty) {
-      if (k === "tellerDesk" && v === "receive") return true;
-      if (k === "cashbookView" && v === "journal") return true;
-    }
-    return pv === v;
-  });
-}
 type NavItem =
   | NavLeaf
   | NavDivider
@@ -812,34 +772,59 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
         ? "Sync pending"
         : "Sync healthy";
 
-  const canShowPage = (page: string) => {
-    if (!user?.isSuperAdmin && !isPageAllowedForNavRole(page, user?.role, businessType)) return false;
-    if (!isPageAllowedForBusinessType(page, businessType)) return false;
-    const moduleId = pageToModuleId(page);
-    if (!moduleId) return true;
-    return getModuleAccess({
-      moduleId,
+  const canShowPage = useCallback(
+    (page: string) => {
+      if (!user?.isSuperAdmin && !isPageAllowedForNavRole(page, user?.role, businessType)) return false;
+      if (!isPageAllowedForBusinessType(page, businessType)) return false;
+      const moduleId = pageToModuleId(page);
+      if (!moduleId) return true;
+      return getModuleAccess({
+        moduleId,
+        businessType,
+        subscriptionStatus,
+        enableFixedAssets: user?.enable_fixed_assets === true,
+        enableCommunications: allowCommunications,
+        enableWallet: allowWallet,
+        enablePayroll: allowPayroll,
+        enableBudget: allowBudget,
+        enableAgent: allowAgent,
+        enableHotelAssessment: allowHotelAssessment,
+        enableManufacturing: allowManufacturing,
+        enableReports: user?.enable_reports !== false,
+        enableAccounting: user?.enable_accounting !== false,
+        enableInventory: user?.enable_inventory !== false,
+        enablePurchases: user?.enable_purchases !== false,
+        schoolEnableReports: user?.school_enable_reports === true,
+        schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
+        schoolEnableAccounting: user?.school_enable_accounting === true,
+        schoolEnableInventory: user?.school_enable_inventory === true,
+        schoolEnablePurchases: user?.school_enable_purchases === true,
+      }).visible;
+    },
+    [
+      user?.isSuperAdmin,
+      user?.role,
+      user?.enable_reports,
+      user?.enable_accounting,
+      user?.enable_inventory,
+      user?.enable_purchases,
+      user?.enable_fixed_assets,
+      user?.school_enable_reports,
+      user?.school_enable_fixed_deposit,
+      user?.school_enable_accounting,
+      user?.school_enable_inventory,
+      user?.school_enable_purchases,
       businessType,
       subscriptionStatus,
-      enableFixedAssets: user?.enable_fixed_assets === true,
-      enableCommunications: allowCommunications,
-      enableWallet: allowWallet,
-      enablePayroll: allowPayroll,
-      enableBudget: allowBudget,
-      enableAgent: allowAgent,
-      enableHotelAssessment: allowHotelAssessment,
-      enableManufacturing: allowManufacturing,
-      enableReports: user?.enable_reports !== false,
-      enableAccounting: user?.enable_accounting !== false,
-      enableInventory: user?.enable_inventory !== false,
-      enablePurchases: user?.enable_purchases !== false,
-      schoolEnableReports: user?.school_enable_reports === true,
-      schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
-      schoolEnableAccounting: user?.school_enable_accounting === true,
-      schoolEnableInventory: user?.school_enable_inventory === true,
-      schoolEnablePurchases: user?.school_enable_purchases === true,
-    }).visible;
-  };
+      allowCommunications,
+      allowWallet,
+      allowPayroll,
+      allowBudget,
+      allowAgent,
+      allowHotelAssessment,
+      allowManufacturing,
+    ]
+  );
   const isReadOnlyPage = (page: string) => {
     const moduleId = pageToModuleId(page);
     if (!moduleId) return false;
@@ -866,6 +851,33 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
       schoolEnablePurchases: user?.school_enable_purchases === true,
     }).readOnly;
   };
+
+  const pageStateKey = JSON.stringify(pageState ?? {});
+
+  const reportHubCategories = useMemo(() => {
+    if (businessType === "sacco" || businessType === "school" || businessType === "vsla") return [];
+    return getSimpleOrgReportHubCategories(businessType, canShowPage);
+  }, [businessType, canShowPage]);
+
+  const pageStateResolved = useMemo(() => pageState ?? {}, [pageStateKey]);
+
+  const showSimpleOrgReportHub =
+    reportHubCategories.length > 0 &&
+    isSimpleOrgReportHubRoute(businessType, currentPage, pageStateResolved, canShowPage);
+
+  const [reportHubCategoryId, setReportHubCategoryId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showSimpleOrgReportHub) return;
+    const active = reportHubCategories.find((c) =>
+      c.items.some((leaf) => isSidebarLeafActive(leaf, currentPage, pageStateResolved))
+    );
+    const next = active?.id ?? reportHubCategories[0]?.id ?? null;
+    if (next) setReportHubCategoryId((prev) => (prev === next ? prev : next));
+  }, [showSimpleOrgReportHub, currentPage, pageStateKey, reportHubCategories, pageStateResolved]);
+
+  const reportHubSelectedCategory =
+    reportHubCategories.find((c) => c.id === reportHubCategoryId) ?? reportHubCategories[0] ?? null;
 
   return (
     <div className="app-page">
@@ -1296,7 +1308,79 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
               </div>
             </div>
           )}
-          {children}
+          {showSimpleOrgReportHub ? (
+            <div className="flex flex-col lg:flex-row w-full min-h-0 lg:min-h-[calc(100dvh-0px)] border-t border-slate-200/80 bg-slate-50/40">
+              <aside
+                className="w-full lg:basis-[10%] lg:shrink-0 lg:grow-0 lg:min-w-[7rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-48 lg:max-h-none"
+                aria-label="Report categories"
+              >
+                <ul className="p-2 space-y-0.5">
+                  {reportHubCategories.map((c) => {
+                    const activeCatId = reportHubCategoryId ?? reportHubCategories[0]?.id;
+                    const sel = c.id === activeCatId;
+                    return (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          onClick={() => setReportHubCategoryId(c.id)}
+                          className={`w-full text-left px-2 py-2 rounded-md text-xs font-semibold leading-snug ${
+                            sel ? "bg-brand-700 text-white shadow-sm" : "text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          {c.label}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </aside>
+              <aside
+                className="w-full lg:basis-[10%] lg:shrink-0 lg:grow-0 lg:min-w-[7rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-56 lg:max-h-none"
+                aria-label="Reports in category"
+              >
+                <ul className="p-2 space-y-0.5">
+                  {(reportHubSelectedCategory?.items ?? []).map((leaf) => {
+                    const isActive = isSidebarLeafActive(leaf, currentPage, pageStateResolved);
+                    const readOnly = isReadOnlyPage(leaf.page);
+                    const leafKey = `${leaf.page}:${JSON.stringify(leaf.state ?? {})}`;
+                    return (
+                      <li key={leafKey}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onNavigate(leaf.page, leaf.state);
+                            setSidebarOpen(false);
+                          }}
+                          className={`w-full text-left px-2 py-2 rounded-md text-sm transition ${
+                            isActive ? "bg-slate-900 text-white font-medium shadow-sm" : "text-slate-700 hover:bg-slate-100"
+                          }`}
+                        >
+                          <span>{leaf.name}</span>
+                          {readOnly && (
+                            <span
+                              className={`block mt-0.5 text-[10px] font-medium ${
+                                isActive ? "text-slate-300" : "text-amber-700"
+                              }`}
+                            >
+                              Read-only
+                            </span>
+                          )}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </aside>
+              <section
+                className="w-full lg:basis-[80%] lg:shrink-0 lg:grow-0 min-w-0 flex-1 bg-white overflow-x-auto overflow-y-auto"
+                aria-label="Report content"
+              >
+                {children}
+              </section>
+            </div>
+          ) : (
+            children
+          )}
         </main>
       </div>
       <TerminalLockOverlay />

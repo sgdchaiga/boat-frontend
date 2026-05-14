@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Banknote,
   FileBarChart,
+  FlaskConical,
   Pill,
   Stethoscope,
   UserPlus,
@@ -213,6 +214,14 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
             >
               <Stethoscope className="w-4 h-4 text-sky-600" />
               New consultation
+            </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("clinic_laboratory", { labTab: "orders" })}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-50"
+            >
+              <FlaskConical className="w-4 h-4 text-violet-600" />
+              Laboratory
             </button>
           </div>
         </div>

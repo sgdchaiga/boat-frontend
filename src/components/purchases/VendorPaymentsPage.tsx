@@ -79,6 +79,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
   const [reference, setReference] = useState("");
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
+  const vendorPaymentInFlightRef = useRef(false);
   const [outstandingBills, setOutstandingBills] = useState<OutstandingBill[]>([]);
   const [loadingBills, setLoadingBills] = useState(false);
   const hasOpenedForPayBillRef = useRef(false);
@@ -325,6 +326,9 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
         ? { payableAmount, unearnedExcessAmount }
         : undefined;
 
+    if (vendorPaymentInFlightRef.current) return;
+    vendorPaymentInFlightRef.current = true;
+
     /** One full payment to a single bill — use legacy bill_id (no allocations table). */
     const useLegacySingleBill = lines.length === 1 && unearnedExcessAmount <= 0.001;
     const needsAllocationRows = lines.length > 0 && !useLegacySingleBill;
@@ -397,6 +401,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
       console.error("Error recording payment:", e);
       alert("Failed: " + formatSupabaseError(e));
     } finally {
+      vendorPaymentInFlightRef.current = false;
       setSaving(false);
     }
   };

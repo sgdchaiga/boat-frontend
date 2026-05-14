@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Receipt, Download, RefreshCw, Plus } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../lib/timezone";
@@ -117,6 +117,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
   const [editingRow, setEditingRow] = useState<TransactionRow | null>(null);
   const [editDate, setEditDate] = useState("");
   const [savingDate, setSavingDate] = useState(false);
+  const dateCorrectionInFlightRef = useRef(false);
   const role = (user?.role || "").toLowerCase();
   const canCorrectDates = superAdmin || ["admin", "manager", "accountant", "supervisor"].includes(role);
 
@@ -617,7 +618,8 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
   };
 
   const saveDateCorrection = async () => {
-    if (!editingRow || !editDate || savingDate) return;
+    if (!editingRow || !editDate || savingDate || dateCorrectionInFlightRef.current) return;
+    dateCorrectionInFlightRef.current = true;
     setSavingDate(true);
     try {
       if (editingRow.source === "Hotel POS") {
@@ -656,6 +658,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
         alert(`Failed to save date correction: ${msg}`);
       }
     } finally {
+      dateCorrectionInFlightRef.current = false;
       setSavingDate(false);
     }
   };

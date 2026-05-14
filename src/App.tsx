@@ -23,6 +23,7 @@ import { RetailCreditSalesReportPage } from './components/RetailCreditSalesRepor
 import { ClinicDashboardPage } from './components/clinic/ClinicDashboardPage';
 import { ClinicPatientsPage } from './components/clinic/ClinicPatientsPage';
 import { ClinicConsultationPage } from './components/clinic/ClinicConsultationPage';
+import { ClinicLaboratoryPage } from './components/clinic/ClinicLaboratoryPage';
 import { BarOrdersPage } from './components/BarOrdersPage';
 import { KitchenOrdersPage } from './components/KitchenOrdersPage';
 import { KitchenMenuPage } from './components/KitchenMenuPage';
@@ -229,6 +230,8 @@ const MANAGED_PAGE_STATE_KEYS = [
   "memberRegister",
   "highlightClinicPatientId",
   "clinicIntent",
+  "highlightLabOrderId",
+  "labTab",
 ] as const;
 
 function getPageStateFromUrl(): Record<string, unknown> {
@@ -325,6 +328,10 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (highlightClinicPatientId) state.highlightClinicPatientId = highlightClinicPatientId;
   const clinicIntent = qp.get("clinicIntent");
   if (clinicIntent === "new_patient" || clinicIntent === "new") state.clinicIntent = clinicIntent;
+  const highlightLabOrderId = qp.get("highlightLabOrderId");
+  if (highlightLabOrderId) state.highlightLabOrderId = highlightLabOrderId;
+  const labTab = qp.get("labTab");
+  if (labTab === "orders" || labTab === "results") state.labTab = labTab;
   return state;
 }
 
@@ -957,6 +964,15 @@ function AppContent() {
           <ClinicConsultationPage
             openNew={pageState?.clinicIntent === 'new'}
             onConsumedNavigateIntent={() => navigate('clinic_consultation', {})}
+          />
+        );
+      case 'clinic_laboratory':
+        return (
+          <ClinicLaboratoryPage
+            readOnly={access.readOnly}
+            initialTab={pageState?.labTab === 'results' ? 'results' : 'orders'}
+            highlightLabOrderId={pageState?.highlightLabOrderId as string | undefined}
+            onConsumedNavigateIntent={() => navigate('clinic_laboratory', {})}
           />
         );
       case 'reports_retail_shift_variance':

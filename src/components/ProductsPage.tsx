@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -146,6 +146,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [sortKey, setSortKey] = useState<ItemsSortKey>("name");
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
   const [serviceConsumables, setServiceConsumables] = useState<ServiceConsumableDraft[]>([]);
+  const saveProductInFlightRef = useRef(false);
 
   useEffect(() => {
     void loadAll();
@@ -367,6 +368,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       active: formData.active,
     };
 
+    if (saveProductInFlightRef.current) return;
+    saveProductInFlightRef.current = true;
     try {
       let savedId: string | null = editingProduct?.id ?? null;
       let savedOrgId: string | null =
@@ -420,6 +423,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     } catch (err) {
       console.error("Unexpected product save error:", err);
       alert("Unexpected error saving product. Check console for details.");
+    } finally {
+      saveProductInFlightRef.current = false;
     }
   }
 

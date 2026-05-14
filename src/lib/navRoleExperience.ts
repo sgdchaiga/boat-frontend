@@ -15,6 +15,7 @@ export const NAV_ROLE_CASHIER_PAGE_IDS = new Set<string>([
   "clinic_dashboard",
   "clinic_patients",
   "clinic_consultation",
+  "clinic_laboratory",
   "clinic_pos",
   "retail_pos",
   "retail_pos_orders",
@@ -30,6 +31,8 @@ export const NAV_ROLE_CASHIER_PAGE_IDS = new Set<string>([
   "wallet",
   "purchases_expenses",
   "purchases_payments",
+  /** Money Out → other expenditures (manual journal) */
+  "accounting_manual",
   /** Front Desk (hotel / mixed) */
   "reservations",
   "checkin",
@@ -57,6 +60,7 @@ export const NAV_ROLE_STOREKEEPER_PAGE_IDS = new Set<string>([
   "purchases_credits",
   "purchases_expenses",
   "cash_receipts",
+  "accounting_manual",
   "transactions",
   "wallet",
   "payments",

@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useId } from "react";
+import { useEffect, useState, useMemo, useId, useRef } from "react";
 import { Plus, X, CheckCircle, FileText, Trash2, Eye, Minus, Package } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
@@ -138,6 +138,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     { product_id: "", description: "", cost_price: 0, quantity: 1 },
   ]);
   const [saving, setSaving] = useState(false);
+  const savePurchaseInFlightRef = useRef(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
   useEffect(() => {
@@ -418,6 +419,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
 
   const handleSave = async () => {
     if (readOnly) return;
+    if (savePurchaseInFlightRef.current) return;
     if (!vendorId) {
       alert(simpleMode ? "Choose who you bought from." : "Select a vendor.");
       return;
@@ -438,6 +440,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       return;
     }
     const total = withNames.reduce((s, i) => s + lineTotal(i), 0);
+    savePurchaseInFlightRef.current = true;
     setSaving(true);
     try {
       if (isLocalDesktopMode && desktopApi.isAvailable()) {
@@ -558,6 +561,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       console.error("Error saving purchase order:", e);
       alert("Failed: " + formatSaveError(e));
     } finally {
+      savePurchaseInFlightRef.current = false;
       setSaving(false);
     }
   };
@@ -1138,6 +1142,7 @@ const approvedAt = new Date().toISOString();
 
             <div className="flex flex-col gap-2 mt-4 pt-4 border-t border-slate-200 shrink-0">
               <button
+                type="button"
                 onClick={handleSave}
                 disabled={saving}
                 className="app-btn-primary w-full py-3 text-base font-semibold"

@@ -431,7 +431,13 @@ const HOTEL_LODGING_ONLY_PAGE_IDS = new Set([
   "hotel_assessment_run",
 ]);
 
-const CLINIC_PAGE_IDS = new Set(["clinic_dashboard", "clinic_patients", "clinic_consultation", "clinic_pos"]);
+const CLINIC_PAGE_IDS = new Set([
+  "clinic_dashboard",
+  "clinic_patients",
+  "clinic_consultation",
+  "clinic_laboratory",
+  "clinic_pos",
+]);
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
@@ -502,7 +508,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     return "frontdesk";
   if (["POS", "hotel_pos_waiter", "hotel_pos_supervisor"].includes(page)) return "hotel_pos";
   if (["retail_pos", "retail_pos_orders", "clinic_pos"].includes(page)) return "retail_pos";
-  if (["clinic_dashboard", "clinic_patients", "clinic_consultation"].includes(page)) return "clinic";
+  if (["clinic_dashboard", "clinic_patients", "clinic_consultation", "clinic_laboratory"].includes(page)) return "clinic";
   if (["kitchen_display", "Kitchen Orders", "Bar Orders", "kitchen_menu", "hotel_pos_kitchen_bar"].includes(page)) return "kitchen_ops";
   if (page === "billing") return "billing";
   if (page === "payments" || page === "cash_receipts") return "payments_received";

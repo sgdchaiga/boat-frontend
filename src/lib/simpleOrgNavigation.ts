@@ -33,6 +33,51 @@ export type BuildSimpleOrgNavArgs = {
   allowBudget: boolean;
 };
 
+/** Flat report links for simple-org tenants (sidebar + in-app report hub). */
+export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType | null | undefined }): NavChild[] {
+  const { businessType } = args;
+  const isHotelOrMixed = businessType === "hotel" || businessType === "mixed";
+  const periodPurchasesReport: NavChild = {
+    name: isHotelOrMixed ? "Expenses & purchases (period)" : "Purchases report",
+    page: "reports_daily_purchases_summary",
+  };
+
+  const clinicPriorityReports: NavChild[] =
+    businessType === "clinic"
+      ? [
+          { name: "Cash flow statement", page: "accounting_cashflow" },
+          { name: "Debtors report", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
+          { name: "Stock movement report", page: "reports_stock_movement" },
+          { name: "Expense report", page: "reports_daily_purchases_summary" },
+        ]
+      : [];
+
+  return [
+    ...clinicPriorityReports,
+    { name: "Daily summary", page: "reports_daily_summary" },
+    { name: "Sales report", page: "reports_daily_sales" },
+    ...(businessType === "clinic" ? [] : [periodPurchasesReport]),
+    { name: "Sales by item", page: "reports_sales_by_item" },
+    { name: "Purchases by item", page: "reports_purchases_by_item" },
+    ...(businessType === "manufacturing"
+      ? [{ name: "Daily production", page: "reports_manufacturing_daily_production" as const }]
+      : []),
+    { name: "Income statement", page: "accounting_income" },
+    { name: "Balance sheet", page: "accounting_balance" },
+    ...(isHotelOrMixed
+      ? [
+          {
+            name: "Debtors (invoice balances)",
+            page: "retail_credit_invoices",
+            state: { invoiceTab: "credit" },
+          },
+          { name: "Cash flow statement", page: "accounting_cashflow" },
+          { name: "Stock movement", page: "reports_stock_movement" },
+        ]
+      : []),
+  ];
+}
+
 /**
  * Primary sidebar for hotel / retail / restaurant / mixed / manufacturing tenants
  * (replaces the legacy multi-section Finance / Purchases tree).
@@ -60,9 +105,9 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
           name: "Clinic",
           icon: Stethoscope,
           children: [
-            { name: "Dashboard", page: "clinic_dashboard" },
             { name: "Patients", page: "clinic_patients" },
             { name: "Consultation", page: "clinic_consultation" },
+            { name: "Laboratory", page: "clinic_laboratory" },
           ],
         },
       ]
@@ -82,8 +127,8 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   const moneyOut: NavChild[] = [
     { name: "Spend money", page: "purchases_expenses" },
     { name: "Pay suppliers", page: "purchases_payments" },
-    /** Distinct from customer payments — general cash / ledger movements */
-    { name: "Other payments", page: "transactions" },
+    /** Misc cash out / non-supplier spend — balanced GL entry (debit expense etc., credit bank/cash), not sales receipts */
+    { name: "Other expenditures", page: "accounting_manual" },
   ];
 
   const retailSales: NavChild[] =
@@ -108,46 +153,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Adjust stock", page: "inventory_stock_adjustments" },
   ];
 
-  const periodPurchasesReport: NavChild = {
-    name: isHotelOrMixed ? "Expenses & purchases (period)" : "Purchases report",
-    page: "reports_daily_purchases_summary",
-  };
-
-  /** Clinic / pharmacy: priority finance & ops reports at top of Reports menu. */
-  const clinicPriorityReports: NavChild[] =
-    businessType === "clinic"
-      ? [
-          { name: "Cash flow statement", page: "accounting_cashflow" },
-          { name: "Debtors report", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
-          { name: "Stock movement report", page: "reports_stock_movement" },
-          { name: "Expense report", page: "reports_daily_purchases_summary" },
-        ]
-      : [];
-
-  const reports: NavChild[] = [
-    ...clinicPriorityReports,
-    { name: "Daily summary", page: "reports_daily_summary" },
-    { name: "Sales report", page: "reports_daily_sales" },
-    ...(businessType === "clinic" ? [] : [periodPurchasesReport]),
-    { name: "Sales by item", page: "reports_sales_by_item" },
-    { name: "Purchases by item", page: "reports_purchases_by_item" },
-    ...(businessType === "manufacturing"
-      ? [{ name: "Daily production", page: "reports_manufacturing_daily_production" as const }]
-      : []),
-    { name: "Income statement", page: "accounting_income" },
-    { name: "Balance sheet", page: "accounting_balance" },
-    ...(isHotelOrMixed
-      ? [
-          {
-            name: "Debtors (invoice balances)",
-            page: "retail_credit_invoices",
-            state: { invoiceTab: "credit" },
-          },
-          { name: "Cash flow statement", page: "accounting_cashflow" },
-          { name: "Stock movement", page: "reports_stock_movement" },
-        ]
-      : []),
-  ];
+  const reports = getSimpleOrgReportNavChildren({ businessType });
 
   const settings: NavChild[] = [
     { name: "Users", page: "staff" },

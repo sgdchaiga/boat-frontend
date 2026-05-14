@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import {
@@ -472,6 +472,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
   const [expenseDate, setExpenseDate] = useState(() => localDateISO());
   const [lines, setLines] = useState<LineDraft[]>(() => [emptyLine()]);
   const [saving, setSaving] = useState(false);
+  const saveExpenseInFlightRef = useRef(false);
   const [expenseAttachmentFiles, setExpenseAttachmentFiles] = useState<File[]>([]);
   const [filterDateFrom, setFilterDateFrom] = useState(() => localDateISO());
   const [filterDateTo, setFilterDateTo] = useState(() => localDateISO());
@@ -934,6 +935,8 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       }
     }
 
+    if (saveExpenseInFlightRef.current) return;
+    saveExpenseInFlightRef.current = true;
     setSaving(true);
     try {
       const expDate = expenseDate || localDateISO();
@@ -1096,6 +1099,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       console.error("Error adding expense:", e);
       alert("Failed: " + formatSupabaseError(e));
     } finally {
+      saveExpenseInFlightRef.current = false;
       setSaving(false);
     }
   };

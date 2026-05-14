@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Plus, Edit2, CheckCircle, Clock, Save, X, Trash2 } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
@@ -49,6 +49,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     { id: randomUuid(), product_id: "", quantity: "" },
   ]);
   const [saving, setSaving] = useState(false);
+  const saveRequisitionInFlightRef = useRef(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
 
@@ -158,6 +159,8 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
       alert("Add at least one product with a quantity.");
       return;
     }
+    if (saveRequisitionInFlightRef.current) return;
+    saveRequisitionInFlightRef.current = true;
     setSaving(true);
     try {
       let requisitionId = editingId;
@@ -209,6 +212,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
       console.error(e);
       alert("Failed to save requisition.");
     } finally {
+      saveRequisitionInFlightRef.current = false;
       setSaving(false);
     }
   };

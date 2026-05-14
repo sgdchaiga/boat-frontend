@@ -190,6 +190,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
 
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; dir: "asc" | "desc" } | null>(null);
   const highlightDismissed = useRef(false);
+  const recordDebtorPaymentInFlightRef = useRef(false);
+  const editDebtorPaymentInFlightRef = useRef(false);
 
   useEffect(() => {
     if (openRecordPayment) {
@@ -728,6 +730,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
       }
     }
 
+    if (recordDebtorPaymentInFlightRef.current) return;
+    recordDebtorPaymentInFlightRef.current = true;
     setSavingPayment(true);
     setPaymentError(null);
     try {
@@ -809,6 +813,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
       alert("Failed to record payment: " + msg);
       console.error("Error recording payment:", err);
     } finally {
+      recordDebtorPaymentInFlightRef.current = false;
       setSavingPayment(false);
     }
   };
@@ -840,6 +845,8 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
       return;
     }
 
+    if (editDebtorPaymentInFlightRef.current) return;
+    editDebtorPaymentInFlightRef.current = true;
     setSavingEdit(true);
     setPaymentError(null);
     try {
@@ -870,6 +877,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
       setPaymentError(msg);
       alert(msg);
     } finally {
+      editDebtorPaymentInFlightRef.current = false;
       setSavingEdit(false);
     }
   };
