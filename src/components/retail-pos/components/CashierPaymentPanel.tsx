@@ -1,5 +1,7 @@
 import { CreditCard, Loader2, Printer, ShoppingCart, User } from "lucide-react";
 import { PAYMENT_METHOD_SELECT_OPTIONS, type PaymentMethodCode } from "../../../lib/paymentMethod";
+import type { PosExperience } from "../../../lib/posExperience";
+import { getPosLabels } from "../../../lib/posExperience";
 import { useState } from "react";
 
 interface CustomerLike {
@@ -61,6 +63,10 @@ interface CashierPaymentPanelProps {
   printRetailReceipt: () => void;
   hasReceipt: boolean;
   activePanelTab: "payment" | "customer" | "notes";
+  /** `"pharmacy"` = patient / pharmacy copy. */
+  posExperience?: PosExperience;
+  /** Main heading for the payment column (e.g. "Collect payment" in pharmacy mode). */
+  panelTitle?: string;
 }
 
 export function CashierPaymentPanel({
@@ -107,14 +113,17 @@ export function CashierPaymentPanel({
   printRetailReceipt,
   hasReceipt,
   activePanelTab,
+  posExperience = "retail",
+  panelTitle = "Payment",
 }: CashierPaymentPanelProps) {
   const [showCustomerModal, setShowCustomerModal] = useState(false);
+  const L = getPosLabels(posExperience);
 
   return (
-    <div className="lg:col-span-3 bg-white rounded-xl border border-slate-200 p-3 h-full min-h-0 overflow-y-auto">
+    <div className="bg-white rounded-xl border border-slate-200 p-3 h-full min-h-0 overflow-y-auto">
       <h2 className="text-base font-bold text-slate-900 mb-2 flex flex-wrap items-center gap-2">
         <ShoppingCart className="w-5 h-5 shrink-0" />
-        Payment
+        {panelTitle}
       </h2>
 
       <div className="mb-2 rounded-xl bg-slate-900 text-white px-3 py-3 text-center">
@@ -139,7 +148,7 @@ export function CashierPaymentPanel({
       <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
         <div className="flex items-center gap-2">
           <User className="w-4 h-4 shrink-0 text-slate-600" />
-          <span className="text-sm text-slate-800 truncate flex-1">{posCustomerSummary || "Walk-in customer"}</span>
+          <span className="text-sm text-slate-800 truncate flex-1">{posCustomerSummary || L.walkIn}</span>
           <button
             type="button"
             onClick={() => setShowCustomerModal(true)}
@@ -152,13 +161,15 @@ export function CashierPaymentPanel({
 
       {activePanelTab === "customer" && (
         <div className="mb-2 rounded-lg border border-slate-200 bg-slate-50 p-2">
-          <p className="text-xs text-slate-700 mb-2">Customer: {posCustomerSummary || "Walk-in customer"}</p>
+          <p className="text-xs text-slate-700 mb-2">
+            {L.patientOrCustomerTab}: {posCustomerSummary || L.walkIn}
+          </p>
           <button
             type="button"
             onClick={() => setShowCustomerModal(true)}
             className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-100"
           >
-            Open customer details
+            Open {L.patientOrCustomerTab.toLowerCase()} details
           </button>
         </div>
       )}
@@ -330,7 +341,7 @@ export function CashierPaymentPanel({
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
           <div className="w-full max-w-md rounded-xl bg-white border border-slate-200 p-4">
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-semibold text-slate-900">Customer details</h3>
+              <h3 className="text-sm font-semibold text-slate-900">{L.patientOrCustomerTab} details</h3>
               <button
                 type="button"
                 onClick={() => setShowCustomerModal(false)}
@@ -353,7 +364,7 @@ export function CashierPaymentPanel({
               }}
               className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm mb-2"
             >
-              <option value="">Walk-in customer</option>
+              <option value="">{L.walkIn}</option>
               {customers.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
@@ -365,7 +376,7 @@ export function CashierPaymentPanel({
               <input
                 value={customerNameDraft}
                 onChange={(e) => setCustomerNameDraft(e.target.value)}
-                placeholder="+ Add customer name"
+                placeholder={`+ Add ${L.patientOrCustomerTab.toLowerCase()} name`}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
               />
               <input

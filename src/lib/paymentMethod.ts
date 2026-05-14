@@ -83,3 +83,27 @@ export async function insertPaymentWithMethodCompat(
   }
   return { data: null, error: lastErr };
 }
+
+/** Update `payments` row; retries `payment_method` with legacy `mobile_money` when CHECK rejects. */
+export async function updatePaymentWithMethodCompat(
+  client: SupabaseClient,
+  paymentId: string,
+  patch: Record<string, unknown>,
+  preferred: PaymentMethodCode
+): Promise<{ error: unknown }> {
+  const variants = paymentMethodVariantsForInsert(preferred);
+  let lastErr: unknown = null;
+  for (let i = 0; i < variants.length; i++) {
+    const pm = variants[i];
+    const { error } = await client.from("payments").update({ ...patch, payment_method: pm }).eq("id", paymentId);
+    if (!error) return { error: null };
+    lastErr = error;
+    if (!isPaymentMethodCheckViolation(error)) {
+      return { error };
+    }
+    if (i === variants.length - 1) {
+      return { error };
+    }
+  }
+  return { error: lastErr };
+}

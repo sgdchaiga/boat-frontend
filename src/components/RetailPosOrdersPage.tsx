@@ -11,6 +11,7 @@ import {
   insertPaymentWithMethodCompat,
 } from "../lib/paymentMethod";
 import { PageNotes } from "./common/PageNotes";
+import { getPosLabels } from "../lib/posExperience";
 
 type SaleLine = {
   id: string;
@@ -46,6 +47,7 @@ export function RetailPosOrdersPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
+  const L = getPosLabels(user?.business_type === "clinic" ? "pharmacy" : "retail");
 
   const [orders, setOrders] = useState<RetailSaleOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -459,7 +461,7 @@ export function RetailPosOrdersPage() {
     const html = `
       <html>
       <head>
-        <title>Retail Receipt</title>
+        <title>${L.receiptTitle}</title>
         <style>
           body{font-family:Arial,sans-serif;padding:12px;max-width:320px;margin:0 auto;color:#0f172a}
           .row{display:flex;justify-content:space-between;gap:8px}
@@ -468,7 +470,7 @@ export function RetailPosOrdersPage() {
         </style>
       </head>
       <body>
-        <h3 style="margin:0 0 6px 0">Retail Receipt (Reprint)</h3>
+        <h3 style="margin:0 0 6px 0">${L.receiptReprintTitle}</h3>
         <div class="muted">Order: ${order.id.slice(0, 8)}</div>
         <div class="muted">Date: ${new Date(order.sale_at).toLocaleString()}</div>
         <div class="line"></div>
@@ -479,7 +481,7 @@ export function RetailPosOrdersPage() {
         <div class="row muted"><span>Outstanding</span><span>${balance.toFixed(2)}</span></div>
         <div class="row muted"><span>Method</span><span>${methods}</span></div>
         <div class="line"></div>
-        <div class="muted">Customer: ${order.customer_name || "Walk-in customer"}</div>
+        <div class="muted">${L.receiptAttributionLabel}: ${order.customer_name || L.walkIn}</div>
       </body>
       </html>
     `;
@@ -515,8 +517,8 @@ export function RetailPosOrdersPage() {
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-2xl md:text-3xl font-bold text-slate-900">Retail POS Orders</h1>
-            <PageNotes ariaLabel="Retail POS orders help">
+            <h1 className="text-2xl md:text-3xl font-bold text-slate-900">{L.ordersPageTitle}</h1>
+            <PageNotes ariaLabel={L.ordersPageHelpAria}>
               <p>Department tabs with edit and payment actions for recorded retail sales.</p>
             </PageNotes>
           </div>
@@ -572,7 +574,7 @@ export function RetailPosOrdersPage() {
             return (
               <div key={order.id} className="bg-white rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between mb-1">
-                  <p className="font-semibold text-slate-900">{order.customer_name || "Walk-in customer"}</p>
+                  <p className="font-semibold text-slate-900">{order.customer_name || L.walkIn}</p>
                   <span className="text-xs text-slate-500 flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5" />
                     {new Date(order.sale_at).toLocaleString()}
@@ -631,7 +633,7 @@ export function RetailPosOrdersPage() {
       {editingOrderId ? (
         <div className="mt-6 bg-white rounded-xl border border-slate-200 p-4 md:p-6">
           <div className="flex items-center justify-between gap-3 mb-4">
-            <h2 className="text-lg font-bold text-slate-900">Edit Retail POS Order</h2>
+            <h2 className="text-lg font-bold text-slate-900">{L.editOrderTitle}</h2>
             <button
               type="button"
               onClick={() => {
@@ -652,7 +654,7 @@ export function RetailPosOrdersPage() {
           </div>
           <div className="mb-4 grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Retail customer</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{L.linkedAccountLabel}</label>
               <select
                 value={editingCustomerId || ""}
                 onChange={(e) => {
@@ -663,7 +665,7 @@ export function RetailPosOrdersPage() {
                 }}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
               >
-                <option value="">Walk-in / no linked customer</option>
+                <option value="">{L.noLinkedAccountOption}</option>
                 {retailCustomers.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.name}
@@ -672,12 +674,12 @@ export function RetailPosOrdersPage() {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Customer name on receipt</label>
+              <label className="block text-sm font-medium text-slate-700 mb-1">{L.customerNameOnReceiptLabel}</label>
               <input
                 type="text"
                 value={editingCustomerName}
                 onChange={(e) => setEditingCustomerName(e.target.value)}
-                placeholder="Walk-in customer"
+                placeholder={L.walkIn}
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
               />
             </div>
@@ -769,7 +771,7 @@ export function RetailPosOrdersPage() {
       {payingOrder ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => !savingPayment && setPayingOrder(null)}>
           <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-slate-900 mb-2">Settle Retail POS Order</h3>
+            <h3 className="text-lg font-semibold text-slate-900 mb-2">{L.settleModalTitle}</h3>
             <p className="text-sm text-slate-600 mb-3">
               Order: <span className="font-mono">{payingOrder.id.slice(0, 8)}</span>
             </p>

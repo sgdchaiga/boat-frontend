@@ -27,6 +27,8 @@ export interface PersistRetailSaleLedgerArgs {
   posVatEnabled: boolean;
   posVatRate: number | null;
   cashierSessionId: string | null;
+  clinicPatientId?: string | null;
+  clinicDiagnosisSnapshot?: string | null;
 }
 
 export interface CollectMobileMoneyPaymentsArgs {
@@ -105,6 +107,8 @@ export async function persistRetailSaleLedger({
   posVatEnabled,
   posVatRate,
   cashierSessionId,
+  clinicPatientId,
+  clinicDiagnosisSnapshot,
 }: PersistRetailSaleLedgerArgs): Promise<boolean> {
   if (!organizationId) return false;
   const { data: existingSale, error: existingErr } = await supabase
@@ -134,6 +138,8 @@ export async function persistRetailSaleLedger({
     vat_rate: posVatRate,
     created_by: processedBy,
     cashier_session_id: cashierSessionId,
+    clinic_patient_id: clinicPatientId ?? null,
+    clinic_diagnosis_snapshot: clinicDiagnosisSnapshot?.trim() || null,
   };
   const { error: saleErr } = await supabase.from("retail_sales").insert(payload);
   if (saleErr) return false;

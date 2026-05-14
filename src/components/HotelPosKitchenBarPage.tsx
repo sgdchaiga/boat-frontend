@@ -1,13 +1,41 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { KitchenDisplayPage } from "./KitchenDisplayPage";
 import { BarOrdersPage } from "./BarOrdersPage";
 import { KitchenOrdersPage } from "./KitchenOrdersPage";
 import { SaunaOrdersPage } from "./SaunaOrdersPage";
+import { useAuth } from "../contexts/AuthContext";
+import { loadHotelConfig } from "../lib/hotelConfig";
+import { resolvePosSaunaDepartment } from "../lib/resolvePosSaunaDepartment";
 
 type KitchenBarTab = "kitchen" | "bar" | "sauna" | "kitchen_orders";
 
 export function HotelPosKitchenBarPage() {
+  const { user } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = !!user?.isSuperAdmin;
+
   const [tab, setTab] = useState<KitchenBarTab>("kitchen");
+  const [saunaCounterTabLabel, setSaunaCounterTabLabel] = useState("Sauna Orders");
+
+  const refreshSaunaCounterTabLabel = useCallback(async () => {
+    if (!orgId) {
+      setSaunaCounterTabLabel("Sauna Orders");
+      return;
+    }
+    const cfg = loadHotelConfig(orgId);
+    const dept = await resolvePosSaunaDepartment(orgId, superAdmin, cfg.pos_sauna_department_id);
+    setSaunaCounterTabLabel(dept ? `${dept.name} Orders` : "Sauna Orders");
+  }, [orgId, superAdmin]);
+
+  useEffect(() => {
+    void refreshSaunaCounterTabLabel();
+  }, [refreshSaunaCounterTabLabel]);
+
+  useEffect(() => {
+    const fn = () => void refreshSaunaCounterTabLabel();
+    window.addEventListener("focus", fn);
+    return () => window.removeEventListener("focus", fn);
+  }, [refreshSaunaCounterTabLabel]);
 
   return (
     <div className="space-y-4">
@@ -34,7 +62,7 @@ export function HotelPosKitchenBarPage() {
             onClick={() => setTab("sauna")}
             className={`px-3 py-1.5 text-sm rounded ${tab === "sauna" ? "bg-slate-900 text-white" : "text-slate-700 hover:bg-slate-100"}`}
           >
-            Sauna Orders
+            {saunaCounterTabLabel}
           </button>
           <button
             type="button"

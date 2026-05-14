@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DollarSign, CreditCard, X, ArrowUp, ArrowDown, ArrowUpDown } from "lucide-react";
+import { DollarSign, CreditCard, X, ArrowUp, ArrowDown, ArrowUpDown, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
-import { createJournalForPayment } from "../lib/journal";
+import { createJournalForPayment, deleteJournalEntryByReference } from "../lib/journal";
 import {
   type ActiveStayOption,
   type PaymentWithCustomer,
@@ -16,6 +16,8 @@ import { parseInvoiceAllocationsJson, totalAllocatedToInvoice } from "../lib/inv
 import {
   formatPaymentMethodLabel,
   insertPaymentWithMethodCompat,
+  updatePaymentWithMethodCompat,
+  normalizePaymentMethod,
   PAYMENT_METHOD_SELECT_OPTIONS,
   type PaymentMethodCode,
 } from "../lib/paymentMethod";
@@ -30,6 +32,8 @@ interface PaymentsPageProps {
   readOnly?: boolean;
   /** Deep-link from invoices: scroll to and highlight this payment row. */
   highlightPaymentId?: string;
+  /** Open the Record payment drawer on load (e.g. from Transactions → Add payment). */
+  openRecordPayment?: boolean;
 }
 
 type PaymentSortKey = "customer" | "transaction_id" | "amount" | "payment_method" | "payment_status" | "paid_at";
@@ -143,7 +147,7 @@ async function enrichPaymentsWithCustomerLabels(
   }));
 }
 
-export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsPageProps) {
+export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordPayment = false }: PaymentsPageProps) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
@@ -177,8 +181,22 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
     Record<string, { invoice_number: string; issue_date: string | null; customer_name: string | null }>
   >({});
 
+  const [editingPayment, setEditingPayment] = useState<PaymentWithCustomer | null>(null);
+  const [editAmount, setEditAmount] = useState("");
+  const [editMethod, setEditMethod] = useState<PaymentMethodCode>("cash");
+  const [editTxId, setEditTxId] = useState("");
+  const [editPaidDate, setEditPaidDate] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; dir: "asc" | "desc" } | null>(null);
   const highlightDismissed = useRef(false);
+
+  useEffect(() => {
+    if (openRecordPayment) {
+      setShowRecordPayment(true);
+    }
+  }, [openRecordPayment]);
+
   const [paymentRange, setPaymentRange] = useState<BillingRangePreset>("all");
   const { from: paymentDateFrom, to: paymentDateTo } = useMemo(
     () => billingRangeToDates(paymentRange),
@@ -795,6 +813,67 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
     }
   };
 
+  const openEditPayment = (p: PaymentWithCustomer) => {
+    if (readOnly) return;
+    if (!isDebtorPayment(p) || p.payment_status !== "completed") return;
+    setEditingPayment(p);
+    setEditAmount(Number(p.amount).toFixed(2));
+    setEditMethod(normalizePaymentMethod(p.payment_method));
+    setEditTxId(String(p.transaction_id || "").trim());
+    setEditPaidDate(new Date(p.paid_at).toISOString().slice(0, 10));
+    setPaymentError(null);
+  };
+
+  const saveEditedPayment = async () => {
+    if (readOnly || !editingPayment) return;
+    const amt = parseFloat(editAmount);
+    if (isNaN(amt) || amt <= 0) {
+      alert("Enter a valid amount.");
+      return;
+    }
+    const lines = getPaymentInvoiceAllocationLines(editingPayment);
+    const allocSum = lines.reduce((s, l) => s + l.amount, 0);
+    if (allocSum > amt + 0.02) {
+      alert(
+        `This payment has ${allocSum.toFixed(2)} allocated to invoices. The amount cannot be less than that total. Adjust invoice allocations first (or use accounting journals).`
+      );
+      return;
+    }
+
+    setSavingEdit(true);
+    setPaymentError(null);
+    try {
+      const delJr = await deleteJournalEntryByReference("payment", editingPayment.id);
+      if (!delJr.ok) {
+        throw new Error(delJr.error || "Could not remove the existing journal entry for this payment.");
+      }
+
+      const dateStr = editPaidDate.trim() || new Date().toISOString().slice(0, 10);
+      const paidAtIso = new Date(`${dateStr}T12:00:00`).toISOString();
+      const patch: Record<string, unknown> = {
+        amount: amt,
+        paid_at: paidAtIso,
+        transaction_id: editTxId.trim() || buildDebtorTransactionNumber(dateStr),
+      };
+      const { error } = await updatePaymentWithMethodCompat(supabase, editingPayment.id, patch, editMethod);
+      if (error) throw error;
+
+      const jr = await createJournalForPayment(editingPayment.id, amt, paidAtIso, user?.id ?? null);
+      if (!jr.ok) {
+        alert(`Payment updated but journal was not posted: ${jr.error}`);
+      }
+
+      setEditingPayment(null);
+      await fetchData();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Failed to update payment";
+      setPaymentError(msg);
+      alert(msg);
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+
   if (loading) {
     return <div className="p-6">Loading...</div>;
   }
@@ -904,6 +983,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
               {payTh("payment_status", "Status")}
               {payTh("paid_at", "Date")}
               <th className="text-left p-3 font-semibold text-slate-700">Docs</th>
+              <th className="text-right p-3 font-semibold text-slate-700 w-24">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -948,6 +1028,22 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                     readOnly={readOnly}
                     onUpdated={fetchData}
                   />
+                </td>
+                <td className="p-3 text-right align-top">
+                  {!readOnly &&
+                  isDebtorPayment(p) &&
+                  p.payment_status === "completed" ? (
+                    <button
+                      type="button"
+                      onClick={() => openEditPayment(p)}
+                      className="inline-flex items-center gap-1 text-sm text-brand-700 hover:underline"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                      Edit
+                    </button>
+                  ) : (
+                    <span className="text-slate-300">—</span>
+                  )}
                 </td>
               </tr>
             ))}
@@ -1036,9 +1132,102 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId }: PaymentsP
                 );
               })()}
             </div>
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end gap-2">
               <button type="button" className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50" onClick={() => setDetailPayment(null)}>
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {editingPayment && (
+        <div
+          className="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] p-4"
+          onClick={() => !savingEdit && setEditingPayment(null)}
+        >
+          <div
+            className="bg-white rounded-xl shadow-xl max-w-md w-full p-6 max-h-[90vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex justify-between items-start gap-3 mb-4">
+              <h2 className="text-xl font-bold text-slate-900">Edit payment</h2>
+              <button
+                type="button"
+                disabled={savingEdit}
+                onClick={() => setEditingPayment(null)}
+                className="p-1 text-slate-500 hover:text-slate-800 disabled:opacity-50"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mb-4">
+              Updates the payment row and reposts the cash/receivable journal for this receipt. Customer and invoice splits are unchanged.
+            </p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Amount</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={editAmount}
+                  onChange={(e) => setEditAmount(e.target.value)}
+                  disabled={savingEdit}
+                  className="border rounded-lg px-3 py-2 w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Payment method</label>
+                <select
+                  value={editMethod}
+                  onChange={(e) => setEditMethod(e.target.value as PaymentMethodCode)}
+                  disabled={savingEdit}
+                  className="border rounded-lg px-3 py-2 w-full"
+                >
+                  {PAYMENT_METHOD_SELECT_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Transaction / reference ID</label>
+                <input
+                  value={editTxId}
+                  onChange={(e) => setEditTxId(e.target.value)}
+                  disabled={savingEdit}
+                  className="border rounded-lg px-3 py-2 w-full font-mono text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Receipt date</label>
+                <input
+                  type="date"
+                  value={editPaidDate}
+                  onChange={(e) => setEditPaidDate(e.target.value)}
+                  disabled={savingEdit}
+                  className="border rounded-lg px-3 py-2 w-full"
+                />
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={savingEdit}
+                onClick={() => setEditingPayment(null)}
+                className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingEdit}
+                onClick={() => void saveEditedPayment()}
+                className="px-4 py-2 bg-brand-700 text-white rounded-lg hover:bg-brand-800 disabled:opacity-50"
+              >
+                {savingEdit ? "Saving…" : "Save changes"}
               </button>
             </div>
           </div>

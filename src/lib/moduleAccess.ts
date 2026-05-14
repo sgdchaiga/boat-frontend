@@ -11,6 +11,7 @@ export type ModuleId =
   | "frontdesk"
   | "hotel_pos"
   | "retail_pos"
+  | "clinic"
   | "kitchen_ops"
   | "billing"
   | "payments_received"
@@ -40,6 +41,8 @@ type ModuleAudience =
   /** Counter/barcode POS + orders (same surfaces as standalone retail; also for manufacturers who sell from stock). */
   | "retail_counter"
   | "both"
+  /** Clinic / pharmacy workspace (hotels, retail, restaurants, mixed; not sacco/school/vsla/manufacturing). */
+  | "clinic"
   | "sacco"
   | "school"
   | "manufacturing"
@@ -64,6 +67,8 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   hotel_pos: "hotel",
   /** Item / barcode till: retail, mixed, restaurant, and manufacturing (counter sales alongside production). */
   retail_pos: "retail_counter",
+  /** Clinic / pharmacy workspace — see `isBusinessEligible` audience `"clinic"`. */
+  clinic: "clinic",
   kitchen_ops: "hotel",
   billing: "hotel",
   payments_received: "both",
@@ -98,6 +103,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   frontdesk: true,
   hotel_pos: true,
   retail_pos: true,
+  clinic: false,
   kitchen_ops: true,
   billing: true,
   payments_received: true,
@@ -123,6 +129,9 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
 };
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
+  if (audience === "clinic") {
+    return businessType === "clinic";
+  }
   /** Unknown / catch-all profiles still need counter POS (`retail_counter`) and retail home; local SQLite often has null type until org row exists. */
   if (!businessType || businessType === "other") {
     return audience === "both" || audience === "retail" || audience === "retail_counter";
@@ -130,6 +139,7 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
   if (audience === "retail_counter") {
     return (
       businessType === "retail" ||
+      businessType === "clinic" ||
       businessType === "mixed" ||
       businessType === "restaurant" ||
       businessType === "manufacturing"
@@ -421,12 +431,31 @@ const HOTEL_LODGING_ONLY_PAGE_IDS = new Set([
   "hotel_assessment_run",
 ]);
 
+const CLINIC_PAGE_IDS = new Set(["clinic_dashboard", "clinic_patients", "clinic_consultation", "clinic_pos"]);
+
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  if (CLINIC_PAGE_IDS.has(page)) {
+    return businessType === "clinic";
+  }
+
   if (!businessType || businessType === "mixed") return true;
 
   const nonRetailLodgingProfiles: BusinessType[] = ["hotel", "school", "sacco", "vsla", "manufacturing"];
   if (nonRetailLodgingProfiles.includes(businessType) && RETAIL_EXCLUSIVE_PAGE_IDS.has(page)) {
+    /** Lodging tenants use credit invoices for property customers — same page as retail debtors. */
+    if ((businessType === "hotel" || businessType === "mixed") && page === "retail_credit_invoices") {
+      return true;
+    }
+    /** Hotel / restaurant clinic or drug-shop counter: same retail POS surfaces as mixed tenants. */
+    const hotelRestaurantCounterRetail =
+      (businessType === "hotel" || businessType === "restaurant") &&
+      (page === "retail_pos" ||
+        page === "retail_pos_orders" ||
+        page === "retail_customers" ||
+        page === "retail_credit_sales_report" ||
+        page === "retail_credit_invoices");
+    if (hotelRestaurantCounterRetail) return true;
     const manufacturingCounterPos =
       businessType === "manufacturing" && (page === "retail_pos" || page === "retail_pos_orders");
     if (!manufacturingCounterPos) return false;
@@ -448,6 +477,12 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
     return true;
   }
 
+  if (businessType === "clinic") {
+    if (page === "retail_pos") return false;
+    if (HOTEL_EXCLUSIVE_PAGE_IDS.has(page)) return false;
+    return true;
+  }
+
   return true;
 }
 
@@ -466,7 +501,8 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (["rooms", "reservations", "checkin", "stays", "housekeeping", "hotel_rooms_setup"].includes(page))
     return "frontdesk";
   if (["POS", "hotel_pos_waiter", "hotel_pos_supervisor"].includes(page)) return "hotel_pos";
-  if (["retail_pos", "retail_pos_orders"].includes(page)) return "retail_pos";
+  if (["retail_pos", "retail_pos_orders", "clinic_pos"].includes(page)) return "retail_pos";
+  if (["clinic_dashboard", "clinic_patients", "clinic_consultation"].includes(page)) return "clinic";
   if (["kitchen_display", "Kitchen Orders", "Bar Orders", "kitchen_menu", "hotel_pos_kitchen_bar"].includes(page)) return "kitchen_ops";
   if (page === "billing") return "billing";
   if (page === "payments" || page === "cash_receipts") return "payments_received";

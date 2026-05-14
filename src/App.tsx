@@ -15,10 +15,14 @@ import { HotelPosSupervisorPage } from './components/HotelPosSupervisorPage';
 import { HotelPosReportsPage } from './components/HotelPosReportsPage';
 import { POSDashboardPage } from './components/POSDashboard';
 import { RetailPOSPage } from './components/RetailPOSPage';
+import { ClinicPOSPage } from './components/clinic/ClinicPOSPage';
 import { RetailPosOrdersPage } from './components/RetailPosOrdersPage';
 import { RetailInvoicesPage } from './components/RetailInvoicesPage';
 import { RetailCustomersPage } from './components/RetailCustomersPage';
 import { RetailCreditSalesReportPage } from './components/RetailCreditSalesReportPage';
+import { ClinicDashboardPage } from './components/clinic/ClinicDashboardPage';
+import { ClinicPatientsPage } from './components/clinic/ClinicPatientsPage';
+import { ClinicConsultationPage } from './components/clinic/ClinicConsultationPage';
 import { BarOrdersPage } from './components/BarOrdersPage';
 import { KitchenOrdersPage } from './components/KitchenOrdersPage';
 import { KitchenMenuPage } from './components/KitchenMenuPage';
@@ -223,6 +227,8 @@ const MANAGED_PAGE_STATE_KEYS = [
   "loanReportTab",
   "recoveryView",
   "memberRegister",
+  "highlightClinicPatientId",
+  "clinicIntent",
 ] as const;
 
 function getPageStateFromUrl(): Record<string, unknown> {
@@ -315,6 +321,10 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (recoveryView === "overdue" || recoveryView === "tracking") state.recoveryView = recoveryView;
   const memberRegister = qp.get("memberRegister");
   if (memberRegister === "1" || memberRegister?.toLowerCase() === "true") state.memberRegister = true;
+  const highlightClinicPatientId = qp.get("highlightClinicPatientId");
+  if (highlightClinicPatientId) state.highlightClinicPatientId = highlightClinicPatientId;
+  const clinicIntent = qp.get("clinicIntent");
+  if (clinicIntent === "new_patient" || clinicIntent === "new") state.clinicIntent = clinicIntent;
   return state;
 }
 
@@ -379,17 +389,31 @@ function AppContent() {
       setCurrentPage(
         user.business_type === "retail"
           ? "retail_dashboard"
-          : user.business_type === "sacco"
-            ? SACCOPRO_HOME_PAGE
-            : user.business_type === "vsla"
-              ? VSLA_HOME_PAGE
-            : "dashboard"
+          : user.business_type === "clinic"
+            ? "clinic_dashboard"
+            : user.business_type === "sacco"
+              ? SACCOPRO_HOME_PAGE
+              : user.business_type === "vsla"
+                ? VSLA_HOME_PAGE
+                : "dashboard"
       );
       setPageState({});
       return;
     }
     if (user.business_type === "retail" && currentPage === "dashboard") {
       setCurrentPage("retail_dashboard");
+      return;
+    }
+    if (user.business_type === "clinic" && currentPage === "dashboard") {
+      setCurrentPage("clinic_dashboard");
+      return;
+    }
+    if (user.business_type === "clinic" && currentPage === "retail_dashboard") {
+      setCurrentPage("clinic_dashboard");
+      return;
+    }
+    if (user.business_type === "clinic" && currentPage === "retail_pos") {
+      setCurrentPage("clinic_pos");
       return;
     }
     if (user.business_type === "hotel" && currentPage === "dashboard") {
@@ -539,6 +563,9 @@ function AppContent() {
     if (user?.business_type === "retail" && currentPage === "dashboard") {
       return <RetailDashboard onNavigate={setCurrentPage} />;
     }
+    if (user?.business_type === "clinic" && currentPage === "dashboard") {
+      return <ClinicDashboardPage onNavigate={navigate} />;
+    }
     if (user?.business_type === "sacco" && currentPage === "dashboard") {
       return <SaccoDashboard />;
     }
@@ -567,7 +594,7 @@ function AppContent() {
           enableWallet: user?.enable_wallet !== false,
           enablePayroll: user?.enable_payroll !== false,
           enableBudget: user?.enable_budget !== false,
-          enableAgent: user?.business_type !== "retail" && user?.enable_agent !== false,
+          enableAgent: user?.business_type !== "retail" && user?.business_type !== "clinic" && user?.enable_agent !== false,
           enableHotelAssessment:
             (user?.business_type === "hotel" || user?.business_type === "mixed") &&
             user?.enable_hotel_assessment !== false,
@@ -608,6 +635,8 @@ function AppContent() {
       const fallback =
         user?.business_type === "retail" ? (
           <RetailDashboard onNavigate={setCurrentPage} />
+        ) : user?.business_type === "clinic" ? (
+          <ClinicDashboardPage onNavigate={navigate} />
         ) : user?.business_type === "sacco" ? (
           <SaccoDashboard />
         ) : user?.business_type === "school" ? (
@@ -868,6 +897,7 @@ function AppContent() {
       case 'hotel_customers':
         return (
           <CustomersPage
+            readOnly={access.readOnly}
             highlightCustomerId={
               (pageState?.highlightCustomerId ?? pageState?.highlightGuestId) as string | undefined
             }
@@ -888,6 +918,8 @@ function AppContent() {
         return <HotelPosReportsPage />;
       case 'pos_dashboard':
         return <POSDashboardPage />;
+      case 'clinic_pos':
+        return <ClinicPOSPage readOnly={access.readOnly} />;
       case 'retail_pos':
         return <RetailPOSPage readOnly={access.readOnly} />;
       case 'retail_pos_orders':
@@ -910,6 +942,23 @@ function AppContent() {
         );
       case 'retail_credit_sales_report':
         return <RetailCreditSalesReportPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case 'clinic_dashboard':
+        return <ClinicDashboardPage onNavigate={navigate} />;
+      case 'clinic_patients':
+        return (
+          <ClinicPatientsPage
+            highlightPatientId={pageState?.highlightClinicPatientId as string | undefined}
+            openRegister={pageState?.clinicIntent === 'new_patient'}
+            onConsumedNavigateIntent={() => navigate('clinic_patients', {})}
+          />
+        );
+      case 'clinic_consultation':
+        return (
+          <ClinicConsultationPage
+            openNew={pageState?.clinicIntent === 'new'}
+            onConsumedNavigateIntent={() => navigate('clinic_consultation', {})}
+          />
+        );
       case 'reports_retail_shift_variance':
         return <RetailShiftVarianceReportPage />;
       case 'reports_retail_sales_insights':
@@ -927,6 +976,7 @@ function AppContent() {
           <PaymentsPage
             readOnly={access.readOnly}
             highlightPaymentId={pageState?.highlightPaymentId as string | undefined}
+            openRecordPayment={Boolean(pageState?.openRecordPayment)}
           />
         );
       case 'cash_receipts':
@@ -1080,6 +1130,8 @@ function AppContent() {
       default:
         return user?.business_type === "retail" ? (
           <RetailDashboard onNavigate={setCurrentPage} />
+        ) : user?.business_type === "clinic" ? (
+          <ClinicDashboardPage onNavigate={navigate} />
         ) : user?.business_type === "sacco" ? (
           <SaccoDashboard />
         ) : user?.business_type === "school" ? (

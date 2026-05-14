@@ -51,7 +51,7 @@ export function CashierCartPanel<TProduct extends ProductLike>({
   const searchResultRows = filteredManualProducts.slice(0, 8);
 
   return (
-    <div className="lg:col-span-7 bg-white rounded-xl border border-slate-200 p-3 h-full min-h-0 overflow-y-auto">
+    <div className="lg:col-span-9 bg-white rounded-xl border border-slate-200 p-3 h-full min-h-0 overflow-y-auto">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
         <input
           ref={scanInputRef}

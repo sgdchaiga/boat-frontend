@@ -35,7 +35,17 @@ export type UserRole =
   | "cashier"
   | "storekeeper";
 
-export type BusinessType = "hotel" | "retail" | "mixed" | "restaurant" | "sacco" | "school" | "manufacturing" | "vsla" | "other";
+export type BusinessType =
+  | "hotel"
+  | "retail"
+  | "mixed"
+  | "restaurant"
+  | "clinic"
+  | "sacco"
+  | "school"
+  | "manufacturing"
+  | "vsla"
+  | "other";
 export type SubscriptionStatus = "trial" | "active" | "past_due" | "cancelled" | "expired" | "none";
 
 export const ROLE_LABELS: Record<UserRole, string> = {
@@ -158,7 +168,18 @@ const LOCAL_SUPERADMIN_EMAILS = (import.meta.env.VITE_LOCAL_SUPERADMIN_EMAILS ||
   .filter(Boolean);
 
 function parseLocalBusinessType(value: string): BusinessType {
-  const allowed: BusinessType[] = ["hotel", "retail", "mixed", "restaurant", "sacco", "school", "manufacturing", "vsla", "other"];
+  const allowed: BusinessType[] = [
+    "hotel",
+    "retail",
+    "mixed",
+    "restaurant",
+    "clinic",
+    "sacco",
+    "school",
+    "manufacturing",
+    "vsla",
+    "other",
+  ];
   if ((allowed as string[]).includes(value)) return value as BusinessType;
   return "retail";
 }

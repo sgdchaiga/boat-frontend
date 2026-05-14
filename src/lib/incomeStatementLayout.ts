@@ -15,7 +15,7 @@ const norm = (s: string | null | undefined) => (s || "").toLowerCase();
 
 /** Hotel, retail, restaurant, mixed: revenue + COGS + operating expenses. */
 function isRetailFamily(bt: BusinessType | null | undefined): boolean {
-  return bt === "hotel" || bt === "retail" || bt === "restaurant" || bt === "mixed";
+  return bt === "hotel" || bt === "retail" || bt === "restaurant" || bt === "mixed" || bt === "clinic";
 }
 
 export function getIncomeStatementMode(businessType: BusinessType | null | undefined): IncomeStatementMode {

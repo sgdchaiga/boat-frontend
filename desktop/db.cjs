@@ -278,6 +278,37 @@ function createHotelCustomer(db, payload) {
   return rowStmt.get(id);
 }
 
+function updateHotelCustomer(db, payload) {
+  db.prepare(`
+    UPDATE hotel_customers
+    SET
+      first_name = @first_name,
+      last_name = @last_name,
+      email = @email,
+      phone = @phone,
+      id_type = @id_type,
+      id_number = @id_number,
+      address = @address
+    WHERE id = @id
+  `).run({
+    id: payload.id,
+    first_name: payload.first_name,
+    last_name: payload.last_name,
+    email: payload.email ?? null,
+    phone: payload.phone ?? null,
+    id_type: payload.id_type ?? null,
+    id_number: payload.id_number ?? null,
+    address: payload.address ?? null,
+  });
+  const row = db.prepare(`
+    SELECT id, first_name, last_name, email, phone, id_type, id_number, address, created_at
+    FROM hotel_customers
+    WHERE id = ?
+    LIMIT 1
+  `).get(payload.id);
+  return row || null;
+}
+
 function enqueueSyncQueue(db, payload) {
   const id = cryptoRandomId();
   db.prepare(`
@@ -713,6 +744,7 @@ module.exports = {
   upsertPosProduct,
   listHotelCustomers,
   createHotelCustomer,
+  updateHotelCustomer,
   getActiveCashierSession,
   openCashierSession,
   closeCashierSession,

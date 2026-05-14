@@ -82,6 +82,14 @@ function isSidebarLeafActive(
     return pv === want;
   }
 
+  /** Credit invoices vs open invoices tab (retail_invoices UI). */
+  if (leaf.page === "retail_credit_invoices") {
+    const want = (leaf.state?.invoiceTab as string | undefined) ?? "invoices";
+    const pv = pageState.invoiceTab as string | undefined;
+    if (want === "invoices") return pv === undefined || pv === null || String(pv) === "" || pv === "invoices";
+    return pv === want;
+  }
+
   const req = leaf.state;
   /** Sidebar leaf with no scoped state highlights whenever that page route is active (URL may carry unrelated query keys). */
   if (!req || Object.keys(req).length === 0) return true;
@@ -219,6 +227,10 @@ function navSectionAccent(sectionName: string) {
       activeChild: 'bg-indigo-500 text-white shadow-sm',
       groupHeader: 'text-indigo-100 bg-slate-800/50 border-l-2 border-indigo-500',
     },
+    Clinic: {
+      activeChild: 'bg-emerald-500 text-white shadow-sm',
+      groupHeader: 'text-emerald-100 bg-slate-800/50 border-l-2 border-emerald-500',
+    },
   };
   return (
     map[sectionName] ?? {
@@ -267,11 +279,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
   const enablePayroll = user?.enable_payroll !== false;
   const enableBudget = user?.enable_budget !== false;
   const retailOnly = businessType === "retail";
-  const allowCommunications = !retailOnly && user?.enable_communications !== false;
-  const allowWallet = !retailOnly && user?.enable_wallet !== false;
-  const allowPayroll = !retailOnly && enablePayroll;
-  const allowBudget = !retailOnly && enableBudget;
-  const allowAgent = !retailOnly && user?.enable_agent !== false;
+  const clinicTenant = businessType === "clinic";
+  const retailLikeTenant = retailOnly || clinicTenant;
+  const allowCommunications = !retailLikeTenant && user?.enable_communications !== false;
+  const allowWallet = !retailLikeTenant && user?.enable_wallet !== false;
+  const allowPayroll = !retailLikeTenant && enablePayroll;
+  const allowBudget = !retailLikeTenant && enableBudget;
+  const allowAgent = !retailLikeTenant && user?.enable_agent !== false;
   const allowHotelAssessment =
     (businessType === "hotel" || businessType === "mixed") && user?.enable_hotel_assessment !== false;
   const allowManufacturing = user?.enable_manufacturing !== false;
@@ -285,7 +299,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
     () =>
       buildSimpleOrgNavigation({
         businessType,
-        dashboardPage: retailOnly ? "retail_dashboard" : "dashboard",
+        dashboardPage: clinicTenant ? "clinic_dashboard" : retailOnly ? "retail_dashboard" : "dashboard",
         allowWallet,
         allowPayroll,
         allowCommunications,
@@ -295,6 +309,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
     [
       businessType,
       retailOnly,
+      clinicTenant,
       allowWallet,
       allowPayroll,
       allowCommunications,

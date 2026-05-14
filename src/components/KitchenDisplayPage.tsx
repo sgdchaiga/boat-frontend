@@ -5,7 +5,8 @@ import { computeRangeInTimezone } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { PageNotes } from "./common/PageNotes";
-import { getNextOrderStatus } from "../lib/hotelPosOrderStatus";
+import { getNextOrderStatus, formatKitchenBarAdvanceLabel } from "../lib/hotelPosOrderStatus";
+import { loadHotelConfig } from "../lib/hotelConfig";
 
 interface KitchenItem {
   quantity: number;
@@ -27,6 +28,18 @@ interface KitchenOrder {
 export function KitchenDisplayPage() {
   const { user, isSuperAdmin } = useAuth();
   const orgId = user?.organization_id ?? null;
+
+  const [hotelCfg, setHotelCfg] = useState(() => loadHotelConfig(orgId ?? undefined));
+
+  useEffect(() => {
+    setHotelCfg(loadHotelConfig(orgId ?? undefined));
+  }, [orgId]);
+
+  useEffect(() => {
+    const fn = () => setHotelCfg(loadHotelConfig(orgId ?? undefined));
+    window.addEventListener("focus", fn);
+    return () => window.removeEventListener("focus", fn);
+  }, [orgId]);
 
   const [orders, setOrders] = useState<KitchenOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -117,7 +130,7 @@ export function KitchenDisplayPage() {
     return () => clearInterval(interval);
   }, [viewRange, viewDate, orgId, isSuperAdmin]);
 
-  const updateStatus = async (orderId: string, newStatus: "preparing" | "ready") => {
+  const updateStatus = async (orderId: string, newStatus: string) => {
     setUpdatingId(orderId);
     try {
       const { error } = await supabase
@@ -259,40 +272,30 @@ export function KitchenDisplayPage() {
               </div>
 
               <div className="flex gap-2 mt-4">
-                {order.order_status === "pending" && (
-                  <button
-                    onClick={() => {
-                      const next = getNextOrderStatus(order.order_status, "restaurant");
-                      if (next === "preparing") void updateStatus(order.id, next);
-                    }}
-                    disabled={updatingId === order.id}
-                    className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 py-2 rounded-lg font-semibold transition"
-                  >
-                    {updatingId === order.id ? "…" : "Preparing"}
-                  </button>
-                )}
-                {order.order_status === "preparing" && (
-                  <button
-                    onClick={() => {
-                      const next = getNextOrderStatus(order.order_status, "restaurant");
-                      if (next === "ready") void updateStatus(order.id, next);
-                    }}
-                    disabled={updatingId === order.id}
-                    className="flex-1 bg-green-600 hover:bg-green-500 disabled:opacity-50 py-2 rounded-lg font-semibold transition"
-                  >
-                    {updatingId === order.id ? "…" : "Ready"}
-                  </button>
-                )}
-                {order.order_status === "ready" && (
-                  <div className="flex-1 py-2 text-center text-green-400 font-semibold">
-                    Ready for pickup
-                  </div>
-                )}
-                {["completed", "served"].includes(order.order_status) && (
-                  <div className="flex-1 py-2 text-center text-slate-400 font-semibold">
-                    Completed
-                  </div>
-                )}
+                {(() => {
+                  const flowOpts = { kitchenFlow: hotelCfg.pos_kitchen_status_flow };
+                  const next = getNextOrderStatus(order.order_status, "restaurant", flowOpts);
+                  const done = ["served", "completed", "cancelled"].includes(order.order_status);
+                  if (next && !done) {
+                    return (
+                      <button
+                        onClick={() => void updateStatus(order.id, String(next))}
+                        disabled={updatingId === order.id}
+                        className="flex-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 py-2 rounded-lg font-semibold transition"
+                      >
+                        {updatingId === order.id ? "…" : formatKitchenBarAdvanceLabel(String(next))}
+                      </button>
+                    );
+                  }
+                  if (done) {
+                    return (
+                      <div className="flex-1 py-2 text-center text-slate-400 font-semibold">
+                        Completed
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             </div>
           ))}

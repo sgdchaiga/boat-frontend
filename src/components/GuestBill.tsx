@@ -3,6 +3,7 @@ import { Printer } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { loadHotelConfig } from "../lib/hotelConfig";
 
 interface StayBill {
   id: string;
@@ -43,7 +44,11 @@ export function GuestBill({ stay, onClose, onNavigate }: GuestBillProps) {
   const superAdmin = !!user?.isSuperAdmin;
   const [charges, setCharges] = useState<BillingCharge[]>([]);
   const [payments, setPayments] = useState<PaymentRow[]>([]);
-  const [orgBillHeader, setOrgBillHeader] = useState<{ name: string; address: string | null } | null>(null);
+  const [orgBillHeader, setOrgBillHeader] = useState<{
+    name: string;
+    address: string | null;
+    logoUrl: string | null;
+  } | null>(null);
   const [loading, setLoading] = useState(true);
   const printRef = useRef<HTMLDivElement>(null);
 
@@ -77,16 +82,25 @@ export function GuestBill({ stay, onClose, onNavigate }: GuestBillProps) {
           superAdmin
         );
         const orgQ = headerOrgId
-          ? supabase.from("organizations").select("name,address").eq("id", headerOrgId).maybeSingle()
+          ? supabase.from("organizations").select("name,address,logo_url").eq("id", headerOrgId).maybeSingle()
           : Promise.resolve({ data: null, error: null });
         const [chargesRes, paymentsRes, orgRes] = await Promise.all([chargesQ, paymentsQ, orgQ]);
         if (chargesRes.data) setCharges(chargesRes.data as BillingCharge[]);
         if (paymentsRes.data) setPayments(paymentsRes.data as PaymentRow[]);
-        const row = orgRes.data as { name?: string | null; address?: string | null } | null;
-        if (row?.name?.trim()) {
+        const row = orgRes.data as { name?: string | null; address?: string | null; logo_url?: string | null } | null;
+        const cfg = loadHotelConfig(headerOrgId ?? orgId ?? undefined);
+        const nameFromDb = row?.name?.trim() ?? "";
+        const nameFromLocal = cfg.hotel_name?.trim() ?? "";
+        const displayName = (nameFromDb || nameFromLocal || "").trim();
+        const addrFromDb = row?.address?.trim() ?? "";
+        const addrFromLocal = cfg.address?.trim() ?? "";
+        const displayAddress = (addrFromDb || addrFromLocal || "").trim() || null;
+        const logoUrl = row?.logo_url?.trim() ? row.logo_url.trim() : null;
+        if (displayName || displayAddress || logoUrl) {
           setOrgBillHeader({
-            name: row.name.trim(),
-            address: row.address?.trim() ? row.address.trim() : null,
+            name: displayName || "Guest bill",
+            address: displayAddress,
+            logoUrl,
           });
         } else {
           setOrgBillHeader(null);
@@ -156,6 +170,15 @@ export function GuestBill({ stay, onClose, onNavigate }: GuestBillProps) {
         ) : (
           <div id="guest-bill-print" className="print-bill">
             <div className="text-center mb-6 border-b pb-4">
+              {orgBillHeader?.logoUrl ? (
+                <div className="mb-4 flex justify-center">
+                  <img
+                    src={orgBillHeader.logoUrl}
+                    alt=""
+                    className="max-h-20 max-w-[220px] w-auto object-contain"
+                  />
+                </div>
+              ) : null}
               <h1 className="text-xl font-bold text-slate-900">
                 {orgBillHeader?.name?.trim() || "Guest bill"}
               </h1>

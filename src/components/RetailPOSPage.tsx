@@ -43,6 +43,11 @@ import {
   type SaleCustomerContext,
 } from "./retail-pos/services/checkoutService";
 import { processSaleOnline } from "./retail-pos/services/processSaleOnline";
+import type { PosExperience } from "../lib/posExperience";
+import { getPosLabels } from "../lib/posExperience";
+import { fetchClinicConsultations, fetchClinicPatients } from "@/lib/clinicData";
+import type { ClinicConsultation, ClinicPatient } from "./clinic/clinicTypes";
+import { ClinicPosLeftPanel } from "./clinic/ClinicPosLeftPanel";
 
 interface Product {
   id: string;
@@ -60,6 +65,7 @@ interface CartItem {
   product: Product;
   quantity: number;
   lineTotal: number;
+  unitPriceOverride?: number | null;
 }
 
 interface ReceiptData {
@@ -96,6 +102,10 @@ interface CashierSessionRow {
 }
 interface RetailPOSPageProps {
   readOnly?: boolean;
+  /** `"pharmacy"` = patient labels + pharmacy receipt (clinic tenants). */
+  posExperience?: PosExperience;
+  /** Dedicated clinic dispensing workspace (left rail). */
+  leftPanelMode?: "retail_cart" | "clinic_workspace";
 }
 
 type PaymentFeedbackStatus = "idle" | "waiting" | "success" | "failed";
@@ -103,11 +113,17 @@ type CheckoutTender = OfflineRetailPayment & { id: string };
 const QUICK_PICK_STATS_KEY = "boat.retail.quickpick.stats.v1";
 const QUICK_PICK_RECENT_KEY = "boat.retail.quickpick.recent.v1";
 
-export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
+export function RetailPOSPage({
+  readOnly = false,
+  posExperience = "retail",
+  leftPanelMode = "retail_cart",
+}: RetailPOSPageProps = {}) {
   const { user } = useAuth();
   const { setCurrentPage } = useAppContext();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
+  const effectivePosExperience: PosExperience = leftPanelMode === "clinic_workspace" ? "pharmacy" : posExperience;
+  const L = useMemo(() => getPosLabels(effectivePosExperience), [effectivePosExperience]);
   const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
   const [topSelling, setTopSelling] = useState<Array<{ id: string; name: string; qty: number }>>([]);
   const [slowMovers, setSlowMovers] = useState<Array<{ id: string; name: string; qty: number }>>([]);
@@ -134,6 +150,12 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const useDesktopLocalMode = localAuthEnabled && desktopApi.isAvailable();
   const scanInputRef = useRef<HTMLInputElement | null>(null);
+  const [clinicPatients, setClinicPatients] = useState<ClinicPatient[]>([]);
+  const [clinicConsultations, setClinicConsultations] = useState<ClinicConsultation[]>([]);
+  const [clinicRegistryLoading, setClinicRegistryLoading] = useState(false);
+  const [patientRegistryQuery, setPatientRegistryQuery] = useState("");
+  const [selectedClinicPatientId, setSelectedClinicPatientId] = useState<string | null>(null);
+  const [prescriptionSearchQuery, setPrescriptionSearchQuery] = useState("");
 
   const {
     products,
@@ -198,6 +220,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
     setCustomerPhoneDraft,
     setCustomers,
     setSavingCustomer,
+    posExperience: effectivePosExperience,
   });
   const {
     activeSession,
@@ -352,11 +375,46 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
   }, [orgId, superAdmin, useDesktopLocalMode]);
 
   useEffect(() => {
+    if (leftPanelMode !== "clinic_workspace" || !orgId || useDesktopLocalMode) {
+      setClinicPatients([]);
+      setClinicConsultations([]);
+      setClinicRegistryLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setClinicRegistryLoading(true);
+    void Promise.all([fetchClinicPatients(orgId, superAdmin), fetchClinicConsultations(orgId, superAdmin)])
+      .then(([p, c]) => {
+        if (!cancelled) {
+          setClinicPatients(p);
+          setClinicConsultations(c);
+        }
+      })
+      .catch((e) => console.warn("[clinic POS] registry load failed:", e))
+      .finally(() => {
+        if (!cancelled) setClinicRegistryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [leftPanelMode, orgId, superAdmin, useDesktopLocalMode]);
+
+  useEffect(() => {
     const selected = customers.find((c) => c.id === selectedCustomerId);
     if (!selected) return;
     setCustomerNameDraft((prev) => (prev.trim() ? prev : selected.name));
     setCustomerPhoneDraft((prev) => (prev.trim() ? prev : selected.phone || ""));
   }, [selectedCustomerId, customers]);
+
+  useEffect(() => {
+    if (leftPanelMode !== "clinic_workspace") return;
+    if (!selectedClinicPatientId) return;
+    const p = clinicPatients.find((x) => x.id === selectedClinicPatientId);
+    if (!p) return;
+    setCustomerNameDraft(p.name);
+    setCustomerPhoneDraft(p.phone || "");
+    setSelectedCustomerId("");
+  }, [leftPanelMode, selectedClinicPatientId, clinicPatients, setCustomerNameDraft, setCustomerPhoneDraft, setSelectedCustomerId]);
 
   useEffect(() => {
     const onOnline = () => {
@@ -461,6 +519,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
     total,
     addToCart: addToCartBase,
     updateQty,
+    setLineUnitPrice,
     clearCart,
     qtyPadProductId,
     qtyPadValue,
@@ -675,7 +734,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
     const match = findByScanCode(scanCode);
     if (!match) {
       playErrorBeep();
-      toast({ title: "Item not found", description: "No product matched the scanned code." });
+      toast({ title: L.medicineNotFoundTitle, description: L.medicineNotFoundDescription });
       window.setTimeout(() => scanInputRef.current?.focus(), 0);
       return;
     }
@@ -719,7 +778,12 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       paidAt: new Date().toISOString(),
       paymentMethod: paymentLines[0]?.method ?? "cash",
       total,
-      lines: cart.map((i) => ({ name: i.product.name, qty: i.quantity, unitPrice: getUnitPrice(i.product), lineTotal: i.lineTotal })),
+      lines: cart.map((i) => ({
+        name: i.product.name,
+        qty: i.quantity,
+        unitPrice: i.unitPriceOverride != null && Number.isFinite(i.unitPriceOverride) ? i.unitPriceOverride : getUnitPrice(i.product, i.quantity),
+        lineTotal: i.lineTotal,
+      })),
     });
     setShowReceiptPreview(false);
     // Keep checkout non-blocking: receipt printing is manual after sale.
@@ -737,7 +801,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
     if (!detectedPhone) {
       const prompted = window.prompt("Enter mobile number")?.trim() || "";
       if (!prompted) {
-        toast({ title: "Mobile number required", description: "Enter customer phone to proceed with mobile payment." });
+        toast({ title: "Mobile number required", description: L.mobilePhoneHint });
         setPaymentFeedbackStatus("failed");
         setPaymentFeedbackMessage("Payment failed");
         return null;
@@ -775,7 +839,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
           saleId: ctx.saleId,
           tenders: ctx.tenders,
           phone: ctx.checkoutPhone,
-          customerName: customerNameDraft.trim() || "Retail customer",
+          customerName: customerNameDraft.trim() || L.defaultPayerName,
           customerEmail: user?.email ?? "no-reply@boat.local",
           organizationId: orgId ?? null,
         })
@@ -830,7 +894,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       vatRate: posVatRate,
     });
     refreshOfflineQueueCount();
-    toast({ title: "Offline mode", description: "Sale queued offline and will sync automatically." });
+    toast({ title: L.offlineDispensingQueuedTitle, description: L.offlineDispensingQueuedBody });
     setPaymentFeedbackStatus("waiting");
     setPaymentFeedbackMessage("Waiting for payment...");
     setRetryPendingTenders([]);
@@ -853,7 +917,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       const verifiedTenders = await handlePayments(ctx);
       await handleOnlineSale(ctx, saleCustomer, verifiedTenders);
       refreshOfflineQueueCount();
-      toast({ title: "Retail sale completed" });
+      toast({ title: L.saleCompletedToast });
       incrementActiveAccessTransactions();
       setPaymentFeedbackStatus(ctx.shouldUseStkPush ? "success" : "idle");
       setPaymentFeedbackMessage(ctx.shouldUseStkPush ? "Payment successful" : "");
@@ -871,7 +935,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
         setPaymentFeedbackStatus("failed");
         setPaymentFeedbackMessage("Payment failed");
       } else {
-        console.error("Retail checkout failed:", error);
+        console.error(`${L.checkoutFailLogPrefix}:`, error);
         toast({ title: "Checkout failed", description: error instanceof Error ? error.message : "Try again." });
         setRetryPendingTenders(ctx.shouldUseStkPush ? ctx.tenders.filter((p) => p.status === "pending").map((p) => ({ method: p.method, amount: p.amount })) : []);
         setPaymentFeedbackStatus(ctx.shouldUseStkPush ? "failed" : "idle");
@@ -886,7 +950,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
     cart.map((i) => ({
       productId: i.product.id,
       quantity: i.quantity,
-      unitPrice: getUnitPrice(i.product),
+      unitPrice: i.unitPriceOverride != null && Number.isFinite(i.unitPriceOverride) ? i.unitPriceOverride : getUnitPrice(i.product, i.quantity),
       lineTotal: i.lineTotal,
       costPrice: i.product.cost_price ?? null,
       trackInventory: i.product.track_inventory ?? true,
@@ -1003,11 +1067,11 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
           ${receiptOrgHeader.address ? `<div class="muted" style="white-space:pre-line">${receiptOrgHeader.address}</div>` : ""}
         </div>
       `
-      : `<h3 style="margin:0 0 6px 0">Retail Receipt</h3>`;
+      : `<h3 style="margin:0 0 6px 0">${L.receiptTitle}</h3>`;
     const html = `
       <html>
       <head>
-        <title>Retail Receipt</title>
+        <title>${L.receiptTitle}</title>
         <style>
           body{font-family:Arial,sans-serif;padding:12px;max-width:320px;margin:0 auto;color:#0f172a}
           .row{display:flex;justify-content:space-between;gap:8px}
@@ -1017,7 +1081,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       </head>
       <body>
         ${orgHeaderHtml}
-        <div class="muted" style="text-align:center;margin-bottom:6px;">Retail Receipt</div>
+        <div class="muted" style="text-align:center;margin-bottom:6px;">${L.receiptTitle}</div>
         <div class="muted">Sale ID: ${receipt.saleId}</div>
         <div class="muted">Paid at: ${new Date(receipt.paidAt).toLocaleString()}</div>
         <div class="line"></div>
@@ -1029,7 +1093,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
         <div class="row muted"><span>Change</span><span>${Math.max(0, paid - receipt.total).toFixed(2)}</span></div>
         ${
           customerNameDraft.trim()
-            ? `<div class="line"></div><div class="muted">Customer: ${customerNameDraft.trim()} ${
+            ? `<div class="line"></div><div class="muted">${L.receiptAttributionLabel}: ${customerNameDraft.trim()} ${
                 customerPhoneDraft.trim() ? `(${customerPhoneDraft.trim()})` : ""
               }</div>`
             : ""
@@ -1087,7 +1151,9 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       `}</style>
 
       <div className="flex flex-wrap items-start gap-2 mb-2 shrink-0">
-        <h1 className="text-2xl font-bold text-slate-900">Retail POS</h1>
+        <h1 className="text-2xl font-bold text-slate-900">
+          {leftPanelMode === "clinic_workspace" ? L.dispensingWorkspaceHeading : L.posHeading}
+        </h1>
         <button
           type="button"
           onClick={() => setCurrentPage("reports_retail_sales_insights")}
@@ -1095,8 +1161,8 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
         >
           Open POS Analytics
         </button>
-        <PageNotes ariaLabel="Retail POS help">
-          <p>Scan items, total updates instantly, take payment, print receipt in seconds.</p>
+        <PageNotes ariaLabel={L.posHelpAria}>
+          <p>{leftPanelMode === "clinic_workspace" ? L.dispensingWorkspaceBlurb : L.posHelpBlurb}</p>
         </PageNotes>
         <button
           type="button"
@@ -1190,7 +1256,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
             onClick={() => setActivePanelTab("customer")}
             className={`rounded border px-3 py-1.5 text-[11px] font-semibold ${activePanelTab === "customer" ? "border-brand-600 bg-brand-50 text-brand-700" : "border-slate-300 text-slate-700"}`}
           >
-            Customer
+            {L.patientOrCustomerTab}
           </button>
           <button
             type="button"
@@ -1203,24 +1269,63 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
       </div>
 
       {posMode === "cashier" ? (
-      <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-10 gap-3 overflow-hidden">
-        <CashierCartPanel
-          scanCode={scanCode}
-          setScanCode={setScanCode}
-          handleScan={handleScan}
-          quickPickProducts={intelligentQuickPickProducts}
-          addToCart={addToCart}
-          getUnitPrice={getUnitPrice}
-          productSearch={productSearch}
-          setProductSearch={setProductSearch}
-          filteredManualProducts={filteredManualProducts}
-          cart={cart}
-          updateQty={updateQty}
-          scanInputRef={scanInputRef}
-          hasMoreProducts={hasMoreProducts}
-          catalogLoadingMore={catalogLoadingMore}
-          onLoadMoreProducts={() => void loadMoreProducts()}
-        />
+      <div
+        className={
+          leftPanelMode === "clinic_workspace"
+            ? "flex-1 min-h-0 grid grid-cols-1 gap-3 overflow-hidden lg:grid-cols-[minmax(0,20%)_minmax(0,1fr)_minmax(0,25%)]"
+            : "flex-1 min-h-0 grid grid-cols-1 gap-3 overflow-hidden lg:grid-cols-12"
+        }
+      >
+        {leftPanelMode === "clinic_workspace" ? (
+          <ClinicPosLeftPanel
+            labels={L}
+            patients={clinicPatients}
+            patientsLoading={clinicRegistryLoading}
+            patientQuery={patientRegistryQuery}
+            setPatientQuery={setPatientRegistryQuery}
+            selectedPatientId={selectedClinicPatientId}
+            setSelectedPatientId={setSelectedClinicPatientId}
+            consultations={clinicConsultations}
+            consultationsLoading={clinicRegistryLoading}
+            prescriptionQuery={prescriptionSearchQuery}
+            setPrescriptionQuery={setPrescriptionSearchQuery}
+            scanCode={scanCode}
+            setScanCode={setScanCode}
+            handleScan={handleScan}
+            scanInputRef={scanInputRef}
+            medicineSearch={productSearch}
+            setMedicineSearch={setProductSearch}
+            filteredMedicines={filteredManualProducts}
+            addMedicineToCart={addToCart}
+            getUnitPrice={getUnitPrice}
+            quickPickMedicines={intelligentQuickPickProducts}
+            cart={cart}
+            updateQty={updateQty}
+            setLineUnitPrice={setLineUnitPrice}
+            hasMoreProducts={hasMoreProducts}
+            catalogLoadingMore={catalogLoadingMore}
+            onLoadMoreProducts={() => void loadMoreProducts()}
+          />
+        ) : (
+          <CashierCartPanel
+            scanCode={scanCode}
+            setScanCode={setScanCode}
+            handleScan={handleScan}
+            quickPickProducts={intelligentQuickPickProducts}
+            addToCart={addToCart}
+            getUnitPrice={getUnitPrice}
+            productSearch={productSearch}
+            setProductSearch={setProductSearch}
+            filteredManualProducts={filteredManualProducts}
+            cart={cart}
+            updateQty={updateQty}
+            scanInputRef={scanInputRef}
+            hasMoreProducts={hasMoreProducts}
+            catalogLoadingMore={catalogLoadingMore}
+            onLoadMoreProducts={() => void loadMoreProducts()}
+          />
+        )}
+        <div className={leftPanelMode === "clinic_workspace" ? "min-h-0 h-full min-w-0" : "lg:col-span-3 min-h-0 h-full min-w-0"}>
         <CashierPaymentPanel
           total={total}
           posCustomerSummary={posCustomerSummary}
@@ -1265,7 +1370,10 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
           printRetailReceipt={printRetailReceipt}
           hasReceipt={Boolean(receipt)}
           activePanelTab={activePanelTab}
+          posExperience={effectivePosExperience}
+          panelTitle={L.paymentPanelTitle}
         />
+        </div>
       </div>
       ) : (
       <div className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-2 gap-3 overflow-y-auto pr-1">
@@ -1307,7 +1415,7 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
               disabled={posVatRate == null || posVatRate <= 0}
               className="h-4 w-4 rounded border-slate-300"
             />
-            <span>Enable VAT in retail checkout</span>
+            <span>{L.managerVatHelp}</span>
           </label>
           {posVatBreakdown ? (
             <div className="space-y-1 text-sm text-slate-800">
@@ -1400,13 +1508,13 @@ export function RetailPOSPage({ readOnly = false }: RetailPOSPageProps = {}) {
           </div>
           <div className="text-center mb-3">
             <h3 className="text-xl font-bold text-slate-900">
-              {receiptOrgHeader?.name?.trim() || "Retail Receipt"}
+              {receiptOrgHeader?.name?.trim() || L.receiptPreviewFallbackHeading}
             </h3>
             {receiptOrgHeader?.address ? (
               <p className="text-sm text-slate-600 whitespace-pre-line mt-1">{receiptOrgHeader.address}</p>
             ) : null}
             {receiptOrgHeader?.name ? (
-              <p className="text-xs text-slate-500 uppercase tracking-wide mt-2">Retail Receipt</p>
+              <p className="text-xs text-slate-500 uppercase tracking-wide mt-2">{L.receiptPreviewSubtitleWhenOrgNamed}</p>
             ) : null}
           </div>
           <p className="text-sm text-slate-600">Sale ID: {receipt.saleId}</p>

@@ -12,6 +12,10 @@ export const NAV_ROLE_CASHIER_PAGE_IDS = new Set<string>([
   "hotel_pos_supervisor",
   "hotel_pos_reports",
   "retail_dashboard",
+  "clinic_dashboard",
+  "clinic_patients",
+  "clinic_consultation",
+  "clinic_pos",
   "retail_pos",
   "retail_pos_orders",
   "retail_credit_invoices",
@@ -33,6 +37,9 @@ export const NAV_ROLE_CASHIER_PAGE_IDS = new Set<string>([
   "housekeeping",
   "rooms",
   "billing",
+  "reports_daily_purchases_summary",
+  "reports_stock_movement",
+  "accounting_cashflow",
 ]);
 
 /** Stores + procure-to-pay; includes expense capture used as operational buying. */
@@ -56,6 +63,8 @@ export const NAV_ROLE_STOREKEEPER_PAGE_IDS = new Set<string>([
   "reports_daily_purchases_summary",
   "reports_stock_movement",
   "reports_purchases_by_item",
+  "retail_credit_invoices",
+  "accounting_cashflow",
 ]);
 
 export function getNavRoleExperience(roleKey: string | undefined | null): NavRoleExperience {
@@ -69,7 +78,13 @@ export function getNavRoleExperience(roleKey: string | undefined | null): NavRol
 
 export function shouldApplyNavRoleScope(businessType: BusinessType | null | undefined): boolean {
   if (!businessType) return false;
-  return businessType === "hotel" || businessType === "mixed" || businessType === "restaurant" || businessType === "retail";
+  return (
+    businessType === "hotel" ||
+    businessType === "mixed" ||
+    businessType === "restaurant" ||
+    businessType === "retail" ||
+    businessType === "clinic"
+  );
 }
 
 export function shouldApplyStorekeeperScope(businessType: BusinessType | null | undefined): boolean {
@@ -110,6 +125,7 @@ export function defaultLandingPageForNavRole(
   }
 
   if (!shouldApplyNavRoleScope(businessType)) return null;
+  if (businessType === "clinic") return "clinic_pos";
   if (businessType === "retail") return "retail_pos";
   return "hotel_pos_waiter";
 }

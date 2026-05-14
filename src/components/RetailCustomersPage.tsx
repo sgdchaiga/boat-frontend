@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
+import { getPosLabels } from "../lib/posExperience";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 import { desktopApi } from "../lib/desktopApi";
@@ -31,6 +32,7 @@ export function RetailCustomersPage({
 }) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
+  const posL = getPosLabels(user?.business_type === "clinic" ? "pharmacy" : "retail");
 
   const [rows, setRows] = useState<RetailCustomerRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -192,15 +194,15 @@ export function RetailCustomersPage({
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">Customers</h1>
-            <PageNotes ariaLabel="Retail customers help">
-              <p>Sales customers used when creating invoices.</p>
+            <h1 className="text-3xl font-bold text-slate-900">{posL.retailCustomersListPageTitle}</h1>
+            <PageNotes ariaLabel={posL.retailCustomersListHelpAria}>
+              <p>{posL.retailCustomersListBlurb}</p>
             </PageNotes>
           </div>
         </div>
         <button type="button" onClick={openNew} disabled={readOnly} className="app-btn-primary text-sm self-start">
           <Plus className="w-4 h-4" />
-          Add customer
+          {posL.addPayerAccountButton}
         </button>
       </div>
 

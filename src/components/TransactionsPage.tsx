@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Receipt, Download, RefreshCw } from "lucide-react";
+import { Receipt, Download, RefreshCw, Plus } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
+import { useAppContext } from "../contexts/AppContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { formatPaymentMethodLabel, normalizePaymentMethod } from "../lib/paymentMethod";
 import {
@@ -95,6 +96,9 @@ function displayPaymentMatchesFilter(displayLabel: string, filterCode: string): 
 
 export function TransactionsPage({ highlightTransactionId }: { highlightTransactionId?: string }) {
   const { user } = useAuth();
+  const { setCurrentPage } = useAppContext();
+  const businessType = user?.business_type ?? null;
+  const showRetailClinicMoneyInActions = businessType === "retail" || businessType === "clinic";
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
 
@@ -661,20 +665,39 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
       <div className="mb-8 flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">Transactions</h1>
-            <PageNotes ariaLabel="Transactions help">
-              <p>POS, billing, and retail invoice lines (Uganda GMT+3). Use Date basis to switch accrual vs cash timeline.</p>
+            <h1 className="text-3xl font-bold text-slate-900">
+              {showRetailClinicMoneyInActions ? "Other payments" : "Transactions"}
+            </h1>
+            <PageNotes ariaLabel={showRetailClinicMoneyInActions ? "Other payments help" : "Transactions help"}>
+              <p>
+                {showRetailClinicMoneyInActions
+                  ? "Sales activity and payment lines from retail POS, invoices, and recorded customer payments. Use Add payment to post a customer receipt (same as Customer payments → Record payment)."
+                  : "POS, billing, and retail invoice lines (Uganda GMT+3). Use Date basis to switch accrual vs cash timeline."}
+              </p>
             </PageNotes>
           </div>
         </div>
-        <button
-          onClick={() => fetchTransactions()}
-          disabled={loading}
-          className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 text-sm font-medium"
-        >
-          <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => fetchTransactions()}
+            disabled={loading}
+            className="flex items-center gap-2 px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50 text-sm font-medium"
+          >
+            <RefreshCw className={`w-4 h-4 ${loading ? "animate-spin" : ""}`} />
+            Refresh
+          </button>
+          {showRetailClinicMoneyInActions ? (
+            <button
+              type="button"
+              onClick={() => setCurrentPage("payments", { openRecordPayment: true })}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-brand-700 text-white text-sm font-medium hover:bg-brand-800"
+            >
+              <Plus className="w-4 h-4" aria-hidden />
+              Add payment
+            </button>
+          ) : null}
+        </div>
       </div>
 
       {fetchError && (

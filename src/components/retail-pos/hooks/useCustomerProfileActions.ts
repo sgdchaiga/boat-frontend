@@ -1,5 +1,7 @@
 import { supabase } from "../../../lib/supabase";
 import { desktopApi } from "../../../lib/desktopApi";
+import type { PosExperience } from "../../../lib/posExperience";
+import { getPosLabels } from "../../../lib/posExperience";
 import { toast } from "../../ui/use-toast";
 import type { SaleCustomerContext } from "../services/checkoutService";
 import type { Dispatch, SetStateAction } from "react";
@@ -23,6 +25,7 @@ interface UseCustomerProfileActionsArgs {
   setCustomerPhoneDraft: (phone: string) => void;
   setCustomers: Dispatch<SetStateAction<RetailCustomerRow[]>>;
   setSavingCustomer: (saving: boolean) => void;
+  posExperience?: PosExperience;
 }
 
 export function useCustomerProfileActions({
@@ -36,7 +39,9 @@ export function useCustomerProfileActions({
   setCustomerPhoneDraft,
   setCustomers,
   setSavingCustomer,
+  posExperience = "retail",
 }: UseCustomerProfileActionsArgs) {
+  const L = getPosLabels(posExperience);
   const ensureLocalRetailCustomer = async (ctx: SaleCustomerContext): Promise<SaleCustomerContext> => {
     if (!useDesktopLocalMode) return ctx;
     const name = ctx.name?.trim() || "";
@@ -65,7 +70,7 @@ export function useCustomerProfileActions({
       }
     } catch (error) {
       console.error("Failed to persist local retail customer:", error);
-      toast({ title: "Customer save failed", description: "Continuing sale without saving customer profile." });
+      toast({ title: L.customerSaveFailedTitle, description: L.customerSaveFailedBody });
     }
     return { ...ctx, name, phone };
   };
@@ -73,7 +78,7 @@ export function useCustomerProfileActions({
   const saveCustomerProfile = async () => {
     const name = customerNameDraft.trim();
     if (!name) {
-      toast({ title: "Customer name required", description: "Enter customer name before saving." });
+      toast({ title: L.customerNameRequiredTitle, description: L.customerNameRequiredDesc });
       return;
     }
     const phone = customerPhoneDraft.trim() || null;
@@ -84,11 +89,11 @@ export function useCustomerProfileActions({
         setSelectedCustomerId(resolved.id || "");
         setCustomerNameDraft(resolved.name || "");
         setCustomerPhoneDraft(resolved.phone || "");
-        toast({ title: "Customer saved" });
+        toast({ title: L.customerSavedTitle });
         return;
       }
       if (!orgId) {
-        toast({ title: "Organization missing", description: "Cannot save customer without organization context." });
+        toast({ title: "Organization missing", description: L.saveWithoutOrgDescription });
         return;
       }
       if (selectedCustomerId) {
@@ -116,7 +121,7 @@ export function useCustomerProfileActions({
         setCustomerNameDraft(created.name);
         setCustomerPhoneDraft(created.phone || "");
       }
-      toast({ title: "Customer saved" });
+      toast({ title: L.customerSavedTitle });
     } catch (error) {
       console.error("Failed to save customer profile:", error);
       toast({ title: "Save failed", description: error instanceof Error ? error.message : "Try again." });

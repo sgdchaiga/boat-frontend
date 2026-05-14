@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld("boatDesktop", {
   customers: {
     list: () => ipcRenderer.invoke("boat:customers:list"),
     create: (payload) => ipcRenderer.invoke("boat:customers:create", payload),
+    update: (payload) => ipcRenderer.invoke("boat:customers:update", payload),
   },
   sessions: {
     getActive: (payload) => ipcRenderer.invoke("boat:session:get-active", payload),

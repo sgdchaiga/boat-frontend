@@ -6,6 +6,8 @@ import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { PageNotes } from "./common/PageNotes";
+import { excludeLineFromKitchenQueue } from "../lib/posCatalogMode";
+import { loadHotelConfig } from "../lib/hotelConfig";
 import {
   type PaymentMethodCode,
   PAYMENT_METHOD_SELECT_OPTIONS,
@@ -13,19 +15,6 @@ import {
 } from "../lib/paymentMethod";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
-
-/** Hide bar / room-service / retail (bar–sauna) lines from the Kitchen queue (shared `kitchen_orders` table). */
-function excludeLineFromKitchenQueue(
-  deptName: string | null | undefined,
-  posCatalogMode?: string | null
-): boolean {
-  if (posCatalogMode === "dish_menu") return false;
-  if (posCatalogMode === "product_catalog") return true;
-  const n = (deptName || "").toLowerCase();
-  if (/\broom\b/.test(n) || n.includes("room service")) return true;
-  if (/\bbar\b/.test(n) || n.includes("sauna") || n.includes("spa")) return true;
-  return false;
-}
 
 interface KitchenItem {
   quantity: number;
@@ -54,6 +43,17 @@ export function KitchenOrdersPage() {
   const [orders, setOrders] = useState<KitchenOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [kitchenDepartments, setKitchenDepartments] = useState<Department[]>([]);
+  const [hotelPosCfg, setHotelPosCfg] = useState(() => loadHotelConfig(orgId));
+
+  useEffect(() => {
+    setHotelPosCfg(loadHotelConfig(orgId));
+  }, [orgId]);
+
+  useEffect(() => {
+    const fn = () => setHotelPosCfg(loadHotelConfig(orgId));
+    window.addEventListener("focus", fn);
+    return () => window.removeEventListener("focus", fn);
+  }, [orgId]);
 
   const [dateRange, setDateRange] = useState<KitchenDateRangeKey>("last_30_days");
   const [customFrom, setCustomFrom] = useState("");
@@ -71,7 +71,7 @@ export function KitchenOrdersPage() {
 
   useEffect(() => {
     fetchOrders();
-  }, [dateRange, customFrom, customTo]);
+  }, [dateRange, customFrom, customTo, orgId, superAdmin, hotelPosCfg.pos_kitchen_orders_department_id]);
 
   const fetchOrders = async () => {
     try {
@@ -121,19 +121,30 @@ export function KitchenOrdersPage() {
       const departments = (departmentsRes.data || []) as Department[];
       const deptNameById = Object.fromEntries(departments.map((d) => [d.id, d.name]));
       const deptModeById = Object.fromEntries(departments.map((d) => [d.id, d.pos_catalog_mode ?? null]));
-      const productMap = Object.fromEntries(
-        ((productsRes?.data || []) as { id: string; name: string; department_id: string | null; sales_price: number | null }[])
-          .map((p) => [p.id, p])
-      );
-      setProductOptions(
-        ((productsRes?.data || []) as { id: string; name: string }[]).map((p) => ({ id: p.id, name: p.name }))
-      );
+      const forcedKitchenDeptId = hotelPosCfg.pos_kitchen_orders_department_id?.trim() || null;
       const kitchenDeps = departments.filter((d) => {
         const n = d.name.toLowerCase();
         if (d.pos_catalog_mode === "dish_menu") return true;
         return n.includes("kitchen") || n.includes("restaurant") || n.includes("food");
       });
-      setKitchenDepartments(kitchenDeps);
+      if (forcedKitchenDeptId) {
+        const forced = departments.find((d) => d.id === forcedKitchenDeptId);
+        setKitchenDepartments(forced ? [forced] : []);
+      } else {
+        setKitchenDepartments(kitchenDeps);
+      }
+
+      const productRows = (productsRes?.data || []) as {
+        id: string;
+        name: string;
+        department_id: string | null;
+        sales_price: number | null;
+      }[];
+      const productMap = Object.fromEntries(productRows.map((p) => [p.id, p]));
+      const productChoices = forcedKitchenDeptId
+        ? productRows.filter((p) => p.department_id === forcedKitchenDeptId)
+        : productRows;
+      setProductOptions(productChoices.map((p) => ({ id: p.id, name: p.name })));
 
       const rawOrders = (ordersRes.data || []) as any[];
       const data = (rawOrders
@@ -160,10 +171,12 @@ export function KitchenOrdersPage() {
               _deptMode: deptMode,
             };
           });
-          const filteredItems = items.filter(
-            (i: { _deptName: string | null; _deptMode: string | null }) =>
-              !excludeLineFromKitchenQueue(i._deptName, i._deptMode)
-          );
+          const filteredItems = forcedKitchenDeptId
+            ? items.filter((i: { products: { department_id: string | null } }) => i.products?.department_id === forcedKitchenDeptId)
+            : items.filter(
+                (i: { _deptName: string | null; _deptMode: string | null }) =>
+                  !excludeLineFromKitchenQueue(i._deptName, i._deptMode)
+              );
           const kitchen_order_items = filteredItems.map(
             ({ _deptName, _deptMode, ...rest }: { _deptName: string | null; _deptMode: string | null; [k: string]: unknown }) => rest
           );
@@ -344,10 +357,22 @@ export function KitchenOrdersPage() {
           </div>
           {kitchenDepartments.length > 0 && (
             <p className="text-xs text-slate-500 mt-1">
-              Departments:{" "}
-              {kitchenDepartments.map((d) => d.name).join(", ")}
+              {hotelPosCfg.pos_kitchen_orders_department_id ? (
+                <>
+                  Department (configured): <strong>{kitchenDepartments.map((d) => d.name).join(", ")}</strong>
+                </>
+              ) : (
+                <>
+                  Departments: {kitchenDepartments.map((d) => d.name).join(", ")}
+                </>
+              )}
             </p>
           )}
+          {hotelPosCfg.pos_kitchen_orders_department_id && kitchenDepartments.length === 0 ? (
+            <p className="text-xs text-amber-700 mt-1">
+              Kitchen department ID is configured but no longer matches a department. Update Admin → Business configuration.
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
           <select

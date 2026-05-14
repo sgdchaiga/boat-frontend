@@ -7,6 +7,7 @@ import type { OfflineRetailLine, OfflineRetailPayment } from "../../../lib/retai
 import { desktopApi } from "../../../lib/desktopApi";
 import { persistRetailSaleLedger, type SaleCustomerContext } from "./checkoutService";
 import { postClearingSettlementAfterRetailSale } from "../../../lib/clearingRetailSettlement";
+import { fetchServiceConsumableCogsLines, fetchServiceConsumableStockMoves } from "../../../lib/serviceConsumableCogs";
 
 interface RetailCustomerLite {
   id: string;
@@ -41,6 +42,11 @@ interface ProcessSaleOnlineArgs {
   departments: DepartmentLite[];
   onAtomicRpcStatus: (status: "available" | "unavailable") => void;
   onAtomicFallbackCount: (count: number) => void;
+  /** When set, links the sale to a clinic patient for dispensing history / receipts. */
+  clinicDispensing?: {
+    clinicPatientId: string | null;
+    clinicDiagnosisSnapshot: string | null;
+  } | null;
 }
 
 export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
@@ -66,6 +72,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     departments,
     onAtomicRpcStatus,
     onAtomicFallbackCount,
+    clinicDispensing,
   } = args;
 
   const runClearingHook = () => {
@@ -84,6 +91,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       customer_id: saleCustomer.id,
       customer_name: saleCustomer.name,
       customer_phone: saleCustomer.phone,
+      clinic_patient_id: clinicDispensing?.clinicPatientId ?? null,
+      clinic_diagnosis_snapshot: clinicDispensing?.clinicDiagnosisSnapshot ?? null,
       total_amount: total,
       amount_paid: amountPaid,
       amount_due: amountDue,
@@ -126,12 +135,28 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     }
   }
   const deptNameById = new Map(departments.map((d) => [d.id, d.name]));
+  const consumableCogs =
+    organizationId && lines.some((l) => !(l.trackInventory ?? true) && l.productId)
+      ? await fetchServiceConsumableCogsLines(
+          organizationId,
+          lines.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            trackInventory: i.trackInventory ?? true,
+          }))
+        )
+      : [];
   const cogsByDept = sumPosCogsByDept(
-    lines.map((i) => ({
-      quantity: i.quantity,
-      unitCost: Number(i.costPrice ?? 0),
-      departmentId: i.departmentId ?? null,
-    })),
+    [
+      ...lines
+        .filter((i) => i.trackInventory ?? true)
+        .map((i) => ({
+          quantity: i.quantity,
+          unitCost: Number(i.costPrice ?? 0),
+          departmentId: i.departmentId ?? null,
+        })),
+      ...consumableCogs,
+    ],
     deptNameById
   );
   const acc = await getDefaultGlAccounts();
@@ -212,6 +237,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       p_journal_entry_date: businessTodayISO(),
       p_journal_description: lines.map((i) => `${i.quantity}x ${i.name}`).join(", ") || "Retail POS sale",
       p_journal_lines: journalLines,
+      p_clinic_patient_id: clinicDispensing?.clinicPatientId ?? null,
+      p_clinic_diagnosis_snapshot: clinicDispensing?.clinicDiagnosisSnapshot ?? null,
     });
     if (!atomicErr) {
       await supabase
@@ -247,6 +274,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     posVatEnabled,
     posVatRate,
     cashierSessionId: activeSessionId,
+    clinicPatientId: clinicDispensing?.clinicPatientId ?? null,
+    clinicDiagnosisSnapshot: clinicDispensing?.clinicDiagnosisSnapshot ?? null,
   });
   if (persistedNewSale) {
     runClearingHook();
@@ -279,17 +308,32 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     if (paymentError) throw paymentError;
   }
 
-  const stockMoves = lines
-    .filter((i) => i.trackInventory)
-    .map((i) => ({
-      product_id: i.productId,
-      source_type: "sale",
-      source_id: saleId,
-      quantity_in: 0,
-      quantity_out: i.quantity,
-      unit_cost: i.costPrice,
-      note: "Retail POS sale",
-    }));
+  const consumableMoves =
+    organizationId && lines.some((l) => !(l.trackInventory ?? true) && l.productId)
+      ? await fetchServiceConsumableStockMoves(
+          organizationId,
+          saleId,
+          lines.map((i) => ({
+            productId: i.productId,
+            quantity: i.quantity,
+            trackInventory: i.trackInventory ?? true,
+          }))
+        )
+      : [];
+  const stockMoves = [
+    ...lines
+      .filter((i) => i.trackInventory)
+      .map((i) => ({
+        product_id: i.productId,
+        source_type: "sale",
+        source_id: saleId,
+        quantity_in: 0,
+        quantity_out: i.quantity,
+        unit_cost: i.costPrice,
+        note: "Retail POS sale",
+      })),
+    ...consumableMoves,
+  ];
   if (stockMoves.length > 0) {
     const { error: stockErr } = await supabase.from("product_stock_movements").insert(stockMoves);
     if (stockErr) throw stockErr;

@@ -3,8 +3,7 @@ import { Plus, Edit2, Trash2, Layers } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
-
-type PosCatalogMode = "dish_menu" | "product_catalog";
+import { type PosCatalogMode, defaultPosCatalogModeForNewDepartmentName } from "../../lib/posCatalogMode";
 
 interface Department {
   id: string;
@@ -107,7 +106,7 @@ export function AdminProductsPage() {
     } else {
       const payload: { name: string; pos_catalog_mode: PosCatalogMode; organization_id?: string } = {
         name: deptName.trim(),
-        pos_catalog_mode: deptPosCatalog,
+        pos_catalog_mode: defaultPosCatalogModeForNewDepartmentName(deptName),
       };
       if (orgId) payload.organization_id = orgId;
       const { error } = await supabase
@@ -407,17 +406,30 @@ export function AdminProductsPage() {
                 placeholder="e.g. Kitchen, Bar"
               />
             </div>
-            <div className="mt-4">
-              <label className="block text-sm font-medium text-slate-700 mb-1">POS list</label>
-              <select
-                value={deptPosCatalog}
-                onChange={(e) => setDeptPosCatalog(e.target.value as PosCatalogMode)}
-                className="border rounded-lg px-3 py-2 w-full text-sm"
-              >
-                <option value="dish_menu">Kitchen menu (dishes — attach recipes for ingredient stock)</option>
-                <option value="product_catalog">Bar / sauna / retail (sell this product; stock on SKU)</option>
-              </select>
-            </div>
+            {editingDept ? (
+              <div className="mt-4">
+                <label className="block text-sm font-medium text-slate-700 mb-1">POS list</label>
+                <select
+                  value={deptPosCatalog}
+                  onChange={(e) => setDeptPosCatalog(e.target.value as PosCatalogMode)}
+                  className="border rounded-lg px-3 py-2 w-full text-sm"
+                >
+                  <option value="dish_menu">Kitchen menu (dishes — attach recipes for ingredient stock)</option>
+                  <option value="product_catalog">Bar / sauna / retail (sell this product; stock on SKU)</option>
+                </select>
+              </div>
+            ) : (
+              <p className="mt-3 text-xs text-slate-600 leading-relaxed">
+                POS list is set from the name when you save (e.g. Kitchen → kitchen menu). You can change it later
+                with Edit. Preview:{" "}
+                <span className="font-medium text-slate-800">
+                  {defaultPosCatalogModeForNewDepartmentName(deptName) === "dish_menu"
+                    ? "Kitchen menu (dishes)"
+                    : "Bar / retail (products)"}
+                </span>
+                .
+              </p>
+            )}
             <div className="flex justify-end gap-2 mt-6">
               <button
                 onClick={() => setShowDeptModal(false)}

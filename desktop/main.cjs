@@ -137,6 +137,10 @@ function registerIpc() {
     return row;
   });
 
+  ipcMain.handle("boat:customers:update", (_event, payload) => {
+    return dbApi.updateHotelCustomer(db, payload || {});
+  });
+
   ipcMain.handle("boat:session:get-active", (_event, payload) => {
     return dbApi.getActiveCashierSession(db, payload?.opened_by || "");
   });

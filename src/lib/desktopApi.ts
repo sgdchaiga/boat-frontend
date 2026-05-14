@@ -63,6 +63,20 @@ export const desktopApi = {
     if (!api) return null;
     return api.customers.create(payload);
   },
+  async updateCustomer(payload: {
+    id: string;
+    first_name: string;
+    last_name: string;
+    email?: string | null;
+    phone?: string | null;
+    id_type?: string | null;
+    id_number?: string | null;
+    address?: string | null;
+  }) {
+    const api = getDesktopApi();
+    if (!api) return null;
+    return api.customers.update(payload);
+  },
   async getActiveSession(openedBy: string) {
     const api = getDesktopApi();
     if (!api) return null;

@@ -56,6 +56,7 @@ export type BoatDesktopApi = {
   customers: {
     list: () => Promise<LocalCustomer[]>;
     create: (payload: LocalCustomerCreateInput) => Promise<LocalCustomer>;
+    update: (payload: LocalCustomerCreateInput & { id: string }) => Promise<LocalCustomer | null>;
   };
   sessions: {
     getActive: (payload: { opened_by: string }) => Promise<{ id: string; opened_at: string; opening_float: number; status: "open" | "closed" } | null>;

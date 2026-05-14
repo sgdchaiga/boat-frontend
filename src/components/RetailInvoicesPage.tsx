@@ -49,7 +49,7 @@ function isMissingRetailInvoicesSchemaError(message: string | undefined | null):
 /** Hotel / mixed / other: use `hotel_customers`; retail / restaurant use `retail_customers`. */
 /** When true, invoice "customer" picker uses `hotel_customers`; otherwise `retail_customers`. */
 function invoiceUsesPropertyCustomersTable(businessType: BusinessType | null | undefined): boolean {
-  if (businessType === "retail" || businessType === "restaurant") return false;
+  if (businessType === "retail" || businessType === "restaurant" || businessType === "clinic") return false;
   return true;
 }
 

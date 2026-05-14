@@ -9,6 +9,8 @@ export interface CartItem<TProduct extends CartProduct> {
   product: TProduct;
   quantity: number;
   lineTotal: number;
+  /** When set, used as unit price for this line (overrides catalog / tier pricing). */
+  unitPriceOverride?: number | null;
 }
 
 export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TProduct, quantity?: number) => number) {
@@ -20,12 +22,17 @@ export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TP
   /** After opening the pad, first digit replaces the seeded value (avoids "1"+"6" → "16"). */
   const qtyPadReplaceNextRef = useRef(false);
 
+  const lineUnitPrice = (item: CartItem<TProduct>, quantity: number) =>
+    item.unitPriceOverride != null && Number.isFinite(item.unitPriceOverride)
+      ? item.unitPriceOverride
+      : getUnitPrice(item.product, quantity);
+
   const addToCart = (product: TProduct) => {
     setCartByProductId((prev) => {
       const existing = prev[product.id];
       if (existing) {
         const nextQty = Number(existing.quantity) + 1;
-        const unit = getUnitPrice(product, nextQty);
+        const unit = lineUnitPrice(existing, nextQty);
         return { ...prev, [product.id]: { ...existing, quantity: nextQty, lineTotal: unit * nextQty } };
       }
       const unit = getUnitPrice(product, 1);
@@ -45,8 +52,29 @@ export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TP
     setCartByProductId((prev) => {
       const item = prev[productId];
       if (!item) return prev;
-      const unit = getUnitPrice(item.product, nextQty);
+      const unit = lineUnitPrice(item, nextQty);
       return { ...prev, [productId]: { ...item, quantity: nextQty, lineTotal: unit * nextQty } };
+    });
+  };
+
+  const setLineUnitPrice = (productId: string, nextUnitRaw: number) => {
+    const nextUnit = Number(nextUnitRaw);
+    if (!Number.isFinite(nextUnit) || nextUnit < 0) {
+      toast({ title: "Invalid price", description: "Enter a valid zero or positive amount." });
+      return;
+    }
+    const rounded = Math.round(nextUnit * 100) / 100;
+    setCartByProductId((prev) => {
+      const item = prev[productId];
+      if (!item) return prev;
+      return {
+        ...prev,
+        [productId]: {
+          ...item,
+          unitPriceOverride: rounded,
+          lineTotal: rounded * item.quantity,
+        },
+      };
     });
   };
 
@@ -95,6 +123,7 @@ export function useCart<TProduct extends CartProduct>(getUnitPrice: (product: TP
     total,
     addToCart,
     updateQty,
+    setLineUnitPrice,
     clearCart,
     qtyPadProductId,
     qtyPadValue,

@@ -25,6 +25,18 @@ type GlAccountOption = {
 
 type ItemKind = "product" | "service";
 
+type ServiceConsumableDraft = {
+  key: string;
+  component_product_id: string;
+  quantity_per_unit: number;
+};
+
+const newConsumableDraft = (): ServiceConsumableDraft => ({
+  key: crypto.randomUUID(),
+  component_product_id: "",
+  quantity_per_unit: 1,
+});
+
 const LAST_BUY_PRICE_KEY = "boat.items.last_buy_price";
 const LAST_SELL_PRICE_KEY = "boat.items.last_sell_price";
 
@@ -133,10 +145,41 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<ItemsSortKey>("name");
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
+  const [serviceConsumables, setServiceConsumables] = useState<ServiceConsumableDraft[]>([]);
 
   useEffect(() => {
     void loadAll();
   }, []);
+
+  useEffect(() => {
+    if (!modalOpen) {
+      setServiceConsumables([]);
+      return;
+    }
+    const showConsumables = itemKind === "service" || (itemKind === "product" && !formData.track_inventory);
+    if (!showConsumables || !editingProduct?.id) {
+      if (!showConsumables) setServiceConsumables([]);
+      return;
+    }
+    let cancelled = false;
+    void supabase
+      .from("product_service_consumables")
+      .select("component_product_id, quantity_per_unit")
+      .eq("service_product_id", editingProduct.id)
+      .then(({ data, error }) => {
+        if (cancelled || error) return;
+        setServiceConsumables(
+          (data || []).map((r) => ({
+            key: crypto.randomUUID(),
+            component_product_id: String((r as { component_product_id: string }).component_product_id),
+            quantity_per_unit: Number((r as { quantity_per_unit: number }).quantity_per_unit ?? 1),
+          }))
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [modalOpen, itemKind, editingProduct?.id, formData.track_inventory]);
 
   async function loadAll() {
     await Promise.all([loadProductsAndBalances(), loadAccounts(), loadDepartments()]);
@@ -226,6 +269,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       track_inventory: true,
       active: true,
     });
+    setServiceConsumables([]);
   }
 
   function openNewItem() {
@@ -281,6 +325,25 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
     const trackStock = itemKind === "product" && formData.track_inventory;
 
+    const seenComponents = new Set<string>();
+    for (const row of serviceConsumables) {
+      const cid = row.component_product_id.trim();
+      if (!cid) continue;
+      if (cid === editingProduct?.id) {
+        alert("A service cannot consume itself. Remove that consumable row.");
+        return;
+      }
+      if (seenComponents.has(cid)) {
+        alert("Each consumable item can only appear once. Merge quantities into a single row.");
+        return;
+      }
+      seenComponents.add(cid);
+      if (!(Number(row.quantity_per_unit) > 0)) {
+        alert("Consumable quantities per service unit must be greater than zero.");
+        return;
+      }
+    }
+
     const incomeId = (formData.income_account.trim() || glSuggestions.income || "") || null;
     const stockId =
       (trackStock ? formData.stock_account.trim() || glSuggestions.stock || "" : "") || null;
@@ -305,6 +368,10 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     };
 
     try {
+      let savedId: string | null = editingProduct?.id ?? null;
+      let savedOrgId: string | null =
+        (editingProduct as { organization_id?: string | null } | null)?.organization_id ?? null;
+
       if (editingProduct) {
         const { error } = await supabase.from("products").update(payload).eq("id", editingProduct.id);
         if (error) {
@@ -313,11 +380,34 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
           return;
         }
       } else {
-        const { error } = await supabase.from("products").insert(payload);
+        const { data: row, error } = await supabase.from("products").insert(payload).select("id, organization_id").single();
         if (error) {
           console.error("Insert product error:", error);
           alert(error.message || "Failed to create product");
           return;
+        }
+        savedId = (row as { id: string }).id;
+        savedOrgId = (row as { organization_id?: string | null }).organization_id ?? null;
+      }
+
+      if (savedId) {
+        await supabase.from("product_service_consumables").delete().eq("service_product_id", savedId);
+        const isService = !trackStock;
+        if (isService && savedOrgId) {
+          const rows = serviceConsumables
+            .filter((r) => r.component_product_id.trim() && Number(r.quantity_per_unit) > 0)
+            .map((r) => ({
+              organization_id: savedOrgId,
+              service_product_id: savedId,
+              component_product_id: r.component_product_id.trim(),
+              quantity_per_unit: Number(r.quantity_per_unit),
+            }));
+          if (rows.length > 0) {
+            const { error: cErr } = await supabase.from("product_service_consumables").insert(rows);
+            if (cErr) {
+              alert(cErr.message || "Item saved, but consumable links failed. Edit the item and try again.");
+            }
+          }
         }
       }
 
@@ -381,6 +471,81 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const showFormMargin =
     formData.sales_price > 0 && formData.cost_price >= 0 && Number.isFinite(formData.cost_price) && Number.isFinite(formData.sales_price);
 
+  const consumablesPanel = (
+    <div className="rounded-lg border border-slate-200 bg-slate-50/80 p-3 space-y-2">
+      <h3 className="text-sm font-semibold text-slate-800">Automatic stock deduction (consumables)</h3>
+      <p className="text-xs text-slate-600">
+        For each unit of this service (or non-tracked sale line) on retail POS, deduct the quantities below from inventory-tracked
+        items (medicines, gloves, etc.).
+      </p>
+      {serviceConsumables.length === 0 ? (
+        <p className="text-xs text-slate-500">No consumables linked yet — optional.</p>
+      ) : (
+        <div className="space-y-2">
+          {serviceConsumables.map((row) => (
+            <div key={row.key} className="flex flex-wrap items-end gap-2">
+              <label className="flex-1 min-w-[140px] text-xs">
+                <span className="text-slate-600 block mb-0.5">Stock item</span>
+                <select
+                  className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white"
+                  value={row.component_product_id}
+                  onChange={(e) =>
+                    setServiceConsumables((prev) =>
+                      prev.map((r) => (r.key === row.key ? { ...r, component_product_id: e.target.value } : r))
+                    )
+                  }
+                >
+                  <option value="">Select product…</option>
+                  {products
+                    .filter(
+                      (p) => p.active !== false && p.id !== editingProduct?.id && p.track_inventory !== false
+                    )
+                    .map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <label className="w-24 text-xs">
+                <span className="text-slate-600 block mb-0.5">Per unit sold</span>
+                <input
+                  type="number"
+                  min={0.0001}
+                  step="any"
+                  className="w-full border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
+                  value={row.quantity_per_unit}
+                  onChange={(e) =>
+                    setServiceConsumables((prev) =>
+                      prev.map((r) =>
+                        r.key === row.key ? { ...r, quantity_per_unit: Number(e.target.value) || 0 } : r
+                      )
+                    )
+                  }
+                />
+              </label>
+              <button
+                type="button"
+                className="text-xs text-red-700 hover:underline px-1 py-1.5"
+                onClick={() => setServiceConsumables((prev) => prev.filter((r) => r.key !== row.key))}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        disabled={readOnly}
+        onClick={() => setServiceConsumables((prev) => [...prev, newConsumableDraft()])}
+        className="text-sm font-medium text-brand-700 hover:text-brand-900 disabled:opacity-50"
+      >
+        + Add consumable
+      </button>
+    </div>
+  );
+
   return (
     <div className="p-6 md:p-8">
       {readOnly && <ReadOnlyNotice />}
@@ -393,6 +558,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
               <p>
                 Items you sell or buy — simplified pricing and stock. Default accounts map from your chart; open{" "}
                 <strong className="font-medium text-slate-800">Advanced</strong> only if your accountant chose custom GL mappings.
+                For <strong className="font-medium text-slate-800">services</strong>, you can link medicines or consumables so each sale
+                automatically deducts their stock on the POS.
               </p>
             </PageNotes>
           </div>
@@ -550,7 +717,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
           onClick={() => !readOnly && setModalOpen(false)}
         >
           <div
-            className="bg-white rounded-xl shadow-xl max-w-xl w-full max-h-[90vh] overflow-y-auto p-6"
+            className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto p-6"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-6">
@@ -693,10 +860,24 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                       />
                       <p className="text-xs text-slate-500 mt-1">You’ll see a warning in the list when stock is at or below this level.</p>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="text-sm text-slate-600">
+                        This item is sold without its own on-hand quantity. Link consumables below so each POS sale still reduces
+                        inventory (same behaviour as a service).
+                      </p>
+                      {consumablesPanel}
+                    </div>
+                  )}
                 </div>
               ) : (
-                <p className="text-sm text-slate-500">Services don’t use stock counts.</p>
+                <div className="space-y-3">
+                  <p className="text-sm text-slate-600">
+                    Services are not counted as on-hand stock. When this service is sold on retail POS, linked consumables are deducted
+                    automatically.
+                  </p>
+                  {consumablesPanel}
+                </div>
               )}
 
               <div>

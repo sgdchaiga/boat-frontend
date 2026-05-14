@@ -27,7 +27,12 @@ import { GlAccountPicker, type GlAccountOption } from "./common/GlAccountPicker"
 import { effectivePosCatalogMode } from "../lib/posCatalogMode";
 import { randomUuid } from "../lib/randomUuid";
 import { incrementActiveAccessTransactions } from "../lib/localAuthStore";
-import { getNextOrderStatus, type ServiceType } from "../lib/hotelPosOrderStatus";
+import {
+  getNextOrderStatus,
+  formatKitchenBarAdvanceLabel,
+  type ServiceType,
+} from "../lib/hotelPosOrderStatus";
+import { loadHotelConfig, type HotelConfig } from "../lib/hotelConfig";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 type PropertyCustomer = Database["public"]["Tables"]["hotel_customers"]["Row"];
@@ -137,6 +142,8 @@ interface PosTableLayoutState {
   number: string;
   status: Exclude<PosTableStatus, "occupied">;
   waiterId: string;
+  /** When org uses automatic table sessions, require Open session for this table only. */
+  requireExplicitSession?: boolean;
 }
 
 interface PendingOfflineOrder {
@@ -169,9 +176,15 @@ interface POSPageProps {
   compactMode?: "full" | "waiter";
 }
 
+function isTerminalKitchenOrderStatus(status: string): boolean {
+  const s = String(status || "").toLowerCase();
+  return s === "served" || s === "completed" || s === "cancelled";
+}
+
 export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
+  const [hotelBizConfig, setHotelBizConfig] = useState<HotelConfig>(() => loadHotelConfig(orgId));
   const [products, setProducts] = useState<Product[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [hotelCustomers, setHotelCustomers] = useState<PropertyCustomer[]>([]);
@@ -228,6 +241,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const submitLockRef = useRef(false);
+  const autoSessionHadActiveRef = useRef<{ key: string; hadActive: boolean }>({ key: "", hadActive: false });
   const [productsError, setProductsError] = useState<string | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
   const [heldTickets, setHeldTickets] = useState<HeldTicket[]>([]);
@@ -345,6 +359,16 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
   }, []);
 
   useEffect(() => {
+    setHotelBizConfig(loadHotelConfig(orgId));
+  }, [orgId]);
+
+  useEffect(() => {
+    const onFocus = () => setHotelBizConfig(loadHotelConfig(orgId));
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [orgId]);
+
+  useEffect(() => {
     const parsed = (() => {
       try {
         const raw = localStorage.getItem(TABLE_LAYOUT_KEY);
@@ -356,7 +380,13 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
     })();
     const next: Record<string, PosTableLayoutState> = {};
     BASE_TABLES.forEach((table) => {
-      next[table] = parsed?.[table] || { number: table, status: "available", waiterId: "" };
+      const p = parsed?.[table];
+      next[table] = {
+        number: table,
+        status: p?.status ?? "available",
+        waiterId: p?.waiterId ?? "",
+        ...(p?.requireExplicitSession ? { requireExplicitSession: true } : {}),
+      };
     });
     setTableLayout(next);
   }, []);
@@ -418,7 +448,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
         .lt("created_at", to.toISOString())
         .order("created_at", { ascending: false });
       if (queueStatusFilter === "active") {
-        ordersQuery = ordersQuery.in("order_status", ["pending", "preparing"]);
+        ordersQuery = ordersQuery.in("order_status", ["pending", "preparing", "ready"]);
       } else if (queueStatusFilter !== "all") {
         ordersQuery = ordersQuery.eq("order_status", queueStatusFilter);
       }
@@ -645,6 +675,59 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
       setTableSessionStartedAt(null);
     }
   };
+
+  const pickTable = async (table: string) => {
+    const canonical =
+      (BASE_TABLES as readonly string[]).find((t) => t.toLowerCase() === table.trim().toLowerCase()) ?? table.trim();
+    const prevRaw = tableNumber.trim();
+    const prevNorm =
+      (BASE_TABLES as readonly string[]).find((t) => t.toLowerCase() === prevRaw.toLowerCase()) ?? prevRaw;
+    const prevSessionOpen = tableSessionOpen;
+    setTableNumber(canonical);
+    const manualMode = (hotelBizConfig.pos_table_session_mode ?? "manual") === "manual";
+    const forceExplicit = !!tableLayout[canonical]?.requireExplicitSession;
+    if (manualMode || forceExplicit) return;
+    try {
+      if (prevSessionOpen && prevNorm && prevNorm !== canonical) {
+        await closeTableSessionDb();
+      }
+      await openTableSessionDb(canonical);
+    } catch (e) {
+      console.warn("[POS] pickTable session:", e);
+    }
+  };
+
+  const commitTableNumberFromBlur = async (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    const canonical = (BASE_TABLES as readonly string[]).find((t) => t.toLowerCase() === trimmed.toLowerCase());
+    if (!canonical) return;
+    if ((hotelBizConfig.pos_table_session_mode ?? "manual") === "manual") return;
+    if (tableLayout[canonical]?.requireExplicitSession) return;
+    await pickTable(canonical);
+  };
+
+  useEffect(() => {
+    if ((hotelBizConfig.pos_table_session_mode ?? "manual") !== "auto") return;
+    if (!tableSessionOpen) return;
+    const t = tableNumber.trim();
+    if (!t) return;
+    if (tableLayout[t]?.requireExplicitSession) return;
+
+    const hasActive = queue.some(
+      (o) =>
+        String(o.table_number || "") === t && !isTerminalKitchenOrderStatus(String(o.order_status || ""))
+    );
+    const ref = autoSessionHadActiveRef.current;
+    if (ref.key !== t) {
+      autoSessionHadActiveRef.current = { key: t, hadActive: hasActive };
+      return;
+    }
+    if (ref.hadActive && !hasActive) {
+      void closeTableSessionDb();
+    }
+    autoSessionHadActiveRef.current = { key: t, hadActive: hasActive };
+  }, [hotelBizConfig.pos_table_session_mode, tableSessionOpen, tableNumber, queue, tableLayout]);
 
   const openOfflineDb = async () =>
     await new Promise<IDBDatabase>((resolve, reject) => {
@@ -904,10 +987,18 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
     return byDept && byMenu && bySearch && bySellMode;
   });
 
+  const kitchenBarStatusOptions = useMemo(
+    () => ({
+      kitchenFlow: hotelBizConfig.pos_kitchen_status_flow,
+      barFlow: hotelBizConfig.pos_bar_status_flow,
+    }),
+    [hotelBizConfig.pos_kitchen_status_flow, hotelBizConfig.pos_bar_status_flow]
+  );
+
   const activeOccupiedTables = useMemo(() => {
     const set = new Set<string>();
     queue.forEach((order) => {
-      if ((order.order_status === "pending" || order.order_status === "preparing") && order.table_number) {
+      if (!isTerminalKitchenOrderStatus(String(order.order_status || "")) && order.table_number) {
         set.add(order.table_number);
       }
     });
@@ -926,21 +1017,22 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
   };
 
   const nextOrderStatus = (status: string, serviceType: ServiceType): string | null => {
-    return getNextOrderStatus(status, serviceType);
+    const n = getNextOrderStatus(status, serviceType, kitchenBarStatusOptions);
+    return n != null ? String(n) : null;
   };
 
   const getNextOrderStatusLabel = (status: string, serviceType: ServiceType): string => {
-    const next = nextOrderStatus(status, serviceType);
+    const next = getNextOrderStatus(status, serviceType, kitchenBarStatusOptions);
     if (!next) return "Update Status";
-    if (next === "preparing") return "Mark Preparing";
-    if (next === "ready") return "Mark Ready";
-    if (next === "served") return "Mark Served";
-    if (next === "in_progress") return "Mark In Progress";
-    return "Mark Completed";
+    if (serviceType === "spa") {
+      if (String(next) === "in_progress") return "Mark In Progress";
+      return "Mark Completed";
+    }
+    return `Mark ${formatKitchenBarAdvanceLabel(String(next))}`;
   };
 
   const updateQueueOrderStatus = async (orderId: string, currentStatus: string, serviceType: ServiceType) => {
-    const next = nextOrderStatus(currentStatus, serviceType);
+    const next = getNextOrderStatus(currentStatus, serviceType, kitchenBarStatusOptions);
     if (!next) return;
     try {
       const { error } = await supabase
@@ -1360,7 +1452,11 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
       alert("Select a customer from the guest list.");
       return;
     }
-    if (!tableSessionOpen && action !== "bill_to_room") {
+    const orderTablePreview = tableNumber.trim() || "POS";
+    const manualMode = (hotelBizConfig.pos_table_session_mode ?? "manual") === "manual";
+    const perTableExplicit = !!tableLayout[orderTablePreview]?.requireExplicitSession;
+    const needExplicitSession = action !== "bill_to_room" && (manualMode || perTableExplicit);
+    if (!tableSessionOpen && needExplicitSession) {
       alert("Open table session first.");
       return;
     }
@@ -1374,6 +1470,9 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
     setSending(true);
     try {
       await validateStockBeforeSubmit();
+      if (action !== "bill_to_room" && !needExplicitSession && !tableSessionOpen) {
+        await openTableSessionDb(orderTablePreview);
+      }
       const { data: staffRow } = await supabase
         .from("staff")
         .select("id, full_name")
@@ -1655,12 +1754,16 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
           <div className="inline-flex flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1">
             <span className="text-[11px] font-medium text-slate-600">
               Session: {tableSessionOpen ? "OPEN" : "CLOSED"}
+              {(hotelBizConfig.pos_table_session_mode ?? "manual") === "auto" ? (
+                <span className="text-slate-400 font-normal"> · auto</span>
+              ) : null}
             </span>
             <input
               type="text"
               placeholder="Table"
               value={tableNumber}
               onChange={(e) => setTableNumber(e.target.value)}
+              onBlur={(e) => void commitTableNumberFromBlur(e.target.value)}
               className="h-7 w-24 border border-slate-200 rounded px-2 text-xs"
             />
             <button
@@ -1840,7 +1943,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                     <button
                       key={table}
                       type="button"
-                      onClick={() => setTableNumber(table)}
+                      onClick={() => void pickTable(table)}
                       className={`border rounded-md text-left px-3 py-2.5 min-h-[56px] min-w-[84px] ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
                     >
                       <p className="font-semibold text-sm">{table}</p>
@@ -1867,7 +1970,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                   <button
                     key={table}
                     type="button"
-                    onClick={() => setTableNumber(table)}
+                    onClick={() => void pickTable(table)}
                     className={`border rounded-md px-2 py-1.5 text-left ${statusClass} ${selected ? "ring-2 ring-brand-400" : ""}`}
                   >
                     <p className="font-semibold text-xs">{table}</p>
@@ -1912,6 +2015,23 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                 ))}
               </select>
             </div>
+            {(hotelBizConfig.pos_table_session_mode ?? "manual") === "auto" &&
+            tableNumber &&
+            (BASE_TABLES as readonly string[]).includes(tableNumber) ? (
+              <div className={`${isWaiterCompact ? "sm:col-span-3" : "md:col-span-3"}`}>
+                <label className="flex items-start gap-2 text-xs text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={!!tableLayout[tableNumber]?.requireExplicitSession}
+                    onChange={(e) => updateTableMeta(tableNumber, { requireExplicitSession: e.target.checked })}
+                  />
+                  <span>
+                    Require <strong>Open session</strong> for this table (overrides automatic open/close for this table only).
+                  </span>
+                </label>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
@@ -2065,6 +2185,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                 placeholder="e.g. 5, Terrace"
                 value={tableNumber}
                 onChange={(e) => setTableNumber(e.target.value)}
+                onBlur={(e) => void commitTableNumberFromBlur(e.target.value)}
                 className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-36"
               />
             </div>
@@ -2402,7 +2523,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
               onChange={(e) => setQueueStatusFilter(e.target.value as typeof queueStatusFilter)}
               className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
             >
-              <option value="active">Active (pending + preparing)</option>
+              <option value="active">Active (pending + preparing + ready)</option>
               <option value="all">All</option>
               <option value="pending">Pending only</option>
               <option value="preparing">Preparing only</option>
@@ -2452,7 +2573,11 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                     className={`text-xs px-2 py-0.5 rounded ${
                       o.order_status === "pending"
                         ? "bg-amber-100 text-amber-800"
-                        : "bg-blue-100 text-blue-800"
+                        : o.order_status === "preparing"
+                          ? "bg-blue-100 text-blue-800"
+                          : o.order_status === "ready"
+                            ? "bg-emerald-100 text-emerald-800"
+                            : "bg-slate-100 text-slate-700"
                     }`}
                   >
                     {o.order_status}

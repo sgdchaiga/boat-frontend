@@ -6,7 +6,8 @@ import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { PageNotes } from "./common/PageNotes";
-import { getNextOrderStatus } from "../lib/hotelPosOrderStatus";
+import { getNextOrderStatus, formatKitchenBarAdvanceLabel } from "../lib/hotelPosOrderStatus";
+import { loadHotelConfig } from "../lib/hotelConfig";
 import {
   type PaymentMethodCode,
   PAYMENT_METHOD_SELECT_OPTIONS,
@@ -37,6 +38,18 @@ export function BarOrdersPage() {
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
 
+  const [hotelCfg, setHotelCfg] = useState(() => loadHotelConfig(orgId));
+
+  useEffect(() => {
+    setHotelCfg(loadHotelConfig(orgId));
+  }, [orgId]);
+
+  useEffect(() => {
+    const fn = () => setHotelCfg(loadHotelConfig(orgId));
+    window.addEventListener("focus", fn);
+    return () => window.removeEventListener("focus", fn);
+  }, [orgId]);
+
   const [orders, setOrders] = useState<BarOrder[]>([]);
   const [loading, setLoading] = useState(true);
   const [barDepartment, setBarDepartment] = useState<Department | null>(null);
@@ -58,9 +71,9 @@ export function BarOrdersPage() {
 
   useEffect(() => {
     fetchOrders();
-  }, [dateRange, customFrom, customTo, orgId, superAdmin]);
+  }, [dateRange, customFrom, customTo, orgId, superAdmin, hotelCfg.pos_bar_department_id]);
 
-  const updateStatus = async (orderId: string, newStatus: "preparing" | "ready" | "served") => {
+  const updateStatus = async (orderId: string, newStatus: string) => {
     setUpdatingId(orderId);
     try {
       const { error } = await supabase.from("kitchen_orders").update({ order_status: newStatus }).eq("id", orderId);
@@ -116,17 +129,22 @@ export function BarOrdersPage() {
       }
 
       const departments = (departmentsRes.data || []) as Department[];
+      const configuredBarId = hotelCfg.pos_bar_department_id?.trim() || null;
       const barDept =
-        departments.find((d) => d.name.toLowerCase().includes("bar")) || null;
+        (configuredBarId ? departments.find((d) => d.id === configuredBarId) : null) ||
+        departments.find((d) => d.name.toLowerCase().includes("bar")) ||
+        null;
       setBarDepartment(barDept);
 
-      const productMap = Object.fromEntries(
-        ((productsRes?.data || []) as { id: string; name: string; department_id: string | null; sales_price: number | null }[])
-          .map((p) => [p.id, p])
-      );
-      setProductOptions(
-        ((productsRes?.data || []) as { id: string; name: string }[]).map((p) => ({ id: p.id, name: p.name }))
-      );
+      const productRows = (productsRes?.data || []) as {
+        id: string;
+        name: string;
+        department_id: string | null;
+        sales_price: number | null;
+      }[];
+      const productMap = Object.fromEntries(productRows.map((p) => [p.id, p]));
+      const productChoices = barDept ? productRows.filter((p) => p.department_id === barDept.id) : productRows;
+      setProductOptions(productChoices.map((p) => ({ id: p.id, name: p.name })));
       const rawOrders = (ordersRes.data || []) as any[];
       const data = rawOrders.map((o) => ({
         ...o,
@@ -345,8 +363,16 @@ export function BarOrdersPage() {
           {barDepartment && (
             <p className="text-xs text-slate-500">
               Showing orders for department: <strong>{barDepartment.name}</strong>
+              {hotelCfg.pos_bar_department_id ? (
+                <span className="text-slate-400"> (set in Admin → Business configuration)</span>
+              ) : null}
             </p>
           )}
+          {!barDepartment && hotelCfg.pos_bar_department_id ? (
+            <p className="text-xs text-amber-700 mt-1">
+              Bar department ID is configured but no longer matches a department. Update Admin → Business configuration.
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
           <select
@@ -480,45 +506,23 @@ export function BarOrdersPage() {
                 >
                   Edit
                 </button>
-                {order.order_status === "pending" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = getNextOrderStatus(order.order_status, "bar");
-                      if (next === "preparing") void updateStatus(order.id, next);
-                    }}
-                    disabled={updatingId === order.id}
-                    className="flex-1 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-3 py-2 text-sm font-semibold hover:bg-blue-100 disabled:opacity-50"
-                  >
-                    {updatingId === order.id ? "…" : "Preparing"}
-                  </button>
-                ) : null}
-                {order.order_status === "preparing" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = getNextOrderStatus(order.order_status, "bar");
-                      if (next === "ready") void updateStatus(order.id, next);
-                    }}
-                    disabled={updatingId === order.id}
-                    className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-100 disabled:opacity-50"
-                  >
-                    {updatingId === order.id ? "…" : "Ready"}
-                  </button>
-                ) : null}
-                {order.order_status === "ready" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const next = getNextOrderStatus(order.order_status, "bar");
-                      if (next === "served") void updateStatus(order.id, next);
-                    }}
-                    disabled={updatingId === order.id}
-                    className="flex-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50"
-                  >
-                    {updatingId === order.id ? "…" : "Served"}
-                  </button>
-                ) : null}
+                {(() => {
+                  const next = getNextOrderStatus(order.order_status, "bar", {
+                    barFlow: hotelCfg.pos_bar_status_flow,
+                  });
+                  const done = ["served", "completed", "cancelled"].includes(order.order_status);
+                  if (!next || done) return null;
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => void updateStatus(order.id, String(next))}
+                      disabled={updatingId === order.id}
+                      className="flex-1 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 px-3 py-2 text-sm font-semibold hover:bg-blue-100 disabled:opacity-50"
+                    >
+                      {updatingId === order.id ? "…" : formatKitchenBarAdvanceLabel(String(next))}
+                    </button>
+                  );
+                })()}
               </div>
             </div>
           ))}

@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Users, Plus, Mail, Phone } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Users, Plus, Mail, Phone, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { enqueueSyncOutbox } from "../lib/syncOutbox";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
@@ -7,11 +7,18 @@ import { useAuth } from "../contexts/AuthContext";
 import { desktopApi } from "../lib/desktopApi";
 import type { Database } from "../lib/database.types";
 import { PageNotes } from "./common/PageNotes";
+import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 
 type PropertyCustomer = Database["public"]["Tables"]["hotel_customers"]["Row"];
 
 /** Property / hotel customers (`public.hotel_customers`; formerly guests → customers). */
-export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: string }) {
+export function CustomersPage({
+  highlightCustomerId,
+  readOnly = false,
+}: {
+  highlightCustomerId?: string;
+  readOnly?: boolean;
+}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -22,6 +29,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
   const [searchTerm, setSearchTerm] = useState("");
 
   const [showModal, setShowModal] = useState(false);
+  const [editing, setEditing] = useState<PropertyCustomer | null>(null);
 
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -31,6 +39,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
   const [idNumber, setIdNumber] = useState("");
   const [address, setAddress] = useState("");
   const [savingCustomer, setSavingCustomer] = useState(false);
+  const highlightOpenedRef = useRef<string | null>(null);
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const useDesktopLocalCustomers = localAuthEnabled && desktopApi.isAvailable();
 
@@ -78,8 +87,55 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
     return () => window.clearTimeout(t);
   }, [highlightCustomerId, loading, customers]);
 
-  const createCustomer = async () => {
-    if (savingCustomer) return;
+  const resetForm = () => {
+    setEditing(null);
+    setFirstName("");
+    setLastName("");
+    setEmail("");
+    setPhone("");
+    setIdType("");
+    setIdNumber("");
+    setAddress("");
+  };
+
+  const openNew = () => {
+    resetForm();
+    setShowModal(true);
+  };
+
+  const openEdit = useCallback((c: PropertyCustomer) => {
+    setEditing(c);
+    setFirstName(c.first_name);
+    setLastName(c.last_name);
+    setEmail(c.email || "");
+    setPhone(c.phone || "");
+    setIdType(c.id_type || "");
+    setIdNumber(c.id_number || "");
+    setAddress(c.address || "");
+    setShowModal(true);
+  }, []);
+
+  useEffect(() => {
+    highlightOpenedRef.current = null;
+  }, [highlightCustomerId]);
+
+  useEffect(() => {
+    if (!highlightCustomerId || customers.length === 0 || readOnly) return;
+    if (highlightOpenedRef.current === highlightCustomerId) return;
+    const c = customers.find((x) => x.id === highlightCustomerId);
+    if (c) {
+      openEdit(c);
+      highlightOpenedRef.current = highlightCustomerId;
+    }
+  }, [highlightCustomerId, customers, openEdit, readOnly]);
+
+  const closeModal = () => {
+    setShowModal(false);
+    resetForm();
+  };
+
+  const saveCustomer = async () => {
+    if (savingCustomer || readOnly) return;
     if (!firstName || !lastName) {
       alert("Enter customer name");
       return;
@@ -88,7 +144,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
     setSavingCustomer(true);
     try {
       if (useDesktopLocalCustomers) {
-        const inserted = await desktopApi.createCustomer({
+        const payload = {
           first_name: firstName,
           last_name: lastName,
           email: email || null,
@@ -96,27 +152,28 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
           id_type: idType || null,
           id_number: idNumber || null,
           address: address || null,
-        });
-        if (!inserted) {
-          alert("Failed to save customer locally.");
-          return;
+        };
+        if (editing) {
+          const updated = await desktopApi.updateCustomer({ id: editing.id, ...payload });
+          if (!updated) {
+            alert("Failed to update customer locally.");
+            return;
+          }
+        } else {
+          const inserted = await desktopApi.createCustomer(payload);
+          if (!inserted) {
+            alert("Failed to save customer locally.");
+            return;
+          }
         }
-        setShowModal(false);
-        setFirstName("");
-        setLastName("");
-        setEmail("");
-        setPhone("");
-        setIdType("");
-        setIdNumber("");
-        setAddress("");
+        closeModal();
         fetchCustomers();
         return;
       }
-      const { data: inserted, error } = await supabase
-        .from("hotel_customers")
-        .insert([
-          {
-            organization_id: orgId ?? null,
+      if (editing) {
+        const { data: updated, error } = await supabase
+          .from("hotel_customers")
+          .update({
             first_name: firstName,
             last_name: lastName,
             email: email || null,
@@ -124,34 +181,60 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
             id_type: idType || null,
             id_number: idNumber || null,
             address: address || null,
-          },
-        ])
-        .select("*")
-        .single();
+          })
+          .eq("id", editing.id)
+          .select("*")
+          .single();
 
-      if (error) {
-        console.error(error);
-        alert(error.message);
-        return;
+        if (error) {
+          console.error(error);
+          alert(error.message);
+          return;
+        }
+
+        if (updated) {
+          await enqueueSyncOutbox(supabase, {
+            tableName: "hotel_customers",
+            operation: "UPDATE",
+            recordId: updated.id,
+            payload: updated as Record<string, unknown>,
+          });
+        }
+      } else {
+        const { data: inserted, error } = await supabase
+          .from("hotel_customers")
+          .insert([
+            {
+              organization_id: orgId ?? null,
+              first_name: firstName,
+              last_name: lastName,
+              email: email || null,
+              phone: phone || null,
+              id_type: idType || null,
+              id_number: idNumber || null,
+              address: address || null,
+            },
+          ])
+          .select("*")
+          .single();
+
+        if (error) {
+          console.error(error);
+          alert(error.message);
+          return;
+        }
+
+        if (inserted) {
+          await enqueueSyncOutbox(supabase, {
+            tableName: "hotel_customers",
+            operation: "INSERT",
+            recordId: inserted.id,
+            payload: inserted as Record<string, unknown>,
+          });
+        }
       }
 
-      if (inserted) {
-        await enqueueSyncOutbox(supabase, {
-          tableName: "hotel_customers",
-          operation: "INSERT",
-          recordId: inserted.id,
-          payload: inserted as Record<string, unknown>,
-        });
-      }
-
-      setShowModal(false);
-      setFirstName("");
-      setLastName("");
-      setEmail("");
-      setPhone("");
-      setIdType("");
-      setIdNumber("");
-      setAddress("");
+      closeModal();
       fetchCustomers();
     } finally {
       setSavingCustomer(false);
@@ -186,13 +269,17 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
         </div>
 
         <button
-          onClick={() => setShowModal(true)}
-          className="bg-brand-700 text-white px-4 py-2 rounded-lg flex gap-2"
+          type="button"
+          onClick={() => openNew()}
+          disabled={readOnly}
+          className="bg-brand-700 text-white px-4 py-2 rounded-lg flex gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Plus className="w-5 h-5" />
           Add customer
         </button>
       </div>
+
+      {readOnly && <ReadOnlyNotice />}
 
       <input
         placeholder="Search name, email or phone…"
@@ -210,17 +297,29 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               highlightCustomerId === c.id ? "ring-2 ring-brand-600 shadow-md" : ""
             }`}
           >
-            <div className="flex items-center gap-3 mb-3">
-              <div className="bg-violet-100 p-3 rounded-lg">
-                <Users className="w-6 h-6 text-violet-600" />
-              </div>
+            <div className="flex items-start justify-between gap-2 mb-3">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="bg-violet-100 p-3 rounded-lg shrink-0">
+                  <Users className="w-6 h-6 text-violet-600" />
+                </div>
 
-              <div>
-                <h3 className="font-bold">
-                  {c.first_name} {c.last_name}
-                </h3>
-                <p className="text-xs text-slate-500">ID: {c.id.slice(0, 8)}</p>
+                <div className="min-w-0">
+                  <h3 className="font-bold">
+                    {c.first_name} {c.last_name}
+                  </h3>
+                  <p className="text-xs text-slate-500">ID: {c.id.slice(0, 8)}</p>
+                </div>
               </div>
+              <button
+                type="button"
+                onClick={() => openEdit(c)}
+                disabled={readOnly}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-xs shrink-0 disabled:opacity-50 disabled:cursor-not-allowed"
+                title={readOnly ? "Read-only" : "Edit customer"}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                Edit
+              </button>
             </div>
 
             {c.email && (
@@ -251,13 +350,14 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-40 flex items-center justify-center z-10">
           <div className="bg-white p-6 rounded-xl w-96 max-h-[90vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4">Add customer</h2>
+            <h2 className="text-xl font-bold mb-4">{editing ? "Edit customer" : "Add customer"}</h2>
 
             <input
               placeholder="First name"
               value={firstName}
               onChange={(e) => setFirstName(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <input
@@ -265,6 +365,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               value={lastName}
               onChange={(e) => setLastName(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <input
@@ -272,6 +373,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <input
@@ -279,6 +381,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <input
@@ -286,6 +389,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               value={idType}
               onChange={(e) => setIdType(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <input
@@ -293,6 +397,7 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               value={idNumber}
               onChange={(e) => setIdNumber(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <input
@@ -300,14 +405,25 @@ export function CustomersPage({ highlightCustomerId }: { highlightCustomerId?: s
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
+              disabled={readOnly}
             />
 
             <div className="flex justify-end gap-2">
-              <button type="button" onClick={() => !savingCustomer && setShowModal(false)} disabled={savingCustomer} className="px-4 py-2 bg-gray-200 rounded disabled:opacity-60">
+              <button
+                type="button"
+                onClick={() => !savingCustomer && closeModal()}
+                disabled={savingCustomer}
+                className="px-4 py-2 bg-gray-200 rounded disabled:opacity-60"
+              >
                 Cancel
               </button>
 
-              <button type="button" onClick={createCustomer} disabled={savingCustomer} className="px-4 py-2 bg-brand-700 text-white rounded disabled:opacity-60">
+              <button
+                type="button"
+                onClick={() => void saveCustomer()}
+                disabled={readOnly || savingCustomer}
+                className="px-4 py-2 bg-brand-700 text-white rounded disabled:opacity-60"
+              >
                 {savingCustomer ? "Saving..." : "Save"}
               </button>
             </div>

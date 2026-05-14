@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizePaymentMethod, formatPaymentMethodLabel, type PaymentMethodCode } from "../../lib/paymentMethod";
 import { toast } from "../ui/use-toast";
 import { useAuth } from "../../contexts/AuthContext";
@@ -65,6 +66,10 @@ export function RetailSalesInsightsPage() {
   const loadData = async () => {
     setLoading(true);
     try {
+      const orgId = user?.organization_id ?? undefined;
+      /** Platform superuser with no org context may browse cross-tenant; everyone else is scoped to their org. */
+      const skipOrgFilter = Boolean(user?.isSuperAdmin) && !orgId;
+
       let start: Date;
       let end: Date;
       if (salesDateFilter === "today") {
@@ -82,15 +87,21 @@ export function RetailSalesInsightsPage() {
       const previousStart = new Date(start.getTime() - daySpan * msPerDay);
       const previousEnd = new Date(end.getTime() - daySpan * msPerDay);
 
-      const [{ data: payRows }, { data: creditRows }, { data: previousPayRows }, { data: lineRows }] = await Promise.all([
-        supabase
-          .from("payments")
-          .select("id, transaction_id, paid_at, amount, payment_method, payment_status, stay_id, processed_by")
-          .is("stay_id", null)
-          .not("transaction_id", "is", null)
-          .gte("paid_at", start.toISOString())
-          .lt("paid_at", end.toISOString())
-          .order("paid_at", { ascending: false }),
+      const paymentsInRange = (rangeStart: Date, rangeEnd: Date) =>
+        filterByOrganizationId(
+          supabase
+            .from("payments")
+            .select("id, transaction_id, paid_at, amount, payment_method, payment_status, stay_id, processed_by")
+            .is("stay_id", null)
+            .not("transaction_id", "is", null)
+            .gte("paid_at", rangeStart.toISOString())
+            .lt("paid_at", rangeEnd.toISOString())
+            .order("paid_at", { ascending: false }),
+          orgId,
+          skipOrgFilter
+        );
+
+      const openCreditSalesQuery = filterByOrganizationId(
         supabase
           .from("retail_sales")
           .select("id,customer_id,sale_at,credit_due_date,customer_name,customer_phone,amount_due,total_amount,payment_status")
@@ -98,19 +109,47 @@ export function RetailSalesInsightsPage() {
           .in("payment_status", ["pending", "partial"])
           .order("sale_at", { ascending: false })
           .limit(100),
-        supabase
-          .from("payments")
-          .select("id, transaction_id, paid_at, amount, payment_method, payment_status, stay_id, processed_by")
-          .is("stay_id", null)
-          .not("transaction_id", "is", null)
-          .gte("paid_at", previousStart.toISOString())
-          .lt("paid_at", previousEnd.toISOString())
-          .order("paid_at", { ascending: false }),
-        supabase
-          .from("retail_sale_lines")
-          .select("description,quantity,line_total,retail_sales!inner(sale_at)")
-          .gte("retail_sales.sale_at", start.toISOString())
-          .lt("retail_sales.sale_at", end.toISOString()),
+        orgId,
+        skipOrgFilter
+      );
+
+      const lineRowsPromise = (async (): Promise<
+        Array<{ description: string | null; quantity: number | null; line_total: number | null }>
+      > => {
+        if (skipOrgFilter && !orgId) {
+          const { data } = await supabase
+            .from("retail_sale_lines")
+            .select("description,quantity,line_total,retail_sales!inner(sale_at)")
+            .gte("retail_sales.sale_at", start.toISOString())
+            .lt("retail_sales.sale_at", end.toISOString());
+          return (data || []) as Array<{ description: string | null; quantity: number | null; line_total: number | null }>;
+        }
+        const { data: idRows } = await filterByOrganizationId(
+          supabase
+            .from("retail_sales")
+            .select("id")
+            .gte("sale_at", start.toISOString())
+            .lt("sale_at", end.toISOString()),
+          orgId,
+          skipOrgFilter
+        );
+        const ids = (idRows || []).map((r: { id: string }) => r.id);
+        const out: Array<{ description: string | null; quantity: number | null; line_total: number | null }> = [];
+        const CHUNK = 300;
+        for (let i = 0; i < ids.length; i += CHUNK) {
+          const chunk = ids.slice(i, i + CHUNK);
+          if (chunk.length === 0) continue;
+          const { data } = await supabase.from("retail_sale_lines").select("description,quantity,line_total").in("sale_id", chunk);
+          out.push(...((data || []) as Array<{ description: string | null; quantity: number | null; line_total: number | null }>));
+        }
+        return out;
+      })();
+
+      const [{ data: payRows }, { data: creditRows }, { data: previousPayRows }, lineRows] = await Promise.all([
+        paymentsInRange(start, end),
+        openCreditSalesQuery,
+        paymentsInRange(previousStart, previousEnd),
+        lineRowsPromise,
       ]);
 
       const rawPayments = (
@@ -127,7 +166,9 @@ export function RetailSalesInsightsPage() {
       const cashierIds = [...new Set(rawPayments.map((p) => p.processed_by).filter(Boolean))] as string[];
       let cashierNameById = new Map<string, string>();
       if (cashierIds.length > 0) {
-        const { data: staffRows } = await supabase.from("staff").select("id,full_name").in("id", cashierIds);
+        let staffQ = supabase.from("staff").select("id,full_name").in("id", cashierIds);
+        staffQ = filterByOrganizationId(staffQ, orgId, skipOrgFilter);
+        const { data: staffRows } = await staffQ;
         cashierNameById = new Map(((staffRows || []) as Array<{ id: string; full_name: string }>).map((s) => [s.id, s.full_name]));
       }
       const mappedPayments = rawPayments.map((p) => ({
@@ -191,7 +232,7 @@ export function RetailSalesInsightsPage() {
 
   useEffect(() => {
     void loadData();
-  }, [salesDateFilter, salesFromDate, salesToDate]);
+  }, [salesDateFilter, salesFromDate, salesToDate, user?.organization_id, user?.isSuperAdmin]);
 
   const visibleCreditSales = useMemo(() => {
     if (!showOverdueOnly) return openCreditSales;
@@ -405,12 +446,16 @@ export function RetailSalesInsightsPage() {
     if (reminderHistoryBySaleId[saleId]) return;
     setLoadingReminderSaleId(saleId);
     try {
-      const { data } = await supabase
+      const orgId = user?.organization_id ?? undefined;
+      const skipOrgFilter = Boolean(user?.isSuperAdmin) && !orgId;
+      let q = supabase
         .from("retail_credit_reminders")
         .select("id,channel,message,reminded_at,reminded_by")
         .eq("sale_id", saleId)
         .order("reminded_at", { ascending: false })
         .limit(5);
+      q = filterByOrganizationId(q, orgId, skipOrgFilter);
+      const { data } = await q;
       setReminderHistoryBySaleId((prev) => ({ ...prev, [saleId]: ((data || []) as CreditReminderRow[]) }));
     } finally {
       setLoadingReminderSaleId(null);
