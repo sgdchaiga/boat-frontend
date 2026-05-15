@@ -932,6 +932,17 @@ function AppContent() {
       case 'retail_pos_orders':
         return <RetailPosOrdersPage />;
       case 'retail_customers':
+        if (user?.business_type === 'clinic') {
+          return (
+            <ClinicPatientsPage
+              highlightPatientId={
+                (pageState?.highlightClinicPatientId ?? pageState?.highlightCustomerId) as string | undefined
+              }
+              openRegister={pageState?.clinicIntent === 'new_patient'}
+              onConsumedNavigateIntent={() => navigate('retail_customers', {})}
+            />
+          );
+        }
         return (
           <RetailCustomersPage
             readOnly={access.readOnly}

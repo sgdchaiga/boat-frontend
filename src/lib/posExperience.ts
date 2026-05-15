@@ -113,7 +113,7 @@ export function getPosLabels(exp: PosExperience): PosLabels {
     retailCustomersListPageTitle: p ? "Patient accounts (POS)" : "Customers",
     retailCustomersListHelpAria: p ? "Patient accounts (POS) help" : "Retail customers help",
     retailCustomersListBlurb: p
-      ? "Patient accounts used at pharmacy POS and on invoices."
+      ? "Patient accounts for pharmacy POS walk-ins. For the clinic register and invoices, use Clinic → Patients."
       : "Sales customers used when creating invoices.",
     addPayerAccountButton: p ? "Add patient account" : "Add customer",
   };

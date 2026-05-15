@@ -1,5 +1,17 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { UserPlus, Users, Pencil, CheckCircle2, XCircle, Loader2, Wallet } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  UserPlus,
+  Users,
+  Pencil,
+  CheckCircle2,
+  XCircle,
+  Loader2,
+  Wallet,
+  Search,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
+} from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
@@ -41,6 +53,16 @@ interface SaccoMembersPageProps {
   onConsumedMemberRegisterIntent?: () => void;
 }
 
+type MemberSortKey = "member_number" | "full_name" | "phone" | "email" | "status";
+
+function memberMatchesSearch(r: SaccoMemberRow, q: string): boolean {
+  const hay = [r.member_number, r.full_name, r.phone, r.email, r.national_id, r.notes]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  return hay.includes(q);
+}
+
 export function SaccoMembersPage({
   readOnly = false,
   onNavigate,
@@ -54,6 +76,11 @@ export function SaccoMembersPage({
   const [rows, setRows] = useState<SaccoMemberRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<{ key: MemberSortKey; dir: "asc" | "desc" }>({
+    key: "member_number",
+    dir: "asc",
+  });
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<SaccoMemberRow | null>(null);
   const [saving, setSaving] = useState(false);
@@ -260,6 +287,66 @@ export function SaccoMembersPage({
 
   const activeCount = rows.filter((r) => r.is_active).length;
 
+  const displayRows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let list = q ? rows.filter((r) => memberMatchesSearch(r, q)) : rows.slice();
+    const dir = sort.dir === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      let cmp = 0;
+      switch (sort.key) {
+        case "member_number":
+          cmp = a.member_number.localeCompare(b.member_number, undefined, { numeric: true });
+          break;
+        case "full_name":
+          cmp = a.full_name.localeCompare(b.full_name);
+          break;
+        case "phone":
+          cmp = (a.phone ?? "").localeCompare(b.phone ?? "");
+          break;
+        case "email":
+          cmp = (a.email ?? "").localeCompare(b.email ?? "");
+          break;
+        case "status":
+          cmp = Number(b.is_active) - Number(a.is_active);
+          break;
+        default:
+          cmp = 0;
+      }
+      return cmp * dir;
+    });
+    return list;
+  }, [rows, search, sort]);
+
+  const toggleSort = (key: MemberSortKey) => {
+    setSort((prev) => {
+      if (prev.key === key) return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
+      return { key, dir: key === "status" ? "desc" : "asc" };
+    });
+  };
+
+  const SortIcon = ({ column }: { column: MemberSortKey }) => {
+    if (sort.key !== column) return <ArrowUpDown className="w-3.5 h-3.5 text-slate-400 shrink-0" aria-hidden />;
+    return sort.dir === "asc" ? (
+      <ArrowUp className="w-3.5 h-3.5 text-emerald-700 shrink-0" aria-hidden />
+    ) : (
+      <ArrowDown className="w-3.5 h-3.5 text-emerald-700 shrink-0" aria-hidden />
+    );
+  };
+
+  const sortableTh = (key: MemberSortKey, label: string) => (
+    <th className="text-left p-0">
+      <button
+        type="button"
+        onClick={() => toggleSort(key)}
+        className="w-full flex items-center gap-1.5 p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide hover:bg-slate-100/80 transition-colors"
+        aria-sort={sort.key === key ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+      >
+        {label}
+        <SortIcon column={key} />
+      </button>
+    </th>
+  );
+
   return (
     <div className="p-4 md:p-6 max-w-6xl mx-auto space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -319,20 +406,48 @@ export function SaccoMembersPage({
         </div>
       ) : (
         <div className="rounded-xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="border-b border-slate-100 bg-slate-50/60 px-4 py-3">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search by name, number, phone, email, ID…"
+                className="w-full rounded-lg border border-slate-200 bg-white pl-9 pr-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 outline-none focus:ring-2 focus:ring-emerald-500 focus:border-emerald-500"
+                aria-label="Search members"
+              />
+            </div>
+            {search.trim() ? (
+              <p className="mt-2 text-xs text-slate-500">
+                Showing <span className="font-medium text-slate-700">{displayRows.length}</span> of {rows.length} members
+              </p>
+            ) : null}
+          </div>
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gradient-to-r from-slate-50 to-emerald-50/40 border-b border-slate-200">
-                  <th className="text-left p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">No.</th>
-                  <th className="text-left p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Name</th>
-                  <th className="text-left p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Phone</th>
-                  <th className="text-left p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide">Email</th>
-                  <th className="text-center p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide w-28">Status</th>
+                  {sortableTh("member_number", "No.")}
+                  {sortableTh("full_name", "Name")}
+                  {sortableTh("phone", "Phone")}
+                  {sortableTh("email", "Email")}
+                  <th className="text-center p-0 w-28">
+                    <button
+                      type="button"
+                      onClick={() => toggleSort("status")}
+                      className="w-full flex items-center justify-center gap-1.5 p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide hover:bg-slate-100/80 transition-colors"
+                      aria-sort={sort.key === "status" ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}
+                    >
+                      Status
+                      <SortIcon column="status" />
+                    </button>
+                  </th>
                   <th className="text-right p-3.5 font-semibold text-slate-700 text-xs uppercase tracking-wide w-44">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {rows.map((r) => (
+                {displayRows.map((r) => (
                   <tr key={r.id} className="hover:bg-emerald-50/35 transition-colors">
                     <td className="p-3.5 font-mono text-sm font-medium text-emerald-800 tabular-nums">{r.member_number}</td>
                     <td className="p-3.5 font-medium text-slate-900">{r.full_name}</td>
@@ -409,7 +524,7 @@ export function SaccoMembersPage({
               </tbody>
             </table>
           </div>
-          {rows.length === 0 && !error && (
+          {rows.length === 0 && !error ? (
             <div className="p-12 text-center border-t border-slate-100 bg-slate-50/50">
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 text-emerald-700">
                 <Users className="w-7 h-7" />
@@ -417,7 +532,12 @@ export function SaccoMembersPage({
               <p className="text-slate-700 font-medium">No members yet</p>
               <p className="text-slate-500 text-sm mt-1">Add your first member to build the register.</p>
             </div>
-          )}
+          ) : displayRows.length === 0 ? (
+            <div className="p-10 text-center border-t border-slate-100 bg-slate-50/50">
+              <p className="text-slate-700 font-medium">No members match your search</p>
+              <p className="text-slate-500 text-sm mt-1">Try a different name, number, or phone.</p>
+            </div>
+          ) : null}
         </div>
       )}
 

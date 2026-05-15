@@ -1,9 +1,9 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { PageNotes } from "@/components/common/PageNotes";
-import { ArrowDownLeft, ClipboardList, CreditCard, Landmark, PiggyBank, Wallet } from "lucide-react";
+import { ArrowDownLeft, ClipboardList, CreditCard, Landmark, Loader2, PiggyBank, Wallet } from "lucide-react";
 
 type Props = {
   memberIdFromNav?: string;
@@ -25,12 +25,23 @@ function looksLoanLine(e: { description?: string; category?: string }): boolean 
 }
 
 const SaccoMemberProfilePage: React.FC<Props> = ({ memberIdFromNav, navigate }) => {
-  const { members, loans, cashbook, formatCurrency } = useAppContext();
+  const { members, loans, cashbook, formatCurrency, refreshSaccoWorkspace, saccoLoading, saccoError } =
+    useAppContext();
   const { user } = useAuth();
   const readOnly = user?.role === "viewer";
 
-  const [internalId, setInternalId] = useState(memberIdFromNav ?? "");
-  const memberId = memberIdFromNav ?? internalId;
+  const [memberId, setMemberId] = useState(memberIdFromNav ?? "");
+
+  useEffect(() => {
+    setMemberId(memberIdFromNav ?? "");
+  }, [memberIdFromNav]);
+
+  useEffect(() => {
+    if (members.length === 0 && !saccoLoading) {
+      void refreshSaccoWorkspace();
+    }
+  }, [members.length, saccoLoading, refreshSaccoWorkspace]);
+
   const member = members.find((m) => m.id === memberId);
 
   const memberLoans = useMemo(
@@ -64,22 +75,40 @@ const SaccoMemberProfilePage: React.FC<Props> = ({ memberIdFromNav, navigate }) 
 
       <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-4 max-w-xl">
         <label className="block text-xs font-semibold text-slate-600 mb-1">Member</label>
-        <select
-          className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
-          value={memberId}
-          onChange={(e) => setInternalId(e.target.value)}
-        >
-          <option value="">Choose a member…</option>
-          {members.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name} ({m.accountNumber})
-            </option>
-          ))}
-        </select>
+        {saccoLoading && members.length === 0 ? (
+          <div className="flex items-center gap-2 text-sm text-slate-500 py-2">
+            <Loader2 className="w-4 h-4 animate-spin text-emerald-600" />
+            Loading members…
+          </div>
+        ) : (
+          <select
+            className="w-full rounded-lg border border-slate-200 px-3 py-2.5 text-sm"
+            value={memberId}
+            onChange={(e) => {
+              const v = e.target.value;
+              setMemberId(v);
+              navigate?.(SACCOPRO_PAGE.memberProfile, v ? { memberId: v } : {});
+            }}
+          >
+            <option value="">Choose a member…</option>
+            {members.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.name} ({m.accountNumber})
+              </option>
+            ))}
+          </select>
+        )}
+        {saccoError ? <p className="mt-2 text-xs text-red-600">{saccoError}</p> : null}
       </div>
 
       {!memberId && (
         <p className="text-sm text-slate-500">Select a member to load loans, savings, and transactions.</p>
+      )}
+
+      {memberId && !member && !saccoLoading && (
+        <p className="text-sm text-amber-800 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+          That member is not in the workspace list. Refresh the page or pick another member from the dropdown.
+        </p>
       )}
 
       {member && (

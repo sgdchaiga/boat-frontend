@@ -27,6 +27,8 @@ import { PageNotes } from "./common/PageNotes";
 import { ModuleMessagingToolbar, SendWhatsAppButton } from "@/components/communications/ModuleMessagingButtons";
 import type { RetailCustomerRow } from "./RetailCustomersPage";
 import { randomUuid } from "@/lib/randomUuid";
+import { fetchClinicPatients } from "@/lib/clinicData";
+import type { ClinicPatient } from "@/components/clinic/clinicTypes";
 
 /** Typed client omits newer tables; use for retail_invoices / retail_invoice_lines until DB types are regenerated. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -38,7 +40,7 @@ function isMissingRetailInvoicesSchemaError(message: string | undefined | null):
     m.includes("retail_invoices") ||
     m.includes("retail_invoice_lines") ||
     m.includes("retail_customers") ||
-    m.includes("property_customer_id") ||
+    m.includes("clinic_patient_id") ||
     m.includes("guest_id") ||
     m.includes("schema cache") ||
     m.includes("pgrst205") ||
@@ -46,11 +48,28 @@ function isMissingRetailInvoicesSchemaError(message: string | undefined | null):
   );
 }
 
-/** Hotel / mixed / other: use `hotel_customers`; retail / restaurant use `retail_customers`. */
-/** When true, invoice "customer" picker uses `hotel_customers`; otherwise `retail_customers`. */
+/** When true, invoice counterparty picker uses `hotel_customers`. */
 function invoiceUsesPropertyCustomersTable(businessType: BusinessType | null | undefined): boolean {
   if (businessType === "retail" || businessType === "restaurant" || businessType === "clinic") return false;
   return true;
+}
+
+function invoiceUsesClinicPatients(businessType: BusinessType | null | undefined): boolean {
+  return businessType === "clinic";
+}
+
+function clinicPatientToInvoicePickerRow(p: ClinicPatient, organizationId: string): RetailCustomerRow {
+  return {
+    id: p.id,
+    organization_id: organizationId,
+    name: p.name.trim() || "Patient",
+    email: null,
+    phone: p.phone || null,
+    address: p.address || null,
+    notes: p.patientNumber,
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+  };
 }
 
 type GuestRow = {
@@ -109,6 +128,7 @@ type DbInvoice = {
   invoice_number: string;
   customer_id?: string | null;
   property_customer_id?: string | null;
+  clinic_patient_id?: string | null;
   customer_name: string;
   customer_email: string | null;
   customer_address: string | null;
@@ -131,6 +151,10 @@ function resolveInvoiceCustomerPhone(
   retailCustomers: RetailCustomerRow[],
   propertyGuests: GuestRow[]
 ): string {
+  if (inv.clinic_patient_id) {
+    const c = retailCustomers.find((x) => x.id === inv.clinic_patient_id);
+    if (c?.phone) return digitsOnlyPhone(c.phone);
+  }
   if (inv.customer_id) {
     const c = retailCustomers.find((x) => x.id === inv.customer_id);
     if (c?.phone) return digitsOnlyPhone(c.phone);
@@ -206,6 +230,7 @@ export function RetailInvoicesPage({
   const orgId = user?.organization_id ?? null;
   const businessType = user?.business_type ?? null;
   const invoiceGuestMode = invoiceUsesPropertyCustomersTable(businessType);
+  const invoiceClinicMode = invoiceUsesClinicPatients(businessType);
 
   const [tab, setTab] = useState<"invoices" | "credit">("invoices");
   const [listLoading, setListLoading] = useState(true);
@@ -256,13 +281,18 @@ export function RetailInvoicesPage({
 
   const loadCustomers = useCallback(async () => {
     if (!orgId) return;
+    if (invoiceClinicMode) {
+      const list = await fetchClinicPatients(orgId, !!user?.isSuperAdmin);
+      setCustomers(list.map((p) => clinicPatientToInvoicePickerRow(p, orgId)));
+      return;
+    }
     const { data, error } = await sb
       .from("retail_customers")
       .select("id, organization_id, name, email, phone, address, notes, created_at, updated_at")
       .eq("organization_id", orgId)
       .order("name");
     if (!error && data) setCustomers(data as RetailCustomerRow[]);
-  }, [orgId]);
+  }, [orgId, invoiceClinicMode, user?.isSuperAdmin]);
 
   const loadPropertyCustomers = useCallback(async () => {
     if (!orgId) return;
@@ -511,7 +541,9 @@ export function RetailInvoicesPage({
   const openEdit = (inv: DbInvoice) => {
     setEditingId(inv.id);
     setInvoiceNumber(inv.invoice_number);
-    setSelectedCustomerId(inv.customer_id || "");
+    setSelectedCustomerId(
+      invoiceClinicMode ? (inv.clinic_patient_id || "") : (inv.customer_id || "")
+    );
     setSelectedPropertyCustomerId(inv.property_customer_id || "");
     setCustomerName(inv.customer_name);
     setCustomerEmail(inv.customer_email || "");
@@ -596,13 +628,17 @@ export function RetailInvoicesPage({
         ? uuidOrNull(selectedPropertyCustomerId)
           ? null
           : uuidOrNull((existingInv?.customer_id as string | null | undefined) ?? null)
-        : uuidOrNull(selectedCustomerId);
+        : invoiceClinicMode
+          ? null
+          : uuidOrNull(selectedCustomerId);
       const propertyCustomerIdResolved = invoiceGuestMode ? uuidOrNull(selectedPropertyCustomerId) : null;
+      const clinicPatientIdResolved = invoiceClinicMode ? uuidOrNull(selectedCustomerId) : null;
 
       const common = {
         invoice_number: invoiceNumber.trim(),
         customer_id: customerIdResolved,
         property_customer_id: propertyCustomerIdResolved,
+        clinic_patient_id: clinicPatientIdResolved,
         customer_name: customerName.trim(),
         customer_email: customerEmail.trim() || null,
         customer_address: customerAddress.trim() || null,
@@ -906,7 +942,7 @@ export function RetailInvoicesPage({
   };
 
   const downloadCsvInvoices = () => {
-    const header = ["Invoice #", "Customer", "Issue date", "Status", "Total", "Paid", "Balance outstanding"].join(",");
+    const header = ["Invoice #", invoiceClinicMode ? "Patient" : "Customer", "Issue date", "Status", "Total", "Paid", "Balance outstanding"].join(",");
     const rows = dbInvoices.map((i) => {
       const paid = invoiceSettlement[i.id]?.paid ?? 0;
       const bal = invoiceBalanceDue(i, invoiceSettlement);
@@ -1126,7 +1162,7 @@ export function RetailInvoicesPage({
               <thead className="bg-slate-50">
                 <tr>
                   <th className="text-left p-3">Invoice #</th>
-                  <th className="text-left p-3">Customer</th>
+                  <th className="text-left p-3">{invoiceClinicMode ? "Patient" : "Customer"}</th>
                   <th className="text-left p-3">Issue</th>
                   <th className="text-left p-3">Status</th>
                   <th className="text-right p-3">Total</th>
@@ -1164,6 +1200,17 @@ export function RetailInvoicesPage({
                             className="text-left text-brand-700 hover:underline font-medium truncate w-full"
                             onClick={() => onNavigate("hotel_customers", { highlightCustomerId: inv.property_customer_id })}
                             title="Open customer"
+                          >
+                            {inv.customer_name || "—"}
+                          </button>
+                        ) : inv.clinic_patient_id && onNavigate ? (
+                          <button
+                            type="button"
+                            className="text-left text-brand-700 hover:underline font-medium truncate w-full"
+                            onClick={() =>
+                              onNavigate("clinic_patients", { highlightClinicPatientId: inv.clinic_patient_id })
+                            }
+                            title="Open patient"
                           >
                             {inv.customer_name || "—"}
                           </button>
@@ -1375,7 +1422,7 @@ export function RetailInvoicesPage({
               </label>
 
               <div className="md:col-span-2 space-y-2">
-                <span className="text-sm text-slate-600">Customer</span>
+                <span className="text-sm text-slate-600">{invoiceClinicMode ? "Patient" : "Customer"}</span>
                 <div className="flex flex-col sm:flex-row gap-2">
                   {invoiceGuestMode ? (
                     <select
@@ -1423,9 +1470,14 @@ export function RetailInvoicesPage({
                       }}
                       disabled={readOnly}
                     >
-                      <option value="">— Select a saved customer or enter details below —</option>
+                      <option value="">
+                        {invoiceClinicMode
+                          ? "— Select a patient or enter billing details below —"
+                          : "— Select a saved customer or enter details below —"}
+                      </option>
                       {customers.map((c) => (
                         <option key={c.id} value={c.id}>
+                          {invoiceClinicMode && c.notes ? `${c.notes} — ` : ""}
                           {c.name}
                           {c.email ? ` · ${c.email}` : ""}
                         </option>
@@ -1437,10 +1489,21 @@ export function RetailInvoicesPage({
                       type="button"
                       className="app-btn-secondary text-sm shrink-0"
                       onClick={() =>
-                        onNavigate(invoiceGuestMode ? "hotel_customers" : "retail_customers", invoiceGuestMode ? {} : undefined)
+                        onNavigate(
+                          invoiceGuestMode
+                            ? "hotel_customers"
+                            : invoiceClinicMode
+                              ? "clinic_patients"
+                              : "retail_customers",
+                          invoiceGuestMode ? {} : undefined
+                        )
                       }
                     >
-                      {invoiceGuestMode ? "Add / manage customers" : "Add / manage retail customers"}
+                      {invoiceGuestMode
+                        ? "Add / manage customers"
+                        : invoiceClinicMode
+                          ? "Add / manage patients"
+                          : "Add / manage retail customers"}
                     </button>
                   ) : null}
                 </div>
@@ -1449,9 +1512,13 @@ export function RetailInvoicesPage({
                     ? propertyCustomersList.length === 0
                       ? "No customers yet — use Sales → Customers (or Add / manage customers), or type billing details below."
                       : "Choosing a customer fills name, email, and address; you can still edit them for this invoice."
-                    : customers.length === 0
-                      ? "No customers in your list yet — use Add / manage customers, or type billing details below."
-                      : "Choosing a customer fills name, email, and address; you can still edit them for this invoice."}
+                    : invoiceClinicMode
+                      ? customers.length === 0
+                        ? "No patients yet — open Clinic → Patients (or Add / manage patients), or type billing details below."
+                        : "Choosing a patient fills name and address; you can still edit them for this invoice."
+                      : customers.length === 0
+                        ? "No customers in your list yet — use Add / manage retail customers, or type billing details below."
+                        : "Choosing a customer fills name, email, and address; you can still edit them for this invoice."}
                 </p>
               </div>
 
@@ -1681,7 +1748,9 @@ export function RetailInvoicesPage({
             </div>
             {onNavigate && communicationsEnabled ? (
               <div className="rounded-lg border border-slate-200 bg-slate-50/90 p-3 print:hidden">
-                <p className="text-xs font-semibold text-slate-600 mb-2">Send to customer</p>
+                <p className="text-xs font-semibold text-slate-600 mb-2">
+                  {invoiceClinicMode ? "Send to patient" : "Send to customer"}
+                </p>
                 <ModuleMessagingToolbar
                   onNavigate={onNavigate}
                   phone={resolveInvoiceCustomerPhone(previewInvoice, customers, propertyCustomersList)}
