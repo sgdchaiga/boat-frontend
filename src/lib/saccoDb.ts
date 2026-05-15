@@ -112,14 +112,24 @@ export function mapLoanFromRow(row: DbLoan): Loan {
   };
 }
 
+function monitoringFeeRateFromStoredFees(raw: Partial<LoanFees> & { monitoringFee?: number } | null | undefined): number {
+  if (raw?.monitoringFeeRate != null && !Number.isNaN(Number(raw.monitoringFeeRate))) {
+    return Number(raw.monitoringFeeRate);
+  }
+  const legacy = Number(raw?.monitoringFee ?? 0);
+  if (legacy > 0 && legacy <= 100) return legacy;
+  return 0;
+}
+
 export function mapProductFromRow(row: DbProduct): LoanProduct {
-  const raw = row.fees as Partial<LoanFees> | null | undefined;
+  const raw = row.fees as (Partial<LoanFees> & { monitoringFee?: number }) | null | undefined;
   const fees: LoanFees = {
     formFee: Number(raw?.formFee ?? 0),
-    monitoringFee: Number(raw?.monitoringFee ?? 0),
+    monitoringFeeRate: monitoringFeeRateFromStoredFees(raw),
     processingFeeRate: Number(raw?.processingFeeRate ?? 0),
     insuranceFeeRate: Number(raw?.insuranceFeeRate ?? 0),
     applicationFeeRate: Number(raw?.applicationFeeRate ?? 0),
+    agentFeeRate: Number(raw?.agentFeeRate ?? 0),
   };
   return {
     id: row.id,

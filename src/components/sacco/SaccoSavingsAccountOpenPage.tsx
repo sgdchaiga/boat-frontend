@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Wallet, Loader2, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -44,6 +44,8 @@ export function SaccoSavingsAccountOpenPage({
   const [savingsProductTypes, setSavingsProductTypes] = useState<SaccoSavingsProductTypeRow[]>([]);
   const [branches, setBranches] = useState<SaccoBranchRow[]>([]);
   const [branchCode, setBranchCode] = useState("");
+  /** When true, changing product/branch will not overwrite the account number until Regenerate. */
+  const accountNoManualRef = useRef(false);
 
   const loadMembers = useCallback(async () => {
     if (!orgId) {
@@ -105,30 +107,39 @@ export function SaccoSavingsAccountOpenPage({
     if (m) applyMember(m);
   }, [memberId, members, applyMember]);
 
-  const regenerateAccountNumber = useCallback(async () => {
-    if (!orgId || !productCode.trim()) {
-      setAccountNo("");
-      return;
-    }
-    setGenerating(true);
-    try {
-      const next = await suggestNextSavingsAccountNumber(
-        orgId,
-        productCode.trim(),
-        branchCode.trim() || undefined
-      );
-      setAccountNo(next);
-    } catch (e) {
-      toast({
-        title: "Could not generate account number",
-        description: e instanceof Error ? e.message : "Check migrations and account number settings.",
-        variant: "destructive",
-      });
-      setAccountNo("");
-    } finally {
-      setGenerating(false);
-    }
-  }, [orgId, productCode, branchCode]);
+  const regenerateAccountNumber = useCallback(
+    async (opts?: { force?: boolean }) => {
+      if (!orgId || !productCode.trim()) {
+        if (opts?.force) setAccountNo("");
+        return;
+      }
+      if (!opts?.force && accountNoManualRef.current) return;
+      setGenerating(true);
+      try {
+        const next = await suggestNextSavingsAccountNumber(
+          orgId,
+          productCode.trim(),
+          branchCode.trim() || undefined
+        );
+        setAccountNo(next);
+        accountNoManualRef.current = false;
+      } catch (e) {
+        toast({
+          title: "Could not generate account number",
+          description: e instanceof Error ? e.message : "Check migrations and account number settings.",
+          variant: "destructive",
+        });
+        if (opts?.force) setAccountNo("");
+      } finally {
+        setGenerating(false);
+      }
+    },
+    [orgId, productCode, branchCode]
+  );
+
+  useEffect(() => {
+    accountNoManualRef.current = false;
+  }, [productCode, branchCode]);
 
   useEffect(() => {
     void regenerateAccountNumber();
@@ -143,6 +154,7 @@ export function SaccoSavingsAccountOpenPage({
     setProductCode("");
     setSubAccount("");
     setAccountNo("");
+    accountNoManualRef.current = false;
     setBranchCode(branches.length > 0 ? pickDefaultBranchCode(branches, "") : "");
   };
 
@@ -335,17 +347,31 @@ export function SaccoSavingsAccountOpenPage({
             <div className="sm:col-span-2">
               <label className={label}>Account No.</label>
               <div className="flex gap-2">
-                <input readOnly value={accountNo} className={`${field} bg-slate-50 font-mono`} placeholder="Generated from product code" />
+                <input
+                  value={accountNo}
+                  onChange={(e) => {
+                    accountNoManualRef.current = true;
+                    setAccountNo(e.target.value);
+                  }}
+                  disabled={readOnly}
+                  required
+                  className={`${field} font-mono`}
+                  placeholder="Suggested number — edit if needed"
+                />
                 <button
                   type="button"
-                  onClick={() => void regenerateAccountNumber()}
-                  disabled={generating || !productCode.trim()}
+                  onClick={() => void regenerateAccountNumber({ force: true })}
+                  disabled={readOnly || generating || !productCode.trim()}
+                  title="Replace with the next number from Savings settings"
                   className="shrink-0 inline-flex items-center gap-1 rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
                 >
                   {generating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
                   Regenerate
                 </button>
               </div>
+              <p className="text-[10px] text-slate-500 mt-0.5">
+                A number is suggested from product and branch. You may correct it before saving; use Regenerate for the next free serial.
+              </p>
             </div>
           </div>
         </section>

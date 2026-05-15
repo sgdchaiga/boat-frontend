@@ -18,12 +18,32 @@ export interface SaccoLoanPolicy {
 
 export interface LoanFees {
   formFee: number;
-  /** Fixed UGX; deducted upfront from disbursement (with other upfront fees). */
-  monitoringFee: number;
+  /** % of loan amount; deducted upfront from disbursement. */
+  monitoringFeeRate: number;
   processingFeeRate: number;
   insuranceFeeRate: number;
   applicationFeeRate: number;
+  /** % of loan principal per month while the loan is active (when agent is enabled on application). */
+  agentFeeRate: number;
 }
+
+export type LoanFeeBreakdown = {
+  formFee: number;
+  monitoringFee: number;
+  processingFee: number;
+  insuranceFee: number;
+  applicationFee: number;
+  /** Upfront fees deducted at disbursement. */
+  totalUpfrontFees: number;
+  netDisbursement: number;
+  useAgent: boolean;
+  agentFeeRate: number;
+  agentFeeMonthly: number;
+  /** agentFeeMonthly × term months. */
+  agentFeeTotal: number;
+  /** @deprecated Use totalUpfrontFees — kept for existing loan rows. */
+  totalFees: number;
+};
 
 export interface LoanProduct {
   id: string;
@@ -69,15 +89,7 @@ export interface Loan {
   /** Bad-debt remainder still recoverable; reduced when recoveries post. */
   writtenOffRemaining?: number;
   writtenOffAt?: string;
-  fees?: {
-    formFee: number;
-    monitoringFee: number;
-    processingFee: number;
-    insuranceFee: number;
-    applicationFee: number;
-    totalFees: number;
-    netDisbursement: number;
-  };
+  fees?: LoanFeeBreakdown;
 }
 
 export interface Member {

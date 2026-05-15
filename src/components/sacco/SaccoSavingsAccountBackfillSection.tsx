@@ -131,9 +131,9 @@ export function SaccoSavingsAccountBackfillSection({ readOnly = false }: SaccoSa
         <div className="min-w-0 flex-1">
           <h2 className="text-base font-semibold text-slate-900">Backfill savings account numbers</h2>
           <p className="text-sm text-slate-600 mt-1">
-            Create a first savings account for members who registered before auto-open was enabled. Members are processed in
-            member number order (1, 2, 3…) so older members receive lower account serials. Members who already have an account
-            are skipped. Numbers use your account type, branch, and serial format.
+            Create a first savings account for members who registered before auto-open was enabled. Each account number uses
+            your branch code, the default savings product code from settings, and a serial equal to the member number (member
+            15 → serial 15 in the account number). Members who already have an account are skipped.
           </p>
         </div>
       </div>

@@ -18,10 +18,11 @@ interface ProductFormData {
   maxAmount: string;
   interestBasis: 'flat' | 'declining';
   formFee: string;
-  monitoringFee: string;
+  monitoringFeeRate: string;
   processingFeeRate: string;
   insuranceFeeRate: string;
   applicationFeeRate: string;
+  agentFeeRate: string;
   compulsorySavingsRate: string;
   minimumShares: string;
   isActive: boolean;
@@ -29,16 +30,17 @@ interface ProductFormData {
 
 const emptyForm: ProductFormData = {
   name: '', interestRate: '12', maxTerm: '36', minAmount: '100000', maxAmount: '10000000',
-  interestBasis: 'declining', formFee: '5000', monitoringFee: '0', processingFeeRate: '2', insuranceFeeRate: '1',
-  applicationFeeRate: '1', compulsorySavingsRate: '10', minimumShares: '50000', isActive: true,
+  interestBasis: 'declining', formFee: '5000', monitoringFeeRate: '0', processingFeeRate: '2', insuranceFeeRate: '1',
+  applicationFeeRate: '1', agentFeeRate: '0', compulsorySavingsRate: '10', minimumShares: '50000', isActive: true,
 };
 
 const productToForm = (p: LoanProduct): ProductFormData => ({
   name: p.name, interestRate: String(p.interestRate), maxTerm: String(p.maxTerm),
   minAmount: String(p.minAmount), maxAmount: String(p.maxAmount), interestBasis: p.interestBasis,
-  formFee: String(p.fees.formFee), monitoringFee: String(p.fees.monitoringFee ?? 0),
+  formFee: String(p.fees.formFee), monitoringFeeRate: String(p.fees.monitoringFeeRate ?? 0),
   processingFeeRate: String(p.fees.processingFeeRate),
   insuranceFeeRate: String(p.fees.insuranceFeeRate), applicationFeeRate: String(p.fees.applicationFeeRate),
+  agentFeeRate: String(p.fees.agentFeeRate ?? 0),
   compulsorySavingsRate: String(p.compulsorySavingsRate), minimumShares: String(p.minimumShares),
   isActive: p.isActive,
 });
@@ -82,9 +84,10 @@ const LoanSettings: React.FC = () => {
       maxAmount: parseFloat(form.maxAmount) || 0, interestBasis: form.interestBasis,
       fees: {
         formFee: parseFloat(form.formFee) || 0,
-        monitoringFee: parseFloat(form.monitoringFee) || 0,
+        monitoringFeeRate: parseFloat(form.monitoringFeeRate) || 0,
         processingFeeRate: parseFloat(form.processingFeeRate) || 0,
         insuranceFeeRate: parseFloat(form.insuranceFeeRate) || 0, applicationFeeRate: parseFloat(form.applicationFeeRate) || 0,
+        agentFeeRate: parseFloat(form.agentFeeRate) || 0,
       },
       compulsorySavingsRate: parseFloat(form.compulsorySavingsRate) || 0,
       minimumShares: parseFloat(form.minimumShares) || 0, isActive: form.isActive,
@@ -104,9 +107,10 @@ const LoanSettings: React.FC = () => {
         maxAmount: parseFloat(form.maxAmount) || 0, interestBasis: form.interestBasis,
         fees: {
           formFee: parseFloat(form.formFee) || 0,
-          monitoringFee: parseFloat(form.monitoringFee) || 0,
+          monitoringFeeRate: parseFloat(form.monitoringFeeRate) || 0,
           processingFeeRate: parseFloat(form.processingFeeRate) || 0,
           insuranceFeeRate: parseFloat(form.insuranceFeeRate) || 0, applicationFeeRate: parseFloat(form.applicationFeeRate) || 0,
+          agentFeeRate: parseFloat(form.agentFeeRate) || 0,
         },
         compulsorySavingsRate: parseFloat(form.compulsorySavingsRate) || 0,
         minimumShares: parseFloat(form.minimumShares) || 0, isActive: form.isActive,
@@ -215,17 +219,17 @@ const LoanSettings: React.FC = () => {
         {/* Fees */}
         <div>
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Loan Fees</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Loan Form Fee (UGX)</label>
               <input type="number" value={form.formFee} onChange={e => setForm(p => ({ ...p, formFee: e.target.value }))}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Monitoring fee (UGX)</label>
-              <input type="number" min={0} value={form.monitoringFee} onChange={e => setForm(p => ({ ...p, monitoringFee: e.target.value }))}
+              <label className="block text-xs font-medium text-slate-700 mb-1">Monitoring Fee (%)</label>
+              <input type="number" step="0.1" min={0} value={form.monitoringFeeRate} onChange={e => setForm(p => ({ ...p, monitoringFeeRate: e.target.value }))}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
-              <p className="text-[10px] text-slate-400 mt-0.5">Deducted upfront</p>
+              <p className="text-[10px] text-slate-400 mt-0.5">% of loan amount, deducted upfront</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Processing Fee (%)</label>
@@ -244,6 +248,14 @@ const LoanSettings: React.FC = () => {
               <input type="number" step="0.1" value={form.applicationFeeRate} onChange={e => setForm(p => ({ ...p, applicationFeeRate: e.target.value }))}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
               <p className="text-[10px] text-slate-400 mt-0.5">% of loan amount</p>
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-slate-700 mb-1">Agent Fee (% per month)</label>
+              <input type="number" step="0.1" min={0} value={form.agentFeeRate} onChange={e => setForm(p => ({ ...p, agentFeeRate: e.target.value }))}
+                className="w-full max-w-xs px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                % of principal each month until the loan is completed. Charged only when agent is enabled on the application.
+              </p>
             </div>
           </div>
         </div>
@@ -445,14 +457,14 @@ const LoanSettings: React.FC = () => {
                     </div>
 
                     {/* Quick Stats */}
-                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3 mt-4">
+                    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-8 gap-3 mt-4">
                       <div className="p-2.5 bg-slate-50 rounded-lg">
                         <p className="text-[10px] text-slate-400 uppercase">Form Fee</p>
                         <p className="text-sm font-semibold text-slate-900">{formatCurrency(product.fees.formFee)}</p>
                       </div>
                       <div className="p-2.5 bg-slate-50 rounded-lg">
                         <p className="text-[10px] text-slate-400 uppercase">Monitoring</p>
-                        <p className="text-sm font-semibold text-slate-900">{formatCurrency(product.fees.monitoringFee ?? 0)}</p>
+                        <p className="text-sm font-semibold text-slate-900">{product.fees.monitoringFeeRate}%</p>
                       </div>
                       <div className="p-2.5 bg-slate-50 rounded-lg">
                         <p className="text-[10px] text-slate-400 uppercase">Processing</p>
@@ -465,6 +477,10 @@ const LoanSettings: React.FC = () => {
                       <div className="p-2.5 bg-slate-50 rounded-lg">
                         <p className="text-[10px] text-slate-400 uppercase">Application</p>
                         <p className="text-sm font-semibold text-slate-900">{product.fees.applicationFeeRate}%</p>
+                      </div>
+                      <div className="p-2.5 bg-violet-50 rounded-lg">
+                        <p className="text-[10px] text-violet-600 uppercase">Agent / mo</p>
+                        <p className="text-sm font-semibold text-violet-700">{product.fees.agentFeeRate ?? 0}%</p>
                       </div>
                       <div className="p-2.5 bg-emerald-50 rounded-lg">
                         <p className="text-[10px] text-emerald-600 uppercase">Comp. Savings</p>
@@ -488,17 +504,22 @@ const LoanSettings: React.FC = () => {
                             <table className="w-full">
                               <tbody className="divide-y divide-slate-100">
                                 <tr><td className="px-3 py-2 text-xs text-slate-600">Loan Form Fee</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(product.fees.formFee)}</td></tr>
-                                <tr><td className="px-3 py-2 text-xs text-slate-600">Monitoring fee (upfront)</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(product.fees.monitoringFee ?? 0)}</td></tr>
+                                <tr><td className="px-3 py-2 text-xs text-slate-600">Monitoring Fee ({product.fees.monitoringFeeRate}%)</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(1000000 * product.fees.monitoringFeeRate / 100)}</td></tr>
                                 <tr><td className="px-3 py-2 text-xs text-slate-600">Processing Fee ({product.fees.processingFeeRate}%)</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(1000000 * product.fees.processingFeeRate / 100)}</td></tr>
                                 <tr><td className="px-3 py-2 text-xs text-slate-600">Insurance ({product.fees.insuranceFeeRate}%)</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(1000000 * product.fees.insuranceFeeRate / 100)}</td></tr>
                                 <tr><td className="px-3 py-2 text-xs text-slate-600">Application Fee ({product.fees.applicationFeeRate}%)</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(1000000 * product.fees.applicationFeeRate / 100)}</td></tr>
+                                <tr><td className="px-3 py-2 text-xs text-slate-600">Agent fee ({product.fees.agentFeeRate ?? 0}% × {product.maxTerm} mo, if enabled)</td><td className="px-3 py-2 text-xs font-medium text-right">{formatCurrency(1000000 * (product.fees.agentFeeRate ?? 0) / 100 * product.maxTerm)}</td></tr>
                                 <tr className="bg-slate-50 font-semibold">
-                                  <td className="px-3 py-2 text-xs text-slate-900">Total Fees</td>
+                                  <td className="px-3 py-2 text-xs text-slate-900">Total upfront fees</td>
                                   <td className="px-3 py-2 text-xs text-right text-red-600">
                                     {formatCurrency(
                                       product.fees.formFee +
-                                        (product.fees.monitoringFee ?? 0) +
-                                        1000000 * (product.fees.processingFeeRate + product.fees.insuranceFeeRate + product.fees.applicationFeeRate) / 100
+                                        1000000 *
+                                          (product.fees.monitoringFeeRate +
+                                            product.fees.processingFeeRate +
+                                            product.fees.insuranceFeeRate +
+                                            product.fees.applicationFeeRate) /
+                                          100
                                     )}
                                   </td>
                                 </tr>
@@ -508,8 +529,12 @@ const LoanSettings: React.FC = () => {
                                     {formatCurrency(
                                       1000000 -
                                         product.fees.formFee -
-                                        (product.fees.monitoringFee ?? 0) -
-                                        1000000 * (product.fees.processingFeeRate + product.fees.insuranceFeeRate + product.fees.applicationFeeRate) / 100
+                                        1000000 *
+                                          (product.fees.monitoringFeeRate +
+                                            product.fees.processingFeeRate +
+                                            product.fees.insuranceFeeRate +
+                                            product.fees.applicationFeeRate) /
+                                          100
                                     )}
                                   </td>
                                 </tr>

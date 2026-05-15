@@ -287,6 +287,43 @@ export function settingsWithBranchCode(
   return { ...settings, branchValue: code };
 }
 
+/** Numeric member_number → serial segment (member 42 → serial 42, padded to width). */
+export function memberNumberAsAccountSerial(memberNumber: string): number {
+  const t = String(memberNumber ?? "").trim();
+  if (/^\d+$/.test(t)) return parseInt(t, 10);
+  const legacy = t.match(/(\d+)\s*$/);
+  if (legacy) return parseInt(legacy[1]!, 10);
+  return 0;
+}
+
+/** Build account number: branch + product code + serial from member_number (not next global serial). */
+export function buildSavingsAccountNumberForMember(
+  settings: SaccoAccountNumberSettings,
+  savingsProductCode: string,
+  memberNumber: string,
+  branchCode?: string | null
+): string {
+  const applied =
+    branchCode != null && String(branchCode).trim()
+      ? settingsWithBranchCode(settings, String(branchCode).trim())
+      : settings;
+  return buildSavingsAccountNumber(applied, savingsProductCode, memberNumberAsAccountSerial(memberNumber));
+}
+
+export async function savingsAccountNumberForMember(
+  organizationId: string,
+  savingsProductCode: string,
+  memberNumber: string,
+  branchCode?: string | null
+): Promise<string> {
+  const base = await fetchSaccoAccountNumberSettings(organizationId);
+  const serial = memberNumberAsAccountSerial(memberNumber);
+  if (!base) {
+    return `ACC-${String(serial || 1).padStart(6, "0")}`;
+  }
+  return buildSavingsAccountNumberForMember(base, savingsProductCode, memberNumber, branchCode);
+}
+
 /** Next savings account number for a given product code (account-type segment) and optional branch code. */
 export async function suggestNextSavingsAccountNumber(
   organizationId: string,

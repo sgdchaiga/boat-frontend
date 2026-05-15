@@ -15,6 +15,7 @@ import {
   ListChecks,
   MinusCircle,
   PiggyBank,
+  UserCheck,
 } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
 
@@ -47,6 +48,7 @@ const LoanInput: React.FC = () => {
     collateralDescription: '',
     lc1ChairmanName: '',
     lc1ChairmanPhone: '',
+    useAgent: false,
   });
 
   const guarantorCandidates = memberChoices.filter(m => m.id !== form.memberId);
@@ -59,8 +61,9 @@ const LoanInput: React.FC = () => {
   const feeBreakdown = useMemo(() => {
     const amount = parseFloat(form.amount) || 0;
     if (!selectedProduct || amount === 0) return null;
-    return calculateLoanFees(amount, selectedProduct);
-  }, [form.amount, selectedProduct]);
+    const term = parseInt(form.term, 10) || 1;
+    return calculateLoanFees(amount, selectedProduct, { useAgent: form.useAgent, termMonths: term });
+  }, [form.amount, form.term, form.useAgent, selectedProduct]);
 
   // Calculate monthly payment
   const calc = useMemo(() => {
@@ -186,6 +189,7 @@ const LoanInput: React.FC = () => {
       collateralDescription: '',
       lc1ChairmanName: '',
       lc1ChairmanPhone: '',
+      useAgent: false,
     });
     } catch (err) {
       toast({
@@ -326,6 +330,33 @@ const LoanInput: React.FC = () => {
                       placeholder="+256 …" />
                   </div>
                 </div>
+              </div>
+
+              <div className="rounded-lg border border-violet-100 bg-violet-50/40 p-4 flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-start gap-3 min-w-0">
+                  <UserCheck className="w-5 h-5 text-violet-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-sm font-medium text-slate-900">Loan agent</p>
+                    <p className="text-xs text-slate-600 mt-0.5">
+                      When enabled, agent fee is {selectedProduct?.fees.agentFeeRate ?? 0}% of principal per month for{' '}
+                      {form.term || '—'} month(s)
+                      {feeBreakdown?.useAgent
+                        ? ` (${formatCurrency(feeBreakdown.agentFeeMonthly)}/mo · total ${formatCurrency(feeBreakdown.agentFeeTotal)})`
+                        : ' (fee = 0 when off)'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.useAgent}
+                  onClick={() => setForm((p) => ({ ...p, useAgent: !p.useAgent }))}
+                  className={`relative w-11 h-6 rounded-full transition-colors shrink-0 ${form.useAgent ? 'bg-violet-600' : 'bg-slate-300'}`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform ${form.useAgent ? 'translate-x-5' : ''}`}
+                  />
+                </button>
               </div>
 
               <div>
@@ -556,7 +587,7 @@ const LoanInput: React.FC = () => {
                   <span className="text-xs font-medium">{formatCurrency(feeBreakdown.formFee)}</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-50">
-                  <span className="text-xs text-slate-500">Monitoring fee (upfront)</span>
+                  <span className="text-xs text-slate-500">Monitoring Fee ({selectedProduct.fees.monitoringFeeRate}%)</span>
                   <span className="text-xs font-medium">{formatCurrency(feeBreakdown.monitoringFee)}</span>
                 </div>
                 <div className="flex justify-between py-1.5 border-b border-slate-50">
@@ -571,9 +602,23 @@ const LoanInput: React.FC = () => {
                   <span className="text-xs text-slate-500">Application Fee ({selectedProduct.fees.applicationFeeRate}%)</span>
                   <span className="text-xs font-medium">{formatCurrency(feeBreakdown.applicationFee)}</span>
                 </div>
+                {feeBreakdown.useAgent ? (
+                  <>
+                    <div className="flex justify-between py-1.5 border-b border-slate-50">
+                      <span className="text-xs text-slate-500">
+                        Agent fee ({feeBreakdown.agentFeeRate}% / month × {form.term} mo)
+                      </span>
+                      <span className="text-xs font-medium">{formatCurrency(feeBreakdown.agentFeeMonthly)}/mo</span>
+                    </div>
+                    <div className="flex justify-between py-1.5 border-b border-slate-50">
+                      <span className="text-xs text-slate-500">Total agent fee (life of loan)</span>
+                      <span className="text-xs font-medium text-violet-700">{formatCurrency(feeBreakdown.agentFeeTotal)}</span>
+                    </div>
+                  </>
+                ) : null}
                 <div className="flex justify-between py-2 border-t-2 border-slate-200 mt-2">
-                  <span className="text-xs font-bold text-red-600">Total Fees</span>
-                  <span className="text-xs font-bold text-red-600">{formatCurrency(feeBreakdown.totalFees)}</span>
+                  <span className="text-xs font-bold text-red-600">Total upfront fees</span>
+                  <span className="text-xs font-bold text-red-600">{formatCurrency(feeBreakdown.totalUpfrontFees)}</span>
                 </div>
                 <div className="flex justify-between py-2 bg-emerald-50 px-3 rounded-lg -mx-1">
                   <span className="text-xs font-bold text-emerald-700">Net Disbursement</span>

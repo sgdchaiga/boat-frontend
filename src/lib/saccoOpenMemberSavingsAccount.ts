@@ -2,7 +2,12 @@
  * Open savings accounts for SACCO members (shared by manual open page + auto-open on registration).
  */
 import { supabase } from "@/lib/supabase";
-import { fetchSaccoAccountNumberSettings, suggestNextSavingsAccountNumber } from "@/lib/saccoAccountNumberSettings";
+import {
+  fetchSaccoAccountNumberSettings,
+  memberNumberAsAccountSerial,
+  savingsAccountNumberForMember,
+  suggestNextSavingsAccountNumber,
+} from "@/lib/saccoAccountNumberSettings";
 import { fetchSaccoBranches, pickDefaultBranchCode } from "@/lib/saccoBranches";
 import { fetchSavingsProductTypes } from "@/lib/saccoSavingsProductTypes";
 
@@ -62,11 +67,27 @@ export type SaccoSavingsBackfillPreview = {
 };
 
 async function resolveDefaultProductCode(organizationId: string): Promise<string> {
-  const { rows } = await fetchSavingsProductTypes(organizationId);
-  const active = rows.filter((r) => r.is_active);
+  const [settings, typesResult] = await Promise.all([
+    fetchSaccoAccountNumberSettings(organizationId),
+    fetchSavingsProductTypes(organizationId),
+  ]);
+  const preferred = (settings?.accountTypeValue ?? "").trim();
+  const active = typesResult.rows
+    .filter((r) => r.is_active)
+    .sort((a, b) => a.sort_order - b.sort_order || a.code.localeCompare(b.code));
+  if (preferred && active.some((r) => r.code.trim() === preferred)) return preferred;
   if (active.length > 0) return active[0].code.trim();
-  const settings = await fetchSaccoAccountNumberSettings(organizationId);
-  return (settings?.accountTypeValue ?? "1").trim() || "1";
+  return preferred || "1";
+}
+
+async function savingsAccountNumberTaken(organizationId: string, accountNumber: string): Promise<boolean> {
+  const { count, error } = await sb
+    .from("sacco_member_savings_accounts")
+    .select("id", { count: "exact", head: true })
+    .eq("organization_id", organizationId)
+    .eq("account_number", accountNumber.trim());
+  if (error) throw error;
+  return (count ?? 0) > 0;
 }
 
 async function resolveDefaultBranchCode(organizationId: string): Promise<string | null> {
@@ -198,8 +219,13 @@ export async function openFirstSavingsAccountForMember(params: {
   postedByName?: string | null;
   /** Skip re-fetching defaults when bulk backfilling. */
   defaults?: { productCode: string; branchCode: string | null };
+  /**
+   * When true (default), serial segment = member_number so account aligns with register.
+   * When false, uses next global serial (manual open page).
+   */
+  useMemberNumberAsSerial?: boolean;
 }): Promise<OpenFirstSavingsAccountResult> {
-  const { organizationId, member, postedByStaffId, postedByName, defaults } = params;
+  const { organizationId, member, postedByStaffId, postedByName, defaults, useMemberNumberAsSerial = true } = params;
   try {
     if (await memberHasSavingsAccount(organizationId, member.id)) {
       return { status: "skipped", reason: "Member already has a savings account." };
@@ -208,11 +234,23 @@ export async function openFirstSavingsAccountForMember(params: {
     const productCode = defaults?.productCode ?? (await resolveDefaultProductCode(organizationId));
     const branchCode =
       defaults !== undefined ? defaults.branchCode : await resolveDefaultBranchCode(organizationId);
-    const accountNumber = await suggestNextSavingsAccountNumber(
-      organizationId,
-      productCode,
-      branchCode ?? undefined
-    );
+
+    const accountNumber =
+      useMemberNumberAsSerial
+        ? await savingsAccountNumberForMember(
+            organizationId,
+            productCode,
+            member.member_number,
+            branchCode ?? undefined
+          )
+        : await suggestNextSavingsAccountNumber(organizationId, productCode, branchCode ?? undefined);
+
+    if (await savingsAccountNumberTaken(organizationId, accountNumber)) {
+      return {
+        status: "failed",
+        message: `Account number ${accountNumber} is already in use.`,
+      };
+    }
 
     const result = await openSavingsAccountForMember({
       organizationId,
@@ -233,13 +271,10 @@ export async function openFirstSavingsAccountForMember(params: {
   }
 }
 
-/** Numeric key for member_number (1, 2, 10 — not lexicographic "10" before "2"). */
+/** Sort key for backfill order (same digits as account serial segment). */
 export function memberNumberSortKey(memberNumber: string): number {
-  const t = String(memberNumber ?? "").trim();
-  if (/^\d+$/.test(t)) return parseInt(t, 10);
-  const legacy = t.match(/(\d+)\s*$/);
-  if (legacy) return parseInt(legacy[1]!, 10);
-  return Number.MAX_SAFE_INTEGER;
+  const n = memberNumberAsAccountSerial(memberNumber);
+  return n > 0 ? n : Number.MAX_SAFE_INTEGER;
 }
 
 /** Oldest / lowest member id first — matches register order for sequential account serials. */

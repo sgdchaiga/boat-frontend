@@ -19,6 +19,7 @@ import type {
   Member,
   ProvisioningConfig,
   SaccoLoanPolicy,
+  type LoanFeeBreakdown,
 } from "@/types/saccoWorkspace";
 import { memberMeetsLoanDisbursePolicy, loanProductSharesGate } from "@/lib/saccoLoanEligibility";
 import {
@@ -41,6 +42,7 @@ export type {
   ProvisioningConfig,
   LoanStatus,
   SaccoLoanPolicy,
+  LoanFeeBreakdown,
 } from "@/types/saccoWorkspace";
 
 export function calculateMonthlyPayment(
@@ -59,22 +61,36 @@ export function calculateMonthlyPayment(
   return Math.round((P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1));
 }
 
-export function calculateLoanFees(amount: number, product: LoanProduct) {
+export function calculateLoanFees(
+  amount: number,
+  product: LoanProduct,
+  options?: { useAgent?: boolean; termMonths?: number }
+): LoanFeeBreakdown {
   const f = product.fees;
   const processingFee = (amount * f.processingFeeRate) / 100;
   const insuranceFee = (amount * f.insuranceFeeRate) / 100;
   const applicationFee = (amount * f.applicationFeeRate) / 100;
   const formFee = f.formFee;
-  const monitoringFee = f.monitoringFee ?? 0;
-  const totalFees = formFee + monitoringFee + processingFee + insuranceFee + applicationFee;
+  const monitoringFee = (amount * (f.monitoringFeeRate ?? 0)) / 100;
+  const totalUpfrontFees = formFee + monitoringFee + processingFee + insuranceFee + applicationFee;
+  const useAgent = Boolean(options?.useAgent);
+  const agentFeeRate = useAgent ? (f.agentFeeRate ?? 0) : 0;
+  const termMonths = Math.max(1, Math.floor(options?.termMonths ?? 1));
+  const agentFeeMonthly = useAgent ? (amount * agentFeeRate) / 100 : 0;
+  const agentFeeTotal = agentFeeMonthly * termMonths;
   return {
     formFee,
     monitoringFee,
     processingFee,
     insuranceFee,
     applicationFee,
-    totalFees,
-    netDisbursement: amount - totalFees,
+    totalUpfrontFees,
+    totalFees: totalUpfrontFees,
+    netDisbursement: amount - totalUpfrontFees,
+    useAgent,
+    agentFeeRate,
+    agentFeeMonthly,
+    agentFeeTotal,
   };
 }
 
