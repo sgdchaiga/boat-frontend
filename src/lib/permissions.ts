@@ -35,7 +35,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "cash_receipts_edit", label: "Edit cash receipts", group: "Sales Operations", description: "Edit/reverse cash receipts." },
 ];
 
-const CACHE_KEY = "boat.permissions.snapshot.v1";
+const CACHE_KEY = "boat.permissions.snapshot.v2";
 
 type PermissionSnapshot = {
   orgId: string;
@@ -94,13 +94,28 @@ export async function loadPermissionSnapshot(input: {
   if (roleErr) throw roleErr;
   if (overrideErr) throw overrideErr;
 
+  /** Only keys present in DB — missing rows fall back to role defaults in `canApprove`. */
   const grants: Record<string, boolean> = {};
-  for (const key of PERMISSION_KEYS) grants[key] = false;
   for (const row of roleRows || []) grants[String(row.permission_key)] = !!row.allowed;
   for (const row of overrideRows || []) grants[String(row.permission_key)] = !!row.allowed;
 
   writeSnapshot({ orgId, staffId, role, grants, loadedAt: Date.now() });
   return grants;
+}
+
+function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean {
+  if (permission === "purchase_orders") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "bills") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
+  if (permission === "vendor_credits") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "chart_of_accounts") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "sacco_savings_settings") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "payroll_prepare") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
+  if (permission === "payroll_approve") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "payroll_post") return roleKey === "admin" || roleKey === "accountant";
+  if (permission === "pos_orders_edit" || permission === "cash_receipts_edit") {
+    return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant" || roleKey === "supervisor";
+  }
+  return false;
 }
 
 export function canApprove(permission: PermissionKey, role?: string | null): boolean {
@@ -109,18 +124,6 @@ export function canApprove(permission: PermissionKey, role?: string | null): boo
   if (snapshot?.grants && Object.prototype.hasOwnProperty.call(snapshot.grants, permission)) {
     return !!snapshot.grants[permission];
   }
-  // Fallback defaults (for first load/offline)
-  if (permission === "purchase_orders") return rl === "admin" || rl === "manager";
-  if (permission === "bills") return rl === "admin" || rl === "manager" || rl === "accountant";
-  if (permission === "vendor_credits") return rl === "admin" || rl === "manager";
-  if (permission === "chart_of_accounts") return rl === "admin" || rl === "manager";
-  if (permission === "sacco_savings_settings") return rl === "admin" || rl === "manager";
-  if (permission === "payroll_prepare") return rl === "admin" || rl === "manager" || rl === "accountant";
-  if (permission === "payroll_approve") return rl === "admin" || rl === "manager";
-  if (permission === "payroll_post") return rl === "admin" || rl === "accountant";
-  if (permission === "pos_orders_edit" || permission === "cash_receipts_edit") {
-    return rl === "admin" || rl === "manager" || rl === "accountant" || rl === "supervisor";
-  }
-  return false;
+  return roleDefaultAllows(permission, rl);
 }
 

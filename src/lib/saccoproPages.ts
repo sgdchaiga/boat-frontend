@@ -9,6 +9,8 @@ export const SACCOPRO_PAGE = {
   memberProfile: "sacco_member_profile",
   /** Account types + account number format (rights: Admin → Approval rights). */
   savingsSettings: "sacco_members_savings_settings",
+  /** Role permissions & staff overrides (admin). */
+  permissions: "sacco_permissions",
   savingsAccountOpen: "sacco_savings_open",
   /** Register of all opened savings product accounts (balances + KYC snapshot). */
   savingsAccountsList: "sacco_savings_accounts_list",

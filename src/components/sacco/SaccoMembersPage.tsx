@@ -17,8 +17,10 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { legacyMemberNumberFromIndex, suggestNextMemberNumber } from "@/lib/saccoAccountNumberSettings";
+import { openFirstSavingsAccountForMember } from "@/lib/saccoOpenMemberSavingsAccount";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { PageNotes } from "@/components/common/PageNotes";
+import { toast } from "@/components/ui/use-toast";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const sb = supabase as any;
@@ -228,11 +230,17 @@ export function SaccoMembersPage({
           .eq("id", editing.id);
         if (e) throw e;
       } else {
+        let inserted: SaccoMemberRow | null = null;
         let lastErr: unknown = null;
         for (let attempt = 0; attempt < 5; attempt++) {
           const member_number = await suggestNextMemberNumber(orgId);
-          const { error: e } = await sb.from("sacco_members").insert({ ...payload, member_number, organization_id: orgId });
+          const { data, error: e } = await sb
+            .from("sacco_members")
+            .insert({ ...payload, member_number, organization_id: orgId })
+            .select()
+            .single();
           if (!e) {
+            inserted = data as SaccoMemberRow;
             lastErr = null;
             break;
           }
@@ -243,6 +251,26 @@ export function SaccoMembersPage({
           if (!isDup) throw e;
         }
         if (lastErr) throw lastErr;
+        if (inserted) {
+          const savingsResult = await openFirstSavingsAccountForMember({
+            organizationId: orgId,
+            member: inserted,
+            postedByStaffId: user?.id ?? null,
+            postedByName: user?.full_name || user?.email || null,
+          });
+          if (savingsResult.status === "opened") {
+            toast({
+              title: "Member registered",
+              description: `Savings account ${savingsResult.accountNumber} opened automatically.`,
+            });
+          } else if (savingsResult.status === "failed") {
+            toast({
+              title: "Member registered",
+              description: `Savings account was not opened: ${savingsResult.message}. Open one manually from Savings.`,
+              variant: "destructive",
+            });
+          }
+        }
       }
       closeRegistrationModal();
       await load();

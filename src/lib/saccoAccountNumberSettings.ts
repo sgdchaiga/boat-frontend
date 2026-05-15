@@ -278,12 +278,24 @@ export async function suggestNextMemberNumber(organizationId: string): Promise<s
   return nextSequentialMemberNumber(numbers);
 }
 
-/** Next savings account number for a given product code (account-type segment). */
+/** Apply a branch code to settings for the branch segment when issuing account numbers. */
+export function settingsWithBranchCode(
+  settings: SaccoAccountNumberSettings,
+  branchCode: string
+): SaccoAccountNumberSettings {
+  const code = String(branchCode ?? "").trim() || settings.branchValue;
+  return { ...settings, branchValue: code };
+}
+
+/** Next savings account number for a given product code (account-type segment) and optional branch code. */
 export async function suggestNextSavingsAccountNumber(
   organizationId: string,
-  savingsProductCode: string
+  savingsProductCode: string,
+  branchCode?: string
 ): Promise<string> {
-  const settings = await fetchSaccoAccountNumberSettings(organizationId);
+  const base = await fetchSaccoAccountNumberSettings(organizationId);
+  const settings =
+    base && branchCode?.trim() ? settingsWithBranchCode(base, branchCode.trim()) : base;
   const { data, error } = await sb.from("sacco_member_savings_accounts").select("account_number").eq("organization_id", organizationId);
   if (error) throw error;
   const numbers = (data ?? []).map((r: { account_number: string }) => r.account_number);

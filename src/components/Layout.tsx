@@ -254,6 +254,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
     isSuperAdmin ||
       ["admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase())
   );
+  const saccoPermissionsNav = Boolean(isSuperAdmin || String(user?.role ?? "").toLowerCase() === "admin");
 
   const simpleNavigation: NavItem[] = useMemo(
     () =>
@@ -369,6 +370,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
         : []),
       { name: 'Wallet', icon: Wallet, page: 'wallet' },
       { name: 'Staff', icon: UsersRound, page: 'staff' },
+      ...(saccoPermissionsNav
+        ? [{ name: 'Permissions', icon: Shield, page: SACCOPRO_PAGE.permissions } as NavItem]
+        : []),
       ...(saccoSystemCashbookNav
         ? [
             {
@@ -412,6 +416,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                   group: 'Configuration',
                   items: [
                     { name: 'Settings', page: 'admin' },
+                    ...(saccoPermissionsNav ? [{ name: 'Permissions', page: SACCOPRO_PAGE.permissions }] : []),
                     { name: 'Loan products', page: SACCOPRO_PAGE.loanSettings },
                     { name: 'Savings numbering', page: 'sacco_members_savings_settings' },
                     { name: 'Interest rules', page: SACCOPRO_PAGE.savingsInterest },
@@ -428,6 +433,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
       enableFixedAssets,
       enableBudget,
       enablePayroll,
+      saccoPermissionsNav,
       saccoSystemCashbookNav,
     ]
   );

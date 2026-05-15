@@ -14,6 +14,9 @@ import {
   type SaccoAccountNumberSettings,
   type SegmentKind,
 } from "@/lib/saccoAccountNumberSettings";
+import { SaccoBranchesSection } from "@/components/sacco/SaccoBranchesSection";
+import { SaccoSavingsAccountTypesSection } from "@/components/sacco/SaccoSavingsAccountTypesSection";
+import { fetchSavingsProductTypes, type SaccoSavingsProductTypeRow } from "@/lib/saccoSavingsProductTypes";
 
 function clampDigits(n: number): number {
   if (Number.isNaN(n)) return 2;
@@ -43,6 +46,13 @@ export function AdminSaccoAccountNumberSettingsPage({ readOnly = false }: AdminS
   const [branchValue, setBranchValue] = useState(DEFAULT_ACCOUNT_NUMBER_SETTINGS.branchValue);
   const [accountTypeValue, setAccountTypeValue] = useState(DEFAULT_ACCOUNT_NUMBER_SETTINGS.accountTypeValue);
   const [separator, setSeparator] = useState(DEFAULT_ACCOUNT_NUMBER_SETTINGS.separator);
+  const [productTypes, setProductTypes] = useState<SaccoSavingsProductTypeRow[]>([]);
+
+  const refreshProductTypes = useCallback(async () => {
+    if (!orgId) return;
+    const { rows } = await fetchSavingsProductTypes(orgId);
+    setProductTypes(rows.filter((t) => t.is_active));
+  }, [orgId]);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -52,7 +62,11 @@ export function AdminSaccoAccountNumberSettingsPage({ readOnly = false }: AdminS
     setLoading(true);
     setError(null);
     try {
-      const row = await fetchSaccoAccountNumberSettings(orgId);
+      const [row, typesResult] = await Promise.all([
+        fetchSaccoAccountNumberSettings(orgId),
+        fetchSavingsProductTypes(orgId),
+      ]);
+      setProductTypes(typesResult.rows.filter((t) => t.is_active));
       const s = row ?? DEFAULT_ACCOUNT_NUMBER_SETTINGS;
       setSegmentOrder(s.segmentOrder);
       setBranchDigits(String(s.branchDigitCount));
@@ -195,7 +209,7 @@ export function AdminSaccoAccountNumberSettingsPage({ readOnly = false }: AdminS
         </div>
 
         {readOnly && (
-          <ReadOnlyNotice message="You can view this format. Only roles allowed in Admin → Approval rights → Savings & member settings may edit." />
+          <ReadOnlyNotice message="You can view this format. Only roles with “Savings settings” under Permissions may edit." />
         )}
 
         {error && (
@@ -289,6 +303,24 @@ export function AdminSaccoAccountNumberSettingsPage({ readOnly = false }: AdminS
                 {selectedKind === "account_type" && (
                   <>
                     <label className={`${label} mt-3`}>Account type code (product code)</label>
+                    {productTypes.length > 0 ? (
+                      <select
+                        value={productTypes.some((t) => t.code === accountTypeValue) ? accountTypeValue : ""}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          if (v) setAccountTypeValue(v);
+                        }}
+                        className={`${field} mb-2`}
+                        disabled={readOnly}
+                      >
+                        <option value="">Pick a registered account type…</option>
+                        {productTypes.map((t) => (
+                          <option key={t.id} value={t.code}>
+                            {t.code} — {t.name}
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
                     <input
                       type="text"
                       inputMode="numeric"
@@ -299,8 +331,8 @@ export function AdminSaccoAccountNumberSettingsPage({ readOnly = false }: AdminS
                       disabled={readOnly}
                     />
                     <p className="text-[10px] text-slate-500 mt-2 leading-relaxed">
-                      When you open a savings account, the <strong>Product code</strong> field (e.g. <strong>12</strong>) is the code for this segment —
-                      it must match what you use here for the preview. The system picks that code and pads it to the digit width.
+                      When you open a savings account, the <strong>Product code</strong> must match a registered account type below. Add types in the
+                      section at the bottom of this page if none exist yet.
                     </p>
                     <p className="text-[10px] text-slate-600 mt-2 font-mono tabular-nums">
                       Padded segment:{" "}
@@ -365,6 +397,31 @@ export function AdminSaccoAccountNumberSettingsPage({ readOnly = false }: AdminS
             <span className="font-mono font-semibold">{rawCodeForList("account_type")}</span> (same as product code when opening).
           </p>
           <p className="mt-1 font-mono text-lg font-semibold text-emerald-800 break-all">{previewNumber}</p>
+        </div>
+
+        <div className="mt-8 pt-6 border-t border-slate-200">
+          <SaccoBranchesSection
+            readOnly={readOnly}
+            compact
+            selectedCode={branchValue}
+            onSelectCode={(code) => {
+              setBranchValue(code);
+              setSelectedKind("branch");
+            }}
+          />
+        </div>
+
+        <div className="mt-8 pt-6 border-t border-slate-200">
+          <SaccoSavingsAccountTypesSection
+            readOnly={readOnly}
+            compact
+            selectedCode={accountTypeValue}
+            onSelectCode={(code) => {
+              setAccountTypeValue(code);
+              setSelectedKind("account_type");
+            }}
+            onTypesChanged={() => void refreshProductTypes()}
+          />
         </div>
 
         <div className="mt-6 flex justify-end">

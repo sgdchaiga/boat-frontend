@@ -88,6 +88,7 @@ import { SaccoMembersPage } from './components/sacco/SaccoMembersPage';
 import { SaccoSavingsAccountOpenPage } from './components/sacco/SaccoSavingsAccountOpenPage';
 import { SaccoSavingsAccountsListPage } from './components/sacco/SaccoSavingsAccountsListPage';
 import { SaccoMembersSavingsSettingsPage } from './components/sacco/SaccoMembersSavingsSettingsPage';
+import { SaccoPermissionsPage } from './components/sacco/SaccoPermissionsPage';
 import { SaccoLoansPage } from './components/sacco/SaccoLoansPage';
 import { SaccoCashbookPage } from './components/sacco/SaccoCashbookPage';
 import { SaccoTellerPage } from './components/sacco/SaccoTellerPage';
@@ -204,6 +205,7 @@ const MANAGED_PAGE_STATE_KEYS = [
   "highlightVendorId",
   "highlightPaymentId",
   "memberId",
+  "permissionsStaffId",
   "payrollRunId",
   "payrollStaffId",
   "adminTab",
@@ -264,6 +266,8 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (highlightPaymentId) state.highlightPaymentId = highlightPaymentId;
   const memberId = qp.get("memberId");
   if (memberId) state.memberId = memberId;
+  const permissionsStaffId = qp.get("permissionsStaffId");
+  if (permissionsStaffId) state.permissionsStaffId = permissionsStaffId;
   const payrollRunId = qp.get("payrollRunId");
   if (payrollRunId) state.payrollRunId = payrollRunId;
   const payrollStaffId = qp.get("payrollStaffId");
@@ -728,6 +732,13 @@ function AppContent() {
       case SACCOPRO_PAGE.savingsSettings:
       case "sacco_members_savings_settings":
         return <SaccoMembersSavingsSettingsPage readOnly={access.readOnly} />;
+      case SACCOPRO_PAGE.permissions:
+        return (
+          <SaccoPermissionsPage
+            readOnly={access.readOnly}
+            focusStaffId={pageState.permissionsStaffId as string | undefined}
+          />
+        );
       case SACCOPRO_PAGE.savingsAccountOpen:
         return (
           <SaccoSavingsAccountOpenPage

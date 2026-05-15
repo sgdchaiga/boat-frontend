@@ -17,9 +17,16 @@ type StaffRow = { id: string; full_name: string; role: string };
 
 interface AdminApprovalRightsPageProps {
   initialFocusStaffId?: string;
+  readOnly?: boolean;
+  /** Hide duplicate page title when embedded in SACCO Permissions. */
+  embedded?: boolean;
 }
 
-export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRightsPageProps = {}) {
+export function AdminApprovalRightsPage({
+  initialFocusStaffId,
+  readOnly = false,
+  embedded = false,
+}: AdminApprovalRightsPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const [roles, setRoles] = useState<RoleTypeRow[]>([]);
@@ -112,6 +119,7 @@ export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRi
   const roleLabelByKey = useMemo(() => Object.fromEntries(roles.map((r) => [r.role_key, r.display_name])), [roles]);
 
   const toggleRolePermission = (roleKey: string, key: PermissionKey) => {
+    if (readOnly) return;
     setRolePerms((prev) => ({
       ...prev,
       [roleKey]: {
@@ -122,6 +130,7 @@ export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRi
   };
 
   const cycleStaffOverride = (staffId: string, key: PermissionKey) => {
+    if (readOnly) return;
     setStaffOverrides((prev) => {
       const cur = prev?.[staffId]?.[key] ?? null;
       const next = cur === null ? true : cur === true ? false : null;
@@ -133,7 +142,7 @@ export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRi
   };
 
   const save = async () => {
-    if (!orgId) return;
+    if (readOnly || !orgId) return;
     setSaving(true);
     try {
       const roleUpserts = roles.flatMap((r) =>
@@ -220,22 +229,37 @@ export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRi
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap justify-between items-center gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h2 className="text-lg font-semibold text-slate-900">Permissions</h2>
-          <PageNotes ariaLabel="Permissions help">
-            <p>Role-based permissions with optional staff-specific overrides. This replaces Approval Rights.</p>
-          </PageNotes>
+      {!embedded ? (
+        <div className="flex flex-wrap justify-between items-center gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-lg font-semibold text-slate-900">Permissions</h2>
+            <PageNotes ariaLabel="Permissions help">
+              <p>Role-based permissions with optional staff-specific overrides. This replaces Approval Rights.</p>
+            </PageNotes>
+          </div>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={readOnly || saving}
+            className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800 disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? "Saving..." : "Save permissions"}
+          </button>
         </div>
-        <button
-          onClick={save}
-          disabled={saving}
-          className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800 disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? "Saving..." : "Save permissions"}
-        </button>
-      </div>
+      ) : (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={readOnly || saving}
+            className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? "Saving..." : "Save permissions"}
+          </button>
+        </div>
+      )}
 
       <div className="bg-white border border-slate-200 rounded-xl overflow-auto">
         <table className="min-w-[980px] w-full text-sm">
@@ -263,6 +287,7 @@ export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRi
                         type="checkbox"
                         checked={!!rolePerms?.[r.role_key]?.[p.key]}
                         onChange={() => toggleRolePermission(r.role_key, p.key)}
+                        disabled={readOnly}
                       />
                       <span className="text-xs text-slate-600">Allow</span>
                     </label>
@@ -322,7 +347,8 @@ export function AdminApprovalRightsPage({ initialFocusStaffId }: AdminApprovalRi
                         <button
                           type="button"
                           onClick={() => cycleStaffOverride(s.id, p.key)}
-                          className={`rounded px-2 py-1 text-xs font-medium ${cls}`}
+                          disabled={readOnly}
+                          className={`rounded px-2 py-1 text-xs font-medium disabled:opacity-50 ${cls}`}
                         >
                           {label}
                         </button>

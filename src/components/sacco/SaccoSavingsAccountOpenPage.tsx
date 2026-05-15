@@ -3,6 +3,8 @@ import { Wallet, Loader2, RefreshCw } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { suggestNextSavingsAccountNumber } from "@/lib/saccoAccountNumberSettings";
+import { fetchSaccoBranches, pickDefaultBranchCode, type SaccoBranchRow } from "@/lib/saccoBranches";
+import { openSavingsAccountForMember } from "@/lib/saccoOpenMemberSavingsAccount";
 import { fetchSavingsProductTypes, type SaccoSavingsProductTypeRow } from "@/lib/saccoSavingsProductTypes";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -40,6 +42,8 @@ export function SaccoSavingsAccountOpenPage({
   const [subAccount, setSubAccount] = useState("");
   const [accountNo, setAccountNo] = useState("");
   const [savingsProductTypes, setSavingsProductTypes] = useState<SaccoSavingsProductTypeRow[]>([]);
+  const [branches, setBranches] = useState<SaccoBranchRow[]>([]);
+  const [branchCode, setBranchCode] = useState("");
 
   const loadMembers = useCallback(async () => {
     if (!orgId) {
@@ -65,11 +69,25 @@ export function SaccoSavingsAccountOpenPage({
   useEffect(() => {
     if (!orgId) {
       setSavingsProductTypes([]);
+      setBranches([]);
+      setBranchCode("");
       return;
     }
     void fetchSavingsProductTypes(orgId)
       .then(({ rows }) => setSavingsProductTypes(rows))
       .catch(() => setSavingsProductTypes([]));
+    void fetchSaccoBranches(orgId)
+      .then(({ rows }) => {
+        setBranches(rows.filter((b) => b.is_active));
+        setBranchCode((prev) => {
+          if (prev && rows.some((b) => b.code === prev && b.is_active)) return prev;
+          return pickDefaultBranchCode(rows.filter((b) => b.is_active), "");
+        });
+      })
+      .catch(() => {
+        setBranches([]);
+        setBranchCode("");
+      });
   }, [orgId]);
 
   useEffect(() => {
@@ -94,7 +112,11 @@ export function SaccoSavingsAccountOpenPage({
     }
     setGenerating(true);
     try {
-      const next = await suggestNextSavingsAccountNumber(orgId, productCode.trim());
+      const next = await suggestNextSavingsAccountNumber(
+        orgId,
+        productCode.trim(),
+        branchCode.trim() || undefined
+      );
       setAccountNo(next);
     } catch (e) {
       toast({
@@ -106,7 +128,7 @@ export function SaccoSavingsAccountOpenPage({
     } finally {
       setGenerating(false);
     }
-  }, [orgId, productCode]);
+  }, [orgId, productCode, branchCode]);
 
   useEffect(() => {
     void regenerateAccountNumber();
@@ -121,6 +143,7 @@ export function SaccoSavingsAccountOpenPage({
     setProductCode("");
     setSubAccount("");
     setAccountNo("");
+    setBranchCode(branches.length > 0 ? pickDefaultBranchCode(branches, "") : "");
   };
 
   const submit = async (e: React.FormEvent) => {
@@ -150,59 +173,29 @@ export function SaccoSavingsAccountOpenPage({
 
     setSaving(true);
     try {
-      const fullRow = {
-        organization_id: orgId,
-        sacco_member_id: memberId,
-        savings_product_code: productCode.trim(),
-        sub_account: subAccount.trim() || null,
-        account_number: accountNo.trim(),
-        date_account_opened: dateAccountOpened,
-        client_no: m.member_number,
-        client_full_name: m.full_name.trim(),
-        gender: m.gender?.trim() || null,
-        date_of_birth: m.date_of_birth ? String(m.date_of_birth).slice(0, 10) : null,
-        marital_status: m.marital_status?.trim() || null,
-        address: m.address?.trim() || null,
-        telephone: m.phone?.trim() || null,
-        email: m.email?.trim() || null,
-        occupation: m.occupation?.trim() || null,
-        next_of_kin: m.next_of_kin?.trim() || null,
-        nok_phone: m.nok_phone?.trim() || null,
-        posted_by_staff_id: user?.id ?? null,
-        posted_by_name: user?.full_name || user?.email || null,
-        balance: 0,
-        is_active: true,
-      };
-      let { error } = await sb.from("sacco_member_savings_accounts").insert(fullRow);
-      if (error) {
-        const msg = `${error.message ?? ""} ${(error as { details?: string }).details ?? ""}`;
-        const looksLikeMissingColumns = /column|does not exist|42703|schema cache|PGRST204/i.test(msg);
-        if (looksLikeMissingColumns) {
-          console.warn(
-            "[SACCO] sacco_member_savings_accounts extended columns missing — run migration 20260426120004. Inserting minimal row."
-          );
-          const minimal = {
-            organization_id: orgId,
-            sacco_member_id: memberId,
-            savings_product_code: productCode.trim(),
-            account_number: accountNo.trim(),
-            balance: 0,
-            is_active: true,
-          };
-          const retry = await sb.from("sacco_member_savings_accounts").insert(minimal);
-          error = retry.error;
-          if (!error) {
-            toast({
-              title: "Savings account opened (basic)",
-              description: `Account ${accountNo}. Apply migration 20260426120004 on Supabase to store opening KYC fields.`,
-            });
-            resetForm();
-            return;
-          }
-        }
-        throw error;
+      const result = await openSavingsAccountForMember({
+        organizationId: orgId,
+        member: m,
+        productCode: productCode.trim(),
+        accountNumber: accountNo.trim(),
+        branchCode: branchCode.trim() || null,
+        subAccount: subAccount.trim() || null,
+        dateAccountOpened,
+        postedByStaffId: user?.id ?? null,
+        postedByName: user?.full_name || user?.email || null,
+      });
+      if (result.status === "failed") {
+        toast({ title: "Save failed", description: result.message, variant: "destructive" });
+        return;
       }
-      toast({ title: "Savings account opened", description: `Account ${accountNo}` });
+      if (result.basicOnly) {
+        toast({
+          title: "Savings account opened (basic)",
+          description: `Account ${result.accountNumber}. Apply migration 20260426120004 on Supabase to store opening KYC fields.`,
+        });
+      } else {
+        toast({ title: "Savings account opened", description: `Account ${result.accountNumber}` });
+      }
       resetForm();
     } catch (err) {
       toast({
@@ -275,6 +268,35 @@ export function SaccoSavingsAccountOpenPage({
             <div>
               <label className={label}>Date account opened</label>
               <input type="date" required value={dateAccountOpened} onChange={(e) => setDateAccountOpened(e.target.value)} className={field} />
+            </div>
+            <div>
+              <label className={label}>Branch</label>
+              {branches.length > 0 ? (
+                <select
+                  value={branchCode}
+                  onChange={(e) => setBranchCode(e.target.value)}
+                  className={`${field} [color-scheme:light]`}
+                  required
+                >
+                  <option value="">Select branch</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.code}>
+                      {b.code} — {b.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <>
+                  <input
+                    value={branchCode}
+                    onChange={(e) => setBranchCode(e.target.value.replace(/\D/g, ""))}
+                    className={field}
+                    inputMode="numeric"
+                    placeholder="Branch code (from Savings settings)"
+                  />
+                  <p className="text-[10px] text-slate-500 mt-0.5">Add branches under Savings settings, or enter the branch segment code here.</p>
+                </>
+              )}
             </div>
             <div>
               <label className={label}>Product code</label>
