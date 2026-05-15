@@ -6,6 +6,7 @@ import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { PageNotes } from "@/components/common/PageNotes";
 import { canEditSaccoSavingsSettings, isLocalAuthEnvEnabled } from "@/lib/saccoSavingsSettingsAccess";
 import { SaccoBranchesSection } from "./SaccoBranchesSection";
+import { SaccoSavingsAccountBackfillSection } from "./SaccoSavingsAccountBackfillSection";
 import { SaccoSavingsAccountTypesSection } from "./SaccoSavingsAccountTypesSection";
 
 type TabId = "types" | "branches" | "numbers";
@@ -62,6 +63,8 @@ export function SaccoMembersSavingsSettingsPage({ readOnly: subscriptionReadOnly
       {!subscriptionReadOnly && !canEdit ? (
         <ReadOnlyNotice message="Your role cannot edit these settings. Ask an administrator to grant “Savings settings” under Admin → Permissions (or Approval rights)." />
       ) : null}
+
+      <SaccoSavingsAccountBackfillSection readOnly={!canEdit} />
 
       <div className="flex flex-wrap gap-2">
         {tabBtn("types", "Account types", Layers)}
