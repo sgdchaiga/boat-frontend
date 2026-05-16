@@ -35,6 +35,7 @@ type DbLoan = {
   sacco_member_id: string;
   member_name: string;
   loan_type: string;
+  loan_number?: string | null;
   amount: number;
   balance: number;
   paid_amount: number;
@@ -61,6 +62,7 @@ type DbLoan = {
 type DbProduct = {
   id: string;
   name: string;
+  loan_code?: string | null;
   interest_rate: number;
   max_term_months: number;
   min_amount: number;
@@ -82,6 +84,7 @@ export function mapLoanFromRow(row: DbLoan): Loan {
     memberId: row.sacco_member_id,
     memberName: row.member_name,
     loanType: row.loan_type,
+    loanNumber: row.loan_number?.trim() ? String(row.loan_number).trim() : undefined,
     amount: Number(row.amount),
     balance: Number(row.balance),
     paidAmount: Number(row.paid_amount),
@@ -131,9 +134,12 @@ export function mapProductFromRow(row: DbProduct): LoanProduct {
     applicationFeeRate: Number(raw?.applicationFeeRate ?? 0),
     agentFeeRate: Number(raw?.agentFeeRate ?? 0),
   };
+  const codeRaw = row.loan_code != null && String(row.loan_code).trim() !== "" ? String(row.loan_code).trim() : "1";
+  const loanCode = String(codeRaw).replace(/\D/g, "") || "1";
   return {
     id: row.id,
     name: row.name,
+    loanCode,
     interestRate: Number(row.interest_rate),
     maxTerm: Number(row.max_term_months),
     minAmount: Number(row.min_amount),
@@ -506,6 +512,7 @@ export async function insertLoanRow(payload: {
   lc1_chairman_name?: string | null;
   lc1_chairman_phone?: string | null;
   last_payment_date?: string | null;
+  loan_number?: string | null;
 }): Promise<Loan> {
   const baseRow = {
     sacco_member_id: payload.sacco_member_id,
@@ -533,8 +540,18 @@ export async function insertLoanRow(payload: {
     lc1_chairman_phone: payload.lc1_chairman_phone ?? null,
     last_payment_date: payload.last_payment_date ?? null,
   };
+  const loanNum = payload.loan_number?.trim() ? payload.loan_number.trim() : null;
+  let toInsert: Record<string, unknown> = loanNum != null ? { ...extendedRow, loan_number: loanNum } : extendedRow;
 
-  let { data, error } = await sb.from("sacco_loans").insert(extendedRow).select("*").single();
+  let { data, error } = await sb.from("sacco_loans").insert(toInsert).select("*").single();
+  if (error && isUnknownColumnError(error) && loanNum != null) {
+    console.warn(
+      "[SACCO] Full loan insert failed (unknown columns). Retrying without loan_number — apply migration 20260516120000_sacco_loan_number_settings.sql for loan_number."
+    );
+    const r1 = await sb.from("sacco_loans").insert(extendedRow).select("*").single();
+    data = r1.data;
+    error = r1.error;
+  }
   if (error && isUnknownColumnError(error)) {
     console.warn(
       "[SACCO] Retrying loan insert without collateral/last_payment columns — apply migration 20260426120001_sacco_loan_collateral_last_payment.sql to persist them."
@@ -550,6 +567,10 @@ export async function insertLoanRow(payload: {
 export async function updateLoanRow(
   id: string,
   patch: Partial<{
+    amount: number;
+    member_name: string;
+    purpose: string;
+    application_date: string;
     balance: number;
     paid_amount: number;
     status: LoanStatus;
@@ -562,17 +583,25 @@ export async function updateLoanRow(
     written_off_remaining: number;
     written_off_total: number;
     written_off_at: string | null;
+    loan_number: string | null;
   }>
 ): Promise<void> {
   const { error } = await sb.from("sacco_loans").update(patch).eq("id", id);
   if (error) throw error;
 }
 
+/** All loans for an organization (portfolio / bulk import matching). */
+export async function fetchLoansForOrganization(organizationId: string): Promise<Loan[]> {
+  const { data, error } = await sb.from("sacco_loans").select("*").eq("organization_id", organizationId);
+  if (error) throw error;
+  return (data ?? []).map((r: DbLoan) => mapLoanFromRow(r));
+}
+
 export async function replaceLoanProductsForOrg(organizationId: string, products: LoanProduct[]): Promise<LoanProduct[]> {
   const { error: delErr } = await sb.from("sacco_loan_products").delete().eq("organization_id", organizationId);
   if (delErr) throw delErr;
   if (products.length === 0) return [];
-  const rows = products.map((p, i) => ({
+  const rowsBase = products.map((p, i) => ({
     organization_id: organizationId,
     name: p.name,
     interest_rate: p.interestRate,
@@ -586,7 +615,18 @@ export async function replaceLoanProductsForOrg(organizationId: string, products
     is_active: p.isActive,
     sort_order: i,
   }));
-  const { error: insErr } = await sb.from("sacco_loan_products").insert(rows);
+  const rowsWithCode = rowsBase.map((row, i) => ({
+    ...row,
+    loan_code: String(products[i]!.loanCode ?? "1").replace(/\D/g, "") || "1",
+  }));
+  let { error: insErr } = await sb.from("sacco_loan_products").insert(rowsWithCode);
+  if (insErr && isUnknownColumnError(insErr)) {
+    console.warn(
+      "[SACCO] sacco_loan_products.loan_code missing — apply migration 20260516120000_sacco_loan_number_settings.sql. Replacing products without loan_code."
+    );
+    const retry = await sb.from("sacco_loan_products").insert(rowsBase);
+    insErr = retry.error;
+  }
   if (insErr) throw insErr;
   const { data, error } = await sb
     .from("sacco_loan_products")

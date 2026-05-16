@@ -1,17 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { useAppContext, LoanProduct } from '@/contexts/AppContext';
 import { upsertSaccoLoanPolicies } from '@/lib/saccoDb';
 import { toast } from '@/components/ui/use-toast';
 import {
   Settings, CreditCard, Shield, Plus, Pencil, Trash2, Save, X,
-  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp, PiggyBank, Percent, Timer
+  AlertTriangle, CheckCircle, Info, ChevronDown, ChevronUp, PiggyBank, Percent, Timer, Hash
 } from 'lucide-react';
+import { AdminSaccoLoanNumberSettingsPage } from '@/components/admin/AdminSaccoLoanNumberSettingsPage';
 import { PageNotes } from '@/components/common/PageNotes';
 
 // ============ LOAN PRODUCT FORM ============
 interface ProductFormData {
   name: string;
+  loanCode: string;
   interestRate: string;
   maxTerm: string;
   minAmount: string;
@@ -29,13 +31,13 @@ interface ProductFormData {
 }
 
 const emptyForm: ProductFormData = {
-  name: '', interestRate: '12', maxTerm: '36', minAmount: '100000', maxAmount: '10000000',
+  name: '', loanCode: '1', interestRate: '12', maxTerm: '36', minAmount: '100000', maxAmount: '10000000',
   interestBasis: 'declining', formFee: '5000', monitoringFeeRate: '0', processingFeeRate: '2', insuranceFeeRate: '1',
   applicationFeeRate: '1', agentFeeRate: '0', compulsorySavingsRate: '10', minimumShares: '50000', isActive: true,
 };
 
 const productToForm = (p: LoanProduct): ProductFormData => ({
-  name: p.name, interestRate: String(p.interestRate), maxTerm: String(p.maxTerm),
+  name: p.name, loanCode: String(p.loanCode ?? '1'), interestRate: String(p.interestRate), maxTerm: String(p.maxTerm),
   minAmount: String(p.minAmount), maxAmount: String(p.maxAmount), interestBasis: p.interestBasis,
   formFee: String(p.fees.formFee), monitoringFeeRate: String(p.fees.monitoringFeeRate ?? 0),
   processingFeeRate: String(p.fees.processingFeeRate),
@@ -59,13 +61,38 @@ const LoanSettings: React.FC = () => {
     refreshSaccoWorkspace,
   } = useAppContext();
 
-  const [activeTab, setActiveTab] = useState<'products' | 'provisioning' | 'orgRules'>('products');
+  const [activeTab, setActiveTab] = useState<'products' | 'provisioning' | 'loan_numbers'>('products');
   const [minSavDraft, setMinSavDraft] = useState(String(saccoLoanPolicies.minSavingsDaysBeforeLoan));
   const [policySaving, setPolicySaving] = useState(false);
 
   useEffect(() => {
     setMinSavDraft(String(saccoLoanPolicies.minSavingsDaysBeforeLoan));
   }, [saccoLoanPolicies.minSavingsDaysBeforeLoan]);
+
+  const saveLoanCoolingPolicy = useCallback(async () => {
+    if (!orgId) {
+      toast({ title: 'Error', description: 'No organization loaded.' });
+      return;
+    }
+    const n = parseInt(minSavDraft, 10);
+    if (!Number.isFinite(n) || n < 0 || n > 3650) {
+      toast({ title: 'Invalid value', description: 'Use a non-negative integer up to 3650.' });
+      return;
+    }
+    setPolicySaving(true);
+    try {
+      await upsertSaccoLoanPolicies(orgId, { minSavingsDaysBeforeLoan: n });
+      await refreshSaccoWorkspace();
+      toast({ title: 'Saved', description: `Members need ${n} full calendar day(s) after first ordinary savings before loans.` });
+    } catch (e) {
+      toast({
+        title: 'Save failed',
+        description: e instanceof Error ? e.message : String(e),
+      });
+    } finally {
+      setPolicySaving(false);
+    }
+  }, [orgId, minSavDraft, refreshSaccoWorkspace]);
   const [editingProduct, setEditingProduct] = useState<string | null>(null);
   const [showAddForm, setShowAddForm] = useState(false);
   const [form, setForm] = useState<ProductFormData>(emptyForm);
@@ -79,7 +106,9 @@ const LoanSettings: React.FC = () => {
     }
     const newProduct: LoanProduct = {
       id: 'LP' + String(loanProducts.length + 1).padStart(3, '0'),
-      name: form.name, interestRate: parseFloat(form.interestRate) || 0,
+      name: form.name,
+      loanCode: String(form.loanCode ?? '1').replace(/\D/g, '') || '1',
+      interestRate: parseFloat(form.interestRate) || 0,
       maxTerm: parseInt(form.maxTerm) || 12, minAmount: parseFloat(form.minAmount) || 0,
       maxAmount: parseFloat(form.maxAmount) || 0, interestBasis: form.interestBasis,
       fees: {
@@ -102,7 +131,9 @@ const LoanSettings: React.FC = () => {
     setLoanProducts(prev => prev.map(p => {
       if (p.id !== id) return p;
       return {
-        ...p, name: form.name, interestRate: parseFloat(form.interestRate) || 0,
+        ...p, name: form.name,
+        loanCode: String(form.loanCode ?? '1').replace(/\D/g, '') || '1',
+        interestRate: parseFloat(form.interestRate) || 0,
         maxTerm: parseInt(form.maxTerm) || 12, minAmount: parseFloat(form.minAmount) || 0,
         maxAmount: parseFloat(form.maxAmount) || 0, interestBasis: form.interestBasis,
         fees: {
@@ -172,11 +203,17 @@ const LoanSettings: React.FC = () => {
         {/* Basic Info */}
         <div>
           <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-3">Basic Information</h4>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Product Name</label>
               <input type="text" value={form.name} onChange={e => setForm(p => ({ ...p, name: e.target.value }))}
                 className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" placeholder="e.g. Normal Loan" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1">Loan code</label>
+              <input type="text" inputMode="numeric" value={form.loanCode} onChange={e => setForm(p => ({ ...p, loanCode: e.target.value }))}
+                className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 font-mono" placeholder="e.g. 01" />
+              <p className="text-[10px] text-slate-400 mt-0.5">Used in the loan reference number (branch + code + serial).</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1">Interest Rate (% p.a.)</label>
@@ -326,16 +363,20 @@ const LoanSettings: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-2xl font-bold text-slate-900">Loan Settings</h1>
           <PageNotes ariaLabel="Loan settings help">
-            <p>Configure loan products, fees, interest basis, and provisioning parameters.</p>
+            <p>
+              Configure loan products, fees, interest basis, loan reference number format, and the org-wide{' '}
+              <strong>savings tenure</strong> rule (whole calendar days after the first ordinary savings account before someone
+              can get a loan). Provisioning schedules are edited under Loan provisioning.
+            </p>
           </PageNotes>
         </div>
       </div>
 
       {/* Tabs */}
-      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit">
+      <div className="flex gap-1 bg-slate-100 p-1 rounded-xl w-fit flex-wrap">
         {[
-          { id: 'products' as const, label: 'Loan Products & Fees', icon: <CreditCard size={16} /> },
-          { id: 'orgRules' as const, label: 'Org lending rules', icon: <Timer size={16} /> },
+          { id: 'products' as const, label: 'Loan products & eligibility', icon: <CreditCard size={16} /> },
+          { id: 'loan_numbers' as const, label: 'Loan number format', icon: <Hash size={16} /> },
           { id: 'provisioning' as const, label: 'Loan Provisioning', icon: <Shield size={16} /> },
         ].map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
@@ -350,6 +391,48 @@ const LoanSettings: React.FC = () => {
       {/* ============ PRODUCTS TAB ============ */}
       {activeTab === 'products' && (
         <div className="space-y-6">
+          {/* Org-wide: minimum savings tenure before borrowing (applications + disbursement) */}
+          <div className="bg-white rounded-xl border border-emerald-100 shadow-sm p-6">
+            <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2 mb-1">
+              <Timer size={18} className="text-emerald-600" /> Required savings tenure before a loan
+            </h3>
+            <p className="text-xs text-slate-500 mb-2">
+              Active rule saved for this organization:{" "}
+              <span className="font-semibold text-slate-800">
+                {saccoLoanPolicies.minSavingsDaysBeforeLoan} calendar day(s)
+              </span>
+              {policySaving ? " · saving…" : ""}
+            </p>
+            <p className="text-xs text-slate-600 leading-relaxed mb-4">
+              Applies to <strong>all loan products</strong> for your organization. Counted from each member&apos;s{' '}
+              <strong>earliest ordinary (non-share) savings account</strong> open date. Members must complete this many full
+              calendar days before eligibility (same check shown on the loan application checklist).
+            </p>
+            <div className="flex flex-wrap items-end gap-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">Whole calendar days required</label>
+                <input
+                  type="number"
+                  min={0}
+                  max={3650}
+                  value={minSavDraft}
+                  onChange={(e) => setMinSavDraft(e.target.value)}
+                  className="w-full max-w-[200px] px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+                <p className="text-[10px] text-slate-400 mt-1">Use 0 to disable waiting (not recommended).</p>
+              </div>
+              <button
+                type="button"
+                disabled={!orgId || policySaving}
+                onClick={() => void saveLoanCoolingPolicy()}
+                className="px-4 py-2.5 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50"
+              >
+                {policySaving ? 'Saving…' : 'Save tenure rule'}
+              </button>
+            </div>
+            {!orgId && <p className="text-xs text-amber-700 mt-3">Sign in with an organization to save this rule.</p>}
+          </div>
+
           {/* Summary Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
@@ -433,7 +516,7 @@ const LoanSettings: React.FC = () => {
                               {product.interestBasis === 'flat' ? 'Flat Rate' : 'Declining Balance'}
                             </span>
                           </div>
-                          <p className="text-sm text-slate-500">{product.interestRate}% p.a. | Max {product.maxTerm} months | {activeLoansCount} active loans</p>
+                          <p className="text-sm text-slate-500">{product.interestRate}% p.a. | Loan code {product.loanCode} | Max {product.maxTerm} months | {activeLoansCount} active loans</p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -587,57 +670,8 @@ const LoanSettings: React.FC = () => {
         </div>
       )}
 
-      {activeTab === 'orgRules' && (
-        <div className="bg-white rounded-xl border border-slate-100 shadow-sm p-6 max-w-xl space-y-4">
-          <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-            <Timer size={18} /> Minimum savings tenure before lending
-          </h3>
-          <p className="text-xs text-slate-600 leading-relaxed">
-            Counted from the <strong>earliest ordinary (non-share) savings account</strong> opened for each member—aligned with SACCO onboarding.
-            Applies to applications and final disbursement.
-          </p>
-          <label className="block text-xs font-medium text-slate-700">Whole calendar days required</label>
-          <input
-            type="number"
-            min={0}
-            max={3650}
-            value={minSavDraft}
-            onChange={e => setMinSavDraft(e.target.value)}
-            className="w-full max-w-[200px] px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-          />
-          <button
-            type="button"
-            disabled={!orgId || policySaving}
-            onClick={() => void (async () => {
-              if (!orgId) {
-                toast({ title: 'Error', description: 'No organization loaded.' });
-                return;
-              }
-              const n = parseInt(minSavDraft, 10);
-              if (!Number.isFinite(n) || n < 0 || n > 3650) {
-                toast({ title: 'Invalid value', description: 'Use a non-negative integer up to 3650.' });
-                return;
-              }
-              setPolicySaving(true);
-              try {
-                await upsertSaccoLoanPolicies(orgId, { minSavingsDaysBeforeLoan: n });
-                await refreshSaccoWorkspace();
-                toast({ title: 'Saved', description: `Members need ${n} full day(s) after first ordinary savings before loans.` });
-              } catch (e) {
-                toast({
-                  title: 'Save failed',
-                  description: e instanceof Error ? e.message : String(e),
-                });
-              } finally {
-                setPolicySaving(false);
-              }
-            })()}
-            className="px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700 disabled:opacity-50"
-          >
-            {policySaving ? 'Saving…' : 'Save policy'}
-          </button>
-          {!orgId && <p className="text-xs text-amber-700">Sign in to persist org lending rules.</p>}
-        </div>
+      {activeTab === 'loan_numbers' && (
+        <AdminSaccoLoanNumberSettingsPage readOnly={false} />
       )}
 
       {/* ============ PROVISIONING TAB ============ */}

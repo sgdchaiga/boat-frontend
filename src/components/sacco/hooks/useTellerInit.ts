@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import {
   fetchTellerDashboardSnapshot,
   fetchTellerInitData,
+  formatTellerLoadError,
   type TellerDashboardSnapshot,
   type TellerInitData,
 } from "@/lib/saccoTellerDb";
@@ -42,8 +43,13 @@ export function useTellerInit(
         ]);
         setSnap(data);
         setInit(initData);
+        if (data.schemaMissing) {
+          setLoadError(
+            "Some teller tables are missing on this database. Apply teller migrations in Supabase, then refresh."
+          );
+        }
       } catch (e) {
-        setLoadError(e instanceof Error ? e.message : "Failed to load teller data");
+        setLoadError(formatTellerLoadError(e));
         setSnap(null);
         setInit(null);
       } finally {

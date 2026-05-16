@@ -48,6 +48,8 @@ export type LoanFeeBreakdown = {
 export interface LoanProduct {
   id: string;
   name: string;
+  /** Numeric code for the loan-number middle segment (padded per org loan number settings). */
+  loanCode: string;
   interestRate: number;
   maxTerm: number;
   minAmount: number;
@@ -61,6 +63,8 @@ export interface LoanProduct {
 
 export interface Loan {
   id: string;
+  /** Structured reference from branch + loan product code + serial (when configured). */
+  loanNumber?: string;
   memberId: string;
   memberName: string;
   loanType: string;

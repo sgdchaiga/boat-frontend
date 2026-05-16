@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import type { BusinessType } from "@/contexts/AuthContext";
 import { PAYROLL_PAGE } from "@/lib/payrollPages";
+import { getSimpleOrgDefaultReportRoute } from "@/lib/reportHubCatalog";
 
 export type NavChild =
   | { name: string; page: string; state?: Record<string, unknown> }
@@ -153,8 +154,6 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Adjust stock", page: "inventory_stock_adjustments" },
   ];
 
-  const reports = getSimpleOrgReportNavChildren({ businessType });
-
   const settings: NavChild[] = [
     { name: "Users", page: "staff" },
     { name: "System settings", page: "admin" },
@@ -231,7 +230,8 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
 
   core.push(
     { name: "Stock", icon: Package, children: stock },
-    { name: "Reports", icon: TrendingUp, children: reports },
+    /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */
+    { name: "Reports", icon: TrendingUp, page: getSimpleOrgDefaultReportRoute(businessType) },
     { name: "Settings", icon: Settings, children: settings }
   );
 

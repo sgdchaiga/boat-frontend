@@ -80,3 +80,17 @@ export function isSimpleOrgReportHubRoute(
   const cats = getSimpleOrgReportHubCategories(businessType, canShowPage);
   return cats.some((c) => c.items.some((leaf) => isSidebarLeafActive(leaf, currentPage, pageState)));
 }
+
+/** Default route when opening Reports from the sidebar (in-page hub picks category + report). */
+export function getSimpleOrgDefaultReportRoute(
+  businessType: BusinessType | null | undefined,
+  canShowPage?: (page: string) => boolean
+): string {
+  const canShow = canShowPage ?? (() => true);
+  const cats = getSimpleOrgReportHubCategories(businessType, canShow);
+  for (const cat of cats) {
+    const first = cat.items[0];
+    if (first) return first.page;
+  }
+  return "reports_daily_summary";
+}

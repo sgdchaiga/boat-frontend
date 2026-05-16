@@ -5,7 +5,6 @@
 import { createJournalEntry, getDefaultGlAccounts } from "@/lib/journal";
 import { fetchJournalGlSettings } from "@/lib/journalAccountSettings";
 import { supabase } from "@/lib/supabase";
-import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { businessTodayISO } from "@/lib/timezone";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 
@@ -129,25 +128,136 @@ export type TellerGlAccountPickRow = {
 /** Active GL accounts for teller counterparty selection (cash deposit / withdrawal). */
 export async function fetchTellerGlAccountPickList(
   organizationId: string,
-  isSuperAdmin?: boolean
+  _isSuperAdmin?: boolean
 ): Promise<TellerGlAccountPickRow[]> {
-  const { data, error } = await filterByOrganizationId(
-    sb.from("gl_accounts").select("*").order("account_code"),
-    organizationId,
-    isSuperAdmin
-  );
-  if (error) throw error;
+  void organizationId;
+  // RLS scopes gl_accounts to the staff org; do not .eq(organization_id) — excludes legacy NULL-org rows.
+  const { data, error } = await sb
+    .from("gl_accounts")
+    .select("id, account_code, account_name, is_active")
+    .order("account_code");
+  if (error) {
+    if (isMissingTellerSchemaError(error) || isUnknownColumnError(error)) {
+      const retry = await sb.from("gl_accounts").select("id, account_code, account_name").order("account_code");
+      if (!retry.error) {
+        return normalizeGlAccountRows((retry.data || []) as unknown[]).map((row) => ({
+          id: row.id,
+          account_code: row.account_code,
+          account_name: row.account_name,
+        }));
+      }
+    }
+    warnTellerQuery("GL accounts pick list", error);
+    return [];
+  }
   return normalizeGlAccountRows((data || []) as unknown[])
     .filter((row) => row.is_active)
     .map((row) => ({ id: row.id, account_code: row.account_code, account_name: row.account_name }));
 }
 
+function isValidUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value ?? "").trim());
+}
+
 function isMissingTellerSchemaError(err: unknown): boolean {
   if (!err || typeof err !== "object") return false;
-  const e = err as { code?: string; message?: string; status?: number };
-  if (e.status === 404) return true;
+  const e = err as { code?: string; message?: string; details?: string; status?: number };
+  if (e.status === 404 || e.status === 406) return true;
+  const c = String(e.code ?? "");
+  if (c === "PGRST205" || c === "PGRST204" || c === "42P01") return true;
+  const m = `${e.message ?? ""} ${e.details ?? ""}`.toLowerCase();
+  if (e.status === 400) {
+    if (
+      m.includes("relation") ||
+      m.includes("does not exist") ||
+      m.includes("schema cache") ||
+      m.includes("could not find the table") ||
+      (m.includes("could not find") && m.includes("column"))
+    ) {
+      return true;
+    }
+  }
+  return (
+    m.includes("does not exist") ||
+    m.includes("schema cache") ||
+    m.includes("could not find the table") ||
+    (m.includes("could not find") && m.includes("column"))
+  );
+}
+
+/** Base teller txn columns (migration 20260426120007); optional cols added in 09/10. */
+const TELLER_TXN_SELECT_BASE =
+  "id, organization_id, session_id, txn_type, amount, sacco_member_id, member_ref, narration, cheque_number, cheque_bank, cheque_value_date, status, maker_staff_id, checker_staff_id, approved_at, journal_batch_ref, created_at, updated_at";
+
+const TELLER_TXN_SELECT_EXTENDED = `${TELLER_TXN_SELECT_BASE}, posting_purpose, sacco_member_savings_account_id, counterparty_gl_account_id`;
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type TellerTxnQueryBuilder = any;
+
+async function runTellerTxnQuery(
+  build: (columns: string) => TellerTxnQueryBuilder
+): Promise<{ data: unknown[] | null; error: unknown; count: number | null }> {
+  for (const columns of [TELLER_TXN_SELECT_EXTENDED, TELLER_TXN_SELECT_BASE]) {
+    const res = await build(columns);
+    if (!res.error) {
+      return { data: res.data ?? null, error: null, count: res.count ?? null };
+    }
+    if (!isUnknownColumnError(res.error) && !isMissingTellerSchemaError(res.error)) {
+      return { data: null, error: res.error, count: null };
+    }
+  }
+  const last = await build(TELLER_TXN_SELECT_BASE);
+  return { data: last.data ?? null, error: last.error, count: last.count ?? null };
+}
+
+function warnTellerQuery(label: string, err: unknown): void {
+  console.warn(`[SACCO teller] ${label}:`, formatTellerDbError(err));
+}
+
+/** PostgREST 400 / missing column — often fixable with a narrower select or migration. */
+function isUnknownColumnError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const e = err as { code?: string; message?: string; details?: string; status?: number };
+  if (e.code === "PGRST204") return true;
+  if (e.status === 400) {
+    const m = `${e.message ?? ""} ${e.details ?? ""}`.toLowerCase();
+    if (m.includes("column") || m.includes("schema cache")) return true;
+  }
   const m = String(e.message ?? "").toLowerCase();
-  return m.includes("does not exist") || m.includes("schema cache") || m.includes("could not find the table");
+  return m.includes("column") && (m.includes("does not exist") || m.includes("could not find"));
+}
+
+export const TELLER_MIGRATION_HINT =
+  "Run teller migrations in Supabase SQL Editor: 20260426120007_sacco_teller.sql, then 20260426120008, 20260426120009, 20260426120010, and 20260426120011_journal_gl_teller_counterparty_settings.sql (or supabase db push).";
+
+export function formatTellerLoadError(err: unknown): string {
+  return formatTellerDbError(err, "Failed to load teller data");
+}
+
+export function formatTellerDbError(err: unknown, fallback = "Teller action failed"): string {
+  if (isMissingTellerSchemaError(err)) {
+    return `Teller tables are not installed on this database. ${TELLER_MIGRATION_HINT}`;
+  }
+  if (isUnknownColumnError(err)) {
+    return `Database schema is out of date for Teller. ${TELLER_MIGRATION_HINT}`;
+  }
+  if (err && typeof err === "object") {
+    const e = err as { code?: string; message?: string; details?: string };
+    const msg = `${e.message ?? ""} ${e.details ?? ""}`.trim();
+    const c = String(e.code ?? "");
+    if (c === "23503" && /staff_id|staff/i.test(msg)) {
+      return "Your sign-in is not linked to a staff record in this organization. Ask an admin to add you under Staff, then sign in again.";
+    }
+    if (c === "42501" || /row-level security|policy/i.test(msg)) {
+      return "Not allowed to open the till for this organization. Confirm your staff account belongs to the same SACCO org.";
+    }
+    if (c === "23505" || /unique|duplicate/i.test(msg)) {
+      return "A till session is already open for you. Go to the Till tab and use Close till, or choose Resume / close stuck session.";
+    }
+    if (msg) return msg;
+  }
+  if (err instanceof Error && err.message) return err.message;
+  return fallback;
 }
 
 export type TellerDashboardSnapshot = {
@@ -167,10 +277,123 @@ export type TellerDashboardSnapshot = {
   recentAudit: SaccoTellerAuditRow[];
 };
 
+/** All open till sessions for this staff member in the org (0, 1, or rarely more if index missing). */
+const TELLER_SESSION_SELECT =
+  "id, organization_id, staff_id, opened_at, closed_at, opening_float, closing_counted, expected_balance, over_short, status, notes, created_at, updated_at";
+
+export async function fetchOpenTellerSessionsForStaff(
+  organizationId: string,
+  staffId: string
+): Promise<SaccoTellerSessionRow[]> {
+  if (!isValidUuid(organizationId) || !isValidUuid(staffId)) return [];
+  const { data, error } = await sb
+    .from("sacco_teller_sessions")
+    .select(TELLER_SESSION_SELECT)
+    .eq("organization_id", organizationId)
+    .eq("staff_id", staffId)
+    .eq("status", "open")
+    .order("opened_at", { ascending: false });
+  if (error) {
+    if (isMissingTellerSchemaError(error)) {
+      throwIfTellerDbError(error);
+    }
+    warnTellerQuery("open sessions", error);
+    return [];
+  }
+  return (data ?? []) as SaccoTellerSessionRow[];
+}
+
+/** Current user's open till session, if any (newest when multiple). */
+export async function fetchOpenTellerSession(
+  organizationId: string,
+  staffId: string
+): Promise<SaccoTellerSessionRow | null> {
+  const rows = await fetchOpenTellerSessionsForStaff(organizationId, staffId);
+  return rows[0] ?? null;
+}
+
+/** Close every open till session for this staff member in the org (end-of-day / stuck recovery). */
+export async function closeAllOpenTellerSessionsForStaff(params: {
+  organizationId: string;
+  staffId: string;
+  notes?: string | null;
+}): Promise<number> {
+  const now = new Date().toISOString();
+  const note =
+    params.notes?.trim() ||
+    "Auto-closed to clear a stuck open session (no counted cash — reopen the till if you are working today).";
+  const { data, error } = await sb
+    .from("sacco_teller_sessions")
+    .update({
+      status: "closed",
+      closed_at: now,
+      notes: note,
+    })
+    .eq("organization_id", params.organizationId)
+    .eq("staff_id", params.staffId)
+    .eq("status", "open")
+    .select("id");
+  if (error) {
+    throwIfTellerDbError(error);
+    throw new Error(formatTellerDbError(error, "Could not close open till session(s)"));
+  }
+  return (data ?? []).length;
+}
+
+async function computeTillTotalsForSession(session: SaccoTellerSessionRow): Promise<{
+  tillEstimated: number;
+  sessionReceiptsTotal: number;
+  sessionPaymentsTotal: number;
+}> {
+  let sessionReceiptsTotal = 0;
+  let sessionPaymentsTotal = 0;
+  let bal = Number(session.opening_float);
+  const { data: sessTx, error } = await sb
+    .from("sacco_teller_transactions")
+    .select("txn_type, amount")
+    .eq("session_id", session.id)
+    .eq("status", "posted");
+  if (error) {
+    console.warn("[SACCO teller] session tx totals:", error);
+    return { tillEstimated: bal, sessionReceiptsTotal: 0, sessionPaymentsTotal: 0 };
+  }
+  for (const t of sessTx ?? []) {
+    const amt = Number((t as { amount: number }).amount);
+    const typ = (t as { txn_type: string }).txn_type;
+    if (typ === "cash_deposit" || typ === "cheque_received" || typ === "cheque_clearing") {
+      bal += amt;
+      sessionReceiptsTotal += amt;
+    } else if (typ === "cash_withdrawal" || typ === "cheque_paid" || typ === "till_vault_out") {
+      bal -= amt;
+      sessionPaymentsTotal += amt;
+    } else if (typ === "adjustment" || typ === "till_vault_in") {
+      bal += amt;
+    }
+  }
+  return { tillEstimated: bal, sessionReceiptsTotal, sessionPaymentsTotal };
+}
+
 export async function fetchTellerDashboardSnapshot(
   organizationId: string,
   staffId: string | undefined
 ): Promise<TellerDashboardSnapshot> {
+  if (!isValidUuid(organizationId)) {
+    console.warn("[SACCO teller] Invalid organization id — cannot load teller snapshot.");
+    return {
+      schemaMissing: false,
+      openSession: null,
+      tillEstimated: null,
+      sessionReceiptsTotal: 0,
+      sessionPaymentsTotal: 0,
+      vaultPosition: 0,
+      pendingApprovalCount: 0,
+      pendingApprovals: [],
+      recentTransactions: [],
+      recentVaultMoves: [],
+      recentAudit: [],
+    };
+  }
+
   const empty: TellerDashboardSnapshot = {
     schemaMissing: false,
     openSession: null,
@@ -185,160 +408,160 @@ export async function fetchTellerDashboardSnapshot(
     recentAudit: [],
   };
 
+  let openSession: SaccoTellerSessionRow | null = null;
   try {
-    const pOpenSession = staffId
-      ? sb
-          .from("sacco_teller_sessions")
-          .select("*")
-          .eq("organization_id", organizationId)
-          .eq("staff_id", staffId)
-          .eq("status", "open")
-          .maybeSingle()
-      : Promise.resolve({ data: null, error: null as Error | null });
+    if (staffId) {
+      openSession = await fetchOpenTellerSession(organizationId, staffId);
+    }
+  } catch (err) {
+    if (isMissingTellerSchemaError(err)) {
+      console.warn("[SACCO] Teller sessions table missing —", TELLER_MIGRATION_HINT);
+      return { ...empty, schemaMissing: true };
+    }
+    console.warn("[SACCO teller] open session lookup:", err);
+  }
 
-    const pPendingCount = sb
-      .from("sacco_teller_transactions")
-      .select("id", { count: "exact", head: true })
-      .eq("organization_id", organizationId)
-      .eq("status", "pending_approval");
-
-    const pPendingRows = sb
-      .from("sacco_teller_transactions")
-      .select("*")
-      .eq("organization_id", organizationId)
-      .eq("status", "pending_approval")
-      .order("created_at", { ascending: true })
-      .limit(50);
-
-    const pVaultChanges = sb
-      .from("sacco_vault_movements")
-      .select("signed_vault_change")
-      .eq("organization_id", organizationId);
-
-    const pRecentTx = sb
-      .from("sacco_teller_transactions")
-      .select("*")
-      .eq("organization_id", organizationId)
-      .order("created_at", { ascending: false })
-      .limit(25);
-
-    const pVaultMoves = sb
+  const [prRes, vchRes, rtxRes, vmRes, auRes] = await Promise.all([
+    runTellerTxnQuery((columns) =>
+      sb
+        .from("sacco_teller_transactions")
+        .select(columns)
+        .eq("organization_id", organizationId)
+        .eq("status", "pending_approval")
+        .order("created_at", { ascending: true })
+        .limit(50)
+    ),
+    sb.from("sacco_vault_movements").select("signed_vault_change").eq("organization_id", organizationId),
+    runTellerTxnQuery((columns) =>
+      sb
+        .from("sacco_teller_transactions")
+        .select(columns)
+        .eq("organization_id", organizationId)
+        .order("created_at", { ascending: false })
+        .limit(25)
+    ),
+    sb
       .from("sacco_vault_movements")
       .select("*")
       .eq("organization_id", organizationId)
       .order("created_at", { ascending: false })
-      .limit(15);
-
-    const pAudit = sb
+      .limit(15),
+    sb
       .from("sacco_teller_audit_log")
       .select("*")
       .eq("organization_id", organizationId)
       .order("created_at", { ascending: false })
-      .limit(20);
+      .limit(20),
+  ]);
 
-    const [sessRes, pcRes, prRes, vchRes, rtxRes, vmRes, auRes] = await Promise.all([
-      pOpenSession,
-      pPendingCount,
-      pPendingRows,
-      pVaultChanges,
-      pRecentTx,
-      pVaultMoves,
-      pAudit,
-    ]);
-
-    for (const r of [sessRes, pcRes, prRes, vchRes, rtxRes, vmRes, auRes]) {
-      if (r.error) throw r.error;
-    }
-
-    const openSession = (sessRes.data ?? null) as SaccoTellerSessionRow | null;
-    const pending = pcRes.count ?? 0;
-    const pendingRows = prRes.data;
-    const vaultRows = vchRes.data;
-    const vaultPosition = (vaultRows ?? []).reduce((s: number, r: { signed_vault_change: number }) => s + Number(r.signed_vault_change), 0);
-    const txList = rtxRes.data;
-    const vmList = vmRes.data;
-    const auditList = auRes.data;
-
-    let tillEstimated: number | null = null;
-    let sessionReceiptsTotal = 0;
-    let sessionPaymentsTotal = 0;
-    if (openSession) {
-      const { data: sessTx, error: e7 } = await sb
-        .from("sacco_teller_transactions")
-        .select("txn_type, amount")
-        .eq("session_id", openSession.id)
-        .eq("status", "posted");
-      if (e7) throw e7;
-      let bal = Number(openSession.opening_float);
-      for (const t of sessTx ?? []) {
-        const amt = Number((t as { amount: number }).amount);
-        const typ = (t as { txn_type: string }).txn_type;
-        if (typ === "cash_deposit" || typ === "cheque_received") {
-          bal += amt;
-          sessionReceiptsTotal += amt;
-        } else if (typ === "cash_withdrawal" || typ === "cheque_paid") {
-          bal -= amt;
-          sessionPaymentsTotal += amt;
-        } else if (typ === "cheque_clearing") {
-          bal += amt;
-          sessionReceiptsTotal += amt;
-        } else if (typ === "adjustment") {
-          bal += amt;
-        } else if (typ === "till_vault_in") {
-          bal += amt;
-        } else if (typ === "till_vault_out") {
-          bal -= amt;
-        }
-      }
-      tillEstimated = bal;
-    }
-
-    return {
-      schemaMissing: false,
-      openSession,
-      tillEstimated,
-      sessionReceiptsTotal,
-      sessionPaymentsTotal,
-      vaultPosition,
-      pendingApprovalCount: pending ?? 0,
-      pendingApprovals: (pendingRows ?? []) as SaccoTellerTransactionRow[],
-      recentTransactions: (txList ?? []) as SaccoTellerTransactionRow[],
-      recentVaultMoves: (vmList ?? []) as SaccoVaultMovementRow[],
-      recentAudit: (auditList ?? []) as SaccoTellerAuditRow[],
-    };
-  } catch (err) {
-    if (isMissingTellerSchemaError(err)) {
-      console.warn("[SACCO] Teller tables missing — run migration 20260426120007_sacco_teller.sql");
-      return { ...empty, schemaMissing: true };
-    }
-    throw err;
+  if (prRes.error) {
+    if (isMissingTellerSchemaError(prRes.error)) return { ...empty, schemaMissing: true, openSession };
+    warnTellerQuery("pending approvals", prRes.error);
   }
+  if (vchRes.error) {
+    if (isMissingTellerSchemaError(vchRes.error)) return { ...empty, schemaMissing: true, openSession };
+    warnTellerQuery("vault sum", vchRes.error);
+  }
+  if (rtxRes.error) {
+    if (isMissingTellerSchemaError(rtxRes.error)) return { ...empty, schemaMissing: true, openSession };
+    warnTellerQuery("recent tx", rtxRes.error);
+  }
+  if (vmRes.error) {
+    if (isMissingTellerSchemaError(vmRes.error)) return { ...empty, schemaMissing: true, openSession };
+    warnTellerQuery("vault moves", vmRes.error);
+  }
+  if (auRes.error) {
+    if (isMissingTellerSchemaError(auRes.error)) return { ...empty, schemaMissing: true, openSession };
+    warnTellerQuery("audit", auRes.error);
+  }
+
+  const pendingRows = prRes.error ? [] : prRes.data;
+  const pending = pendingRows?.length ?? 0;
+  const vaultRows = vchRes.error ? [] : vchRes.data;
+  const vaultPosition = (vaultRows ?? []).reduce(
+    (s: number, r: { signed_vault_change: number }) => s + Number(r.signed_vault_change),
+    0
+  );
+  const txList = rtxRes.error ? [] : rtxRes.data;
+  const vmList = vmRes.error ? [] : vmRes.data;
+  const auditList = auRes.error ? [] : auRes.data;
+
+  let tillEstimated: number | null = null;
+  let sessionReceiptsTotal = 0;
+  let sessionPaymentsTotal = 0;
+  if (openSession) {
+    const totals = await computeTillTotalsForSession(openSession);
+    tillEstimated = totals.tillEstimated;
+    sessionReceiptsTotal = totals.sessionReceiptsTotal;
+    sessionPaymentsTotal = totals.sessionPaymentsTotal;
+  }
+
+  return {
+    schemaMissing: false,
+    openSession,
+    tillEstimated,
+    sessionReceiptsTotal,
+    sessionPaymentsTotal,
+    vaultPosition,
+    pendingApprovalCount: pending ?? 0,
+    pendingApprovals: (pendingRows ?? []) as SaccoTellerTransactionRow[],
+    recentTransactions: (txList ?? []) as SaccoTellerTransactionRow[],
+    recentVaultMoves: (vmList ?? []) as SaccoVaultMovementRow[],
+    recentAudit: (auditList ?? []) as SaccoTellerAuditRow[],
+  };
 }
 
 export async function fetchTellerMemberPickList(organizationId: string): Promise<TellerMemberPickRow[]> {
-  const { data, error } = await sb
+  if (!isValidUuid(organizationId)) return [];
+  let res = await sb
     .from("sacco_members")
     .select("id, member_number, full_name")
     .eq("organization_id", organizationId)
     .eq("is_active", true)
     .order("member_number");
-  if (error) {
-    if (isMissingTellerSchemaError(error)) return [];
-    throw error;
+  if (res.error && isUnknownColumnError(res.error)) {
+    res = await sb
+      .from("sacco_members")
+      .select("id, member_number, full_name")
+      .eq("organization_id", organizationId)
+      .order("member_number");
   }
-  return (data ?? []) as TellerMemberPickRow[];
+  if (res.error) {
+    if (isMissingTellerSchemaError(res.error)) return [];
+    warnTellerQuery("members pick list", res.error);
+    return [];
+  }
+  return (res.data ?? []) as TellerMemberPickRow[];
 }
 
 export async function fetchTellerSavingsAccountPickList(organizationId: string): Promise<TellerSavingsAccountPickRow[]> {
-  const { data: accs, error: e1 } = await sb
+  const baseSelect = "id, account_number, savings_product_code, balance, sacco_member_id";
+  let accs: unknown[] | null = null;
+  let e1: { code?: string; message?: string; status?: number } | null = null;
+
+  const withActive = await sb
     .from("sacco_member_savings_accounts")
-    .select("id, account_number, savings_product_code, balance, sacco_member_id")
+    .select(baseSelect)
     .eq("organization_id", organizationId)
     .eq("is_active", true)
     .order("account_number");
+  if (withActive.error && isUnknownColumnError(withActive.error)) {
+    const withoutActive = await sb
+      .from("sacco_member_savings_accounts")
+      .select(baseSelect)
+      .eq("organization_id", organizationId)
+      .order("account_number");
+    accs = withoutActive.data;
+    e1 = withoutActive.error;
+  } else {
+    accs = withActive.data;
+    e1 = withActive.error;
+  }
+
   if (e1) {
     if (isMissingTellerSchemaError(e1)) return [];
-    throw e1;
+    warnTellerQuery("savings accounts pick list", e1);
+    return [];
   }
   const list = (accs ?? []) as Array<{
     id: string;
@@ -356,7 +579,16 @@ export async function fetchTellerSavingsAccountPickList(organizationId: string):
     .in("id", ids);
   if (e2) {
     if (isMissingTellerSchemaError(e2)) return [];
-    throw e2;
+    warnTellerQuery("savings account member names", e2);
+    return list.map((a) => ({
+      id: a.id,
+      account_number: a.account_number,
+      savings_product_code: a.savings_product_code ?? "",
+      sacco_member_id: a.sacco_member_id,
+      member_number: "",
+      full_name: "",
+      balance: Number(a.balance),
+    }));
   }
   const map = new Map((mems ?? []).map((m: TellerMemberPickRow) => [m.id, m]));
   return list.map((a) => {
@@ -590,7 +822,7 @@ async function finalizePostedTellerTxnEffects(params: {
   await insertCashbookLineForTellerTxn({ organizationId: params.organizationId, txn: params.txn });
 }
 
-export async function openTellerSession(params: {
+async function insertOpenTellerSessionRow(params: {
   organizationId: string;
   staffId: string;
   openingFloat: number;
@@ -607,28 +839,122 @@ export async function openTellerSession(params: {
     })
     .select("*")
     .single();
-  if (error) {
-    if (isMissingTellerSchemaError(error)) {
-      throw new Error(
-        "Teller tables are not installed. Run migration 20260426120007_sacco_teller.sql (and 20260426120008 for vault transfer types)."
-      );
-    }
-    const msg = String((error as { message?: string }).message ?? "");
-    if (msg.includes("unique") || msg.includes("duplicate") || (error as { code?: string }).code === "23505") {
-      throw new Error("You already have an open till session. Close it before opening another.");
-    }
-    throw error;
+  if (error) throw error;
+  return data as SaccoTellerSessionRow;
+}
+
+export type OpenTellerSessionResult = {
+  session: SaccoTellerSessionRow;
+  /** True when an existing open session was reused (not a new insert). */
+  resumed: boolean;
+};
+
+export async function openTellerSession(params: {
+  organizationId: string;
+  staffId: string;
+  openingFloat: number;
+  notes?: string | null;
+}): Promise<SaccoTellerSessionRow> {
+  const r = await resumeOrOpenTellerSession(params);
+  return r.session;
+}
+
+/** Open till or resume the current open session; clears stuck duplicates when needed. */
+export async function resumeOrOpenTellerSession(params: {
+  organizationId: string;
+  staffId: string;
+  openingFloat: number;
+  notes?: string | null;
+  /** When true, close any open session for this staff+org then open fresh. */
+  forceNew?: boolean;
+}): Promise<OpenTellerSessionResult> {
+  if (!params.organizationId?.trim()) {
+    throw new Error("No organization is linked to your account.");
   }
-  const row = data as SaccoTellerSessionRow;
-  await appendTellerAuditLog({
-    organizationId: params.organizationId,
-    entityType: "sacco_teller_sessions",
-    entityId: row.id,
-    action: "session_open",
-    actorStaffId: params.staffId,
-    detail: { opening_float: params.openingFloat },
+  if (!params.staffId?.trim()) {
+    throw new Error("Sign in with a staff account to open the till.");
+  }
+
+  let openRows = await fetchOpenTellerSessionsForStaff(params.organizationId, params.staffId).catch((e) => {
+    if (isMissingTellerSchemaError(e)) throw new Error(formatTellerDbError(e));
+    throw e;
   });
-  return row;
+
+  if (params.forceNew && openRows.length > 0) {
+    await closeAllOpenTellerSessionsForStaff({
+      organizationId: params.organizationId,
+      staffId: params.staffId,
+      notes: params.notes,
+    });
+    openRows = [];
+  }
+
+  if (openRows.length > 1) {
+    const keep = openRows[0]!;
+    for (const extra of openRows.slice(1)) {
+      await sb
+        .from("sacco_teller_sessions")
+        .update({ status: "closed", closed_at: new Date().toISOString(), notes: "Auto-closed duplicate open session." })
+        .eq("id", extra.id)
+        .eq("organization_id", params.organizationId);
+    }
+    return { session: keep, resumed: true };
+  }
+
+  if (openRows.length === 1) {
+    return { session: openRows[0]!, resumed: true };
+  }
+
+  try {
+    const row = await insertOpenTellerSessionRow(params);
+    await appendTellerAuditLog({
+      organizationId: params.organizationId,
+      entityType: "sacco_teller_sessions",
+      entityId: row.id,
+      action: "session_open",
+      actorStaffId: params.staffId,
+      detail: { opening_float: params.openingFloat },
+    });
+    return { session: row, resumed: false };
+  } catch (error) {
+    const code = String((error as { code?: string }).code ?? "");
+    const msg = String((error as { message?: string }).message ?? "");
+    const isDup = code === "23505" || /unique|duplicate|sacco_teller_sess_one_open/i.test(msg);
+
+    if (!isDup) {
+      throw new Error(formatTellerDbError(error, "Could not open till session"));
+    }
+
+    const afterDup = await fetchOpenTellerSessionsForStaff(params.organizationId, params.staffId);
+    if (afterDup[0]) {
+      return { session: afterDup[0], resumed: true };
+    }
+
+    const closed = await closeAllOpenTellerSessionsForStaff({
+      organizationId: params.organizationId,
+      staffId: params.staffId,
+    });
+    if (closed > 0) {
+      try {
+        const row = await insertOpenTellerSessionRow(params);
+        await appendTellerAuditLog({
+          organizationId: params.organizationId,
+          entityType: "sacco_teller_sessions",
+          entityId: row.id,
+          action: "session_open",
+          actorStaffId: params.staffId,
+          detail: { opening_float: params.openingFloat, recovered_from_stuck: true },
+        });
+        return { session: row, resumed: false };
+      } catch (retryErr) {
+        throw new Error(formatTellerDbError(retryErr, "Could not open till after clearing stuck session"));
+      }
+    }
+
+    throw new Error(
+      "A till session is already open in the database but could not be loaded or closed. Ask an administrator to close open rows in sacco_teller_sessions for your staff account, then try again."
+    );
+  }
 }
 
 export async function closeTellerSession(params: {
@@ -1061,12 +1387,26 @@ export type TellerInitData = {
 };
 
 export async function fetchTellerInitData(organizationId: string, isSuperAdmin: boolean): Promise<TellerInitData> {
+  if (!isValidUuid(organizationId)) {
+    return {
+      members: [],
+      savingsAccounts: [],
+      glAccounts: [],
+      tellerAllowPerTxnCounterpartyGl: true,
+      tellerDefaultCounterpartyGlId: null,
+    };
+  }
+
   const [members, savingsAccounts, glAccounts, s] = await Promise.all([
     fetchTellerMemberPickList(organizationId),
     fetchTellerSavingsAccountPickList(organizationId),
     fetchTellerGlAccountPickList(organizationId, isSuperAdmin),
-    fetchJournalGlSettings(organizationId),
+    fetchJournalGlSettings(organizationId).catch((e) => {
+      warnTellerQuery("journal_gl_settings", e);
+      return null;
+    }),
   ]);
+
   return {
     members,
     savingsAccounts,

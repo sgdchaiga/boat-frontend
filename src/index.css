@@ -74,4 +74,22 @@
   .app-badge-neutral {
     @apply inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700;
   }
+
+  /** Reports hub (clinic / retail / hotel): nav columns + scrollable report body */
+  .report-hub-shell {
+    @apply flex w-full max-w-full min-w-0 overflow-hidden;
+  }
+
+  .report-hub-nav {
+    @apply shrink-0 lg:w-44 lg:max-w-[11rem];
+  }
+
+  .report-hub-content {
+    @apply flex-1 min-w-0 w-full max-w-full;
+  }
+
+  /* Cards that clip wide tables — scroll horizontally inside the report pane */
+  .report-hub-content .overflow-hidden:has(table) {
+    overflow-x: auto;
+  }
 }

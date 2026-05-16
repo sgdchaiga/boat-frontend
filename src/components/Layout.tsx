@@ -289,6 +289,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
         icon: UsersRound,
         children: [
           { name: 'Member list', page: SACCOPRO_PAGE.members },
+          { name: 'Bulk import', page: SACCOPRO_PAGE.bulkImport },
           { name: 'Member app', page: SACCOPRO_PAGE.memberApp },
           { name: 'Member profile', page: SACCOPRO_PAGE.memberProfile },
         ],
@@ -309,6 +310,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
         children: [
           { name: 'Dashboard', page: SACCOPRO_PAGE.loanDashboard },
           { name: 'Applications', page: SACCOPRO_PAGE.loanInput },
+          { name: 'Loan product bulk import', page: SACCOPRO_PAGE.loanBulkImport },
+          { name: 'Member loan balances import', page: SACCOPRO_PAGE.loanPortfolioImport },
           { name: 'Approvals', page: SACCOPRO_PAGE.loanApproval },
           { name: 'Disbursement', page: SACCOPRO_PAGE.loanDisbursement },
           { name: 'Loan accounts', page: SACCOPRO_PAGE.loanList },
@@ -1180,7 +1183,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                         </li>
                       );
                     }
-                    const isActive = currentPage === item.page;
+                    const isReportsHubLeaf =
+                      item.name === 'Reports' &&
+                      isSimpleOrgReportHubRoute(businessType, currentPage, pageStateResolved, canShowPage);
+                    const isActive = currentPage === item.page || isReportsHubLeaf;
                     if (!canShowPage(item.page)) return null;
                     const readOnly = isReadOnlyPage(item.page);
                     return (
@@ -1252,8 +1258,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
         />
       )}
 
-      <div className="lg:pl-64">
-        <main className="pt-14 lg:pt-0">
+      <div className="lg:pl-64 min-w-0 max-w-full">
+        <main className="pt-14 lg:pt-0 min-w-0 max-w-full">
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -1315,9 +1321,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
             </div>
           )}
           {showSimpleOrgReportHub ? (
-            <div className="flex flex-col lg:flex-row w-full min-h-0 lg:min-h-[calc(100dvh-0px)] border-t border-slate-200/80 bg-slate-50/40">
+            <div className="report-hub-shell flex flex-col lg:flex-row w-full max-w-full min-w-0 min-h-0 lg:min-h-[calc(100dvh-0px)] border-t border-slate-200/80 bg-slate-50/40 overflow-hidden">
               <aside
-                className="w-full lg:basis-[10%] lg:shrink-0 lg:grow-0 lg:min-w-[7rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-48 lg:max-h-none"
+                className="report-hub-nav w-full shrink-0 lg:w-44 lg:max-w-[11rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-48 lg:max-h-none"
                 aria-label="Report categories"
               >
                 <ul className="p-2 space-y-0.5">
@@ -1341,7 +1347,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                 </ul>
               </aside>
               <aside
-                className="w-full lg:basis-[10%] lg:shrink-0 lg:grow-0 lg:min-w-[7rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-56 lg:max-h-none"
+                className="report-hub-nav w-full shrink-0 lg:w-44 lg:max-w-[11rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-56 lg:max-h-none"
                 aria-label="Reports in category"
               >
                 <ul className="p-2 space-y-0.5">
@@ -1377,11 +1383,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                   })}
                 </ul>
               </aside>
-              <section
-                className="w-full lg:basis-[80%] lg:shrink-0 lg:grow-0 min-w-0 flex-1 bg-white overflow-x-auto overflow-y-auto"
-                aria-label="Report content"
-              >
-                {children}
+              <section className="report-hub-content flex-1 min-w-0 w-full bg-white" aria-label="Report content">
+                <div className="min-w-0 w-full max-w-full overflow-x-auto overflow-y-auto">
+                  {children}
+                </div>
               </section>
             </div>
           ) : (

@@ -1,8 +1,60 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
 import { Printer } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
+import type { Loan } from '@/types/saccoWorkspace';
+
+/** Days since last payment, or since disbursement, or since application (for outstanding / aging buckets). */
+function daysSinceReferenceForAging(loan: Loan): number {
+  const ref = loan.lastPaymentDate || loan.disbursementDate || loan.applicationDate;
+  if (!ref) return 0;
+  const raw = ref.includes('T') ? ref : `${String(ref).slice(0, 10)}T12:00:00`;
+  const start = new Date(raw);
+  if (Number.isNaN(start.getTime())) return 0;
+  const end = new Date();
+  return Math.max(0, Math.floor((end.getTime() - start.getTime()) / 86_400_000));
+}
+
+function bucketIndexForDays(days: number): number {
+  if (days <= 30) return 0;
+  if (days <= 60) return 1;
+  if (days <= 90) return 2;
+  if (days <= 180) return 3;
+  if (days <= 365) return 4;
+  return 5;
+}
+
+const AGING_BRACKETS = [
+  'Current (0–30 days)',
+  '31–60 days',
+  '61–90 days',
+  '91–180 days',
+  '181–365 days',
+  'Over 365 days',
+] as const;
+
+function computeAgingFromLoans(activeLoans: Loan[]) {
+  const buckets = AGING_BRACKETS.map((bracket) => ({
+    bracket,
+    count: 0,
+    amount: 0,
+    pct: 0,
+  }));
+  for (const loan of activeLoans) {
+    const bal = Number(loan.balance) || 0;
+    if (bal <= 0) continue;
+    const days = daysSinceReferenceForAging(loan);
+    const idx = bucketIndexForDays(days);
+    buckets[idx].count += 1;
+    buckets[idx].amount += bal;
+  }
+  const totalAmount = buckets.reduce((s, b) => s + b.amount, 0);
+  for (const b of buckets) {
+    b.pct = totalAmount > 0 ? Math.round((b.amount / totalAmount) * 1000) / 10 : 0;
+  }
+  return { buckets, totalAmount };
+}
 
 export type LoanReportTabId = 'summary' | 'aging' | 'disbursement' | 'collection';
 
@@ -34,15 +86,20 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
   const totalOutstanding = active.reduce((s, l) => s + l.balance, 0);
   const totalCollected = loans.reduce((s, l) => s + l.paidAmount, 0);
 
-  // Aging analysis
-  const aging = [
-    { bracket: 'Current (0-30 days)', count: 3, amount: 757000, pct: 38.5 },
-    { bracket: '31-60 days', count: 1, amount: 412000, pct: 20.9 },
-    { bracket: '61-90 days', count: 1, amount: 220000, pct: 11.2 },
-    { bracket: '91-180 days', count: 1, amount: 195000, pct: 9.9 },
-    { bracket: '181-365 days', count: 1, amount: 125000, pct: 6.4 },
-    { bracket: 'Over 365 days', count: 0, amount: 0, pct: 0 },
-  ];
+  const { aging, agingTotalAmount } = useMemo(() => {
+    const r = computeAgingFromLoans(active);
+    return { aging: r.buckets, agingTotalAmount: r.totalAmount };
+  }, [active]);
+
+  const reportDateLabel = useMemo(
+    () =>
+      new Date().toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }),
+    []
+  );
 
   const reports = [
     { id: 'summary', label: 'Portfolio Summary' },
@@ -81,7 +138,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
             <div className="space-y-6">
               <div className="text-center border-b border-slate-200 pb-4">
                 <h2 className="text-xl font-bold text-slate-900">Loan Portfolio Summary Report</h2>
-                <p className="text-sm text-slate-500">As at March 3, 2026</p>
+                <p className="text-sm text-slate-500">As at {reportDateLabel}</p>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 {[
@@ -108,7 +165,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                     ['Total Amount Disbursed', totalDisbursed],
                     ['Total Outstanding Balance', totalOutstanding],
                     ['Total Amount Collected', totalCollected],
-                    ['Total Interest Earned', 890000],
+                    ['Total Interest Earned', 0],
                     ['Provision for Bad Debts', 0],
                     ['Net Loan Portfolio', totalOutstanding],
                   ].map(([l, v]) => (
@@ -152,8 +209,18 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
             <div className="space-y-4">
               <div className="text-center border-b border-slate-200 pb-4">
                 <h2 className="text-xl font-bold text-slate-900">Loan Aging Analysis</h2>
-                <p className="text-sm text-slate-500">As at March 3, 2026</p>
+                <p className="text-sm text-slate-500">As at {reportDateLabel}</p>
+                <p className="mt-2 text-xs text-slate-500 max-w-xl mx-auto">
+                  Buckets use days since last repayment (or first disbursement if none). Only loans with status
+                  &quot;disbursed&quot; and a positive balance are included.
+                </p>
               </div>
+              {agingTotalAmount === 0 ? (
+                <p className="text-center text-sm text-slate-600 py-4">
+                  No outstanding disbursed loans — nothing to age. When you add and disburse loans, balances will appear
+                  here.
+                </p>
+              ) : null}
               <table className="w-full">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
@@ -185,7 +252,9 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                     <td className="px-4 py-3 text-sm">Total</td>
                     <td className="px-4 py-3 text-sm text-right">{aging.reduce((s, a) => s + a.count, 0)}</td>
                     <td className="px-4 py-3 text-sm text-right">{formatCurrency(aging.reduce((s, a) => s + a.amount, 0))}</td>
-                    <td className="px-4 py-3 text-sm text-right">100%</td>
+                    <td className="px-4 py-3 text-sm text-right">
+                      {agingTotalAmount > 0 ? "100%" : "—"}
+                    </td>
                   </tr>
                 </tfoot>
               </table>

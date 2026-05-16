@@ -88,6 +88,7 @@ import { SaccoMembersPage } from './components/sacco/SaccoMembersPage';
 import { SaccoSavingsAccountOpenPage } from './components/sacco/SaccoSavingsAccountOpenPage';
 import { SaccoSavingsAccountsListPage } from './components/sacco/SaccoSavingsAccountsListPage';
 import { SaccoMembersSavingsSettingsPage } from './components/sacco/SaccoMembersSavingsSettingsPage';
+import { SaccoBulkImportPage } from './components/sacco/SaccoBulkImportPage';
 import { SaccoPermissionsPage } from './components/sacco/SaccoPermissionsPage';
 import { SaccoLoansPage } from './components/sacco/SaccoLoansPage';
 import { SaccoCashbookPage } from './components/sacco/SaccoCashbookPage';
@@ -732,6 +733,12 @@ function AppContent() {
       case SACCOPRO_PAGE.savingsSettings:
       case "sacco_members_savings_settings":
         return <SaccoMembersSavingsSettingsPage readOnly={access.readOnly} />;
+      case SACCOPRO_PAGE.bulkImport:
+        return <SaccoBulkImportPage readOnly={access.readOnly} />;
+      case SACCOPRO_PAGE.loanBulkImport:
+        return <SaccoBulkImportPage readOnly={access.readOnly} lockedKind="loan_products" />;
+      case SACCOPRO_PAGE.loanPortfolioImport:
+        return <SaccoBulkImportPage readOnly={access.readOnly} lockedKind="member_loans" />;
       case SACCOPRO_PAGE.permissions:
         return (
           <SaccoPermissionsPage

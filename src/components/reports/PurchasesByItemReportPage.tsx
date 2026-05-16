@@ -6,6 +6,7 @@ import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import autoTable from "jspdf-autotable";
+import { ItemReportFiltersPanel } from "./ItemReportFiltersPanel";
 
 type ItemRow = {
   itemName: string;
@@ -128,7 +129,11 @@ export function PurchasesByItemReportPage() {
 
   const departments = useMemo(() => ["all", ...Array.from(new Set(rows.map((r) => r.department)))], [rows]);
   const vendors = useMemo(() => ["all", ...Array.from(new Set(rows.map((r) => r.vendor)))], [rows]);
-  const items = useMemo(() => ["all", ...Array.from(new Set(rows.map((r) => r.itemName)))], [rows]);
+  const customers = useMemo(() => ["all"], []);
+  const items = useMemo(
+    () => Array.from(new Set(rows.map((r) => r.itemName))).sort((a, b) => a.localeCompare(b)),
+    [rows]
+  );
 
   const filtered = useMemo(
     () =>
@@ -215,56 +220,28 @@ export function PurchasesByItemReportPage() {
           <button type="button" onClick={exportPdf} className="border rounded px-3 py-2 text-sm hover:bg-slate-50">PDF</button>
         </div>
       </div>
-      <div className="flex flex-wrap gap-2 mb-4">
-        <select value={dateRange} onChange={(e) => setDateRange(e.target.value as DateRangeKey)} className="border rounded px-3 py-2 text-sm">
-          <option value="today">Today</option>
-          <option value="this_week">This week</option>
-          <option value="this_month">This month</option>
-          <option value="last_month">Last month</option>
-          <option value="custom">Custom</option>
-        </select>
-        {dateRange === "custom" ? (
-          <>
-            <input type="date" className="border rounded px-3 py-2 text-sm" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} />
-            <input type="date" className="border rounded px-3 py-2 text-sm" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
-          </>
-        ) : null}
-        <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} className="border rounded px-3 py-2 text-sm">
-          {departments.map((d) => (
-            <option key={d} value={d}>
-              {d === "all" ? "All departments" : d}
-            </option>
-          ))}
-        </select>
-        <select value={vendorFilter} onChange={(e) => setVendorFilter(e.target.value)} className="border rounded px-3 py-2 text-sm">
-          {vendors.map((v) => (
-            <option key={v} value={v}>
-              {v === "all" ? "All vendors" : v}
-            </option>
-          ))}
-        </select>
-        <select
-          multiple
-          value={itemFilters}
-          onChange={(e) =>
-            setItemFilters(Array.from(e.target.selectedOptions).map((o) => o.value))
-          }
-          className="border rounded px-3 py-2 text-sm min-w-[220px]"
-          title="Select one or more items"
-        >
-          {items
-            .filter((v) => v !== "all")
-            .map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-        </select>
-        <select value={customerFilter} onChange={(e) => setCustomerFilter(e.target.value)} className="border rounded px-3 py-2 text-sm">
-          <option value="all">All customers</option>
-          <option value="none">N/A for purchases</option>
-        </select>
-      </div>
+      <ItemReportFiltersPanel
+        dateRange={dateRange}
+        onDateRangeChange={setDateRange}
+        customFrom={customFrom}
+        customTo={customTo}
+        onCustomFromChange={setCustomFrom}
+        onCustomToChange={setCustomTo}
+        departmentFilter={departmentFilter}
+        onDepartmentFilterChange={setDepartmentFilter}
+        departments={departments}
+        customerFilter={customerFilter}
+        onCustomerFilterChange={setCustomerFilter}
+        customers={customers}
+        customerDisabled
+        customerDisabledHint="N/A for purchases"
+        vendorFilter={vendorFilter}
+        onVendorFilterChange={setVendorFilter}
+        vendors={vendors}
+        itemFilters={itemFilters}
+        onItemFiltersChange={setItemFilters}
+        items={items}
+      />
       {loading ? (
         <p className="text-slate-500">Loading...</p>
       ) : (

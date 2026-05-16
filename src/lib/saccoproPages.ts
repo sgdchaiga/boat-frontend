@@ -5,6 +5,12 @@ export const SACCOPRO_PAGE = {
   /** Board-friendly KPIs from workspace data. */
   performanceDashboard: "sacco_performance_dashboard",
   members: "sacco_members",
+  /** Savings / member / loan catalog / member loan portfolio CSV import (Members hub). */
+  bulkImport: "sacco_bulk_import",
+  /** Loan product CSV (catalog) — Loans hub — admins only in UI. */
+  loanBulkImport: "sacco_loan_bulk_import",
+  /** Member loan accounts / balances CSV — Loans hub — admins only in UI. */
+  loanPortfolioImport: "sacco_loan_portfolio_import",
   /** Loans + savings + activity for one member. */
   memberProfile: "sacco_member_profile",
   /** Account types + account number format (rights: Admin → Approval rights). */

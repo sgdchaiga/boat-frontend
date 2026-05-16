@@ -40,11 +40,14 @@ import {
   buildTellerReportCsv,
   closeTellerSession,
   downloadCsv,
-  openTellerSession,
+  closeAllOpenTellerSessionsForStaff,
+  resumeOrOpenTellerSession,
   rejectTellerTransaction,
   transferCashFromTillToVault,
   transferCashFromVaultToTill,
   type TellerReportId,
+  TELLER_MIGRATION_HINT,
+  formatTellerDbError,
 } from "@/lib/saccoTellerDb";
 import { useTellerCompleteTransaction } from "@/components/sacco/hooks/useTellerCompleteTransaction";
 import { useTellerInit } from "@/components/sacco/hooks/useTellerInit";
@@ -261,21 +264,34 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   });
 
   const runMutation = useCallback(
-    async (fn: () => Promise<void>, options?: { successMessage?: string; silentRefresh?: boolean }) => {
-      if (!canMutate || !orgId || !staffId) return;
+    async (fn: () => Promise<void>, options?: { successMessage?: string | false; silentRefresh?: boolean }) => {
+      if (!orgId) {
+        setActionMessage({ kind: "err", text: "Link your staff account to an organization before using Teller." });
+        return;
+      }
+      if (!staffId) {
+        setActionMessage({ kind: "err", text: "Sign in with a staff account to use Teller." });
+        return;
+      }
+      if (snap?.schemaMissing) {
+        setActionMessage({ kind: "err", text: TELLER_MIGRATION_HINT });
+        return;
+      }
       setSaving(true);
       setActionMessage(null);
       try {
         await fn();
-        setActionMessage({ kind: "ok", text: options?.successMessage ?? "Saved." });
+        if (options?.successMessage !== false) {
+          setActionMessage({ kind: "ok", text: options?.successMessage ?? "Saved." });
+        }
         await load({ silent: options?.silentRefresh !== false });
       } catch (e) {
-        setActionMessage({ kind: "err", text: e instanceof Error ? e.message : "Action failed" });
+        setActionMessage({ kind: "err", text: formatTellerDbError(e) });
       } finally {
         setSaving(false);
       }
     },
-    [canMutate, orgId, staffId, load]
+    [orgId, staffId, snap?.schemaMissing, load]
   );
 
   const validateTransactionForm = useCallback((): boolean => {
@@ -322,34 +338,72 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
     setActionMessage,
   ]);
 
+  const openTillWithFloat = async (opts?: { forceNew?: boolean; successMessage?: string }) => {
+    const v = Number(openFloatStr);
+    if (!Number.isFinite(v) || v < 0) throw new Error("Enter a valid opening float.");
+    const { session, resumed } = await resumeOrOpenTellerSession({
+      organizationId: orgId!,
+      staffId: staffId!,
+      openingFloat: Math.round(v),
+      notes: openSessionNotes.trim() || null,
+      forceNew: opts?.forceNew,
+    });
+    setOpenFloatStr("");
+    setOpenSessionNotes("");
+    return {
+      session,
+      message:
+        opts?.successMessage ??
+        (resumed ? "Resumed your open till session." : "Till session opened."),
+    };
+  };
+
   const handleOpenSession = () =>
     runMutation(async () => {
-      const v = Number(openFloatStr);
-      if (!Number.isFinite(v) || v < 0) throw new Error("Enter a valid opening float.");
-      await openTellerSession({
-        organizationId: orgId!,
-        staffId: staffId!,
-        openingFloat: Math.round(v),
-        notes: openSessionNotes.trim() || null,
-      });
-      setOpenFloatStr("");
-      setOpenSessionNotes("");
-    });
+      const { message } = await openTillWithFloat();
+      setActionMessage({ kind: "ok", text: message });
+    }, { successMessage: false, silentRefresh: false });
 
   const submitOpenTillFromModal = () =>
     runMutation(async () => {
+      const { message } = await openTillWithFloat();
+      setOpenTillModal(false);
+      setActionMessage({ kind: "ok", text: message });
+    }, { successMessage: false, silentRefresh: false });
+
+  const handleResumeOpenTill = () =>
+    runMutation(async () => {
       const v = Number(openFloatStr);
-      if (!Number.isFinite(v) || v < 0) throw new Error("Enter a valid opening float.");
-      await openTellerSession({
+      const float = Number.isFinite(v) && v >= 0 ? Math.round(v) : 0;
+      const { session, resumed } = await resumeOrOpenTellerSession({
         organizationId: orgId!,
         staffId: staffId!,
-        openingFloat: Math.round(v),
+        openingFloat: float,
         notes: openSessionNotes.trim() || null,
       });
-      setOpenFloatStr("");
-      setOpenSessionNotes("");
+      if (!resumed) {
+        setOpenFloatStr("");
+        setOpenSessionNotes("");
+      }
       setOpenTillModal(false);
-    }, { successMessage: "Till session opened." });
+      setActionMessage({
+        kind: "ok",
+        text: resumed ? "Till session resumed — you can post transactions." : "Till session opened.",
+      });
+      void session;
+    }, { successMessage: false, silentRefresh: false });
+
+  const handleCloseStuckTill = () =>
+    runMutation(async () => {
+      const n = await closeAllOpenTellerSessionsForStaff({
+        organizationId: orgId!,
+        staffId: staffId!,
+        notes: "Closed from Teller (stuck session recovery).",
+      });
+      if (n === 0) {
+        throw new Error("No open till session was found to close. Refresh the page and try again.");
+      }
+    }, { successMessage: "Stuck till session closed. You can open a new session now.", silentRefresh: false });
 
   const requestCompleteTransaction = useCallback(() => {
     if (!validateTransactionForm()) return;
@@ -529,7 +583,9 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         )}
         {snap?.schemaMissing && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-            Teller tables are not installed. Run the SACCO teller migrations in Supabase, then refresh.
+            Teller database objects are missing or out of date. In Supabase → SQL Editor, run migrations starting with{" "}
+            <code className="text-xs">20260426120007_sacco_teller.sql</code> through{" "}
+            <code className="text-xs">20260426120011_journal_gl_teller_counterparty_settings.sql</code>, then refresh.
           </div>
         )}
 
@@ -623,10 +679,27 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
             </span>
             <button
               type="button"
+              onClick={() => void handleResumeOpenTill()}
+              disabled={saving}
+              className="rounded-lg border border-amber-700 bg-white px-3 py-2 text-sm font-semibold text-amber-950 hover:bg-amber-100 disabled:opacity-50"
+            >
+              Resume session
+            </button>
+            <button
+              type="button"
               onClick={() => setOpenTillModal(true)}
               className="rounded-lg bg-amber-800 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-amber-900"
             >
               Open till
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleCloseStuckTill()}
+              disabled={saving}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              title='Use if you see "already have an open session" but Till shows closed'
+            >
+              Close stuck session
             </button>
           </div>
         )}
@@ -1281,16 +1354,34 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                 <label className={label}>Notes (optional)</label>
                 <input className={field} value={openSessionNotes} onChange={(e) => setOpenSessionNotes(e.target.value)} />
               </div>
-              <div className="flex gap-2 pt-2">
+              <div className="flex flex-col gap-2 pt-2">
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                    disabled={saving || !orgId || !staffId || snap?.schemaMissing}
+                    onClick={() => void submitOpenTillFromModal()}
+                  >
+                    Open till
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 rounded-xl border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-900 hover:bg-emerald-100 disabled:opacity-50"
+                    disabled={saving || !orgId || !staffId || snap?.schemaMissing}
+                    onClick={() => void handleResumeOpenTill()}
+                  >
+                    Resume existing
+                  </button>
+                </div>
                 <button
                   type="button"
-                  className="flex-1 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                  disabled={saving || !canMutate}
-                  onClick={() => void submitOpenTillFromModal()}
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                  disabled={saving || !orgId || !staffId}
+                  onClick={() => void handleCloseStuckTill()}
                 >
-                  Open till
+                  Close stuck session (then open again)
                 </button>
-                <button type="button" className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={() => setOpenTillModal(false)}>
+                <button type="button" className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50" onClick={() => setOpenTillModal(false)}>
                   Cancel
                 </button>
               </div>

@@ -19,7 +19,7 @@ import type {
   Member,
   ProvisioningConfig,
   SaccoLoanPolicy,
-  type LoanFeeBreakdown,
+  LoanFeeBreakdown,
 } from "@/types/saccoWorkspace";
 import { memberMeetsLoanDisbursePolicy, loanProductSharesGate } from "@/lib/saccoLoanEligibility";
 import {
@@ -29,6 +29,8 @@ import {
   updateLoanRow,
   upsertProvisioningSettings,
 } from "@/lib/saccoDb";
+import { suggestNextLoanNumber } from "@/lib/saccoLoanNumberSettings";
+import { fetchSaccoBranches, pickDefaultBranchCode } from "@/lib/saccoBranches";
 
 export type {
   CashbookEntry,
@@ -405,6 +407,16 @@ export function AppProvider({
         const prod = loanProductsInner.find((p) => p.name === payload.loanType);
         const shr = loanProductSharesGate(member, prod);
         if (!shr.ok) throw new Error(shr.reason);
+
+        let loanNumber: string | null = null;
+        try {
+          const br = await fetchSaccoBranches(organizationId);
+          const branchCode = br.tableMissing ? undefined : pickDefaultBranchCode(br.rows);
+          loanNumber = await suggestNextLoanNumber(organizationId, String(prod?.loanCode ?? "1"), branchCode);
+        } catch (numErr) {
+          console.warn("[SACCO] suggestNextLoanNumber", numErr);
+        }
+
         const row = await insertLoanRow({
           sacco_member_id: payload.memberId,
           member_name: payload.memberName,
@@ -427,6 +439,7 @@ export function AppProvider({
           lc1_chairman_name: payload.lc1ChairmanName?.trim() || null,
           lc1_chairman_phone: payload.lc1ChairmanPhone?.trim() || null,
           last_payment_date: null,
+          loan_number: loanNumber,
         });
         setLoans((prev) => [...prev, row]);
       } catch (e) {
