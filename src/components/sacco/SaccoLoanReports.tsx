@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
-import { Printer } from 'lucide-react';
+import { SaccoReportToolbar } from '@/components/common/SaccoReportToolbar';
+import { downloadLoanReportPdf } from '@/lib/saccoReportPdf';
 import { PageNotes } from '@/components/common/PageNotes';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
 import type { Loan } from '@/types/saccoWorkspace';
@@ -117,9 +118,13 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
             <p>Generate and view loan portfolio reports.</p>
           </PageNotes>
         </div>
-        <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg text-sm hover:bg-slate-50">
-          <Printer size={16} /> Print Report
-        </button>
+        <SaccoReportToolbar
+          onPrint={() => window.print()}
+          onPdf={() => {
+            const today = new Date().toISOString().slice(0, 10);
+            downloadLoanReportPdf(reportType, loans, { dateFrom: today, dateTo: today });
+          }}
+        />
       </div>
 
       {/* Report Tabs */}

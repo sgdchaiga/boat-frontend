@@ -7,7 +7,11 @@ export type ReportHubLeaf = { name: string; page: string; state?: Record<string,
 export type ReportHubCategory = { id: string; label: string; items: ReportHubLeaf[] };
 
 const SALES_PAGES = new Set(["reports_daily_summary", "reports_daily_sales", "reports_sales_by_item"]);
-const PURCHASES_PAGES = new Set(["reports_daily_purchases_summary", "reports_purchases_by_item"]);
+const PURCHASES_PAGES = new Set([
+  "reports_daily_purchases_summary",
+  "reports_purchases_by_item",
+  "reports_expenses",
+]);
 const INVENTORY_PAGES = new Set(["reports_stock_movement", "reports_manufacturing_daily_production"]);
 const FINANCIAL_PAGES = new Set(["accounting_income", "accounting_balance", "accounting_cashflow"]);
 const RECEIVABLES_PAGES = new Set(["retail_credit_invoices"]);

@@ -1,6 +1,12 @@
-import React from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
+import { useAuth } from '@/contexts/AuthContext';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
+import {
+  fetchSaccoDashboardCharts,
+  type SaccoDashboardCharts,
+} from '@/lib/saccoDashboardCharts';
+import { supabase } from '@/lib/supabase';
 import {
   Users, CreditCard, PiggyBank, TrendingUp,
   ArrowUpRight, ArrowDownRight, DollarSign, Building2, AlertTriangle, CheckCircle
@@ -9,7 +15,16 @@ import { PageNotes } from '@/components/common/PageNotes';
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 
+const EMPTY_CHARTS: SaccoDashboardCharts = {
+  monthlyData: [],
+  savingsGrowth: [],
+  loanTypeData: [],
+};
+
 const Dashboard: React.FC = () => {
+  const { user } = useAuth();
+  const organizationId = user?.organization_id ?? null;
+
   const {
     members,
     loans,
@@ -23,6 +38,42 @@ const Dashboard: React.FC = () => {
     refreshSaccoWorkspace,
   } = useAppContext();
 
+  const [orgName, setOrgName] = useState<string>('');
+  const [charts, setCharts] = useState<SaccoDashboardCharts>(EMPTY_CHARTS);
+  const [chartsLoading, setChartsLoading] = useState(false);
+  const [chartsError, setChartsError] = useState<string | null>(null);
+
+  const loadCharts = useCallback(async () => {
+    if (!organizationId) {
+      setCharts(EMPTY_CHARTS);
+      setChartsError(null);
+      return;
+    }
+    setChartsLoading(true);
+    setChartsError(null);
+    try {
+      const [chartData, orgRes] = await Promise.all([
+        fetchSaccoDashboardCharts(organizationId),
+        supabase.from('organizations').select('name').eq('id', organizationId).maybeSingle(),
+      ]);
+      setCharts(chartData);
+      const row = orgRes.data as { name?: string | null } | null;
+      setOrgName(row?.name?.trim() || 'Your SACCO');
+      if (orgRes.error) console.warn('[SACCO dashboard] org name', orgRes.error);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Could not load dashboard charts';
+      setChartsError(msg);
+      setCharts(EMPTY_CHARTS);
+      console.error('[SACCO dashboard charts]', e);
+    } finally {
+      setChartsLoading(false);
+    }
+  }, [organizationId]);
+
+  useEffect(() => {
+    void loadCharts();
+  }, [loadCharts]);
+
   const activeMembers = members.filter(m => m.status === 'active').length;
   const totalSavings = members.reduce((s, m) => s + m.savingsBalance, 0);
   const activeLoans = loans.filter(l => l.status === 'disbursed');
@@ -32,34 +83,22 @@ const Dashboard: React.FC = () => {
   const totalAssets = fixedAssets.filter(a => a.status === 'In Use').reduce((s, a) => s + a.currentValue, 0);
   const cashBalance = cashbook.length > 0 ? cashbook[cashbook.length - 1].balance : 0;
 
-  const loanTypeData = [
-    { name: 'Normal', value: loans.filter(l => l.loanType === 'Normal Loan').length, color: '#10b981' },
-    { name: 'Emergency', value: loans.filter(l => l.loanType === 'Emergency Loan').length, color: '#f59e0b' },
-    { name: 'Development', value: loans.filter(l => l.loanType === 'Development Loan').length, color: '#3b82f6' },
-    { name: 'Education', value: loans.filter(l => l.loanType === 'Education Loan').length, color: '#8b5cf6' },
-  ];
+  const { monthlyData, savingsGrowth, loanTypeData } = charts;
 
-  const monthlyData = [
-    { month: 'Sep', deposits: 1200000, withdrawals: 800000, loans: 500000 },
-    { month: 'Oct', deposits: 1450000, withdrawals: 920000, loans: 650000 },
-    { month: 'Nov', deposits: 1380000, withdrawals: 750000, loans: 800000 },
-    { month: 'Dec', deposits: 1680000, withdrawals: 1100000, loans: 450000 },
-    { month: 'Jan', deposits: 1520000, withdrawals: 880000, loans: 700000 },
-    { month: 'Feb', deposits: 1750000, withdrawals: 950000, loans: 900000 },
-    { month: 'Mar', deposits: 1900000, withdrawals: 1050000, loans: 1100000 },
-  ];
+  const overviewMonthLabel = useMemo(() => {
+    const d = new Date();
+    return d.toLocaleString('default', { month: 'long', year: 'numeric' });
+  }, []);
 
-  const savingsGrowth = [
-    { month: 'Sep', amount: 12500000 },
-    { month: 'Oct', amount: 13200000 },
-    { month: 'Nov', amount: 13800000 },
-    { month: 'Dec', amount: 14500000 },
-    { month: 'Jan', amount: 15100000 },
-    { month: 'Feb', amount: 15900000 },
-    { month: 'Mar', amount: 16800000 },
-  ];
+  const hasMonthlyActivity = monthlyData.some((m) => m.deposits > 0 || m.withdrawals > 0 || m.loans > 0);
+  const hasSavingsTrend = savingsGrowth.some((m) => m.amount > 0);
 
   const recentTransactions = cashbook.slice(-5).reverse();
+
+  const refreshAll = useCallback(async () => {
+    await refreshSaccoWorkspace();
+    await loadCharts();
+  }, [refreshSaccoWorkspace, loadCharts]);
 
   const stats: {
     label: string;
@@ -79,17 +118,23 @@ const Dashboard: React.FC = () => {
     { label: 'Fixed Assets', value: formatCurrency(totalAssets), change: '-1.8%', up: false, icon: <Building2 size={22} />, color: 'bg-rose-500', page: 'fixed_assets' },
   ];
 
+  const chartScopeLabel = orgName ? `Showing data for ${orgName}` : 'Organization charts';
+
   return (
     <div className="space-y-6">
       {saccoLoading && (
         <p className="text-sm text-slate-500">Loading workspace data from the server…</p>
       )}
-      {saccoError && (
+      {(saccoError || chartsError) && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex flex-wrap items-center justify-between gap-2">
-          <span>SACCO data could not be loaded: {saccoError}</span>
+          <span>
+            {saccoError ? `SACCO data could not be loaded: ${saccoError}` : null}
+            {saccoError && chartsError ? ' · ' : null}
+            {chartsError ? `Charts: ${chartsError}` : null}
+          </span>
           <button
             type="button"
-            onClick={() => void refreshSaccoWorkspace()}
+            onClick={() => void refreshAll()}
             className="text-amber-800 font-medium underline hover:no-underline"
           >
             Retry
@@ -103,16 +148,19 @@ const Dashboard: React.FC = () => {
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl font-bold text-slate-900">Admin Dashboard</h1>
             <PageNotes ariaLabel="Dashboard notes">
-              <p className="text-slate-600">Welcome back! Here&apos;s your SACCO overview for March 2026</p>
+              <p className="text-slate-600">Welcome back! Here&apos;s your SACCO overview for {overviewMonthLabel}</p>
             </PageNotes>
           </div>
+          {organizationId && (
+            <p className="text-xs text-slate-500 mt-1">{chartScopeLabel}</p>
+          )}
         </div>
         <div className="flex gap-2">
           <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-full border border-emerald-200">
             System Online
           </span>
           <span className="px-3 py-1.5 bg-slate-100 text-slate-600 text-xs font-medium rounded-full">
-            Last sync: 2 min ago
+            {chartsLoading ? 'Refreshing charts…' : 'Charts synced'}
           </span>
         </div>
       </div>
@@ -149,48 +197,64 @@ const Dashboard: React.FC = () => {
       )}
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div key={organizationId ?? 'no-org'} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Monthly Trends */}
         <div className="lg:col-span-2 bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-900 mb-4">Monthly Financial Trends</h3>
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={monthlyData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="#94a3b8" />
-              <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(v) => `${(v / 1000000).toFixed(1)}M`} />
-              <Tooltip formatter={(v: number) => `UGX ${v.toLocaleString()}`} />
+          <h3 className="text-sm font-semibold text-slate-900 mb-1">Monthly Financial Trends</h3>
+          <p className="text-xs text-slate-500 mb-4">Teller deposits & withdrawals (posted) and loan disbursements</p>
+          {chartsLoading ? (
+            <p className="text-sm text-slate-500 py-16 text-center">Loading chart data…</p>
+          ) : !hasMonthlyActivity ? (
+            <p className="text-sm text-slate-500 py-16 text-center">No teller or loan activity in the last seven months for this organization.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={280}>
+              <BarChart data={monthlyData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="#94a3b8" />
+                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(v) => (v >= 1_000_000 ? `${(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${Math.round(v / 1_000)}K` : String(v))} />
+                <Tooltip formatter={(v: number) => `UGX ${v.toLocaleString()}`} />
 
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="deposits" fill="#10b981" radius={[4, 4, 0, 0]} name="Deposits" />
-              <Bar dataKey="withdrawals" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Withdrawals" />
-              <Bar dataKey="loans" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Loans" />
-            </BarChart>
-          </ResponsiveContainer>
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="deposits" fill="#10b981" radius={[4, 4, 0, 0]} name="Deposits" />
+                <Bar dataKey="withdrawals" fill="#f59e0b" radius={[4, 4, 0, 0]} name="Withdrawals" />
+                <Bar dataKey="loans" fill="#3b82f6" radius={[4, 4, 0, 0]} name="Loan disbursements" />
+              </BarChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
 
         {/* Loan Distribution */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-900 mb-4">Loan Distribution</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={loanTypeData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
-                {loanTypeData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="space-y-2 mt-2">
-            {loanTypeData.map((d, i) => (
-              <div key={i} className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-2">
-                  <div className="w-3 h-3 rounded-full" style={{ backgroundColor: d.color }} />
-                  <span className="text-slate-600">{d.name}</span>
-                </div>
-                <span className="font-medium text-slate-900">{d.value} loans</span>
+          <h3 className="text-sm font-semibold text-slate-900 mb-1">Loan Distribution</h3>
+          <p className="text-xs text-slate-500 mb-4">By loan product for this organization</p>
+          {chartsLoading ? (
+            <p className="text-sm text-slate-500 py-16 text-center">Loading chart data…</p>
+          ) : loanTypeData.length === 0 ? (
+            <p className="text-sm text-slate-500 py-16 text-center">No loans on file for this organization.</p>
+          ) : (
+            <>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={loanTypeData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
+                    {loanTypeData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+              <div className="space-y-2 mt-2">
+                {loanTypeData.map((d, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <div className="flex items-center gap-2">
+                      <div className="w-3 h-3 rounded-full" style={{ backgroundColor: d.color }} />
+                      <span className="text-slate-600">{d.name}</span>
+                    </div>
+                    <span className="font-medium text-slate-900">{d.value} loans</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -198,17 +262,24 @@ const Dashboard: React.FC = () => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Savings Growth */}
         <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-          <h3 className="text-sm font-semibold text-slate-900 mb-4">Savings Growth Trend</h3>
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={savingsGrowth}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-              <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="#94a3b8" />
-              <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(v) => `${(v / 1000000).toFixed(0)}M`} />
-              <Tooltip formatter={(v: number) => `UGX ${v.toLocaleString()}`} />
+          <h3 className="text-sm font-semibold text-slate-900 mb-1">Savings Growth Trend</h3>
+          <p className="text-xs text-slate-500 mb-4">Estimated from current savings balances and teller savings activity</p>
+          {chartsLoading ? (
+            <p className="text-sm text-slate-500 py-16 text-center">Loading chart data…</p>
+          ) : !hasSavingsTrend ? (
+            <p className="text-sm text-slate-500 py-16 text-center">No savings balances or savings teller activity in the last seven months.</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={220}>
+              <AreaChart data={savingsGrowth}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="month" tick={{ fontSize: 12 }} stroke="#94a3b8" />
+                <YAxis tick={{ fontSize: 11 }} stroke="#94a3b8" tickFormatter={(v) => (v >= 1_000_000 ? `${(v / 1_000_000).toFixed(0)}M` : v >= 1_000 ? `${Math.round(v / 1_000)}K` : String(v))} />
+                <Tooltip formatter={(v: number) => `UGX ${v.toLocaleString()}`} />
 
-              <Area type="monotone" dataKey="amount" stroke="#10b981" fill="#10b98120" strokeWidth={2} name="Total Savings" />
-            </AreaChart>
-          </ResponsiveContainer>
+                <Area type="monotone" dataKey="amount" stroke="#10b981" fill="#10b98120" strokeWidth={2} name="Total Savings" />
+              </AreaChart>
+            </ResponsiveContainer>
+          )}
         </div>
 
         {/* Recent Transactions */}
@@ -218,22 +289,26 @@ const Dashboard: React.FC = () => {
             <button onClick={() => setCurrentPage(SACCOPRO_PAGE.savingsStatements)} className="text-xs text-emerald-600 hover:text-emerald-700 font-medium">View All</button>
           </div>
           <div className="space-y-3">
-            {recentTransactions.map(t => (
-              <div key={t.id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
-                <div className="flex items-center gap-3">
-                  <div className={`w-8 h-8 rounded-full flex items-center justify-center ${t.debit > 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
-                    {t.debit > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+            {recentTransactions.length === 0 ? (
+              <p className="text-sm text-slate-500 py-8 text-center">No cashbook entries for this organization yet.</p>
+            ) : (
+              recentTransactions.map(t => (
+                <div key={t.id} className="flex items-center justify-between py-2 border-b border-slate-50 last:border-0">
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center ${t.debit > 0 ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-600'}`}>
+                      {t.debit > 0 ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
+                    </div>
+                    <div>
+                      <p className="text-sm font-medium text-slate-900 truncate max-w-[200px]">{t.description}</p>
+                      <p className="text-xs text-slate-400">{t.date}</p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="text-sm font-medium text-slate-900 truncate max-w-[200px]">{t.description}</p>
-                    <p className="text-xs text-slate-400">{t.date}</p>
-                  </div>
+                  <span className={`text-sm font-semibold ${t.debit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {t.debit > 0 ? '+' : '-'}{formatCurrency(t.debit || t.credit)}
+                  </span>
                 </div>
-                <span className={`text-sm font-semibold ${t.debit > 0 ? 'text-emerald-600' : 'text-red-600'}`}>
-                  {t.debit > 0 ? '+' : '-'}{formatCurrency(t.debit || t.credit)}
-                </span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
         </div>
       </div>

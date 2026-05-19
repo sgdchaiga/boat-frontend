@@ -27,6 +27,7 @@ import {
   Smartphone,
   BarChart3,
   AlertTriangle,
+  Link2,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -44,6 +45,7 @@ import {
   isSimpleOrgReportHubRoute,
 } from '@/lib/reportHubCatalog';
 import { desktopApi } from '@/lib/desktopApi';
+import { organizationMembershipLabel } from '@/lib/orgMembership';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncPush';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 
@@ -204,7 +206,9 @@ const singleNavActive = 'bg-brand-600 text-white shadow-sm';
 const singleNavIdle = 'text-slate-400 hover:bg-slate-800/80 hover:text-white';
 
 export function Layout({ children, currentPage, pageState = {}, onNavigate }: LayoutProps) {
-  const { user, clockOut, lockTerminal, accessSession, isSuperAdmin, isHotelStaff } = useAuth();
+  const { user, clockOut, lockTerminal, accessSession, isSuperAdmin, isHotelStaff, memberships, switchOrganization } =
+    useAuth();
+  const [orgSwitching, setOrgSwitching] = useState(false);
   const businessType = user?.business_type ?? null;
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -230,6 +234,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
     { name: 'Communications', icon: MessageSquare, page: 'communications' },
     { name: 'Organizations', icon: Building2, page: 'platform_organizations' },
     { name: 'Business admins', icon: UsersRound, page: 'platform_business_admins' },
+    { name: 'Link user to org', icon: Link2, page: 'platform_link_user' },
     { name: 'Business types', icon: Building2, page: 'platform_business_types' },
     { name: 'Subscription plans', icon: CreditCard, page: 'platform_plans' },
     { name: 'Super users', icon: Shield, page: 'platform_superusers' },
@@ -885,9 +890,6 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
     if (next) setReportHubCategoryId((prev) => (prev === next ? prev : next));
   }, [showSimpleOrgReportHub, currentPage, pageStateKey, reportHubCategories, pageStateResolved]);
 
-  const reportHubSelectedCategory =
-    reportHubCategories.find((c) => c.id === reportHubCategoryId) ?? reportHubCategories[0] ?? null;
-
   return (
     <div className="app-page">
       <div className="lg:hidden fixed top-0 left-0 right-0 bg-slate-950 border-b border-slate-800 z-50 px-3 py-2 shadow-sm">
@@ -1229,6 +1231,44 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                 </p>
               )}
             </div>
+            {!isLocalAuthMode && memberships.length > 1 ? (
+              <div className="px-2 py-1 mb-1">
+                <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">Organization</label>
+                <select
+                  value={user?.organization_id ?? ""}
+                  disabled={orgSwitching}
+                  onChange={(e) => {
+                    const nextOrgId = e.target.value;
+                    if (!nextOrgId || nextOrgId === user?.organization_id) return;
+                    void (async () => {
+                      setOrgSwitching(true);
+                      const { error } = await switchOrganization(nextOrgId);
+                      setOrgSwitching(false);
+                      if (error) {
+                        alert(error.message);
+                        return;
+                      }
+                      const bt = memberships.find((m) => m.organization_id === nextOrgId)?.organizations
+                        ?.business_type;
+                      if (bt === "retail") onNavigate("retail_dashboard");
+                      else if (bt === "clinic") onNavigate("clinic_dashboard");
+                      else if (bt === "sacco") onNavigate(SACCOPRO_PAGE);
+                      else if (bt === "school") onNavigate(SCHOOL_PAGE);
+                      else if (bt === "vsla") onNavigate(VSLA_PAGE);
+                      else if (bt === "manufacturing") onNavigate("manufacturing");
+                      else onNavigate("dashboard");
+                    })();
+                  }}
+                  className="w-full rounded-md border border-slate-700 bg-slate-900 text-xs text-slate-200 px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-sky-500"
+                >
+                  {memberships.map((m) => (
+                    <option key={m.organization_id} value={m.organization_id}>
+                      {organizationMembershipLabel(m)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ) : null}
             {isLocalAuthMode && (
               <button
                 type="button"
@@ -1321,70 +1361,63 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
             </div>
           )}
           {showSimpleOrgReportHub ? (
-            <div className="report-hub-shell flex flex-col lg:flex-row w-full max-w-full min-w-0 min-h-0 lg:min-h-[calc(100dvh-0px)] border-t border-slate-200/80 bg-slate-50/40 overflow-hidden">
-              <aside
-                className="report-hub-nav w-full shrink-0 lg:w-44 lg:max-w-[11rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-48 lg:max-h-none"
-                aria-label="Report categories"
+            <div className="report-hub-shell flex flex-col w-full max-w-full min-w-0 min-h-0 flex-1 border-t border-slate-200/80 bg-white overflow-hidden">
+              <nav
+                className="report-hub-toolbar shrink-0 border-b border-slate-200 bg-slate-50/90 overflow-x-auto"
+                aria-label="Report navigation"
               >
-                <ul className="p-2 space-y-0.5">
+                <div className="p-2 space-y-2 min-w-0">
                   {reportHubCategories.map((c) => {
                     const activeCatId = reportHubCategoryId ?? reportHubCategories[0]?.id;
-                    const sel = c.id === activeCatId;
+                    const catSelected = c.id === activeCatId;
                     return (
-                      <li key={c.id}>
+                      <div key={c.id} className="flex flex-wrap items-center gap-1.5 min-w-0">
                         <button
                           type="button"
                           onClick={() => setReportHubCategoryId(c.id)}
-                          className={`w-full text-left px-2 py-2 rounded-md text-xs font-semibold leading-snug ${
-                            sel ? "bg-brand-700 text-white shadow-sm" : "text-slate-700 hover:bg-slate-100"
+                          className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-semibold leading-snug transition ${
+                            catSelected
+                              ? "bg-brand-700 text-white shadow-sm"
+                              : "text-slate-700 bg-white border border-slate-200 hover:bg-slate-100"
                           }`}
                         >
                           {c.label}
                         </button>
-                      </li>
+                        {catSelected ? (
+                          <div className="flex flex-wrap items-center gap-1 min-w-0" role="group" aria-label={`Reports in ${c.label}`}>
+                            {c.items.map((leaf) => {
+                              const isActive = isSidebarLeafActive(leaf, currentPage, pageStateResolved);
+                              const readOnly = isReadOnlyPage(leaf.page);
+                              const leafKey = `${leaf.page}:${JSON.stringify(leaf.state ?? {})}`;
+                              return (
+                                <button
+                                  key={leafKey}
+                                  type="button"
+                                  onClick={() => {
+                                    onNavigate(leaf.page, leaf.state);
+                                    setSidebarOpen(false);
+                                  }}
+                                  className={`shrink-0 px-2.5 py-1.5 rounded-md text-xs font-medium transition ${
+                                    isActive
+                                      ? "bg-slate-900 text-white shadow-sm"
+                                      : "text-slate-700 bg-white border border-slate-200 hover:bg-slate-100"
+                                  }`}
+                                  title={readOnly ? "Read-only" : undefined}
+                                >
+                                  {leaf.name}
+                                  {readOnly ? <span className="ml-1 opacity-75">· RO</span> : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : null}
+                      </div>
                     );
                   })}
-                </ul>
-              </aside>
-              <aside
-                className="report-hub-nav w-full shrink-0 lg:w-44 lg:max-w-[11rem] border-b lg:border-b-0 lg:border-r border-slate-200 bg-white overflow-y-auto max-h-56 lg:max-h-none"
-                aria-label="Reports in category"
-              >
-                <ul className="p-2 space-y-0.5">
-                  {(reportHubSelectedCategory?.items ?? []).map((leaf) => {
-                    const isActive = isSidebarLeafActive(leaf, currentPage, pageStateResolved);
-                    const readOnly = isReadOnlyPage(leaf.page);
-                    const leafKey = `${leaf.page}:${JSON.stringify(leaf.state ?? {})}`;
-                    return (
-                      <li key={leafKey}>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            onNavigate(leaf.page, leaf.state);
-                            setSidebarOpen(false);
-                          }}
-                          className={`w-full text-left px-2 py-2 rounded-md text-sm transition ${
-                            isActive ? "bg-slate-900 text-white font-medium shadow-sm" : "text-slate-700 hover:bg-slate-100"
-                          }`}
-                        >
-                          <span>{leaf.name}</span>
-                          {readOnly && (
-                            <span
-                              className={`block mt-0.5 text-[10px] font-medium ${
-                                isActive ? "text-slate-300" : "text-amber-700"
-                              }`}
-                            >
-                              Read-only
-                            </span>
-                          )}
-                        </button>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </aside>
-              <section className="report-hub-content flex-1 min-w-0 w-full bg-white" aria-label="Report content">
-                <div className="min-w-0 w-full max-w-full overflow-x-auto overflow-y-auto">
+                </div>
+              </nav>
+              <section className="report-hub-content flex-1 min-w-0 min-h-0 w-full bg-white" aria-label="Report content">
+                <div className="min-w-0 w-full max-w-full h-full overflow-x-auto overflow-y-auto p-3 sm:p-4">
                   {children}
                 </div>
               </section>

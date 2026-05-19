@@ -47,6 +47,8 @@ interface ProcessSaleOnlineArgs {
     clinicPatientId: string | null;
     clinicDiagnosisSnapshot: string | null;
   } | null;
+  /** Clinic dispensing workspace (`clinic_pos` route), not shop-floor retail POS. */
+  clinicPos?: boolean;
 }
 
 export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
@@ -73,7 +75,10 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     onAtomicRpcStatus,
     onAtomicFallbackCount,
     clinicDispensing,
+    clinicPos = false,
   } = args;
+
+  const paymentSource = clinicPos || clinicDispensing?.clinicPatientId ? "pos_clinic" : "pos_retail";
 
   const runClearingHook = () => {
     void postClearingSettlementAfterRetailSale({
@@ -287,7 +292,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       {
         stay_id: null,
         ...(organizationId ? { organization_id: organizationId } : {}),
-        payment_source: "pos_retail",
+        payment_source: paymentSource,
         amount: tender.amount,
         payment_status: tender.status,
         transaction_id: saleId,

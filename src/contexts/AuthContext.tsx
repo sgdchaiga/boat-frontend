@@ -24,6 +24,15 @@ import {
 } from "@/lib/localAuthStore";
 import { readLocalSubscriptionProfile } from "@/lib/localSubscriptionLicense";
 import { getTenantIdFromEnv } from "@/lib/deployment";
+import {
+  loadMembershipsForUser,
+  pickDefaultOrganizationId,
+  readStoredActiveOrganizationId,
+  writeStoredActiveOrganizationId,
+  type OrganizationMembership,
+} from "@/lib/orgMembership";
+
+export type { OrganizationMembership };
 
 export type UserRole =
   | "admin"
@@ -145,6 +154,14 @@ interface AuthContextType {
   resetPasswordForEmail: (email: string) => Promise<{ error: Error | null }>;
   /** Set new password after recovery link; then completes login */
   setNewPassword: (newPassword: string) => Promise<{ error: Error | null }>;
+  /** Organizations this login can access (cloud multi-org). */
+  memberships: OrganizationMembership[];
+  /** True when signed in but must pick an organization before entering the app. */
+  needsOrganizationPicker: boolean;
+  /** Switch active organization (cloud); reloads tenant profile and syncs server session. */
+  switchOrganization: (organizationId: string) => Promise<{ error: Error | null }>;
+  /** Same as switchOrganization; used on the post-login picker. */
+  selectOrganization: (organizationId: string) => Promise<{ error: Error | null }>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -424,17 +441,18 @@ async function enforceDesktopSeatLimit(
 }
 
 async function loadUserFlags(userId: string): Promise<{ isSuperAdmin: boolean; isHotelStaff: boolean }> {
-  const [adminRes, staffRes] = await Promise.all([
+  const [adminRes, staffRes, memberRes] = await Promise.all([
     supabase.from("platform_admins").select("user_id").eq("user_id", userId).maybeSingle(),
     supabase.from("staff").select("id").eq("id", userId).maybeSingle(),
+    supabase.from("organization_members").select("user_id").eq("user_id", userId).eq("is_active", true).limit(1),
   ]);
   return {
     isSuperAdmin: !!adminRes.data,
-    isHotelStaff: !!staffRes.data,
+    isHotelStaff: !!staffRes.data || ((memberRes.data || []) as { user_id: string }[]).length > 0,
   };
 }
 
-async function loadTenantProfile(userId: string): Promise<TenantProfile> {
+async function loadTenantProfile(userId: string, explicitOrganizationId?: string | null): Promise<TenantProfile> {
   const empty = {
     organization_id: null,
     business_type: null,
@@ -477,7 +495,9 @@ async function loadTenantProfile(userId: string): Promise<TenantProfile> {
     /** Desktop local: `.env` org (VITE_TENANT_ID / VITE_LOCAL_ORGANIZATION_ID) must win over stale SQLite `staff.organization_id` (often the dev default UUID). */
     const envOrgId = getTenantIdFromEnv()?.trim() || null;
     const organization_id =
-      IS_LOCAL_AUTH_MODE && envOrgId ? envOrgId : staffOrgId;
+      IS_LOCAL_AUTH_MODE && envOrgId
+        ? envOrgId
+        : explicitOrganizationId ?? staffOrgId;
     if (!organization_id) {
       writeTenantCache(userId, empty);
       return empty;
@@ -636,6 +656,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [accessSession, setAccessSession] = useState<LocalAccessSession | null>(null);
   const [terminalLocked, setTerminalLocked] = useState(false);
   const [pinChangeRequired, setPinChangeRequired] = useState(false);
+  const [memberships, setMemberships] = useState<OrganizationMembership[]>([]);
+  const [needsOrganizationPicker, setNeedsOrganizationPicker] = useState(false);
 
   const getSubscriptionCacheMeta = useCallback((userId: string) => {
     const cached = readTenantCache(userId);
@@ -654,28 +676,196 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     };
   }, []);
 
-  const applySessionUser = useCallback(async (sessionUser: { id: string; email?: string } | null) => {
-    if (!sessionUser?.email) {
-      setUser(null);
-      return;
-    }
-    const meta = sessionUser as { user_metadata?: Record<string, unknown> };
-    const [flags, tenant] = await Promise.all([
-      loadUserFlags(sessionUser.id),
-      loadTenantProfile(sessionUser.id),
-    ]);
-    const subscriptionCacheMeta = getSubscriptionCacheMeta(sessionUser.id);
-    setUser({
-      id: sessionUser.id,
-      email: sessionUser.email,
-      role: meta.user_metadata?.role as UserRole | undefined,
-      full_name: meta.user_metadata?.full_name as string | undefined,
-      phone: meta.user_metadata?.phone as string | undefined,
-      ...flags,
-      ...tenant,
-      ...subscriptionCacheMeta,
-    });
-  }, [getSubscriptionCacheMeta]);
+  const buildAuthUser = useCallback(
+    (
+      sessionUser: { id: string; email: string },
+      flags: { isSuperAdmin: boolean; isHotelStaff: boolean },
+      tenant: TenantProfile,
+      membership?: OrganizationMembership | null,
+      meta?: Record<string, unknown>
+    ): AuthUser => {
+      const subscriptionCacheMeta = getSubscriptionCacheMeta(sessionUser.id);
+      const roleFromMember = membership?.role as UserRole | undefined;
+      return {
+        id: sessionUser.id,
+        email: sessionUser.email,
+        role: roleFromMember ?? (meta?.role as UserRole | undefined),
+        full_name: membership?.full_name ?? (meta?.full_name as string | undefined),
+        phone: membership?.phone ?? (meta?.phone as string | undefined),
+        ...flags,
+        ...tenant,
+        ...subscriptionCacheMeta,
+      };
+    },
+    [getSubscriptionCacheMeta]
+  );
+
+  const activateCloudOrganization = useCallback(
+    async (
+      sessionUser: { id: string; email: string },
+      organizationId: string,
+      memberList: OrganizationMembership[],
+      meta?: Record<string, unknown>
+    ) => {
+      const { error: rpcError } = await supabase.rpc("set_active_organization", {
+        p_organization_id: organizationId,
+      });
+      if (rpcError) throw rpcError;
+
+      writeStoredActiveOrganizationId(sessionUser.id, organizationId);
+      const membership = memberList.find((m) => m.organization_id === organizationId) ?? null;
+      const [flags, tenant, refreshedMembers] = await Promise.all([
+        loadUserFlags(sessionUser.id),
+        loadTenantProfile(sessionUser.id, organizationId),
+        loadMembershipsForUser(sessionUser.id).catch(() => memberList),
+      ]);
+      setMemberships(refreshedMembers);
+      setNeedsOrganizationPicker(false);
+      setUser(buildAuthUser(sessionUser, flags, tenant, membership, meta));
+    },
+    [buildAuthUser]
+  );
+
+  const applySessionUser = useCallback(
+    async (sessionUser: { id: string; email?: string } | null) => {
+      if (!sessionUser?.email) {
+        setUser(null);
+        setMemberships([]);
+        setNeedsOrganizationPicker(false);
+        return;
+      }
+
+      const meta = (sessionUser as { user_metadata?: Record<string, unknown> }).user_metadata;
+      const flags = await loadUserFlags(sessionUser.id);
+
+      if (IS_LOCAL_AUTH_MODE) {
+        const [tenant] = await Promise.all([loadTenantProfile(sessionUser.id)]);
+        setMemberships([]);
+        setNeedsOrganizationPicker(false);
+        setUser(buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta));
+        return;
+      }
+
+      let memberList: OrganizationMembership[] = [];
+      if (!flags.isSuperAdmin) {
+        try {
+          memberList = await loadMembershipsForUser(sessionUser.id);
+        } catch {
+          memberList = [];
+        }
+      }
+      setMemberships(memberList);
+
+      if (flags.isSuperAdmin && memberList.length === 0) {
+        const tenant = await loadTenantProfile(sessionUser.id);
+        setNeedsOrganizationPicker(false);
+        setUser(buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta));
+        return;
+      }
+
+      if (memberList.length === 0) {
+        const tenant = await loadTenantProfile(sessionUser.id);
+        setNeedsOrganizationPicker(false);
+        setUser(buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta));
+        return;
+      }
+
+      const storedOrgId = readStoredActiveOrganizationId(sessionUser.id);
+      const activeOrgId =
+        storedOrgId && memberList.some((m) => m.organization_id === storedOrgId)
+          ? storedOrgId
+          : memberList.length === 1
+            ? memberList[0].organization_id
+            : pickDefaultOrganizationId(memberList, null);
+
+      if (memberList.length > 1 && !storedOrgId) {
+        setNeedsOrganizationPicker(true);
+        setUser({
+          id: sessionUser.id,
+          email: sessionUser.email,
+          ...flags,
+          organization_id: null,
+          business_type: null,
+          subscription_status: "none",
+          subscription_plan_id: null,
+          subscription_plan_code: null,
+          subscription_period_end: null,
+          enable_fixed_assets: false,
+          enable_communications: true,
+          enable_wallet: true,
+          enable_payroll: true,
+          enable_budget: true,
+          enable_agent: true,
+          enable_hotel_assessment: true,
+          enable_manufacturing: true,
+          enable_reports: true,
+          enable_accounting: true,
+          enable_inventory: true,
+          enable_purchases: true,
+          hotel_enable_smart_room_charges: true,
+          school_enable_reports: false,
+          school_enable_fixed_deposit: false,
+          school_enable_accounting: false,
+          school_enable_inventory: false,
+          school_enable_purchases: false,
+          purchases_require_po_approval: true,
+          purchases_require_bill_approval: true,
+          license_device_allowed: true,
+          license_device_reason: null,
+          ...getSubscriptionCacheMeta(sessionUser.id),
+        });
+        return;
+      }
+
+      if (!activeOrgId) {
+        setNeedsOrganizationPicker(memberList.length > 1);
+        return;
+      }
+
+      try {
+        await activateCloudOrganization(
+          { id: sessionUser.id, email: sessionUser.email },
+          activeOrgId,
+          memberList,
+          meta
+        );
+      } catch (err) {
+        console.error("Failed to activate organization", err);
+        if (memberList.length > 1) {
+          setNeedsOrganizationPicker(true);
+        }
+        const tenant = await loadTenantProfile(sessionUser.id);
+        setUser(buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta));
+      }
+    },
+    [activateCloudOrganization, buildAuthUser, getSubscriptionCacheMeta]
+  );
+
+  const switchOrganization = useCallback(
+    async (organizationId: string) => {
+      if (IS_LOCAL_AUTH_MODE) {
+        return { error: new Error("Organization switching is available in cloud mode only.") };
+      }
+      if (!user?.id || !user.email) {
+        return { error: new Error("Not signed in") };
+      }
+      const member = memberships.find((m) => m.organization_id === organizationId);
+      if (!member) {
+        return { error: new Error("You do not have access to that organization.") };
+      }
+      try {
+        await activateCloudOrganization(
+          { id: user.id, email: user.email },
+          organizationId,
+          memberships
+        );
+        return { error: null };
+      } catch (err) {
+        return { error: err instanceof Error ? err : new Error("Failed to switch organization") };
+      }
+    },
+    [activateCloudOrganization, memberships, user?.email, user?.id]
+  );
 
   const refreshUserFlags = useCallback(async () => {
     if (IS_LOCAL_AUTH_MODE) {
@@ -696,13 +886,27 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       return;
     }
     if (!user?.id) return;
+    const activeOrgId = user.organization_id ?? readStoredActiveOrganizationId(user.id);
     const [flags, tenant] = await Promise.all([
       loadUserFlags(user.id),
-      loadTenantProfile(user.id),
+      loadTenantProfile(user.id, activeOrgId),
     ]);
     const subscriptionCacheMeta = getSubscriptionCacheMeta(user.id);
-    setUser((u) => (u ? { ...u, ...flags, ...tenant, ...subscriptionCacheMeta } : null));
-  }, [getSubscriptionCacheMeta, user?.id]);
+    const membership = memberships.find((m) => m.organization_id === activeOrgId) ?? null;
+    setUser((u) =>
+      u
+        ? {
+            ...u,
+            ...flags,
+            ...tenant,
+            ...subscriptionCacheMeta,
+            role: (membership?.role as UserRole | undefined) ?? u.role,
+            full_name: membership?.full_name ?? u.full_name,
+            phone: membership?.phone ?? u.phone,
+          }
+        : null
+    );
+  }, [getSubscriptionCacheMeta, memberships, user?.id, user?.organization_id]);
 
   useEffect(() => {
     if (IS_LOCAL_AUTH_MODE) {
@@ -915,6 +1119,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     await supabase.auth.signOut();
     setUser(null);
+    setMemberships([]);
+    setNeedsOrganizationPicker(false);
     setPendingPasswordReset(false);
   };
 
@@ -1060,6 +1266,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         approveWithSupervisorPin,
         resetPasswordForEmail,
         setNewPassword,
+        memberships,
+        needsOrganizationPicker,
+        switchOrganization,
+        selectOrganization: switchOrganization,
       }}
     >
       {children}

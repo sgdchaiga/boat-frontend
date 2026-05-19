@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
 import { PiggyBank, Plus, X, Eye, RefreshCw } from 'lucide-react';
+import { SaccoReportToolbar } from '@/components/common/SaccoReportToolbar';
+import { downloadFixedDepositsPdf } from '@/lib/saccoReportPdf';
 
 const FixedDeposit: React.FC = () => {
   const { fixedDeposits, addFixedDeposit, members, formatCurrency, setFixedDeposits } = useAppContext();
@@ -52,9 +54,18 @@ const FixedDeposit: React.FC = () => {
           <h1 className="text-2xl font-bold text-slate-900">Fixed Deposits</h1>
           <p className="text-slate-500 text-sm">{fixedDeposits.length} deposits | {formatCurrency(totalActive)} active</p>
         </div>
-        <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
-          <Plus size={16} /> New Fixed Deposit
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <SaccoReportToolbar
+            onPrint={() => window.print()}
+            onPdf={() => {
+              const today = new Date().toISOString().slice(0, 10);
+              downloadFixedDepositsPdf(filtered, today, today);
+            }}
+          />
+          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
+            <Plus size={16} /> New Fixed Deposit
+          </button>
+        </div>
       </div>
 
       {/* Summary */}

@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
+import { Banknote, FlaskConical, Stethoscope, UserPlus } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizePaymentMethod, formatPaymentMethodLabel, type PaymentMethodCode } from "../../lib/paymentMethod";
+import { isClinicPosPayment, type DashboardPayment } from "../../lib/dashboardPaymentFilters";
+import { fetchClinicDispensingSaleIdsInRange } from "../../lib/clinicDispensingHistory";
+import { fetchPaymentsForRetailSalesInPeriod } from "../../lib/clinicPosAnalyticsSummary";
 import { toast } from "../ui/use-toast";
 import { useAuth } from "../../contexts/AuthContext";
 
@@ -42,7 +46,13 @@ interface CreditReminderRow {
   reminded_by: string | null;
 }
 
-export function RetailSalesInsightsPage() {
+export type RetailSalesInsightsPageProps = {
+  /** Clinic dispensing workspace: same layout as POS Analytics, scoped to clinic POS. */
+  clinicOnly?: boolean;
+  onNavigate?: (page: string, state?: Record<string, unknown>) => void;
+};
+
+export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: RetailSalesInsightsPageProps = {}) {
   const { user } = useAuth();
   const [salesDateFilter, setSalesDateFilter] = useState<SalesDateFilter>("today");
   const [salesFromDate, setSalesFromDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -91,7 +101,9 @@ export function RetailSalesInsightsPage() {
         filterByOrganizationId(
           supabase
             .from("payments")
-            .select("id, transaction_id, paid_at, amount, payment_method, payment_status, stay_id, processed_by")
+            .select(
+              "id, transaction_id, paid_at, amount, payment_method, payment_status, stay_id, processed_by, payment_source"
+            )
             .is("stay_id", null)
             .not("transaction_id", "is", null)
             .gte("paid_at", rangeStart.toISOString())
@@ -101,7 +113,7 @@ export function RetailSalesInsightsPage() {
           skipOrgFilter
         );
 
-      const openCreditSalesQuery = filterByOrganizationId(
+      let openCreditSalesQuery = filterByOrganizationId(
         supabase
           .from("retail_sales")
           .select("id,customer_id,sale_at,credit_due_date,customer_name,customer_phone,amount_due,total_amount,payment_status")
@@ -112,27 +124,28 @@ export function RetailSalesInsightsPage() {
         orgId,
         skipOrgFilter
       );
+      if (clinicOnly) {
+        openCreditSalesQuery = openCreditSalesQuery.not("clinic_patient_id", "is", null);
+      }
 
       const lineRowsPromise = (async (): Promise<
         Array<{ description: string | null; quantity: number | null; line_total: number | null }>
       > => {
         if (skipOrgFilter && !orgId) {
-          const { data } = await supabase
+          let linesQ = supabase
             .from("retail_sale_lines")
-            .select("description,quantity,line_total,retail_sales!inner(sale_at)")
+            .select("description,quantity,line_total,retail_sales!inner(sale_at,clinic_patient_id)")
             .gte("retail_sales.sale_at", start.toISOString())
             .lt("retail_sales.sale_at", end.toISOString());
+          const { data } = await linesQ;
           return (data || []) as Array<{ description: string | null; quantity: number | null; line_total: number | null }>;
         }
-        const { data: idRows } = await filterByOrganizationId(
-          supabase
-            .from("retail_sales")
-            .select("id")
-            .gte("sale_at", start.toISOString())
-            .lt("sale_at", end.toISOString()),
-          orgId,
-          skipOrgFilter
-        );
+        let salesInPeriodQ = supabase
+          .from("retail_sales")
+          .select("id")
+          .gte("sale_at", start.toISOString())
+          .lt("sale_at", end.toISOString());
+        const { data: idRows } = await filterByOrganizationId(salesInPeriodQ, orgId, skipOrgFilter);
         const ids = (idRows || []).map((r: { id: string }) => r.id);
         const out: Array<{ description: string | null; quantity: number | null; line_total: number | null }> = [];
         const CHUNK = 300;
@@ -145,15 +158,36 @@ export function RetailSalesInsightsPage() {
         return out;
       })();
 
-      const [{ data: payRows }, { data: creditRows }, { data: previousPayRows }, lineRows] = await Promise.all([
-        paymentsInRange(start, end),
+      const superAdmin = Boolean(user?.isSuperAdmin);
+      const [clinicSaleIds, previousClinicSaleIds] = clinicOnly
+        ? await Promise.all([
+            fetchClinicDispensingSaleIdsInRange(orgId, superAdmin, start, end),
+            fetchClinicDispensingSaleIdsInRange(orgId, superAdmin, previousStart, previousEnd),
+          ])
+        : [new Set<string>(), new Set<string>()];
+
+      const [payRowsResolved, creditRes, previousPayRowsResolved, lineRows] = await Promise.all([
+        clinicOnly
+          ? fetchPaymentsForRetailSalesInPeriod(orgId, superAdmin, start, end)
+          : paymentsInRange(start, end).then((r) => {
+              if (r.error) throw new Error(r.error.message);
+              return r.data || [];
+            }),
         openCreditSalesQuery,
-        paymentsInRange(previousStart, previousEnd),
+        clinicOnly
+          ? fetchPaymentsForRetailSalesInPeriod(orgId, superAdmin, previousStart, previousEnd)
+          : paymentsInRange(previousStart, previousEnd).then((r) => {
+              if (r.error) throw new Error(r.error.message);
+              return r.data || [];
+            }),
         lineRowsPromise,
       ]);
+      const payRows = payRowsResolved;
+      const creditRows = creditRes.data;
+      const previousPayRows = previousPayRowsResolved;
 
-      const rawPayments = (
-        (payRows || []) as Array<{
+      const filterClinic = (
+        rows: Array<{
           id: string;
           transaction_id: string | null;
           paid_at: string;
@@ -161,8 +195,40 @@ export function RetailSalesInsightsPage() {
           payment_method: string | null;
           payment_status: RetailSalePaymentRow["paymentStatus"];
           processed_by: string | null;
-        }>
-      );
+          payment_source?: string | null;
+          stay_id?: string | null;
+        }>,
+        linkedSaleIds: Set<string>
+      ) =>
+        clinicOnly
+          ? rows.filter((p) =>
+              isClinicPosPayment(
+                {
+                  amount: p.amount,
+                  payment_status: p.payment_status,
+                  payment_source: p.payment_source,
+                  stay_id: p.stay_id ?? null,
+                  transaction_id: p.transaction_id,
+                } as DashboardPayment,
+                linkedSaleIds
+              )
+            )
+          : rows;
+
+      type PayRow = {
+        id: string;
+        transaction_id: string | null;
+        paid_at: string;
+        amount: number | null;
+        payment_method: string | null;
+        payment_status: RetailSalePaymentRow["paymentStatus"];
+        processed_by: string | null;
+        payment_source?: string | null;
+        stay_id?: string | null;
+      };
+      const rawPayments = clinicOnly
+        ? ((payRows || []) as PayRow[])
+        : filterClinic((payRows || []) as PayRow[], clinicSaleIds);
       const cashierIds = [...new Set(rawPayments.map((p) => p.processed_by).filter(Boolean))] as string[];
       let cashierNameById = new Map<string, string>();
       if (cashierIds.length > 0) {
@@ -182,16 +248,9 @@ export function RetailSalesInsightsPage() {
         cashierName: p.processed_by ? cashierNameById.get(p.processed_by) ?? null : null,
       }));
 
-      const previousRawPayments = (
-        (previousPayRows || []) as Array<{
-          id: string;
-          transaction_id: string | null;
-          paid_at: string;
-          amount: number | null;
-          payment_method: string | null;
-          payment_status: RetailSalePaymentRow["paymentStatus"];
-          processed_by: string | null;
-        }>
+      const previousRawPayments = (clinicOnly
+        ? ((previousPayRows || []) as PayRow[])
+        : filterClinic((previousPayRows || []) as PayRow[], previousClinicSaleIds)
       ).map((p) => ({
         paymentId: p.id,
         saleId: String(p.transaction_id || ""),
@@ -232,7 +291,7 @@ export function RetailSalesInsightsPage() {
 
   useEffect(() => {
     void loadData();
-  }, [salesDateFilter, salesFromDate, salesToDate, user?.organization_id, user?.isSuperAdmin]);
+  }, [salesDateFilter, salesFromDate, salesToDate, user?.organization_id, user?.isSuperAdmin, clinicOnly]);
 
   const visibleCreditSales = useMemo(() => {
     if (!showOverdueOnly) return openCreditSales;
@@ -327,7 +386,7 @@ export function RetailSalesInsightsPage() {
   const exportAnalyticsCsv = () => {
     const rangeLabel = salesDateFilter === "today" ? "today" : `${salesFromDate} to ${salesToDate}`;
     const rows: string[][] = [
-      ["POS Analytics Snapshot"],
+      [clinicOnly ? "Clinic POS Analytics Snapshot" : "POS Analytics Snapshot"],
       ["Range", rangeLabel],
       [],
       ["KPI", "Value"],
@@ -361,7 +420,7 @@ export function RetailSalesInsightsPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `pos-analytics-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `${clinicOnly ? "clinic-pos-analytics" : "pos-analytics"}-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -390,7 +449,7 @@ export function RetailSalesInsightsPage() {
       await supabase.from("payments").insert({
         organization_id: user?.organization_id ?? null,
         retail_customer_id: saleRow.customer_id ?? null,
-        payment_source: "pos_retail",
+        payment_source: clinicOnly ? "pos_clinic" : "pos_retail",
         amount,
         payment_status: "completed",
         transaction_id: sale.id,
@@ -499,8 +558,12 @@ export function RetailSalesInsightsPage() {
     <div className="p-6 max-w-7xl mx-auto space-y-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">POS Analytics</h1>
-          <p className="text-sm text-slate-600">Retail POS performance, collections, refunds, and credit operations.</p>
+          <h1 className="text-2xl font-bold text-slate-900">{clinicOnly ? "Clinic dashboard" : "POS Analytics"}</h1>
+          <p className="text-sm text-slate-600">
+            {clinicOnly
+              ? "Clinic dispensing performance, collections, refunds, and credit — same view as POS Analytics."
+              : "Retail POS performance, collections, refunds, and credit operations."}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={exportAnalyticsCsv} className="px-3 py-2 text-sm border rounded-lg">
@@ -512,9 +575,55 @@ export function RetailSalesInsightsPage() {
         </div>
       </div>
 
+      {clinicOnly && onNavigate ? (
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => onNavigate("clinic_patients", { clinicIntent: "new_patient" })}
+            className="inline-flex items-center gap-2 rounded-lg bg-emerald-700 text-white px-3 py-2 text-sm font-medium hover:bg-emerald-800"
+          >
+            <UserPlus className="w-4 h-4" />
+            New patient
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate("clinic_pos")}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+          >
+            <Banknote className="w-4 h-4 text-emerald-600" />
+            New dispensing
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate("clinic_consultation", { clinicIntent: "new" })}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+          >
+            <Stethoscope className="w-4 h-4 text-sky-600" />
+            New consultation
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate("clinic_laboratory", { labTab: "orders" })}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50"
+          >
+            <FlaskConical className="w-4 h-4 text-violet-600" />
+            Laboratory
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate("reports_retail_sales_insights")}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+          >
+            Shop-floor POS analytics
+          </button>
+        </div>
+      ) : null}
+
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-3">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Completed sales</p>
+          <p className="text-xs uppercase tracking-wide text-slate-500">
+            {clinicOnly ? "Completed dispensings" : "Completed sales"}
+          </p>
           <p className="text-xl font-bold text-slate-900">{summary.completedCount}</p>
           <p className={`text-xs ${formatDelta(summary.completedCount, previousSummary.completedCount).tone}`}>
             vs prev: {formatDelta(summary.completedCount, previousSummary.completedCount).label}
@@ -572,12 +681,18 @@ export function RetailSalesInsightsPage() {
               <div key={`${row.cashierName}-${idx}`} className="flex items-center justify-between border border-slate-100 rounded-lg px-3 py-2">
                 <div>
                   <p className="text-sm font-medium text-slate-900">{row.cashierName}</p>
-                  <p className="text-xs text-slate-500">{row.count} completed sales</p>
+                  <p className="text-xs text-slate-500">
+                    {row.count} {clinicOnly ? "completed dispensings" : "completed sales"}
+                  </p>
                 </div>
                 <p className="text-sm font-semibold text-slate-900">{row.amount.toFixed(2)}</p>
               </div>
             ))}
-            {cashierLeaderboard.length === 0 ? <p className="text-sm text-slate-500">No completed sales for leaderboard.</p> : null}
+            {cashierLeaderboard.length === 0 ? (
+              <p className="text-sm text-slate-500">
+                {clinicOnly ? "No completed dispensings for leaderboard." : "No completed sales for leaderboard."}
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
@@ -629,7 +744,9 @@ export function RetailSalesInsightsPage() {
             className="border rounded px-2 py-1.5 text-sm min-w-[220px]"
           />
         </div>
-        <h2 className="text-lg font-semibold text-slate-900 mb-2">POS Sales Activity</h2>
+        <h2 className="text-lg font-semibold text-slate-900 mb-2">
+          {clinicOnly ? "Dispensing activity" : "POS Sales Activity"}
+        </h2>
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -677,7 +794,11 @@ export function RetailSalesInsightsPage() {
                 </tr>
               ))}
               {filteredSales.length === 0 ? (
-                <tr><td className="py-3 text-slate-500" colSpan={7}>No sales for selected range.</td></tr>
+                <tr>
+                  <td className="py-3 text-slate-500" colSpan={7}>
+                    {clinicOnly ? "No dispensings for selected range." : "No sales for selected range."}
+                  </td>
+                </tr>
               ) : null}
             </tbody>
           </table>

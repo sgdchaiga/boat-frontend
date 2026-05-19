@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { BookMarked, Scale } from "lucide-react";
+import { SaccoReportToolbar } from "@/components/common/SaccoReportToolbar";
+import { downloadCashbookPdf } from "@/lib/saccoReportPdf";
 import { PageNotes } from "@/components/common/PageNotes";
 import { useAppContext } from "@/contexts/AppContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
@@ -40,6 +42,16 @@ export function SaccoCashbookPage({
             what has been synced into the workspace.
           </p>
         </PageNotes>
+        <SaccoReportToolbar
+          className="ml-auto"
+          onPrint={() => window.print()}
+          onPdf={() => {
+            const today = new Date().toISOString().slice(0, 10);
+            const from = sorted[0]?.date ?? today;
+            const to = sorted[sorted.length - 1]?.date ?? today;
+            downloadCashbookPdf(cashbook, from, to);
+          }}
+        />
       </header>
 
       <div role="tablist" className="flex flex-wrap gap-2 text-sm border-b border-slate-100 pb-2">

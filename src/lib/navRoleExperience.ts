@@ -41,6 +41,7 @@ export const NAV_ROLE_CASHIER_PAGE_IDS = new Set<string>([
   "rooms",
   "billing",
   "reports_daily_purchases_summary",
+  "reports_expenses",
   "reports_stock_movement",
   "accounting_cashflow",
 ]);
@@ -65,6 +66,7 @@ export const NAV_ROLE_STOREKEEPER_PAGE_IDS = new Set<string>([
   "wallet",
   "payments",
   "reports_daily_purchases_summary",
+  "reports_expenses",
   "reports_stock_movement",
   "reports_purchases_by_item",
   "retail_credit_invoices",

@@ -5,6 +5,7 @@ import { supabase } from "../../lib/supabase";
 import type { Database } from "../../lib/database.types";
 import { useAuth, type UserRole } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { fetchOrganizationMembers } from "@/lib/orgMembership";
 import { desktopApi } from "@/lib/desktopApi";
 import { generateStaffCode, normalizePin, normalizeStaffCode, readLocalAccounts, validatePin, writeLocalAccounts } from "@/lib/localAuthStore";
 
@@ -84,15 +85,38 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
-    let staffQ = supabase.from("staff").select("*").order("created_at", { ascending: false });
-    staffQ = filterByOrganizationId(staffQ, orgId, superAdmin);
-    const [types, staffRes] = await Promise.all([loadRoleTypes(), staffQ]);
+    const types = await loadRoleTypes();
     setRoleTypes(types);
-    const { data: staffData, error } = staffRes;
-    if (error) console.error(error);
-    setStaff((staffData || []) as Staff[]);
+    try {
+      if (useLocalDesktopNewStaff || !orgId) {
+        let staffQ = supabase.from("staff").select("*").order("created_at", { ascending: false });
+        staffQ = filterByOrganizationId(staffQ, orgId, superAdmin);
+        const { data: staffData, error } = await staffQ;
+        if (error) console.error(error);
+        setStaff((staffData || []) as Staff[]);
+      } else {
+        const rows = await fetchOrganizationMembers({ organizationId: orgId });
+        setStaff(
+          rows.map(
+            (row) =>
+              ({
+                id: row.user_id,
+                organization_id: row.organization_id,
+                role: row.role,
+                full_name: row.full_name,
+                email: row.email,
+                phone: row.phone,
+                is_active: row.is_active,
+                created_at: row.created_at,
+              }) as Staff
+          )
+        );
+      }
+    } catch (error) {
+      console.error(error);
+    }
     setLoading(false);
-  }, [loadRoleTypes, orgId, superAdmin]);
+  }, [loadRoleTypes, orgId, superAdmin, useLocalDesktopNewStaff]);
 
   useEffect(() => {
     void fetchAll();
@@ -175,6 +199,22 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         const pinError = validatePin(normalizePin(pin));
         if (pinError) {
           alert(pinError);
+          return;
+        }
+      }
+      if (!useLocalDesktopNewStaff && orgId) {
+        const { error: memberErr } = await supabase
+          .from("organization_members")
+          .update({
+            full_name: fullName,
+            phone: phone || null,
+            role,
+            is_active: isActive,
+          })
+          .eq("user_id", editingStaff.id)
+          .eq("organization_id", orgId);
+        if (memberErr) {
+          alert(memberErr.message);
           return;
         }
       }
@@ -295,27 +335,45 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
           },
         });
         if (signUpErr) {
-          alert(signUpErr.message);
-          return;
-        }
-        const authUserId = signUpData.user?.id;
-        if (!authUserId) {
-          alert("Failed to create login account for this user.");
-          return;
-        }
+          const msg = signUpErr.message.toLowerCase();
+          const alreadyRegistered =
+            msg.includes("already registered") || msg.includes("already been registered");
+          if (alreadyRegistered && orgId) {
+            const { error: inviteErr } = await supabase.rpc("invite_organization_member", {
+              p_email: email.trim(),
+              p_organization_id: orgId,
+              p_role: role,
+              p_full_name: fullName.trim(),
+              p_phone: phone.trim() || null,
+            });
+            if (inviteErr) {
+              alert(inviteErr.message);
+              return;
+            }
+          } else {
+            alert(signUpErr.message);
+            return;
+          }
+        } else {
+          const authUserId = signUpData.user?.id;
+          if (!authUserId) {
+            alert("Failed to create login account for this user.");
+            return;
+          }
 
-        const { error } = await supabase.from("staff").insert({
-          id: authUserId,
-          full_name: fullName,
-          email,
-          phone: phone || null,
-          role,
-          is_active: isActive,
-          organization_id: orgId ?? null,
-        });
-        if (error) {
-          alert(error.message);
-          return;
+          const { error } = await supabase.from("staff").insert({
+            id: authUserId,
+            full_name: fullName,
+            email,
+            phone: phone || null,
+            role,
+            is_active: isActive,
+            organization_id: orgId ?? null,
+          });
+          if (error) {
+            alert(error.message);
+            return;
+          }
         }
       }
     }
@@ -339,6 +397,17 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     }
     setUpdatingRoleId(member.id);
     try {
+      if (!useLocalDesktopNewStaff && orgId) {
+        const { error: memberErr } = await supabase
+          .from("organization_members")
+          .update({ role: newRole })
+          .eq("user_id", member.id)
+          .eq("organization_id", orgId);
+        if (memberErr) {
+          alert(memberErr.message);
+          return;
+        }
+      }
       const { error } = await supabase.from("staff").update({ role: newRole }).eq("id", member.id);
       if (error) {
         alert(error.message);

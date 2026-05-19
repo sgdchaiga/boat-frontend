@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
-import { Plus, Save } from "lucide-react";
+import { Plus, Save, Upload } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { randomUuid } from "../../lib/randomUuid";
+import { useAuth } from "../../contexts/AuthContext";
+import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { ensureActiveOrganization } from "../../lib/stockBulkImport";
 import { PageNotes } from "../common/PageNotes";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { StockBulkImportPanel } from "../inventory/StockBulkImportPanel";
 
 interface Product {
   id: string;
@@ -33,7 +37,19 @@ interface AdjustmentHistoryRow {
   totalAmount: number;
 }
 
-export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { highlightAdjustmentSourceId?: string }) {
+type AdjustmentTab = "manual" | "import";
+
+export function AdminStockAdjustmentsPage({
+  highlightAdjustmentSourceId,
+  readOnly = false,
+}: {
+  highlightAdjustmentSourceId?: string;
+  readOnly?: boolean;
+}) {
+  const { user, isSuperAdmin } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = Boolean(isSuperAdmin);
+  const [tab, setTab] = useState<AdjustmentTab>("manual");
   const [products, setProducts] = useState<Product[]>([]);
   const [currentStock, setCurrentStock] = useState<Record<string, number>>({});
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -56,9 +72,11 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
 
   const loadStockSnapshot = async () => {
-    const { data: moves } = await supabase
-      .from("product_stock_movements")
-      .select("product_id, quantity_in, quantity_out");
+    if (orgId) await ensureActiveOrganization(orgId);
+    const { data: moves } = await filterStockMovementsByOrganizationId(
+      supabase.from("product_stock_movements").select("product_id, quantity_in, quantity_out"),
+      orgId
+    );
     const stock: Record<string, number> = {};
     (moves || []).forEach((m: any) => {
       const pid = m.product_id as string;
@@ -70,12 +88,16 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
   };
 
   const loadAdjustmentHistory = async () => {
-    const { data } = await supabase
-      .from("product_stock_movements")
-      .select("source_id,movement_date,note,quantity_in,quantity_out")
-      .eq("source_type", "adjustment")
-      .not("source_id", "is", null)
-      .order("movement_date", { ascending: false });
+    if (orgId) await ensureActiveOrganization(orgId);
+    const { data } = await filterStockMovementsByOrganizationId(
+      supabase
+        .from("product_stock_movements")
+        .select("source_id,movement_date,note,quantity_in,quantity_out")
+        .eq("source_type", "adjustment")
+        .not("source_id", "is", null)
+        .order("movement_date", { ascending: false }),
+      orgId
+    );
     const grouped = new Map<string, AdjustmentHistoryRow>();
     (data || []).forEach((row: any) => {
       const sourceId = String(row.source_id || "");
@@ -105,15 +127,18 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
   useEffect(() => {
     const loadData = async () => {
       try {
+        if (orgId) await ensureActiveOrganization(orgId);
         const [{ data: productsData }, { data: moves }, { data: glData }] = await Promise.all([
-          supabase.from("products").select("id, name, track_inventory").order("name"),
-          supabase
-            .from("product_stock_movements")
-            .select("product_id, quantity_in, quantity_out"),
-          supabase
-            .from("gl_accounts")
-            .select("*")
-            .order("account_code"),
+          filterByOrganizationId(
+            supabase.from("products").select("id, name, track_inventory").order("name"),
+            orgId,
+            superAdmin
+          ),
+          filterStockMovementsByOrganizationId(
+            supabase.from("product_stock_movements").select("product_id, quantity_in, quantity_out"),
+            orgId
+          ),
+          supabase.from("gl_accounts").select("*").order("account_code"),
         ]);
         setProducts((productsData || []) as Product[]);
         const normalizedGl = normalizeGlAccountRows((glData || []) as unknown[])
@@ -139,7 +164,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
       }
     };
     void loadData();
-  }, []);
+  }, [orgId, superAdmin]);
 
   const handleProductChange = (id: string, product_id: string) => {
     const currentQty = currentStock[product_id] ?? 0;
@@ -196,12 +221,16 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
   };
 
   const openAdjustmentDetails = async (sourceId: string) => {
-    const { data } = await supabase
-      .from("product_stock_movements")
-      .select("id,product_id,movement_date,note,quantity_in,quantity_out")
-      .eq("source_type", "adjustment")
-      .eq("source_id", sourceId)
-      .order("movement_date", { ascending: true });
+    if (orgId) await ensureActiveOrganization(orgId);
+    const { data } = await filterStockMovementsByOrganizationId(
+      supabase
+        .from("product_stock_movements")
+        .select("id,product_id,movement_date,note,quantity_in,quantity_out")
+        .eq("source_type", "adjustment")
+        .eq("source_id", sourceId)
+        .order("movement_date", { ascending: true }),
+      orgId
+    );
     const rowsData = (data || []) as Array<{
       product_id: string;
       movement_date: string;
@@ -246,14 +275,14 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
     }
     setSaving(true);
     try {
+      if (orgId) await ensureActiveOrganization(orgId);
       const sourceId = editingSourceId || randomUuid();
+      const movementDateIso = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00.000Z` : new Date().toISOString();
       const payload = validRows.map((r) => {
         const delta = Number(r.qtyDelta);
-        return {
+        const row: Record<string, unknown> = {
           product_id: r.product_id,
-          movement_date: date
-            ? new Date(date).toISOString()
-            : new Date().toISOString(),
+          movement_date: movementDateIso,
           source_type: "adjustment",
           source_id: sourceId,
           quantity_in: delta > 0 ? delta : 0,
@@ -266,15 +295,27 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
                 } | `
               : "") + (reason.trim() || "Manual adjustment"),
         };
+        if (orgId) row.organization_id = orgId;
+        return row;
       });
       if (editingSourceId) {
-        await supabase
-          .from("product_stock_movements")
-          .delete()
-          .eq("source_type", "adjustment")
-          .eq("source_id", editingSourceId);
+        await filterStockMovementsByOrganizationId(
+          supabase
+            .from("product_stock_movements")
+            .delete()
+            .eq("source_type", "adjustment")
+            .eq("source_id", editingSourceId),
+          orgId
+        );
       }
-      await supabase.from("product_stock_movements").insert(payload);
+      const { data: inserted, error: insertErr } = await supabase
+        .from("product_stock_movements")
+        .insert(payload)
+        .select("id");
+      if (insertErr) throw insertErr;
+      if ((inserted?.length ?? 0) !== payload.length) {
+        throw new Error(`Only ${inserted?.length ?? 0} of ${payload.length} movement(s) were saved.`);
+      }
       alert("Stock adjusted.");
       // Refresh current stock and reset rows
       await loadStockSnapshot();
@@ -310,10 +351,50 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold text-slate-900">Stock Adjustments</h2>
         <PageNotes ariaLabel="Stock adjustments help">
-          <p>Enter date and reason once, then adjust one or more items. Use either new quantity or amount adjusted per line.</p>
+          <p>
+            Enter adjustments manually or import many lines from CSV/Excel. Use either new quantity or amount adjusted per
+            line.
+          </p>
         </PageNotes>
       </div>
 
+      <div className="flex gap-1 border-b border-slate-200 max-w-5xl">
+        <button
+          type="button"
+          onClick={() => setTab("manual")}
+          className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+            tab === "manual"
+              ? "border-brand-700 text-brand-800"
+              : "border-transparent text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          Manual
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("import")}
+          className={`inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition ${
+            tab === "import"
+              ? "border-brand-700 text-brand-800"
+              : "border-transparent text-slate-600 hover:text-slate-900"
+          }`}
+        >
+          <Upload className="w-4 h-4" />
+          Import file
+        </button>
+      </div>
+
+      {tab === "import" ? (
+        <StockBulkImportPanel
+          readOnly={readOnly}
+          onApplied={() => {
+            void loadStockSnapshot();
+            void loadAdjustmentHistory();
+          }}
+        />
+      ) : null}
+
+      {tab === "manual" ? (
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 overflow-x-auto max-w-5xl">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-base font-semibold text-slate-900">
@@ -449,6 +530,7 @@ export function AdminStockAdjustmentsPage({ highlightAdjustmentSourceId }: { hig
           </button>
         </div>
       </div>
+      ) : null}
 
       <div className="bg-white border border-slate-200 rounded-xl p-6 overflow-x-auto max-w-5xl">
         <h3 className="text-base font-semibold text-slate-900 mb-3">Adjustments history</h3>

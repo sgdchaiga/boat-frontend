@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Shield, Users } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
+import { fetchOrganizationMembers } from "@/lib/orgMembership";
 import { PageNotes } from "@/components/common/PageNotes";
 
 interface OrgRow {
@@ -44,21 +45,23 @@ export function PlatformBusinessAdminsPage() {
     setLoading(true);
     setError(null);
     try {
-      const [orgRes, staffRes] = await Promise.all([
-        supabase.from("organizations").select("id,name").order("name"),
-        supabase
-          .from("staff")
-          .select("id,full_name,email,phone,role,is_active,organization_id")
-          .eq("role", "admin")
-          .order("created_at", { ascending: false }),
-      ]);
-
+      const orgRes = await supabase.from("organizations").select("id,name").order("name");
       if (orgRes.error) throw orgRes.error;
-      if (staffRes.error) throw staffRes.error;
 
       const orgData = (orgRes.data || []) as OrgRow[];
       setOrgs(orgData);
-      setStaff((staffRes.data || []) as StaffRow[]);
+      const rows = await fetchOrganizationMembers({ role: "admin" });
+      setStaff(
+        rows.map((row) => ({
+          id: row.user_id,
+          full_name: row.full_name,
+          email: row.email,
+          phone: row.phone,
+          role: row.role,
+          is_active: row.is_active,
+          organization_id: row.organization_id,
+        }))
+      );
       if (!selectedOrgId && orgData[0]?.id) setSelectedOrgId(orgData[0].id);
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load business admins.");
@@ -117,21 +120,38 @@ export function PlatformBusinessAdminsPage() {
           },
         },
       });
-      if (signUpErr) throw signUpErr;
-      const authUserId = signUpData.user?.id;
-      if (!authUserId) throw new Error("Failed to create login account for this admin.");
+      if (signUpErr) {
+        const msg = signUpErr.message.toLowerCase();
+        const alreadyRegistered =
+          msg.includes("already registered") || msg.includes("already been registered");
+        if (alreadyRegistered) {
+          const { error: inviteErr } = await supabase.rpc("invite_organization_member", {
+            p_email: email.trim(),
+            p_organization_id: selectedOrgId,
+            p_role: "admin",
+            p_full_name: fullName.trim(),
+            p_phone: phone.trim() || null,
+          });
+          if (inviteErr) throw inviteErr;
+        } else {
+          throw signUpErr;
+        }
+      } else {
+        const authUserId = signUpData.user?.id;
+        if (!authUserId) throw new Error("Failed to create login account for this admin.");
 
-      const payload = {
-        id: authUserId,
-        full_name: fullName.trim(),
-        email: email.trim(),
-        phone: phone.trim() || null,
-        role: "admin",
-        is_active: true,
-        organization_id: selectedOrgId,
-      };
-      const { error: insErr } = await (supabase as any).from("staff").insert(payload);
-      if (insErr) throw insErr;
+        const payload = {
+          id: authUserId,
+          full_name: fullName.trim(),
+          email: email.trim(),
+          phone: phone.trim() || null,
+          role: "admin",
+          is_active: true,
+          organization_id: selectedOrgId,
+        };
+        const { error: insErr } = await (supabase as any).from("staff").insert(payload);
+        if (insErr) throw insErr;
+      }
 
       setFullName("");
       setEmail("");
@@ -210,6 +230,35 @@ export function PlatformBusinessAdminsPage() {
           throw new Error("Password account creation returned no user id.");
         }
         targetStaffId = authUserId;
+      }
+
+      const priorOrgId = editingAdmin.organization_id;
+      if (priorOrgId && priorOrgId !== editOrgId) {
+        const { error: delMemberErr } = await supabase
+          .from("organization_members")
+          .delete()
+          .eq("user_id", editingAdmin.id)
+          .eq("organization_id", priorOrgId);
+        if (delMemberErr) throw delMemberErr;
+        const { error: linkErr } = await supabase.rpc("invite_organization_member", {
+          p_email: editingAdmin.email.trim(),
+          p_organization_id: editOrgId,
+          p_role: "admin",
+          p_full_name: editFullName.trim(),
+          p_phone: editPhone.trim() || null,
+        });
+        if (linkErr) throw linkErr;
+      } else {
+        const { error: memberErr } = await supabase
+          .from("organization_members")
+          .update({
+            full_name: editFullName.trim(),
+            phone: editPhone.trim() || null,
+            is_active: editIsActive,
+          })
+          .eq("user_id", editingAdmin.id)
+          .eq("organization_id", editOrgId);
+        if (memberErr) throw memberErr;
       }
 
       const { error: updErr } = await supabase

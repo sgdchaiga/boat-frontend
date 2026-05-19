@@ -164,6 +164,7 @@ export function AppProvider({
 }) {
   const { user } = useAuth();
   const organizationId = user?.organization_id ?? null;
+  /** Load SACCO workspace whenever the signed-in org is a SACCO tenant. */
   const isSacco = user?.business_type === "sacco";
 
   const [members, setMembers] = useState<Member[]>([]);

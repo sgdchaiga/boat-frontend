@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
+import { useAuth } from "../../contexts/AuthContext";
+import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { PageNotes } from "../common/PageNotes";
 
 interface Product {
@@ -17,6 +19,9 @@ interface BalanceRow {
 }
 
 export function StockBalancesPage() {
+  const { user, isSuperAdmin } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = Boolean(isSuperAdmin);
   const [rows, setRows] = useState<BalanceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,21 +30,32 @@ export function StockBalancesPage() {
   const [showLowOnly, setShowLowOnly] = useState(false);
 
   useEffect(() => {
-    loadBalances();
-  }, []);
+    void loadBalances();
+  }, [orgId, superAdmin]);
 
   const loadBalances = async () => {
     setLoading(true);
     setError(null);
     try {
+      if (orgId) {
+        const { error: orgErr } = await supabase.rpc("set_active_organization", {
+          p_organization_id: orgId,
+        });
+        if (orgErr) {
+          throw new Error(orgErr.message || "Could not set active organization.");
+        }
+      }
+
       const [productsRes, movesRes] = await Promise.all([
-        supabase
-          .from("products")
-          .select("id,name,track_inventory")
-          .order("name"),
-        supabase
-          .from("product_stock_movements")
-          .select("product_id,quantity_in,quantity_out"),
+        filterByOrganizationId(
+          supabase.from("products").select("id,name,track_inventory").order("name"),
+          orgId,
+          superAdmin
+        ),
+        filterStockMovementsByOrganizationId(
+          supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out"),
+          orgId
+        ),
       ]);
 
       if (productsRes.error) throw productsRes.error;

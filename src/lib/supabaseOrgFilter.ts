@@ -30,6 +30,18 @@ export function filterByOrganizationId<T>(
  * Tenant scope for `journal_entry_lines` when the query embeds `journal_entries`
  * (e.g. `journal_entries!inner(...)`). Organization is stored on the header row, not on lines.
  */
+/**
+ * Stock movements: always filter by organization when an id is provided
+ * (including super-admin) so balances and adjustment history match the active workspace.
+ */
+export function filterStockMovementsByOrganizationId<T>(
+  query: T,
+  organizationId: string | null | undefined
+): T {
+  if (!organizationId) return query;
+  return (query as T & { eq: (column: string, value: string) => T }).eq("organization_id", organizationId);
+}
+
 export function filterJournalLinesByOrganizationId<T>(
   query: T,
   organizationId: string | null | undefined,

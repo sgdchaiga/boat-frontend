@@ -49,7 +49,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
           { name: "Cash flow statement", page: "accounting_cashflow" },
           { name: "Debtors report", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
           { name: "Stock movement report", page: "reports_stock_movement" },
-          { name: "Expense report", page: "reports_daily_purchases_summary" },
+          { name: "Expense report", page: "reports_expenses" },
         ]
       : [];
 
@@ -58,6 +58,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     { name: "Daily summary", page: "reports_daily_summary" },
     { name: "Sales report", page: "reports_daily_sales" },
     ...(businessType === "clinic" ? [] : [periodPurchasesReport]),
+    ...(businessType !== "clinic" ? [{ name: "Expense report", page: "reports_expenses" as const }] : []),
     { name: "Sales by item", page: "reports_sales_by_item" },
     { name: "Purchases by item", page: "reports_purchases_by_item" },
     ...(businessType === "manufacturing"

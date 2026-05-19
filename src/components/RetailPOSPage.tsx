@@ -846,6 +846,24 @@ export function RetailPOSPage({
       : ctx.tenders;
   };
 
+  const clinicDispensingForCheckout = useMemo(() => {
+    if (leftPanelMode !== "clinic_workspace") return null;
+    const latestConsult = selectedClinicPatientId
+      ? clinicConsultations
+          .filter((c) => c.patientId === selectedClinicPatientId)
+          .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0]
+      : null;
+    const diagnosisBits = [
+      latestConsult?.symptoms?.trim(),
+      latestConsult?.diagnosis?.trim(),
+      latestConsult?.notes?.trim(),
+    ].filter(Boolean);
+    return {
+      clinicPatientId: selectedClinicPatientId,
+      clinicDiagnosisSnapshot: diagnosisBits.length > 0 ? diagnosisBits.join(" · ") : null,
+    };
+  }, [leftPanelMode, selectedClinicPatientId, clinicConsultations]);
+
   const handleOnlineSale = async (ctx: NonNullable<ReturnType<typeof prepareCheckout>>, saleCustomer: SaleCustomerContext, tenders: CheckoutTender[]) => {
     const payload = {
       saleId: ctx.saleId,
@@ -869,6 +887,8 @@ export function RetailPOSPage({
       departments,
       onAtomicRpcStatus: setAtomicRpcStatus,
       onAtomicFallbackCount: setAtomicFallbackCount,
+      clinicPos: leftPanelMode === "clinic_workspace",
+      clinicDispensing: clinicDispensingForCheckout,
     };
     if (ctx.shouldUseStkPush) {
       await Promise.race([processSaleOnline(payload), new Promise((_, reject) => window.setTimeout(() => reject(new Error("payment_timeout")), 60_000))]);
@@ -991,6 +1011,8 @@ export function RetailPOSPage({
           departments,
           onAtomicRpcStatus: setAtomicRpcStatus,
           onAtomicFallbackCount: setAtomicFallbackCount,
+          clinicPos: leftPanelMode === "clinic_workspace",
+          clinicDispensing: clinicDispensingForCheckout,
         });
         removeOfflineRetailSale(row.id);
       }

@@ -125,6 +125,49 @@ export type TellerGlAccountPickRow = {
   account_name: string;
 };
 
+export type TellerStaffContext = {
+  staffId: string;
+  organizationId: string;
+  fullName: string | null;
+  role: string | null;
+};
+
+export type TellerOpenSessionListRow = SaccoTellerSessionRow & {
+  staff_full_name: string | null;
+};
+
+export type TillPositionRow = TellerOpenSessionListRow & {
+  tillEstimated: number;
+  sessionReceiptsTotal: number;
+  sessionPaymentsTotal: number;
+  overInsuredLimit: boolean;
+};
+
+export type TellerReportTable = {
+  title: string;
+  subtitle: string;
+  head: string[];
+  rows: string[][];
+  summaryLines: string[];
+};
+
+/** Resolve org + staff from the staff table (must match auth.uid() for RLS). */
+export async function resolveTellerStaffContext(authUserId: string): Promise<TellerStaffContext | null> {
+  if (!authUserId?.trim()) return null;
+  const { data, error } = await sb
+    .from("staff")
+    .select("id, organization_id, full_name, role")
+    .eq("id", authUserId)
+    .maybeSingle();
+  if (error || !data?.organization_id) return null;
+  return {
+    staffId: String(data.id),
+    organizationId: String(data.organization_id),
+    fullName: (data.full_name as string | null) ?? null,
+    role: (data.role as string | null) ?? null,
+  };
+}
+
 /** Active GL accounts for teller counterparty selection (cash deposit / withdrawal). */
 export async function fetchTellerGlAccountPickList(
   organizationId: string,
@@ -252,7 +295,16 @@ export function formatTellerDbError(err: unknown, fallback = "Teller action fail
       return "Not allowed to open the till for this organization. Confirm your staff account belongs to the same SACCO org.";
     }
     if (c === "23505" || /unique|duplicate/i.test(msg)) {
+      if (/sacco_teller_sess_one_open_per_org|one_open_per_org/i.test(msg)) {
+        return (
+          "This database limits open tills organization-wide (misconfigured index). " +
+          "Run migration 20260517130000_sacco_teller_concurrent_sessions.sql in Supabase, then refresh."
+        );
+      }
       return "A till session is already open for you. Go to the Till tab and use Close till, or choose Resume / close stuck session.";
+    }
+    if (c === "23503" && /staff_id/i.test(msg)) {
+      return "Your login is not linked to a staff record. Ask an administrator to add you under Staff with the same account you use to sign in, then try again.";
     }
     if (msg) return msg;
   }
@@ -301,6 +353,106 @@ export async function fetchOpenTellerSessionsForStaff(
     return [];
   }
   return (data ?? []) as SaccoTellerSessionRow[];
+}
+
+/** All open till sessions in the org (supervisors / admin teller oversight). */
+export async function fetchOpenTellerSessionsForOrganization(
+  organizationId: string
+): Promise<TellerOpenSessionListRow[]> {
+  if (!isValidUuid(organizationId)) return [];
+  const { data, error } = await sb
+    .from("sacco_teller_sessions")
+    .select(`${TELLER_SESSION_SELECT}, staff:staff_id(full_name)`)
+    .eq("organization_id", organizationId)
+    .eq("status", "open")
+    .order("opened_at", { ascending: true });
+  if (error) {
+    if (isMissingTellerSchemaError(error)) {
+      warnTellerQuery("org open sessions", error);
+      return [];
+    }
+    warnTellerQuery("org open sessions", error);
+    return [];
+  }
+  return (data ?? []).map((row: Record<string, unknown>) => {
+    const staff = row.staff as { full_name?: string | null } | null;
+    const { staff: _s, ...sess } = row;
+    return {
+      ...(sess as SaccoTellerSessionRow),
+      staff_full_name: staff?.full_name ?? null,
+    };
+  });
+}
+
+/** Open till sessions with computed cash on hand (manager oversight). */
+export async function fetchTillPositionsForOrganization(
+  organizationId: string,
+  insuredLimitUgx: number | null
+): Promise<TillPositionRow[]> {
+  const sessions = await fetchOpenTellerSessionsForOrganization(organizationId);
+  const limit = insuredLimitUgx != null && insuredLimitUgx > 0 ? insuredLimitUgx : null;
+  const rows: TillPositionRow[] = [];
+  for (const s of sessions) {
+    const totals = await computeTillTotalsForSession(s);
+    rows.push({
+      ...s,
+      tillEstimated: totals.tillEstimated,
+      sessionReceiptsTotal: totals.sessionReceiptsTotal,
+      sessionPaymentsTotal: totals.sessionPaymentsTotal,
+      overInsuredLimit: limit !== null && totals.tillEstimated > limit,
+    });
+  }
+  return rows;
+}
+
+/** Posted teller transactions for a calendar date range (inclusive, org-local dates as yyyy-mm-dd). */
+export async function fetchTellerTransactionsForDateRange(
+  organizationId: string,
+  dateFrom: string,
+  dateTo: string
+): Promise<SaccoTellerTransactionRow[]> {
+  if (!isValidUuid(organizationId)) return [];
+  const fromIso = `${dateFrom.slice(0, 10)}T00:00:00.000Z`;
+  const end = new Date(`${dateTo.slice(0, 10)}T12:00:00`);
+  end.setUTCDate(end.getUTCDate() + 1);
+  const toIso = end.toISOString();
+  const { data, error } = await runTellerTxnQuery((columns) =>
+    sb
+      .from("sacco_teller_transactions")
+      .select(columns)
+      .eq("organization_id", organizationId)
+      .gte("created_at", fromIso)
+      .lt("created_at", toIso)
+      .order("created_at", { ascending: true })
+  );
+  if (error) {
+    if (isMissingTellerSchemaError(error)) return [];
+    warnTellerQuery("transactions for date range", error);
+    return [];
+  }
+  return (data ?? []) as SaccoTellerTransactionRow[];
+}
+
+/** Supervisor closes any open till session in the org (e.g. third teller blocked by stuck row). */
+export async function closeTellerSessionByIdAsSupervisor(params: {
+  organizationId: string;
+  sessionId: string;
+  notes?: string | null;
+}): Promise<void> {
+  const now = new Date().toISOString();
+  const { data, error } = await sb
+    .from("sacco_teller_sessions")
+    .update({
+      status: "closed",
+      closed_at: now,
+      notes: params.notes?.trim() || "Closed by supervisor from Teller.",
+    })
+    .eq("id", params.sessionId)
+    .eq("organization_id", params.organizationId)
+    .eq("status", "open")
+    .select("id");
+  if (error) throw new Error(formatTellerDbError(error, "Could not close till session"));
+  if (!data?.length) throw new Error("Session not found or already closed.");
 }
 
 /** Current user's open till session, if any (newest when multiple). */
@@ -822,12 +974,30 @@ async function finalizePostedTellerTxnEffects(params: {
   await insertCashbookLineForTellerTxn({ organizationId: params.organizationId, txn: params.txn });
 }
 
+async function assertTellerStaffCanOpen(params: { organizationId: string; staffId: string }): Promise<void> {
+  const ctx = await resolveTellerStaffContext(params.staffId);
+  if (!ctx) {
+    throw new Error(
+      "Your sign-in is not linked to a staff record in this organization. Ask an admin to add you under Staff, then sign in again."
+    );
+  }
+  if (ctx.organizationId !== params.organizationId) {
+    throw new Error(
+      "Your staff account belongs to a different organization than this SACCO workspace. Ask an admin to fix your staff organization link."
+    );
+  }
+  if (ctx.staffId !== params.staffId) {
+    throw new Error("Teller sessions must be opened under your own staff login.");
+  }
+}
+
 async function insertOpenTellerSessionRow(params: {
   organizationId: string;
   staffId: string;
   openingFloat: number;
   notes?: string | null;
 }): Promise<SaccoTellerSessionRow> {
+  await assertTellerStaffCanOpen(params);
   const { data, error } = await sb
     .from("sacco_teller_sessions")
     .insert({
@@ -837,7 +1007,7 @@ async function insertOpenTellerSessionRow(params: {
       status: "open",
       notes: params.notes ?? null,
     })
-    .select("*")
+    .select(TELLER_SESSION_SELECT)
     .single();
   if (error) throw error;
   return data as SaccoTellerSessionRow;
@@ -874,6 +1044,10 @@ export async function resumeOrOpenTellerSession(params: {
   if (!params.staffId?.trim()) {
     throw new Error("Sign in with a staff account to open the till.");
   }
+  await assertTellerStaffCanOpen({
+    organizationId: params.organizationId,
+    staffId: params.staffId,
+  });
 
   let openRows = await fetchOpenTellerSessionsForStaff(params.organizationId, params.staffId).catch((e) => {
     if (isMissingTellerSchemaError(e)) throw new Error(formatTellerDbError(e));
@@ -951,6 +1125,15 @@ export async function resumeOrOpenTellerSession(params: {
       }
     }
 
+    const orgOpen = await fetchOpenTellerSessionsForOrganization(params.organizationId);
+    const others = orgOpen.filter((s) => s.staff_id !== params.staffId);
+    if (others.length > 0 && orgOpen.length >= 2) {
+      throw new Error(
+        `Could not open your till (${orgOpen.length} session(s) already open in this SACCO). ` +
+          "Each teller must use their own staff login. If you share one login, only one till can be open. " +
+          "A supervisor can close other open tills from the Teller screen, or run migration 20260517130000_sacco_teller_concurrent_sessions.sql if a database cap is blocking new sessions."
+      );
+    }
     throw new Error(
       "A till session is already open in the database but could not be loaded or closed. Ask an administrator to close open rows in sacco_teller_sessions for your staff account, then try again."
     );
@@ -1287,82 +1470,161 @@ export type TellerReportId =
   | "over_short"
   | "audit_logs";
 
-/** Client-side CSV export from current snapshot (no server report API yet). */
-export function buildTellerReportCsv(reportId: TellerReportId, snap: TellerDashboardSnapshot): string {
-  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
-  const lines: string[] = [];
+function fmtUgxReport(n: number | null | undefined): string {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  return `UGX ${Math.round(n).toLocaleString("en-UG")}`;
+}
+
+/** Tabular teller report for on-screen preview and PDF. */
+export function buildTellerReportTable(
+  reportId: TellerReportId,
+  snap: TellerDashboardSnapshot,
+  options?: {
+    dailyTransactions?: SaccoTellerTransactionRow[];
+    tillPositions?: TillPositionRow[];
+    insuredLimitUgx?: number | null;
+    reportDate?: string;
+  }
+): TellerReportTable {
+  const reportDate = options?.reportDate ?? new Date().toISOString().slice(0, 10);
+  const insured = options?.insuredLimitUgx ?? null;
+
   if (reportId === "cash_position") {
-    lines.push(["metric", "value"].join(","));
-    lines.push(["till_estimated_ugx", snap.tillEstimated ?? ""].join(","));
-    lines.push(["vault_position_ugx", snap.vaultPosition].join(","));
-    lines.push(["session_open", snap.openSession ? "yes" : "no"].join(","));
-    if (snap.openSession) {
-      lines.push(["opening_float_ugx", snap.openSession.opening_float].join(","));
+    const positions = options?.tillPositions ?? [];
+    if (positions.length > 0) {
+      return {
+        title: "Teller cash position",
+        subtitle: `Open tills as at ${reportDate}`,
+        head: ["Teller", "Opened", "Float", "Est. cash on hand", "Receipts", "Payments", "Insured limit"],
+        rows: positions.map((p) => [
+          p.staff_full_name?.trim() || "Staff",
+          new Date(p.opened_at).toLocaleString(),
+          fmtUgxReport(p.opening_float),
+          fmtUgxReport(p.tillEstimated),
+          fmtUgxReport(p.sessionReceiptsTotal),
+          fmtUgxReport(p.sessionPaymentsTotal),
+          p.overInsuredLimit ? "OVER LIMIT" : insured ? "OK" : "—",
+        ]),
+        summaryLines: [
+          `Insured limit per till: ${insured ? fmtUgxReport(insured) : "Not configured"}`,
+          `Open tills: ${positions.length}`,
+          `Over limit: ${positions.filter((p) => p.overInsuredLimit).length}`,
+        ],
+      };
     }
-    return lines.join("\n");
+    return {
+      title: "Teller cash position",
+      subtitle: `Your till as at ${reportDate}`,
+      head: ["Metric", "Value"],
+      rows: [
+        ["Estimated till cash", fmtUgxReport(snap.tillEstimated)],
+        ["Vault position", fmtUgxReport(snap.vaultPosition)],
+        ["Session open", snap.openSession ? "Yes" : "No"],
+        ...(snap.openSession ? [["Opening float", fmtUgxReport(snap.openSession.opening_float)]] : []),
+      ],
+      summaryLines: [`Insured limit per till: ${insured ? fmtUgxReport(insured) : "Not configured"}`],
+    };
   }
+
   if (reportId === "daily_summary") {
-    lines.push(
-      [
-        "created_at",
-        "txn_type",
-        "posting_purpose",
-        "savings_account_id",
-        "counterparty_gl_account_id",
-        "member_ref",
-        "amount",
-        "status",
-        "journal_batch_ref",
-        "narration",
-      ]
-        .map(esc)
-        .join(",")
-    );
-    for (const t of snap.recentTransactions) {
-      lines.push(
-        [
-          t.created_at,
-          t.txn_type,
-          t.posting_purpose ?? "",
-          t.sacco_member_savings_account_id ?? "",
-          t.counterparty_gl_account_id ?? "",
-          t.member_ref ?? "",
-          t.amount,
-          t.status,
-          t.journal_batch_ref ?? "",
-          t.narration ?? "",
-        ]
-          .map((x) => esc(String(x)))
-          .join(",")
-      );
-    }
-    return lines.join("\n");
+    const txns = options?.dailyTransactions ?? snap.recentTransactions;
+    const totalIn = txns.reduce((s, t) => {
+      const typ = String(t.txn_type);
+      return typ === "cash_deposit" || typ === "cheque_received" || typ === "cheque_clearing"
+        ? s + Number(t.amount)
+        : s;
+    }, 0);
+    const totalOut = txns.reduce((s, t) => {
+      const typ = String(t.txn_type);
+      return typ === "cash_withdrawal" || typ === "cheque_paid" || typ === "till_vault_out"
+        ? s + Number(t.amount)
+        : s;
+    }, 0);
+    return {
+      title: "Daily transactions summary",
+      subtitle: `Posted teller transactions · ${reportDate}`,
+      head: ["Time", "Type", "Member / ref", "Amount", "Status", "Narration"],
+      rows: txns.map((t) => [
+        new Date(t.created_at).toLocaleString(),
+        String(t.txn_type),
+        t.member_ref ?? "—",
+        fmtUgxReport(t.amount),
+        String(t.status),
+        (t.narration ?? "").slice(0, 80),
+      ]),
+      summaryLines: [
+        `Transactions: ${txns.length}`,
+        `Total receipts: ${fmtUgxReport(totalIn)}`,
+        `Total payments: ${fmtUgxReport(totalOut)}`,
+        `Net: ${fmtUgxReport(totalIn - totalOut)}`,
+      ],
+    };
   }
+
   if (reportId === "cash_movement") {
-    lines.push(["kind", "created_at", "amount_or_delta", "note"].map(esc).join(","));
+    const rows: string[][] = [];
     for (const t of snap.recentTransactions) {
-      lines.push(["teller_txn", t.created_at, t.amount, t.narration ?? ""].map((x) => esc(String(x))).join(","));
+      rows.push(["Teller txn", new Date(t.created_at).toLocaleString(), fmtUgxReport(t.amount), t.narration ?? ""]);
     }
     for (const v of snap.recentVaultMoves) {
-      lines.push(["vault", v.created_at, v.signed_vault_change, v.narration ?? ""].map((x) => esc(String(x))).join(","));
+      rows.push([
+        "Vault",
+        new Date(v.created_at).toLocaleString(),
+        fmtUgxReport(v.signed_vault_change),
+        v.narration ?? "",
+      ]);
     }
-    return lines.join("\n");
+    return {
+      title: "Cash movement report",
+      subtitle: `Recent vault and till movements · ${reportDate}`,
+      head: ["Kind", "Time", "Amount", "Note"],
+      rows,
+      summaryLines: [`Vault position: ${fmtUgxReport(snap.vaultPosition)}`],
+    };
   }
+
   if (reportId === "over_short") {
-    lines.push(["metric", "value"].join(","));
-    lines.push(["note", "Use closed sessions in DB for historical variance; UI snapshot is live only"].map(esc).join(","));
-    if (snap.openSession) {
-      lines.push(["expected_till_ugx", snap.tillEstimated ?? ""].join(","));
-    }
-    return lines.join("\n");
+    return {
+      title: "Over / short report",
+      subtitle: `Live till snapshot · ${reportDate}`,
+      head: ["Metric", "Value"],
+      rows: [
+        ["Expected till (open session)", fmtUgxReport(snap.tillEstimated)],
+        ["Note", "Historical over/short is recorded when a till is closed with a physical count."],
+      ],
+      summaryLines: [],
+    };
   }
-  lines.push(["created_at", "action", "entity_type", "entity_id", "detail_json"].map(esc).join(","));
-  for (const a of snap.recentAudit) {
-    lines.push(
-      [a.created_at, a.action, a.entity_type, a.entity_id ?? "", JSON.stringify(a.detail ?? {})]
-        .map((x) => esc(String(x)))
-        .join(",")
-    );
+
+  return {
+    title: "Teller audit log",
+    subtitle: `Recent actions · ${reportDate}`,
+    head: ["Time", "Action", "Entity", "Detail"],
+    rows: snap.recentAudit.map((a) => [
+      new Date(a.created_at).toLocaleString(),
+      a.action,
+      a.entity_type,
+      JSON.stringify(a.detail ?? {}).slice(0, 120),
+    ]),
+    summaryLines: [],
+  };
+}
+
+/** Client-side CSV export from current snapshot (no server report API yet). */
+export function buildTellerReportCsv(
+  reportId: TellerReportId,
+  snap: TellerDashboardSnapshot,
+  options?: Parameters<typeof buildTellerReportTable>[2]
+): string {
+  const table = buildTellerReportTable(reportId, snap, options);
+  const esc = (s: string) => `"${s.replace(/"/g, '""')}"`;
+  const lines: string[] = [table.head.map(esc).join(",")];
+  for (const row of table.rows) {
+    lines.push(row.map((c) => esc(String(c))).join(","));
+  }
+  if (table.summaryLines.length) {
+    lines.push("");
+    for (const s of table.summaryLines) lines.push(esc(s));
   }
   return lines.join("\n");
 }

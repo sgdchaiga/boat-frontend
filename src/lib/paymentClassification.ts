@@ -3,7 +3,7 @@ import { parseInvoiceAllocationsJson } from "./invoicePaymentAllocations";
 
 export type PaymentRow = Database["public"]["Tables"]["payments"]["Row"];
 
-export type PaymentSource = "pos_hotel" | "pos_retail" | "debtor";
+export type PaymentSource = "pos_hotel" | "pos_retail" | "pos_clinic" | "debtor";
 
 /** Legacy classification when `payment_source` is not set (DB not migrated yet). */
 function legacyIsPosCashReceipt(
@@ -26,7 +26,7 @@ function legacyIsPosCashReceipt(
  */
 export function isPosCashReceipt(p: PaymentRow): boolean {
   const src = p.payment_source;
-  if (src === "pos_hotel" || src === "pos_retail") {
+  if (src === "pos_hotel" || src === "pos_retail" || src === "pos_clinic") {
     return p.payment_status === "completed";
   }
   if (src === "debtor") return false;
@@ -36,6 +36,6 @@ export function isPosCashReceipt(p: PaymentRow): boolean {
 export function isDebtorPayment(p: PaymentRow): boolean {
   const src = p.payment_source;
   if (src === "debtor") return true;
-  if (src === "pos_hotel" || src === "pos_retail") return false;
+  if (src === "pos_hotel" || src === "pos_retail" || src === "pos_clinic") return false;
   return !legacyIsPosCashReceipt(p);
 }

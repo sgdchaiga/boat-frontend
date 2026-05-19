@@ -4,7 +4,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { supabase } from "@/lib/supabase";
 import { PageNotes } from "@/components/common/PageNotes";
-import { BookOpen, Printer } from "lucide-react";
+import { BookOpen } from "lucide-react";
+import { SaccoReportToolbar } from "@/components/common/SaccoReportToolbar";
+import { downloadMemberSavingsPdf } from "@/lib/saccoReportPdf";
 
 type Props = {
   navigate?: (page: string, state?: Record<string, unknown>) => void;
@@ -118,16 +120,16 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
         </PageNotes>
       </div>
 
-      <div className="flex flex-wrap gap-3 print:hidden">
-        <button
-          type="button"
-          onClick={() => window.print()}
-          disabled={rows.length === 0}
-          className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <Printer size={16} />
-          Print member statement
-        </button>
+      <div className="flex flex-wrap gap-3 print:hidden items-center">
+        <SaccoReportToolbar
+          onPrint={() => window.print()}
+          onPdf={() => {
+            const today = new Date().toISOString().slice(0, 10);
+            downloadMemberSavingsPdf(members, today, today);
+          }}
+          printLabel="Print statement"
+          pdfLabel="Download PDF"
+        />
         <button
           type="button"
           onClick={() => navigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "receive", tellerTask: "deposit" })}

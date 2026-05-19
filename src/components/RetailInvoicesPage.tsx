@@ -105,6 +105,7 @@ type CreditInvoiceRow = {
   amountDue: number;
   paymentMethod: string;
   paymentIds: string[];
+  customerName?: string | null;
 };
 
 type InvoiceStatus = "draft" | "sent" | "paid" | "void";
@@ -399,6 +400,10 @@ export function RetailInvoicesPage({
       return;
     }
     setCreditLoading(true);
+    const skipOrgFilter = !!user?.isSuperAdmin;
+
+    const map = new Map<string, CreditInvoiceRow>();
+
     const { data, error } = await supabase
       .from("payments")
       .select("id, transaction_id, paid_at, amount, payment_method, payment_status")
@@ -407,43 +412,81 @@ export function RetailInvoicesPage({
       .eq("payment_status", "pending")
       .order("paid_at", { ascending: false });
 
-    if (error) {
-      setCreditInvoices([]);
-      setCreditLoading(false);
-      return;
+    if (!error) {
+      const rows = ((data || []) as PaymentRow[])
+        .map((p) => {
+          const saleId = parseSaleId(p.transaction_id);
+          if (!saleId) return null;
+          return { ...p, saleId };
+        })
+        .filter(Boolean) as Array<PaymentRow & { saleId: string }>;
+
+      for (const p of rows) {
+        const existing = map.get(p.saleId);
+        if (!existing) {
+          map.set(p.saleId, {
+            saleId: p.saleId,
+            invoicePaidAt: p.paid_at ?? null,
+            amountDue: Number(p.amount ?? 0),
+            paymentMethod: p.payment_method,
+            paymentIds: [p.id],
+          });
+        } else {
+          existing.amountDue += Number(p.amount ?? 0);
+          existing.paymentIds.push(p.id);
+          if (p.paid_at && (!existing.invoicePaidAt || p.paid_at > existing.invoicePaidAt)) {
+            existing.invoicePaidAt = p.paid_at;
+          }
+        }
+      }
     }
 
-    const rows = ((data || []) as PaymentRow[])
-      .map((p) => {
-        const saleId = parseSaleId(p.transaction_id);
-        if (!saleId) return null;
-        return { ...p, saleId };
-      })
-      .filter(Boolean) as Array<PaymentRow & { saleId: string }>;
-
-    const map = new Map<string, CreditInvoiceRow>();
-    for (const p of rows) {
-      const existing = map.get(p.saleId);
-      if (!existing) {
-        map.set(p.saleId, {
-          saleId: p.saleId,
-          invoicePaidAt: p.paid_at ?? null,
-          amountDue: Number(p.amount ?? 0),
-          paymentMethod: p.payment_method,
-          paymentIds: [p.id],
-        });
-      } else {
-        existing.amountDue += Number(p.amount ?? 0);
-        existing.paymentIds.push(p.id);
-        if (p.paid_at && (!existing.invoicePaidAt || p.paid_at > existing.invoicePaidAt)) {
-          existing.invoicePaidAt = p.paid_at;
+    let salesQ = filterByOrganizationId(
+      supabase
+        .from("retail_sales")
+        .select("id, amount_due, sale_at, payment_status, customer_name, credit_due_date")
+        .gt("amount_due", 0)
+        .in("payment_status", ["pending", "partial"])
+        .order("sale_at", { ascending: false })
+        .limit(500),
+      orgId,
+      skipOrgFilter
+    );
+    const { data: salesData, error: salesErr } = await salesQ;
+    if (!salesErr) {
+      for (const raw of salesData || []) {
+        const sale = raw as {
+          id: string;
+          amount_due: number | null;
+          sale_at: string | null;
+          payment_status: string | null;
+          customer_name: string | null;
+        };
+        const due = Number(sale.amount_due ?? 0);
+        if (due <= 0) continue;
+        const existing = map.get(sale.id);
+        if (!existing) {
+          map.set(sale.id, {
+            saleId: sale.id,
+            invoicePaidAt: sale.sale_at ?? null,
+            amountDue: due,
+            paymentMethod: sale.payment_status || "credit",
+            paymentIds: [],
+            customerName: sale.customer_name,
+          });
+        } else {
+          existing.amountDue = Math.max(existing.amountDue, due);
+          if (sale.customer_name) existing.customerName = sale.customer_name;
+          if (sale.sale_at && (!existing.invoicePaidAt || sale.sale_at > existing.invoicePaidAt)) {
+            existing.invoicePaidAt = sale.sale_at;
+          }
         }
       }
     }
 
     setCreditInvoices(Array.from(map.values()).sort((a, b) => (b.invoicePaidAt || "").localeCompare(a.invoicePaidAt || "")));
     setCreditLoading(false);
-  }, [orgId]);
+  }, [orgId, user?.isSuperAdmin]);
 
   useEffect(() => {
     loadProducts();
@@ -466,8 +509,23 @@ export function RetailInvoicesPage({
   }, [loadDbInvoices]);
 
   useEffect(() => {
-    if (tab === "credit") loadCreditInvoices();
-  }, [tab, loadCreditInvoices]);
+    if (tab === "credit") {
+      void loadCreditInvoices();
+      void loadDbInvoices();
+    }
+  }, [tab, loadCreditInvoices, loadDbInvoices]);
+
+  const outstandingSalesInvoices = useMemo(() => {
+    return dbInvoices
+      .filter((inv) => inv.status !== "void")
+      .map((inv) => ({
+        inv,
+        balance: invoiceBalanceDue(inv, invoiceSettlement),
+        paid: invoiceSettlement[inv.id]?.paid ?? 0,
+      }))
+      .filter((row) => row.balance > 0.001)
+      .sort((a, b) => (b.inv.issue_date || "").localeCompare(a.inv.issue_date || ""));
+  }, [dbInvoices, invoiceSettlement]);
 
   useEffect(() => {
     if (highlightSaleId) {
@@ -1084,7 +1142,7 @@ export function RetailInvoicesPage({
               tab === "credit" ? "bg-brand-700 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"
             }`}
           >
-            Outstanding POS credit
+            Outstanding / debtors
           </button>
         </div>
       </div>
@@ -1301,41 +1359,90 @@ export function RetailInvoicesPage({
 
       {tab === "credit" && (
         <>
-          {creditLoading ? (
-            <p className="text-slate-500">Loading…</p>
+          {creditLoading || listLoading ? (
+            <p className="text-slate-500">Loading outstanding balances…</p>
           ) : (
             <>
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <PageNotes ariaLabel="Outstanding POS credit help">
+                <PageNotes ariaLabel="Outstanding and debtors help">
                   <p>
-                    These rows come from Retail POS sales on account (pending payments). They are separate from manual invoices above.
+                    Sales invoices with an unpaid balance and POS sales on account appear here. Use{" "}
+                    <strong>Sales invoices</strong> to create or edit invoice documents.
                   </p>
                 </PageNotes>
                 <button
                   type="button"
                   onClick={downloadCsvCredit}
                   className="app-btn-secondary text-sm self-start"
-                  disabled={creditInvoices.length === 0}
+                  disabled={creditInvoices.length === 0 && outstandingSalesInvoices.length === 0}
                 >
                   <Download className="w-4 h-4" />
-                  Export CSV
+                  Export POS credit CSV
                 </button>
               </div>
+
+              <h2 className="text-sm font-semibold text-slate-800 mt-2">Sales invoices — balance due</h2>
+              <div className="app-card overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead className="bg-slate-50">
+                    <tr>
+                      <th className="text-left p-3">Invoice #</th>
+                      <th className="text-left p-3">{invoiceClinicMode ? "Patient" : "Customer"}</th>
+                      <th className="text-left p-3">Issue</th>
+                      <th className="text-left p-3">Due</th>
+                      <th className="text-right p-3">Balance</th>
+                      <th className="text-left p-3">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {outstandingSalesInvoices.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="p-6 text-center text-slate-500">
+                          No sales invoices with an outstanding balance.
+                        </td>
+                      </tr>
+                    ) : (
+                      outstandingSalesInvoices.map(({ inv, balance }) => (
+                        <tr key={inv.id} className="border-t border-slate-100">
+                          <td className="p-3 font-mono text-xs font-medium">{inv.invoice_number}</td>
+                          <td className="p-3 max-w-[200px] truncate">{inv.customer_name || "—"}</td>
+                          <td className="p-3">{inv.issue_date}</td>
+                          <td className="p-3">{inv.due_date || "—"}</td>
+                          <td className="p-3 text-right tabular-nums font-semibold text-slate-900">{formatMoney(balance)}</td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              className="px-2 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-xs inline-flex items-center gap-1"
+                              onClick={() => openPreview(inv)}
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              Preview
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+
+              <h2 className="text-sm font-semibold text-slate-800 mt-6">POS sales on account</h2>
               <div className="app-card overflow-hidden">
                 <table className="w-full text-sm">
                   <thead className="bg-slate-50">
                     <tr>
                       <th className="text-left p-3">Sale ref</th>
+                      <th className="text-left p-3">Customer</th>
                       <th className="text-left p-3">Recorded</th>
                       <th className="text-right p-3">Amount due</th>
-                      <th className="text-left p-3">Method</th>
+                      <th className="text-left p-3">Status</th>
                       <th className="text-left p-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {creditInvoices.length === 0 ? (
                       <tr>
-                        <td colSpan={5} className="p-8 text-center text-slate-500">
+                        <td colSpan={6} className="p-8 text-center text-slate-500">
                           No outstanding POS credit sales.
                         </td>
                       </tr>
@@ -1353,6 +1460,7 @@ export function RetailInvoicesPage({
                                 <span className="truncate">{inv.saleId.slice(0, 12)}</span>
                               </div>
                             </td>
+                            <td className="p-3 max-w-[160px] truncate">{inv.customerName || "—"}</td>
                             <td className="p-3">{inv.invoicePaidAt ? new Date(inv.invoicePaidAt).toLocaleString() : "—"}</td>
                             <td className="p-3 text-right">
                               <button

@@ -21,10 +21,25 @@ export function isUuid(s: string | null | undefined): boolean {
   return !!s && UUID_RE.test(String(s));
 }
 
+/** Completed clinic / pharmacy dispensing POS receipt (payment-centric filter). */
+export function isClinicPosPayment(p: DashboardPayment, linkedClinicSaleIds: Set<string>): boolean {
+  if (p.payment_status !== "completed") return false;
+  const src = p.payment_source;
+  if (src === "pos_clinic") return true;
+  if (src === "pos_hotel" || src === "debtor") return false;
+  const tid = p.transaction_id != null ? String(p.transaction_id).trim() : "";
+  if (!tid || !isUuid(tid)) return false;
+  if (!linkedClinicSaleIds.has(tid)) return false;
+  // Legacy pharmacy/clinic POS stored as pos_retail on the retail_sales ledger
+  if (src === "pos_retail" && p.stay_id == null) return true;
+  return linkedClinicSaleIds.has(tid);
+}
+
 /** Completed retail POS receipt (shop floor). */
 export function isRetailPosPayment(p: DashboardPayment, kitchenOrderIds: Set<string>): boolean {
   if (p.payment_status !== "completed") return false;
   const src = p.payment_source;
+  if (src === "pos_clinic") return false;
   if (src === "pos_retail") return true;
   if (src === "pos_hotel" || src === "debtor") return false;
   const tid = p.transaction_id != null ? String(p.transaction_id).trim() : "";
@@ -38,7 +53,7 @@ export function isRetailPosPayment(p: DashboardPayment, kitchenOrderIds: Set<str
 export function isHotelHospitalityPayment(p: DashboardPayment, kitchenOrderIds: Set<string>): boolean {
   if (p.payment_status !== "completed") return false;
   const src = p.payment_source;
-  if (src === "pos_retail") return false;
+  if (src === "pos_retail" || src === "pos_clinic") return false;
   if (src === "pos_hotel" || src === "debtor") return true;
   if (p.stay_id != null) return true;
   const tid = p.transaction_id != null ? String(p.transaction_id) : "";
@@ -50,7 +65,7 @@ export type HotelRevenueBucket = "pos_hotel" | "stay" | "kitchen" | "debtor" | "
 
 export function hotelRevenueBucket(p: DashboardPayment, kitchenOrderIds: Set<string>): HotelRevenueBucket {
   if (p.payment_status !== "completed") return "none";
-  if (p.payment_source === "pos_retail") return "none";
+  if (p.payment_source === "pos_retail" || p.payment_source === "pos_clinic") return "none";
   if (p.payment_source === "debtor") return "debtor";
   if (p.payment_source === "pos_hotel") return "pos_hotel";
   if (p.stay_id != null) return "stay";

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginPage } from "@/components/LoginPage";
+import { OrganizationPickerPage } from "@/components/OrganizationPickerPage";
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { RetailDashboard } from './components/RetailDashboard';
@@ -42,6 +43,7 @@ import { FinancialRevenueByChargeTypePage } from './components/reports/Financial
 import { FinancialPaymentsByMethodPage } from './components/reports/FinancialPaymentsByMethodPage';
 import { FinancialPaymentsByChargeTypePage } from './components/reports/FinancialPaymentsByChargeTypePage';
 import { DailyPurchasesSummaryPage } from './components/reports/DailyPurchasesSummaryPage';
+import { ExpensesReportPage } from './components/reports/ExpensesReportPage';
 import { ManufacturingDailyProductionReportPage } from './components/reports/ManufacturingDailyProductionReportPage';
 import { DailySummaryReportPage } from './components/reports/DailySummaryReportPage';
 import { RetailShiftVarianceReportPage } from './components/reports/RetailShiftVarianceReportPage';
@@ -81,6 +83,7 @@ import { PlatformBusinessAdminsPage } from './components/platform/PlatformBusine
 import { PlatformBusinessTypesPage } from './components/platform/PlatformBusinessTypesPage';
 import { PlatformPlansPage } from './components/platform/PlatformPlansPage';
 import { PlatformSuperUsersPage } from './components/platform/PlatformSuperUsersPage';
+import { PlatformLinkUserPage } from './components/platform/PlatformLinkUserPage';
 import { AppProvider } from './contexts/AppContext';
 import SaccoDashboard from './components/sacco/SaccoDashboard';
 import { SaccoOverviewPage } from './components/sacco/SaccoOverviewPage';
@@ -341,7 +344,7 @@ function getPageStateFromUrl(): Record<string, unknown> {
 }
 
 function AppContent() {
-  const { user, loading, isSuperAdmin, isHotelStaff } = useAuth();
+  const { user, loading, needsOrganizationPicker, isSuperAdmin, isHotelStaff } = useAuth();
   const [currentPage, setCurrentPage] = useState(() => getPageFromUrl('dashboard'));
   const [pageState, setPageState] = useState<Record<string, unknown>>(() => getPageStateFromUrl());
   const navigate = (page: string, state?: Record<string, unknown>) => {
@@ -570,6 +573,10 @@ function AppContent() {
     return <LoginPage />;
   }
 
+  if (needsOrganizationPicker) {
+    return <OrganizationPickerPage />;
+  }
+
   const renderPage = () => {
     // Special-case: retail users should never see the hotel dashboard/access-denied notice.
     if (user?.business_type === "retail" && currentPage === "dashboard") {
@@ -675,6 +682,8 @@ function AppContent() {
         return <PlatformOrganizationsPage />;
       case 'platform_business_admins':
         return <PlatformBusinessAdminsPage />;
+      case 'platform_link_user':
+        return <PlatformLinkUserPage />;
       case 'platform_business_types':
         return <PlatformBusinessTypesPage />;
       case 'platform_plans':
@@ -1007,7 +1016,12 @@ function AppContent() {
       case 'reports_retail_shift_variance':
         return <RetailShiftVarianceReportPage />;
       case 'reports_retail_sales_insights':
-        return <RetailSalesInsightsPage />;
+        return (
+          <RetailSalesInsightsPage
+            clinicOnly={pageState?.clinicOnly === true || pageState?.clinicOnly === "true"}
+            onNavigate={navigate}
+          />
+        );
       case 'Bar Orders':
         return <BarOrdersPage />;
       case 'Kitchen Orders':
@@ -1070,6 +1084,8 @@ function AppContent() {
         return <FinancialPaymentsByChargeTypePage />;
       case 'reports_daily_purchases_summary':
         return <DailyPurchasesSummaryPage />;
+      case 'reports_expenses':
+        return <ExpensesReportPage />;
       case 'reports_stock_movement':
         return <StockMovementReportPage />;
       case 'reports_purchases_by_item':
@@ -1079,7 +1095,12 @@ function AppContent() {
       case 'reports_manufacturing_daily_production':
         return <ManufacturingDailyProductionReportPage />;
       case 'inventory_stock_adjustments':
-        return <AdminStockAdjustmentsPage highlightAdjustmentSourceId={pageState?.highlightAdjustmentSourceId as string | undefined} />;
+        return (
+          <AdminStockAdjustmentsPage
+            highlightAdjustmentSourceId={pageState?.highlightAdjustmentSourceId as string | undefined}
+            readOnly={access.readOnly}
+          />
+        );
       case 'inventory_stock_balances':
         return <StockBalancesPage />;
       case 'inventory_store_requisitions':

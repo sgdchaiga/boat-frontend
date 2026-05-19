@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Activity,
   ArrowRight,
@@ -12,12 +12,14 @@ import {
   Wallet,
 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
-import { computeRangeInTimezone } from "@/lib/timezone";
+import {
+  businessTodayISO,
+  computeRangeInTimezone,
+  type DateRangeKey,
+} from "@/lib/timezone";
 import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
-import { isRetailPosPayment, type DashboardPayment } from "@/lib/dashboardPaymentFilters";
-import { fetchKitchenOrderIdsForPayments } from "@/lib/dashboardKitchenLookup";
-import { toBusinessDateString } from "@/lib/timezone";
+import { loadClinicPosPeriodSummary } from "@/lib/clinicPosAnalyticsSummary";
 import { PageNotes } from "@/components/common/PageNotes";
 import { fetchClinicConsultations, fetchClinicPatients } from "@/lib/clinicData";
 import type { ClinicPatient } from "./clinicTypes";
@@ -31,12 +33,36 @@ function formatMoney(amount: number): string {
   return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function isSameBusinessDay(iso: string, dayKey: string): boolean {
-  try {
-    return toBusinessDateString(new Date(iso)) === dayKey;
-  } catch {
-    return false;
-  }
+function isInRange(iso: string, from: Date, to: Date): boolean {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return false;
+  return t >= from.getTime() && t < to.getTime();
+}
+
+function DashHint({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <PageNotes ariaLabel={label} variant="comment">
+      {children}
+    </PageNotes>
+  );
+}
+
+function rangeLabel(key: DateRangeKey): string {
+  const labels: Partial<Record<DateRangeKey, string>> = {
+    today: "Today",
+    yesterday: "Yesterday",
+    this_week: "This week",
+    this_month: "This month",
+    this_quarter: "This quarter",
+    this_year: "This year",
+    last_week: "Last week",
+    last_month: "Last month",
+    last_7_days: "Last 7 days",
+    last_30_days: "Last 30 days",
+    last_24_hours: "Last 24 hours",
+    custom: "Selected period",
+  };
+  return labels[key] ?? "Period";
 }
 
 export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
@@ -46,14 +72,23 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [salesToday, setSalesToday] = useState(0);
-  const [pendingCredit, setPendingCredit] = useState(0);
-  const [pendingAccounts, setPendingAccounts] = useState(0);
+  const [dateRange, setDateRange] = useState<DateRangeKey>("today");
+  const [customFrom, setCustomFrom] = useState(() => businessTodayISO());
+  const [customTo, setCustomTo] = useState(() => businessTodayISO());
+
+  const [posSummary, setPosSummary] = useState({
+    completedCount: 0,
+    salesValue: 0,
+    refundedValue: 0,
+    outstandingCredit: 0,
+    overdueCredit: 0,
+    openCreditSaleCount: 0,
+  });
   const [lowStock, setLowStock] = useState<Array<{ name: string; balance: number }>>([]);
-  const [patientsToday, setPatientsToday] = useState(0);
+  const [patientsInPeriod, setPatientsInPeriod] = useState(0);
   const [recentPatients, setRecentPatients] = useState<ClinicPatient[]>([]);
 
-  const todayKey = useMemo(() => toBusinessDateString(new Date()), []);
+  const periodLabel = useMemo(() => rangeLabel(dateRange), [dateRange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,72 +96,41 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
       setLoading(true);
       setLoadError(null);
       try {
-        const [clinicPatients, clinicConsultations, { from: curFrom, to: curTo }] = await Promise.all([
+        const { from: curFrom, to: curTo } = computeRangeInTimezone(dateRange, customFrom, customTo);
+        const [clinicPatients, clinicConsultations, summary] = await Promise.all([
           fetchClinicPatients(orgId, superAdmin),
           fetchClinicConsultations(orgId, superAdmin),
-          Promise.resolve(computeRangeInTimezone("today", "", "")),
+          loadClinicPosPeriodSummary(orgId, superAdmin, curFrom, curTo),
         ]);
 
         if (!cancelled) {
-          const ptoday = new Set<string>();
+          setPosSummary(summary);
+
+          const activePatientIds = new Set<string>();
           for (const p of clinicPatients) {
-            if (isSameBusinessDay(p.createdAt, todayKey)) ptoday.add(p.id);
+            if (isInRange(p.createdAt, curFrom, curTo)) activePatientIds.add(p.id);
           }
           for (const c of clinicConsultations) {
-            if (isSameBusinessDay(c.createdAt, todayKey)) ptoday.add(c.patientId);
+            if (isInRange(c.createdAt, curFrom, curTo)) activePatientIds.add(c.patientId);
           }
-          setPatientsToday(ptoday.size);
+          setPatientsInPeriod(activePatientIds.size);
 
-          const sorted = [...clinicPatients].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-          setRecentPatients(sorted.slice(0, 5));
+          const recent = clinicPatients
+            .filter((p) => activePatientIds.has(p.id))
+            .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            .slice(0, 5);
+          setRecentPatients(recent);
         }
 
-        let payQ = supabase
-          .from("payments")
-          .select("id, transaction_id, paid_at, amount, payment_method, payment_status, stay_id, payment_source")
-          .eq("payment_status", "completed")
-          .gte("paid_at", curFrom.toISOString())
-          .lt("paid_at", curTo.toISOString());
-        payQ = filterByOrganizationId(payQ, orgId, superAdmin);
-
-        const [paymentsRes, productsRes, movesRes, custRes] = await Promise.all([
-          payQ,
-          filterByOrganizationId(
-            supabase.from("products").select("id, name, track_inventory").eq("active", true),
-            orgId,
-            superAdmin
-          ),
-          supabase.from("product_stock_movements").select("product_id, quantity_in, quantity_out"),
-          filterByOrganizationId(
-            supabase.from("retail_customers").select("id, current_credit_balance"),
-            orgId,
-            superAdmin
-          ),
-        ]);
+        const productsRes = await filterByOrganizationId(
+          supabase.from("products").select("id, name, track_inventory").eq("active", true),
+          orgId,
+          superAdmin
+        );
+        const movesRes = await supabase.from("product_stock_movements").select("product_id, quantity_in, quantity_out");
 
         if (cancelled) return;
-        if (paymentsRes.error) throw new Error(paymentsRes.error.message);
-
-        const allPayments = (paymentsRes.data || []) as DashboardPayment[];
-        const kitchenIds = await fetchKitchenOrderIdsForPayments(allPayments, orgId, superAdmin);
-        const retailToday = allPayments.filter((p) => {
-          const t = new Date(p.paid_at || 0).getTime();
-          return t >= curFrom.getTime() && t < curTo.getTime() && isRetailPosPayment(p, kitchenIds);
-        });
-        setSalesToday(retailToday.reduce((s, p) => s + Number(p.amount ?? 0), 0));
-
-        const customers = (custRes.data || []) as Array<{ id: string; current_credit_balance?: number | null }>;
-        let pend = 0;
-        let acct = 0;
-        for (const c of customers) {
-          const b = Number(c.current_credit_balance ?? 0);
-          if (b > 0.009) {
-            pend += b;
-            acct += 1;
-          }
-        }
-        setPendingCredit(pend);
-        setPendingAccounts(acct);
+        if (productsRes.error) throw new Error(productsRes.error.message);
 
         const products = (productsRes.data || []) as Array<{ id: string; name: string; track_inventory: boolean | null }>;
         const map: Record<string, { name: string; balance: number }> = {};
@@ -160,7 +164,7 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
     return () => {
       cancelled = true;
     };
-  }, [orgId, superAdmin, todayKey]);
+  }, [orgId, superAdmin, dateRange, customFrom, customTo]);
 
   if (loading) {
     return (
@@ -180,15 +184,60 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
   return (
     <div className="min-h-[calc(100vh-4rem)] p-6 md:p-8 bg-gradient-to-br from-emerald-50/60 via-slate-50 to-slate-100/40">
       <div className="max-w-6xl mx-auto space-y-8">
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-3xl font-bold text-slate-900">Clinic</h1>
-              <PageNotes ariaLabel="Clinic workspace help">
-                <p>Patient register and visits in Supabase; sales, credit balances, and stock from your retail data.</p>
-              </PageNotes>
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h1 className="text-3xl font-bold text-slate-900">Clinic</h1>
+                <PageNotes ariaLabel="Clinic workspace help" variant="comment">
+                  <p>Clinics, pharmacies, and drug shops — alongside your retail tools.</p>
+                  <p>Sales and credit figures use the same rules as POS Analytics, scoped to clinic dispensing.</p>
+                </PageNotes>
+              </div>
             </div>
-            <p className="text-slate-600 mt-1">Clinics, pharmacies, and drug shops — alongside your retail tools.</p>
+            <div className="flex flex-wrap items-end gap-3">
+              <div>
+                <label htmlFor="clinic-dash-date-range" className="block text-sm text-slate-600 mb-1">
+                  Period
+                </label>
+                <select
+                  id="clinic-dash-date-range"
+                  value={dateRange}
+                  onChange={(e) => setDateRange(e.target.value as DateRangeKey)}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white min-w-[10rem]"
+                >
+                  <option value="today">Today</option>
+                  <option value="yesterday">Yesterday</option>
+                  <option value="this_week">This week</option>
+                  <option value="this_month">This month</option>
+                  <option value="last_7_days">Last 7 days</option>
+                  <option value="last_30_days">Last 30 days</option>
+                  <option value="custom">Custom range</option>
+                </select>
+              </div>
+              {dateRange === "custom" ? (
+                <div className="flex flex-wrap items-end gap-2">
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">From</label>
+                    <input
+                      type="date"
+                      value={customFrom}
+                      onChange={(e) => setCustomFrom(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-slate-500 mb-1">To</label>
+                    <input
+                      type="date"
+                      value={customTo}
+                      onChange={(e) => setCustomTo(e.target.value)}
+                      className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
+                    />
+                  </div>
+                </div>
+              ) : null}
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
@@ -223,6 +272,14 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
               <FlaskConical className="w-4 h-4 text-violet-600" />
               Laboratory
             </button>
+            <button
+              type="button"
+              onClick={() => onNavigate("reports_retail_sales_insights", { clinicOnly: true })}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-100"
+            >
+              <FileBarChart className="w-4 h-4 text-slate-600" />
+              Clinic POS analytics
+            </button>
           </div>
         </div>
 
@@ -234,40 +291,69 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <Users className="w-8 h-8 text-emerald-600" />
-              <span className="text-2xl font-bold text-slate-900">{patientsToday}</span>
+              <span className="text-2xl font-bold text-slate-900">{patientsInPeriod}</span>
             </div>
-            <p className="mt-2 font-medium text-slate-800">Patients today</p>
-            <p className="text-xs text-slate-500 mt-0.5">Registered or had a consultation today</p>
+            <p className="mt-2 font-medium text-slate-800 inline-flex items-center gap-1">
+              Patients ({periodLabel.toLowerCase()})
+              <DashHint label="Patients in period">
+                <p>Registered or had a consultation in the selected period.</p>
+              </DashHint>
+            </p>
           </div>
+
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <Activity className="w-8 h-8 text-sky-600" />
-              <span className="text-2xl font-bold text-slate-900">{formatMoney(salesToday)}</span>
+              <span className="text-2xl font-bold text-slate-900">{formatMoney(posSummary.salesValue)}</span>
             </div>
-            <p className="mt-2 font-medium text-slate-800">Sales today</p>
-            <p className="text-xs text-slate-500 mt-0.5">Retail POS (same as retail dashboard)</p>
+            <p className="mt-2 font-medium text-slate-800 inline-flex items-center gap-1">
+              Sales ({periodLabel.toLowerCase()})
+              <DashHint label="Sales in period">
+                <p>
+                  Matches POS Analytics &quot;Sales value&quot; for clinic dispensing: {posSummary.completedCount}{" "}
+                  completed payment{posSummary.completedCount === 1 ? "" : "s"} in period.
+                  {posSummary.refundedValue > 0.009
+                    ? ` Refunded in period: ${formatMoney(posSummary.refundedValue)}.`
+                    : ""}
+                </p>
+              </DashHint>
+            </p>
           </div>
+
           <button
             type="button"
-            onClick={() => onNavigate("retail_credit_invoices", { invoiceTab: "credit" })}
+            onClick={() => onNavigate("reports_retail_sales_insights", { clinicOnly: true })}
             className="text-left bg-white rounded-xl border border-slate-200 p-5 shadow-sm hover:border-slate-300 transition"
           >
             <div className="flex items-center justify-between gap-2">
               <Wallet className="w-8 h-8 text-amber-600" />
-              <span className="text-2xl font-bold text-slate-900">{formatMoney(pendingCredit)}</span>
+              <span className="text-2xl font-bold text-slate-900">{formatMoney(posSummary.outstandingCredit)}</span>
             </div>
-            <p className="mt-2 font-medium text-slate-800">Pending balances</p>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {pendingAccounts} retail customer{pendingAccounts === 1 ? "" : "s"} with credit balance
+            <p className="mt-2 font-medium text-slate-800 inline-flex items-center gap-1">
+              Open credit
+              <DashHint label="Open credit">
+                <p>
+                  Matches POS Analytics &quot;Open credit&quot; for clinic sales: {posSummary.openCreditSaleCount} sale
+                  {posSummary.openCreditSaleCount === 1 ? "" : "s"} with balance due.
+                  {posSummary.overdueCredit > 0.009
+                    ? ` Overdue: ${formatMoney(posSummary.overdueCredit)}.`
+                    : ""}
+                </p>
+              </DashHint>
             </p>
           </button>
+
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <Pill className="w-8 h-8 text-rose-600" />
               <span className="text-2xl font-bold text-slate-900">{lowStock.length}</span>
             </div>
-            <p className="mt-2 font-medium text-slate-800">Low stock (≤5)</p>
-            <p className="text-xs text-slate-500 mt-0.5">Tracked products from inventory</p>
+            <p className="mt-2 font-medium text-slate-800 inline-flex items-center gap-1">
+              Low stock (≤5)
+              <DashHint label="Low stock">
+                <p>Tracked products at or below 5 units on hand.</p>
+              </DashHint>
+            </p>
           </div>
         </div>
 
@@ -275,9 +361,18 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
           <div className="flex flex-wrap items-center gap-2 mb-3">
             <FileBarChart className="h-5 w-5 text-slate-600" aria-hidden />
             <h2 className="text-lg font-bold text-slate-900">Financial and stock reports</h2>
+            <DashHint label="Financial and stock reports">
+              <p>Open the same reports used for retail operations (cash, credit, stock, and spend).</p>
+            </DashHint>
           </div>
-          <p className="text-sm text-slate-600 mb-3">Open the same reports used for retail operations (cash, credit, stock, and spend).</p>
           <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onNavigate("reports_retail_sales_insights", { clinicOnly: true })}
+              className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-medium text-emerald-900 hover:bg-emerald-100"
+            >
+              Clinic POS analytics
+            </button>
             <button
               type="button"
               onClick={() => onNavigate("accounting_cashflow")}
@@ -301,7 +396,7 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
             </button>
             <button
               type="button"
-              onClick={() => onNavigate("reports_daily_purchases_summary")}
+              onClick={() => onNavigate("reports_expenses")}
               className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100"
             >
               Expense report
@@ -334,9 +429,9 @@ export function ClinicDashboardPage({ onNavigate }: ClinicDashboardPageProps) {
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
-            <h2 className="text-lg font-bold text-slate-900 mb-4">Recent patients</h2>
+            <h2 className="text-lg font-bold text-slate-900 mb-4">Patients in period</h2>
             {recentPatients.length === 0 ? (
-              <p className="text-sm text-slate-600">No patients yet — use New patient to register.</p>
+              <p className="text-sm text-slate-600">No patient activity in this period.</p>
             ) : (
               <ul className="space-y-3">
                 {recentPatients.map((p) => (

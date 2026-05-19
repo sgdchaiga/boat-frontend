@@ -1,7 +1,9 @@
 import React, { useMemo } from 'react';
 import { useAppContext } from '@/contexts/AppContext';
 import type { Loan } from '@/types/saccoWorkspace';
-import { Phone, UserRound, Printer, Landmark } from 'lucide-react';
+import { Phone, UserRound, Landmark } from 'lucide-react';
+import { SaccoReportToolbar } from '@/components/common/SaccoReportToolbar';
+import { downloadSaccoTablePdf } from '@/lib/saccoReportPdf';
 import { PageNotes } from '@/components/common/PageNotes';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
 
@@ -87,13 +89,25 @@ const SaccoLoanRecovery: React.FC<{
             </p>
           </PageNotes>
         </div>
-        <button
-          type="button"
-          onClick={() => window.print()}
-          className="flex items-center gap-2 px-4 py-2 border border-slate-200 rounded-lg text-sm hover:bg-slate-50"
-        >
-          <Printer size={16} /> Print
-        </button>
+        <SaccoReportToolbar
+          onPrint={() => window.print()}
+          onPdf={() => {
+            const today = new Date().toISOString().slice(0, 10);
+            downloadSaccoTablePdf({
+              title: 'Loan recovery register',
+              subtitle: `As at ${today}`,
+              filename: `sacco_loan_recovery_${today}`,
+              head: ['Borrower', 'Loan', 'Balance', 'Phone', 'Guarantors'],
+              rows: rows.map((l) => [
+                l.memberName,
+                l.loanType,
+                formatCurrency(l.balance),
+                members.find((m) => m.name === l.memberName)?.phone?.trim() ?? '—',
+                guarantorLines(l.guarantors),
+              ]),
+            });
+          }}
+        />
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">

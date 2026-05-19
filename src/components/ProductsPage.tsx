@@ -10,6 +10,9 @@ import {
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import type { Database } from "../lib/database.types";
+import { useAuth } from "../contexts/AuthContext";
+import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../lib/supabaseOrgFilter";
+import { ensureActiveOrganization } from "../lib/stockBulkImport";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 
@@ -117,6 +120,9 @@ type ItemsSortKey = "name" | "profit";
 type ItemsSortDir = "asc" | "desc";
 
 export default function ProductsPage({ readOnly = false }: ProductsPageProps = {}) {
+  const { user, isSuperAdmin } = useAuth();
+  const orgId = user?.organization_id ?? undefined;
+  const superAdmin = Boolean(isSuperAdmin);
   const [products, setProducts] = useState<Product[]>([]);
   const [balanceByProduct, setBalanceByProduct] = useState<Record<string, number>>({});
   const [glAccounts, setGlAccounts] = useState<GlAccountOption[]>([]);
@@ -150,7 +156,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
   useEffect(() => {
     void loadAll();
-  }, []);
+  }, [orgId, superAdmin]);
 
   useEffect(() => {
     if (!modalOpen) {
@@ -187,9 +193,13 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   }
 
   async function loadProductsAndBalances() {
+    if (orgId) await ensureActiveOrganization(orgId);
     const [prodRes, movesRes] = await Promise.all([
-      supabase.from("products").select("*"),
-      supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out"),
+      filterByOrganizationId(supabase.from("products").select("*"), orgId, superAdmin),
+      filterStockMovementsByOrganizationId(
+        supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out"),
+        orgId
+      ),
     ]);
 
     if (prodRes.error) {

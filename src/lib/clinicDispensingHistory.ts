@@ -22,6 +22,27 @@ export function phonesLikelyMatch(a: string, b: string): boolean {
   return da === db;
 }
 
+/**
+ * Retail sale ids in period (by `sale_at`, same as POS Orders).
+ * Used with `isClinicPosPayment` / sale-level clinic rules for analytics filters.
+ */
+export async function fetchClinicDispensingSaleIdsInRange(
+  orgId: string | undefined,
+  superAdmin: boolean,
+  from: Date,
+  to: Date
+): Promise<Set<string>> {
+  let q = supabase
+    .from("retail_sales")
+    .select("id")
+    .gte("sale_at", from.toISOString())
+    .lt("sale_at", to.toISOString());
+  q = filterByOrganizationId(q, orgId, superAdmin);
+  const { data, error } = await q;
+  if (error) throw new Error(error.message);
+  return new Set((data || []).map((r) => String((r as { id: string }).id)));
+}
+
 export async function fetchClinicPatientDispensedLines(
   orgId: string | undefined,
   superAdmin: boolean,

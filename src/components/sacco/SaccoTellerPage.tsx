@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+﻿import { useCallback, useEffect, useMemo, useState } from "react";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import {
   ArrowDownToLine,
@@ -38,23 +38,37 @@ import {
 import {
   approveTellerTransaction,
   buildTellerReportCsv,
+  buildTellerReportTable,
   closeTellerSession,
+  closeTellerSessionByIdAsSupervisor,
   downloadCsv,
   closeAllOpenTellerSessionsForStaff,
+  fetchOpenTellerSessionsForOrganization,
+  fetchTillPositionsForOrganization,
+  fetchTellerTransactionsForDateRange,
   resumeOrOpenTellerSession,
   rejectTellerTransaction,
+  resolveTellerStaffContext,
   transferCashFromTillToVault,
   transferCashFromVaultToTill,
+  type TellerOpenSessionListRow,
   type TellerReportId,
+  type TellerReportTable,
+  type TillPositionRow,
   TELLER_MIGRATION_HINT,
   formatTellerDbError,
 } from "@/lib/saccoTellerDb";
+import { fetchSaccoTillInsuredLimit, upsertSaccoTillInsuredLimit } from "@/lib/saccoTellerSettings";
+import { downloadTellerReportPdf } from "@/lib/saccoReportPdf";
+import { SaccoTellerReportPreview } from "@/components/sacco/SaccoTellerReportPreview";
+import { SaccoTillOversightPanel } from "@/components/sacco/SaccoTillOversightPanel";
+import { supabase } from "@/lib/supabase";
 import { useTellerCompleteTransaction } from "@/components/sacco/hooks/useTellerCompleteTransaction";
 import { useTellerInit } from "@/components/sacco/hooks/useTellerInit";
 import type { SaccoTellerTransactionRow, TellerMemberPickRow } from "@/lib/saccoTellerDb";
 
 function formatUgx(n: number | null | undefined): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  if (n === null || n === undefined || Number.isNaN(n)) return "â€”";
   return `UGX ${Math.round(n).toLocaleString("en-UG")}`;
 }
 
@@ -133,8 +147,35 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const desk = normalizeDesk(tellerDesk);
   const { user, isSuperAdmin } = useAuth();
   const { refreshSaccoWorkspace } = useAppContext();
-  const orgId = user?.organization_id ?? null;
-  const staffId = user?.id ?? undefined;
+  const [tellerCtx, setTellerCtx] = useState<Awaited<ReturnType<typeof resolveTellerStaffContext>>>(null);
+  const [tellerCtxLoading, setTellerCtxLoading] = useState(true);
+  const [orgOpenSessions, setOrgOpenSessions] = useState<TellerOpenSessionListRow[]>([]);
+  const [tillPositions, setTillPositions] = useState<TillPositionRow[]>([]);
+  const [tillPositionsLoading, setTillPositionsLoading] = useState(false);
+  const [insuredLimitUgx, setInsuredLimitUgx] = useState<number | null>(null);
+  const [insuredLimitDraft, setInsuredLimitDraft] = useState("");
+  const [orgName, setOrgName] = useState("");
+  const [reportPreviewOpen, setReportPreviewOpen] = useState(false);
+  const [reportPreviewTable, setReportPreviewTable] = useState<TellerReportTable | null>(null);
+  const [activeReportId, setActiveReportId] = useState<TellerReportId | null>(null);
+  const [dailyReportDate, setDailyReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    if (!user?.id) {
+      setTellerCtx(null);
+      setTellerCtxLoading(false);
+      return;
+    }
+    setTellerCtxLoading(true);
+    void resolveTellerStaffContext(user.id).then((ctx) => {
+      setTellerCtx(ctx);
+      setTellerCtxLoading(false);
+    });
+  }, [user?.id]);
+
+  const orgId = tellerCtx?.organizationId ?? user?.organization_id ?? null;
+  const staffId = tellerCtx?.staffId ?? user?.id ?? undefined;
+  const staffLinkMissing = Boolean(user?.id && !tellerCtxLoading && !tellerCtx);
   const showAdminControls =
     Boolean(isSuperAdmin) || ["admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase());
 
@@ -194,6 +235,104 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
   const { snap, init, loading, loadError, initLoading, load } = useTellerInit(orgId, staffId, Boolean(isSuperAdmin));
 
+  const refreshOrgOpenSessions = useCallback(async () => {
+    if (!orgId || !showAdminControls) {
+      setOrgOpenSessions([]);
+      return;
+    }
+    const rows = await fetchOpenTellerSessionsForOrganization(orgId);
+    setOrgOpenSessions(rows);
+  }, [orgId, showAdminControls]);
+
+  const refreshTillOversight = useCallback(async () => {
+    if (!orgId) {
+      setTillPositions([]);
+      setInsuredLimitUgx(null);
+      return;
+    }
+    setTillPositionsLoading(true);
+    try {
+      const limit = await fetchSaccoTillInsuredLimit(orgId);
+      setInsuredLimitUgx(limit);
+      setInsuredLimitDraft(limit != null ? String(Math.round(limit)) : "");
+      if (showAdminControls) {
+        setTillPositions(await fetchTillPositionsForOrganization(orgId, limit));
+      } else {
+        setTillPositions([]);
+      }
+    } catch (e) {
+      console.error("[SACCO teller oversight]", e);
+    } finally {
+      setTillPositionsLoading(false);
+    }
+  }, [orgId, showAdminControls]);
+
+  useEffect(() => {
+    void refreshOrgOpenSessions();
+    void refreshTillOversight();
+  }, [refreshOrgOpenSessions, refreshTillOversight, snap?.openSession, loading]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    let alive = true;
+    void supabase
+      .from("organizations")
+      .select("name")
+      .eq("id", orgId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!alive) return;
+        const row = data as { name?: string | null } | null;
+        setOrgName(row?.name?.trim() || "");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [orgId]);
+
+  const buildReportOptions = useCallback(
+    async (reportId: TellerReportId, dateForDaily?: string) => {
+      if (!orgId || !snap) return {};
+      const reportDate = dateForDaily ?? new Date().toISOString().slice(0, 10);
+      if (reportId === "daily_summary") {
+        const dailyTransactions = await fetchTellerTransactionsForDateRange(orgId, reportDate, reportDate);
+        return { dailyTransactions, insuredLimitUgx, reportDate };
+      }
+      if (reportId === "cash_position" && showAdminControls) {
+        const tillPositions = await fetchTillPositionsForOrganization(orgId, insuredLimitUgx);
+        return { tillPositions, insuredLimitUgx, reportDate };
+      }
+      return { insuredLimitUgx, reportDate };
+    },
+    [orgId, snap, showAdminControls, insuredLimitUgx]
+  );
+
+  const openReportPreview = useCallback(
+    async (reportId: TellerReportId, dateForDaily?: string) => {
+      if (!snap || snap.schemaMissing) return;
+      setActiveReportId(reportId);
+      const opts = await buildReportOptions(reportId, dateForDaily);
+      setReportPreviewTable(buildTellerReportTable(reportId, snap, opts));
+      setReportPreviewOpen(true);
+    },
+    [snap, buildReportOptions]
+  );
+
+  useEffect(() => {
+    if (desk !== "daily" || !snap || snap.schemaMissing || !orgId) return;
+    let cancelled = false;
+    void (async () => {
+      const opts = await buildReportOptions("daily_summary", dailyReportDate);
+      if (cancelled) return;
+      setActiveReportId("daily_summary");
+      setReportPreviewTable(buildTellerReportTable("daily_summary", snap, opts));
+      setReportPreviewOpen(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [desk, dailyReportDate, orgId, snap?.schemaMissing, buildReportOptions]);
+
   const pickMembers = init?.members ?? [];
   const pickSavingsAccounts = init?.savingsAccounts ?? [];
 
@@ -228,7 +367,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const eodVariance =
     eodExpected !== null && !Number.isNaN(eodCountedNum) && eodCounted.trim() !== "" ? Math.round(eodCountedNum) - eodExpected : null;
 
-  const canMutate = Boolean(orgId && staffId && !snap?.schemaMissing);
+  const canMutate = Boolean(orgId && staffId && !snap?.schemaMissing && !staffLinkMissing && !tellerCtxLoading);
 
   const { doComplete, fieldMsg, setFieldMsg } = useTellerCompleteTransaction({
     canMutate,
@@ -285,14 +424,26 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
           setActionMessage({ kind: "ok", text: options?.successMessage ?? "Saved." });
         }
         await load({ silent: options?.silentRefresh !== false });
+        await refreshOrgOpenSessions();
       } catch (e) {
         setActionMessage({ kind: "err", text: formatTellerDbError(e) });
       } finally {
         setSaving(false);
       }
     },
-    [orgId, staffId, snap?.schemaMissing, load]
+    [orgId, staffId, snap?.schemaMissing, load, refreshOrgOpenSessions]
   );
+
+  const handleSupervisorCloseSession = (sessionId: string) =>
+    runMutation(
+      async () => {
+        await closeTellerSessionByIdAsSupervisor({ organizationId: orgId!, sessionId });
+        await refreshTillOversight();
+        await refreshOrgOpenSessions();
+        await load({ silent: true });
+      },
+      { successMessage: "Till session closed." }
+    );
 
   const validateTransactionForm = useCallback((): boolean => {
     setFieldMsg({});
@@ -388,7 +539,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       setOpenTillModal(false);
       setActionMessage({
         kind: "ok",
-        text: resumed ? "Till session resumed — you can post transactions." : "Till session opened.",
+        text: resumed ? "Till session resumed â€” you can post transactions." : "Till session opened.",
       });
       void session;
     }, { successMessage: false, silentRefresh: false });
@@ -413,13 +564,13 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const confirmTransactionSummary = useMemo(() => {
     const amtSrc = taskAction === "cheque" ? chequeAmountStr : amountStr;
     const n = Math.round(Number(digitsOnly(amtSrc) || "0"));
-    const memberLine = selectedMember ? `${selectedMember.member_number} — ${selectedMember.full_name}` : "—";
+    const memberLine = selectedMember ? `${selectedMember.member_number} â€” ${selectedMember.full_name}` : "â€”";
 
     let accountDetail = "";
     if (taskRequiresSavingsAccount(taskAction) && selectedSavingsAccountId) {
       const acc = pickSavingsAccounts.find((x) => x.id === selectedSavingsAccountId);
       if (acc)
-        accountDetail = `${acc.savings_product_code} (${acc.account_number}) · balance ${formatUgx(acc.balance)}`;
+        accountDetail = `${acc.savings_product_code} (${acc.account_number}) Â· balance ${formatUgx(acc.balance)}`;
     }
 
     const verbShort =
@@ -492,7 +643,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       const sess = snap?.openSession;
       if (!sess) throw new Error("No open session to close.");
       const expectedBal = snap?.tillEstimated;
-      if (expectedBal === null || expectedBal === undefined) throw new Error("Expected balance unavailable — refresh or check session.");
+      if (expectedBal === null || expectedBal === undefined) throw new Error("Expected balance unavailable â€” refresh or check session.");
       if (eodCounted.trim() === "" || Number.isNaN(eodCountedNum)) throw new Error("Please enter the counted cash amount.");
       const counted = Math.round(eodCountedNum);
       const overShort = counted - expectedBal;
@@ -564,7 +715,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               <PageNotes ariaLabel="Teller help" variant="comment">
                 <p>
                   Choose what you are doing, find the member, enter the amount, and use <strong>Complete transaction</strong>. The system posts
-                  small amounts directly and routes larger ones for approval. GL mapping is configured by accounting — not on this screen.
+                  small amounts directly and routes larger ones for approval. GL mapping is configured by accounting â€” not on this screen.
                 </p>
               </PageNotes>
             </div>
@@ -583,7 +734,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         )}
         {snap?.schemaMissing && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-            Teller database objects are missing or out of date. In Supabase → SQL Editor, run migrations starting with{" "}
+            Teller database objects are missing or out of date. In Supabase â†’ SQL Editor, run migrations starting with{" "}
             <code className="text-xs">20260426120007_sacco_teller.sql</code> through{" "}
             <code className="text-xs">20260426120011_journal_gl_teller_counterparty_settings.sql</code>, then refresh.
           </div>
@@ -591,7 +742,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
         <div className="rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-950 mb-3">
           <strong>Heart of BOAT:</strong> savings deposits, withdrawals, loan repayments, and fees are posted here after member
-          selection. Loans and Statements prepare the story — treasury completes the movement.
+          selection. Loans and Statements prepare the story â€” treasury completes the movement.
         </div>
 
         <div className="flex flex-wrap gap-2 mb-3">
@@ -667,7 +818,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         )}
         {desk === "daily" && (
           <p className="text-sm text-slate-600 pb-2">
-            Session reporting and CSV extracts — scroll to Reports or till close tools.
+            Daily summary opens in preview â€” review on screen, then print or download PDF. Change the date under Reports.
           </p>
         )}
 
@@ -710,32 +861,49 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         >
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Till</span>
-            <strong className="tabular-nums text-emerald-900">{loading ? "…" : formatUgx(snap?.tillEstimated ?? null)}</strong>
+            <strong className="tabular-nums text-emerald-900">{loading ? "â€¦" : formatUgx(snap?.tillEstimated ?? null)}</strong>
           </span>
           <span className="text-slate-300 hidden sm:inline" aria-hidden>
             |
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Vault</span>
-            <strong className="tabular-nums text-slate-900">{loading ? "…" : formatUgx(snap?.vaultPosition ?? 0)}</strong>
+            <strong className="tabular-nums text-slate-900">{loading ? "â€¦" : formatUgx(snap?.vaultPosition ?? 0)}</strong>
           </span>
           <span className="text-slate-300 hidden sm:inline" aria-hidden>
             |
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Session</span>
-            <strong className="text-slate-900">{loading ? "…" : snap?.openSession ? "Open" : "Closed"}</strong>
+            <strong className="text-slate-900">{loading ? "â€¦" : snap?.openSession ? "Open" : "Closed"}</strong>
           </span>
           <span className="text-slate-300 hidden sm:inline" aria-hidden>
             |
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Pending</span>
-            <strong className="tabular-nums text-amber-900">{loading ? "…" : snap?.pendingApprovalCount ?? 0}</strong>
+            <strong className="tabular-nums text-amber-900">{loading ? "â€¦" : snap?.pendingApprovalCount ?? 0}</strong>
           </span>
         </div>
 
         {!orgId ? <p className="text-xs text-slate-500">Link staff to an organization.</p> : null}
+        {staffLinkMissing ? (
+          <p className="text-xs text-red-700">
+            Your login is not on the Staff list for this SACCO. Ask an administrator to add you under Staff (same account you
+            use to sign in), then refresh.
+          </p>
+        ) : null}
+        {showAdminControls ? (
+          <SaccoTillOversightPanel
+            positions={tillPositions}
+            insuredLimitUgx={insuredLimitUgx}
+            loading={tillPositionsLoading}
+            onRefresh={() => void refreshTillOversight()}
+            canSupervise
+            saving={saving}
+            onCloseTill={(sessionId) => void handleSupervisorCloseSession(sessionId)}
+          />
+        ) : null}
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 pt-2">
@@ -745,7 +913,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
             {initLoading || loading ? (
               <p className="text-sm text-slate-500 flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Loading…
+                Loadingâ€¦
               </p>
             ) : null}
 
@@ -757,7 +925,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       className={`${field} pl-9`}
-                      placeholder="Search name or member number…"
+                      placeholder="Search name or member numberâ€¦"
                       value={memberSearch}
                       onChange={(e) => {
                         setMemberSearch(e.target.value);
@@ -769,7 +937,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     />
                     {selectedMember && (
                       <p className="text-xs text-emerald-800 mt-1">
-                        Selected: {selectedMember.member_number} — {selectedMember.full_name}
+                        Selected: {selectedMember.member_number} â€” {selectedMember.full_name}
                       </p>
                     )}
                     {memberMatches.length > 0 && !selectedMemberId && (
@@ -781,11 +949,11 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                               className="w-full text-left px-3 py-2 hover:bg-emerald-50"
                               onClick={() => {
                                 setSelectedMemberId(m.id);
-                                setMemberSearch(`${m.member_number} — ${m.full_name}`);
+                                setMemberSearch(`${m.member_number} â€” ${m.full_name}`);
                                 setFieldMsg({});
                               }}
                             >
-                              {m.member_number} — {m.full_name}
+                              {m.member_number} â€” {m.full_name}
                             </button>
                           </li>
                         ))}
@@ -797,7 +965,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
                 {taskRequiresSavingsAccount(taskAction) && selectedMemberId && memberSavings.length > 0 && (
                   <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
-                    <p className="text-sm font-semibold text-slate-900 mb-3">Accounts — tap one</p>
+                    <p className="text-sm font-semibold text-slate-900 mb-3">Accounts â€” tap one</p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       {memberSavings.map((a) => (
                         <button
@@ -815,7 +983,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                         >
                           <p className="text-base font-semibold text-slate-900 leading-snug">
                             {a.savings_product_code}
-                            <span className="font-normal text-slate-600"> · {a.account_number}</span>
+                            <span className="font-normal text-slate-600"> Â· {a.account_number}</span>
                           </p>
                           <p className="text-sm font-medium text-emerald-900 mt-2 tabular-nums">{formatUgx(a.balance)}</p>
                         </button>
@@ -857,7 +1025,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       className={`${field} pl-9`}
-                      placeholder="Search…"
+                      placeholder="Searchâ€¦"
                       value={memberSearch}
                       onChange={(e) => {
                         setMemberSearch(e.target.value);
@@ -873,10 +1041,10 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                               className="w-full text-left px-3 py-2 hover:bg-emerald-50"
                               onClick={() => {
                                 setSelectedMemberId(m.id);
-                                setMemberSearch(`${m.member_number} — ${m.full_name}`);
+                                setMemberSearch(`${m.member_number} â€” ${m.full_name}`);
                               }}
                             >
-                              {m.member_number} — {m.full_name}
+                              {m.member_number} â€” {m.full_name}
                             </button>
                           </li>
                         ))}
@@ -942,7 +1110,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                 onClick={() => requestCompleteTransaction()}
                 className="w-full rounded-2xl bg-emerald-600 py-4 text-center text-lg font-bold uppercase tracking-wide text-white shadow-lg hover:bg-emerald-700 disabled:opacity-50"
               >
-                {saving ? "Working…" : "Complete transaction"}
+                {saving ? "Workingâ€¦" : "Complete transaction"}
               </button>
               <details className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 px-4 py-2 text-sm">
                 <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900">
@@ -974,7 +1142,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm space-y-1">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Opening float</span>
-                  <span className="font-mono tabular-nums">{snap?.openSession ? formatUgx(snap.openSession.opening_float) : "—"}</span>
+                  <span className="font-mono tabular-nums">{snap?.openSession ? formatUgx(snap.openSession.opening_float) : "â€”"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Receipts (posted)</span>
@@ -1016,7 +1184,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               )}
 
               <div className="border-t border-slate-100 pt-4 space-y-2">
-                <p className="text-xs font-medium text-slate-800">Vault ↔ till</p>
+                <p className="text-xs font-medium text-slate-800">Vault â†” till</p>
                 <input
                   className={`${field} tabular-nums`}
                   type="number"
@@ -1033,7 +1201,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     onClick={() => void handleVaultFrom()}
                     className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
                   >
-                    Vault → till
+                    Vault â†’ till
                   </button>
                   <button
                     type="button"
@@ -1041,7 +1209,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     onClick={() => void handleVaultTo()}
                     className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
                   >
-                    Till → vault
+                    Till â†’ vault
                   </button>
                 </div>
               </div>
@@ -1080,7 +1248,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               <div>
                 <p className="text-slate-500 text-xs">Difference</p>
                 <p className={`text-xl font-bold tabular-nums ${eodVariance !== null && eodVariance !== 0 ? "text-amber-800" : "text-slate-900"}`}>
-                  {eodVariance === null ? "—" : eodVariance > 0 ? `+${formatUgx(eodVariance).replace("UGX ", "")}` : formatUgx(eodVariance)}
+                  {eodVariance === null ? "â€”" : eodVariance > 0 ? `+${formatUgx(eodVariance).replace("UGX ", "")}` : formatUgx(eodVariance)}
                 </p>
               </div>
             </div>
@@ -1125,7 +1293,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                       <tr key={t.id} className="border-b border-slate-50">
                         <td className="p-2 text-xs whitespace-nowrap">{new Date(t.created_at).toLocaleString()}</td>
                         <td className="p-2 text-xs">{formatTxnTypeLabel(String(t.txn_type))}</td>
-                        <td className="p-2 text-xs max-w-[12rem] break-words">{t.member_ref ?? "—"}</td>
+                        <td className="p-2 text-xs max-w-[12rem] break-words">{t.member_ref ?? "â€”"}</td>
                         <td className="p-2 tabular-nums">{formatUgx(t.amount)}</td>
                         <td className="p-2 text-xs">{t.status}</td>
                       </tr>
@@ -1154,12 +1322,12 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                   >
                     <div className="flex-1 min-w-0 space-y-1">
                       <p className="text-lg font-bold text-slate-900">
-                        {pendingCardLabel(t)} — {formatUgx(t.amount)}
+                        {pendingCardLabel(t)} â€” {formatUgx(t.amount)}
                       </p>
-                      <p className="text-sm text-slate-700 line-clamp-2">{t.member_ref || "—"}</p>
+                      <p className="text-sm text-slate-700 line-clamp-2">{t.member_ref || "â€”"}</p>
                       <p className="text-xs text-slate-500">{new Date(t.created_at).toLocaleString()}</p>
                       {t.narration ? <p className="text-xs text-slate-600 italic">{t.narration}</p> : null}
-                      {isMaker ? <p className="text-xs text-slate-500">You are the maker — you may still approve or reject here.</p> : null}
+                      {isMaker ? <p className="text-xs text-slate-500">You are the maker â€” you may still approve or reject here.</p> : null}
                     </div>
                     <div className="flex flex-col gap-2 sm:w-56 shrink-0">
                       <input
@@ -1198,6 +1366,27 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
       {mainTab === "reports" && (
         <div className="space-y-4">
+          {desk === "daily" && (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 flex flex-wrap items-end gap-3">
+              <label className="text-sm">
+                <span className="block text-xs font-medium text-slate-600 mb-1">Summary date</span>
+                <input
+                  type="date"
+                  value={dailyReportDate}
+                  onChange={(e) => setDailyReportDate(e.target.value)}
+                  className={field + " max-w-[11rem]"}
+                />
+              </label>
+              <button
+                type="button"
+                disabled={!snap || snap.schemaMissing || loading}
+                onClick={() => void openReportPreview("daily_summary", dailyReportDate)}
+                className="rounded-lg bg-emerald-700 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-800 disabled:opacity-50"
+              >
+                Refresh preview
+              </button>
+            </div>
+          )}
           <div className="grid gap-4 sm:grid-cols-2">
             {reportCards.map((r) => {
               const Icon = r.icon;
@@ -1212,18 +1401,39 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                       <p className="text-xs text-slate-600 mt-1">{r.desc}</p>
                     </div>
                   </div>
-                  <button
-                    type="button"
-                    disabled={!snap || snap.schemaMissing || loading}
-                    onClick={() => {
-                      if (!snap || snap.schemaMissing) return;
-                      const csv = buildTellerReportCsv(r.id, snap);
-                      downloadCsv(`teller_${r.id}_${new Date().toISOString().slice(0, 10)}.csv`, csv);
-                    }}
-                    className="mt-auto self-start rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900"
-                  >
-                    Download CSV
-                  </button>
+                  <div className="flex flex-wrap gap-2 mt-auto">
+                    <button
+                      type="button"
+                      disabled={!snap || snap.schemaMissing || loading}
+                      onClick={() =>
+                        void openReportPreview(
+                          r.id,
+                          r.id === "daily_summary" ? dailyReportDate : undefined
+                        )
+                      }
+                      className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700 disabled:opacity-50"
+                    >
+                      Preview
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!snap || snap.schemaMissing || loading}
+                      onClick={() => {
+                        void (async () => {
+                          if (!snap || snap.schemaMissing) return;
+                          const opts = await buildReportOptions(
+                            r.id,
+                            r.id === "daily_summary" ? dailyReportDate : undefined
+                          );
+                          const csv = buildTellerReportCsv(r.id, snap, opts);
+                          downloadCsv(`teller_${r.id}_${dailyReportDate}.csv`, csv);
+                        })();
+                      }}
+                      className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900 disabled:opacity-50"
+                    >
+                      CSV
+                    </button>
+                  </div>
                 </div>
               );
             })}
@@ -1263,7 +1473,41 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       )}
 
       {mainTab === "controls" && showAdminControls && (
-        <div className="max-w-xl">
+        <div className="max-w-xl space-y-4">
+          <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+            <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
+              <ShieldCheck className="w-5 h-5 text-emerald-600" />
+              Till insured cash limit
+            </h2>
+            <p className="text-sm text-slate-600">
+              Maximum cash per open till before oversight flags uninsured exposure.
+            </p>
+            <label className="block text-sm">
+              <span className={label}>Limit (UGX)</span>
+              <input
+                className={field}
+                inputMode="numeric"
+                placeholder="e.g. 50000000"
+                value={insuredLimitDraft}
+                onChange={(e) => setInsuredLimitDraft(e.target.value.replace(/\D/g, ""))}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={!orgId || saving}
+              onClick={() =>
+                void runMutation(async () => {
+                  if (!orgId) return;
+                  const n = insuredLimitDraft.trim() === "" ? null : Number(insuredLimitDraft);
+                  await upsertSaccoTillInsuredLimit(orgId, n);
+                  await refreshTillOversight();
+                }, { successMessage: "Insured till limit saved." })
+              }
+              className="rounded-lg bg-emerald-600 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-700 disabled:opacity-50"
+            >
+              Save limit
+            </button>
+          </div>
           <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
             <h2 className="text-sm font-semibold text-slate-800 flex items-center gap-2">
               <ShieldCheck className="w-5 h-5 text-emerald-600" />
@@ -1409,7 +1653,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                 <span className="font-semibold tabular-nums text-right">{confirmTransactionSummary.amountDisplay}</span>
               </div>
               {(taskRequiresMemberOnly(taskAction) || taskRequiresSavingsAccount(taskAction) || taskAction === "cheque") &&
-              confirmTransactionSummary.memberLine !== "—" ? (
+              confirmTransactionSummary.memberLine !== "â€”" ? (
                 <div className="flex justify-between gap-4">
                   <span className="text-slate-500 shrink-0">Member</span>
                   <span className="text-right text-slate-900">{confirmTransactionSummary.memberLine}</span>
@@ -1447,6 +1691,35 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
           </div>
         </div>
       ) : null}
+
+      <SaccoTellerReportPreview
+        open={reportPreviewOpen}
+        onClose={() => setReportPreviewOpen(false)}
+        table={reportPreviewTable}
+        orgName={orgName}
+        onDownloadPdf={() => {
+          if (!reportPreviewTable || !activeReportId) return;
+          downloadTellerReportPdf(
+            reportPreviewTable,
+            `teller_${activeReportId}_${dailyReportDate}.pdf`,
+            orgName
+          );
+        }}
+        onDownloadCsv={() => {
+          if (!snap || !activeReportId || snap.schemaMissing) return;
+          void (async () => {
+            const opts = await buildReportOptions(
+              activeReportId,
+              activeReportId === "daily_summary" ? dailyReportDate : undefined
+            );
+            downloadCsv(
+              `teller_${activeReportId}_${dailyReportDate}.csv`,
+              buildTellerReportCsv(activeReportId, snap, opts)
+            );
+          })();
+        }}
+      />
     </div>
   );
 }
+

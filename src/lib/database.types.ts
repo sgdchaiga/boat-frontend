@@ -346,8 +346,8 @@ export interface Database {
           property_customer_id?: string | null
           retail_customer_id?: string | null
           invoice_allocations?: unknown
-          /** pos_hotel | pos_retail | debtor — set by app; backfilled in migration. */
-          payment_source?: 'pos_hotel' | 'pos_retail' | 'debtor',
+          /** pos_hotel | pos_retail | pos_clinic | debtor — set by app; backfilled in migration. */
+          payment_source?: 'pos_hotel' | 'pos_retail' | 'pos_clinic' | 'debtor',
           amount: number
           payment_method: 'cash' | 'card' | 'bank_transfer' | 'mtn_mobile_money' | 'airtel_money'
           payment_status: 'pending' | 'completed' | 'failed' | 'refunded'
@@ -366,7 +366,7 @@ export interface Database {
           property_customer_id?: string | null
           retail_customer_id?: string | null
           invoice_allocations?: unknown
-          payment_source?: 'pos_hotel' | 'pos_retail' | 'debtor'
+          payment_source?: 'pos_hotel' | 'pos_retail' | 'pos_clinic' | 'debtor'
           amount: number
           payment_method: 'cash' | 'card' | 'bank_transfer' | 'mtn_mobile_money' | 'airtel_money'
           payment_status?: 'pending' | 'completed' | 'failed' | 'refunded'
@@ -385,7 +385,7 @@ export interface Database {
           property_customer_id?: string | null
           retail_customer_id?: string | null
           invoice_allocations?: unknown
-          payment_source?: 'pos_hotel' | 'pos_retail' | 'debtor'
+          payment_source?: 'pos_hotel' | 'pos_retail' | 'pos_clinic' | 'debtor'
           amount?: number
           payment_method?: 'cash' | 'card' | 'bank_transfer' | 'mtn_mobile_money' | 'airtel_money'
           payment_status?: 'pending' | 'completed' | 'failed' | 'refunded'
