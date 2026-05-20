@@ -1790,6 +1790,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                       <th className="p-2">Member</th>
                       <th className="p-2">Mbr #</th>
                       <th className="p-2">Savings acct</th>
+                      <th className="p-2">Reference</th>
                       <th className="p-2">Amount</th>
                       <th className="p-2">Status</th>
                       {canEditTransactions ? <th className="p-2 w-16" /> : null}
@@ -1798,7 +1799,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                   <tbody>
                     {recentActivityLoading ? (
                       <tr>
-                        <td colSpan={canEditTransactions ? 9 : 8} className="p-6 text-center text-slate-500">
+                        <td colSpan={canEditTransactions ? 10 : 9} className="p-6 text-center text-slate-500">
                           <span className="inline-flex items-center gap-2">
                             <Loader2 className="w-4 h-4 animate-spin shrink-0" />
                             Loading transactions…
@@ -1807,7 +1808,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                       </tr>
                     ) : recentActivityRows.length === 0 ? (
                       <tr>
-                        <td colSpan={canEditTransactions ? 9 : 8} className="p-6 text-center text-slate-500">
+                        <td colSpan={canEditTransactions ? 10 : 9} className="p-6 text-center text-slate-500">
                           No transactions for this date.
                         </td>
                       </tr>
@@ -1820,6 +1821,10 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                         const sav = t.sacco_member_savings_account_id
                           ? recentActivitySavingsById.get(t.sacco_member_savings_account_id)
                           : undefined;
+                        const refText = (t.member_ref ?? "").trim();
+                        const showReference =
+                          refText &&
+                          (!mem || !t.sacco_member_id || refText !== `${mem.member_number} — ${mem.full_name}`.trim());
                         return (
                         <tr key={t.id} className="border-b border-slate-50">
                           <td className="p-2 text-xs whitespace-nowrap tabular-nums">{businessDate}</td>
@@ -1828,6 +1833,9 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                           <td className="p-2 text-xs max-w-[8rem] break-words">{mem?.full_name ?? "—"}</td>
                           <td className="p-2 text-xs tabular-nums">{mem?.member_number ?? "—"}</td>
                           <td className="p-2 text-xs tabular-nums">{sav?.account_number ?? "—"}</td>
+                          <td className="p-2 text-xs max-w-[10rem] break-words text-slate-600">
+                            {showReference ? refText : "—"}
+                          </td>
                           <td className="p-2 tabular-nums">{formatUgx(t.amount)}</td>
                           <td className="p-2 text-xs">{t.status}</td>
                           {canEditTransactions ? (
