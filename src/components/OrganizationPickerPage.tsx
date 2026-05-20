@@ -4,6 +4,7 @@ import { APP_NAME } from "@/constants/branding";
 import { useAuth } from "@/contexts/AuthContext";
 import {
   organizationMembershipLabel,
+  organizationMembershipName,
   pickDefaultOrganizationId,
   readStoredActiveOrganizationId,
   type OrganizationMembership,
@@ -99,13 +100,18 @@ export const OrganizationPickerPage: React.FC = () => {
               </select>
               {selectedMembership ? (
                 <p className="mt-2 text-xs text-slate-400">
-                  Signed in as <span className="text-slate-300">{selectedMembership.full_name}</span>
+                  <span className="text-slate-200 font-medium">
+                    {organizationMembershipName(selectedMembership)}
+                  </span>
                   {selectedMembership.role ? (
                     <>
                       {" "}
-                      · <span className="text-slate-300">{selectedMembership.role}</span>
+                      · role <span className="text-slate-300">{selectedMembership.role}</span>
                     </>
                   ) : null}
+                  {" "}
+                  · you as{" "}
+                  <span className="text-slate-300">{selectedMembership.full_name}</span>
                 </p>
               ) : null}
             </div>

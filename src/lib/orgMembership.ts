@@ -135,8 +135,57 @@ function normalizeOrgEmbed(org: unknown): OrgEmbed {
   return org as OrgEmbed;
 }
 
+function mapMembershipRow(r: {
+  organization_id: string;
+  role: string;
+  full_name: string;
+  phone: string | null;
+  is_active: boolean;
+  last_accessed_at: string | null;
+  organizations?: unknown;
+}): OrganizationMembership {
+  return {
+    organization_id: r.organization_id,
+    role: r.role,
+    full_name: r.full_name,
+    phone: r.phone,
+    is_active: r.is_active,
+    last_accessed_at: r.last_accessed_at,
+    organizations: normalizeOrgEmbed(r.organizations),
+  };
+}
+
+function parseMembershipsRpcPayload(data: unknown): OrganizationMembership[] | null {
+  if (data == null) return null;
+  const rows = Array.isArray(data) ? data : null;
+  if (!rows) return null;
+  return rows.map((raw) => {
+    const r = raw as Record<string, unknown>;
+    return mapMembershipRow({
+      organization_id: String(r.organization_id ?? ""),
+      role: String(r.role ?? ""),
+      full_name: String(r.full_name ?? ""),
+      phone: r.phone != null ? String(r.phone) : null,
+      is_active: r.is_active !== false,
+      last_accessed_at: r.last_accessed_at != null ? String(r.last_accessed_at) : null,
+      organizations: r.organizations,
+    });
+  });
+}
+
 /** Load memberships and organization display fields (names for org picker / switcher). */
 export async function loadMembershipsForUser(userId: string): Promise<OrganizationMembership[]> {
+  const { data: rpcData, error: rpcError } = await supabase.rpc("get_user_organization_memberships");
+  const rpcMissing =
+    rpcError &&
+    (rpcError.code === "PGRST202" || rpcError.message?.includes("get_user_organization_memberships"));
+  if (!rpcError) {
+    const parsed = parseMembershipsRpcPayload(rpcData);
+    if (parsed && parsed.length > 0) return parsed;
+  } else if (!rpcMissing) {
+    console.warn("[orgMembership] get_user_organization_memberships:", rpcError.message);
+  }
+
   const { data, error } = await supabase
     .from("organization_members")
     .select(
@@ -151,45 +200,48 @@ export async function loadMembershipsForUser(userId: string): Promise<Organizati
     organizations?: unknown;
   })[];
 
-  const missingOrgIds = rows
-    .filter((r) => !normalizeOrgEmbed(r.organizations)?.name?.trim())
-    .map((r) => r.organization_id);
-
   const orgById = new Map<string, NonNullable<OrgEmbed>>();
   for (const r of rows) {
     const org = normalizeOrgEmbed(r.organizations);
-    if (org?.id) orgById.set(org.id, org);
+    if (org?.id && org.name?.trim()) orgById.set(org.id, org);
   }
+
+  const missingOrgIds = rows
+    .filter((r) => !orgById.has(r.organization_id))
+    .map((r) => r.organization_id);
 
   if (missingOrgIds.length > 0) {
     const { data: orgRows, error: orgError } = await supabase
       .from("organizations")
       .select("id, name, business_type, logo_url")
       .in("id", [...new Set(missingOrgIds)]);
-    if (orgError) throw orgError;
-    for (const o of orgRows || []) {
-      const org = o as NonNullable<OrgEmbed>;
-      orgById.set(org.id, org);
+    if (!orgError) {
+      for (const o of orgRows || []) {
+        const org = o as NonNullable<OrgEmbed>;
+        orgById.set(org.id, org);
+      }
     }
   }
 
-  return rows.map((r) => ({
-    organization_id: r.organization_id,
-    role: r.role,
-    full_name: r.full_name,
-    phone: r.phone,
-    is_active: r.is_active,
-    last_accessed_at: r.last_accessed_at,
-    organizations: orgById.get(r.organization_id) ?? null,
-  }));
+  return rows.map((r) =>
+    mapMembershipRow({
+      ...r,
+      organizations: orgById.get(r.organization_id) ?? normalizeOrgEmbed(r.organizations),
+    })
+  );
 }
 
 export function organizationMembershipLabel(m: OrganizationMembership): string {
   const org = normalizeOrgEmbed(m.organizations);
-  const name = org?.name?.trim() || "Organization";
-  const type = org?.business_type;
-  const typeLabel = type ? BUSINESS_TYPE_LABELS[type] || type : "";
+  const name = org?.name?.trim();
   const role = m.role?.trim();
-  const parts = [name, typeLabel, role].filter(Boolean);
-  return parts.join(" · ");
+  if (name) {
+    return role ? `${name} (${role})` : name;
+  }
+  return role ? `Organization (${role})` : "Organization";
+}
+
+/** Organization name only (for headers / labels). */
+export function organizationMembershipName(m: OrganizationMembership): string {
+  return normalizeOrgEmbed(m.organizations)?.name?.trim() || "Organization";
 }

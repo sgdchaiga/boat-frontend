@@ -307,6 +307,11 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
           { name: 'Give money', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'give' } },
           { name: 'Transfers', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'transfer' } },
           { name: 'Daily summary', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
+          {
+            name: 'Recent teller activity',
+            page: SACCOPRO_PAGE.teller,
+            state: { tellerDesk: 'daily', tellerReportsTab: 'recent_activity' },
+          },
         ],
       },
       {
@@ -1233,7 +1238,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
             </div>
             {!isLocalAuthMode && memberships.length > 1 ? (
               <div className="px-2 py-1 mb-1">
-                <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">Organization</label>
+                <label className="block text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+                  Switch organization
+                </label>
                 <select
                   value={user?.organization_id ?? ""}
                   disabled={orgSwitching}

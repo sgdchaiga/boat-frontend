@@ -42,6 +42,7 @@ export type SaccoTellerTxnType =
 export type TellerPostingPurpose =
   | "savings"
   | "membership_fee"
+  | "subscription"
   | "shares"
   | "loan_repayment"
   | "fee_or_penalty"
@@ -50,6 +51,7 @@ export type TellerPostingPurpose =
 export const TELLER_POSTING_PURPOSE_LABELS: Record<TellerPostingPurpose, string> = {
   savings: "Savings (select account)",
   membership_fee: "Membership fee",
+  subscription: "Subscription",
   shares: "Shares / equity",
   loan_repayment: "Loan repayment",
   fee_or_penalty: "Fee or penalty",
@@ -77,9 +79,36 @@ export type SaccoTellerTransactionRow = {
   checker_staff_id: string | null;
   approved_at: string | null;
   journal_batch_ref: string | null;
+  /** Business calendar date (yyyy-mm-dd, Kampala); journal/cashbook entry_date when posting. */
+  txn_date?: string | null;
+  corrects_txn_id?: string | null;
+  reversed_at?: string | null;
+  reversed_by_staff_id?: string | null;
+  correction_reason?: string | null;
   created_at: string;
   updated_at: string;
 };
+
+/** Fields an authorized officer may change. */
+export type SaccoTellerTransactionPatch = {
+  amount?: number;
+  narration?: string | null;
+  member_ref?: string | null;
+  sacco_member_id?: string | null;
+  sacco_member_savings_account_id?: string | null;
+  posting_purpose?: TellerPostingPurpose | string | null;
+  counterparty_gl_account_id?: string | null;
+  /** Allowed only to switch between `cash_deposit` and `cash_withdrawal` on those rows. */
+  txn_type?: SaccoTellerTxnType | string;
+  /** Business posting date yyyy-mm-dd. */
+  txn_date?: string | null;
+};
+
+/** Posted teller rows we can safely reverse and re-post (GL + cashbook + savings). */
+export function canCorrectPostedTellerTxnType(txnType: string): boolean {
+  const t = String(txnType);
+  return t === "cash_deposit" || t === "cash_withdrawal" || t === "adjustment";
+}
 
 export type SaccoVaultMovementRow = {
   id: string;
@@ -228,11 +257,16 @@ function isMissingTellerSchemaError(err: unknown): boolean {
   );
 }
 
-/** Base teller txn columns (migration 20260426120007); optional cols added in 09/10. */
-const TELLER_TXN_SELECT_BASE =
+/** Base columns without txn_date (pre–txn_date migration). */
+const TELLER_TXN_SELECT_LEGACY_BASE =
   "id, organization_id, session_id, txn_type, amount, sacco_member_id, member_ref, narration, cheque_number, cheque_bank, cheque_value_date, status, maker_staff_id, checker_staff_id, approved_at, journal_batch_ref, created_at, updated_at";
 
+const TELLER_TXN_SELECT_BASE =
+  "id, organization_id, session_id, txn_type, amount, sacco_member_id, member_ref, narration, cheque_number, cheque_bank, cheque_value_date, status, maker_staff_id, checker_staff_id, approved_at, journal_batch_ref, txn_date, created_at, updated_at";
+
 const TELLER_TXN_SELECT_EXTENDED = `${TELLER_TXN_SELECT_BASE}, posting_purpose, sacco_member_savings_account_id, counterparty_gl_account_id`;
+
+const TELLER_TXN_SELECT_LEGACY_EXTENDED = `${TELLER_TXN_SELECT_LEGACY_BASE}, posting_purpose, sacco_member_savings_account_id, counterparty_gl_account_id`;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type TellerTxnQueryBuilder = any;
@@ -240,7 +274,12 @@ type TellerTxnQueryBuilder = any;
 async function runTellerTxnQuery(
   build: (columns: string) => TellerTxnQueryBuilder
 ): Promise<{ data: unknown[] | null; error: unknown; count: number | null }> {
-  for (const columns of [TELLER_TXN_SELECT_EXTENDED, TELLER_TXN_SELECT_BASE]) {
+  for (const columns of [
+    TELLER_TXN_SELECT_EXTENDED,
+    TELLER_TXN_SELECT_BASE,
+    TELLER_TXN_SELECT_LEGACY_EXTENDED,
+    TELLER_TXN_SELECT_LEGACY_BASE,
+  ]) {
     const res = await build(columns);
     if (!res.error) {
       return { data: res.data ?? null, error: null, count: res.count ?? null };
@@ -249,7 +288,7 @@ async function runTellerTxnQuery(
       return { data: null, error: res.error, count: null };
     }
   }
-  const last = await build(TELLER_TXN_SELECT_BASE);
+  const last = await build(TELLER_TXN_SELECT_LEGACY_BASE);
   return { data: last.data ?? null, error: last.error, count: last.count ?? null };
 }
 
@@ -405,32 +444,71 @@ export async function fetchTillPositionsForOrganization(
   return rows;
 }
 
-/** Posted teller transactions for a calendar date range (inclusive, org-local dates as yyyy-mm-dd). */
+/** Normalized yyyy-mm-dd for `sacco_teller_transactions.txn_date` (NOT NULL after migration). */
+function normalizeTxnDateColumn(raw: string | null | undefined): string {
+  const td = typeof raw === "string" ? raw.trim().slice(0, 10) : "";
+  if (td && /^\d{4}-\d{2}-\d{2}$/.test(td)) return td;
+  return businessTodayISO().slice(0, 10);
+}
+
+/** Posted journal / cashbook line date: business txn date when set, else today (Kampala). */
+function entryDateForPostedTellerTxn(txn: SaccoTellerTransactionRow): string {
+  const raw = txn.txn_date;
+  const d = typeof raw === "string" ? raw.trim().slice(0, 10) : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+  return businessTodayISO();
+}
+
+/** Posted teller transactions for a calendar date range (inclusive, yyyy-mm-dd). Uses txn_date when available. */
 export async function fetchTellerTransactionsForDateRange(
   organizationId: string,
   dateFrom: string,
   dateTo: string
 ): Promise<SaccoTellerTransactionRow[]> {
   if (!isValidUuid(organizationId)) return [];
-  const fromIso = `${dateFrom.slice(0, 10)}T00:00:00.000Z`;
-  const end = new Date(`${dateTo.slice(0, 10)}T12:00:00`);
-  end.setUTCDate(end.getUTCDate() + 1);
-  const toIso = end.toISOString();
-  const { data, error } = await runTellerTxnQuery((columns) =>
+  const from = dateFrom.slice(0, 10);
+  const to = dateTo.slice(0, 10);
+
+  const byTxnDate = await runTellerTxnQuery((columns) =>
     sb
       .from("sacco_teller_transactions")
       .select(columns)
       .eq("organization_id", organizationId)
-      .gte("created_at", fromIso)
-      .lt("created_at", toIso)
+      .gte("txn_date", from)
+      .lte("txn_date", to)
       .order("created_at", { ascending: true })
   );
-  if (error) {
-    if (isMissingTellerSchemaError(error)) return [];
-    warnTellerQuery("transactions for date range", error);
-    return [];
+
+  if (!byTxnDate.error) {
+    return (byTxnDate.data ?? []) as SaccoTellerTransactionRow[];
   }
-  return (data ?? []) as SaccoTellerTransactionRow[];
+
+  const errMsg = String((byTxnDate.error as { message?: string })?.message ?? "").toLowerCase();
+  if (isUnknownColumnError(byTxnDate.error) && errMsg.includes("txn_date")) {
+    const fromIso = `${from}T00:00:00.000Z`;
+    const end = new Date(`${to}T12:00:00`);
+    end.setUTCDate(end.getUTCDate() + 1);
+    const toIso = end.toISOString();
+    const legacy = await runTellerTxnQuery((columns) =>
+      sb
+        .from("sacco_teller_transactions")
+        .select(columns)
+        .eq("organization_id", organizationId)
+        .gte("created_at", fromIso)
+        .lt("created_at", toIso)
+        .order("created_at", { ascending: true })
+    );
+    if (legacy.error) {
+      if (isMissingTellerSchemaError(legacy.error)) return [];
+      warnTellerQuery("transactions for date range", legacy.error);
+      return [];
+    }
+    return (legacy.data ?? []) as SaccoTellerTransactionRow[];
+  }
+
+  if (isMissingTellerSchemaError(byTxnDate.error)) return [];
+  warnTellerQuery("transactions for date range", byTxnDate.error);
+  return [];
 }
 
 /** Supervisor closes any open till session in the org (e.g. third teller blocked by stuck row). */
@@ -812,19 +890,16 @@ export function tellerDeltaForSavingsAccountBalance(txnType: string, amount: num
  * When a teller txn is posted against a savings account, mirror the amount into that account’s balance
  * so loan eligibility and registers see up-to-date figures.
  */
-async function applyPostedTellerTxnToSavingsAccountBalance(params: {
+async function applySavingsBalanceDelta(params: {
   organizationId: string;
-  txn: SaccoTellerTransactionRow;
+  accountId: string;
+  delta: number;
 }): Promise<void> {
-  const acctId = params.txn.sacco_member_savings_account_id;
-  if (!acctId) return;
-  const delta = tellerDeltaForSavingsAccountBalance(String(params.txn.txn_type), Number(params.txn.amount));
-  if (delta === null || delta === 0) return;
-
+  if (params.delta === 0) return;
   const { data: acct, error: e1 } = await sb
     .from("sacco_member_savings_accounts")
     .select("balance")
-    .eq("id", acctId)
+    .eq("id", params.accountId)
     .eq("organization_id", params.organizationId)
     .maybeSingle();
   if (e1) {
@@ -833,16 +908,27 @@ async function applyPostedTellerTxnToSavingsAccountBalance(params: {
   }
   if (!acct) return;
   const prev = Number((acct as { balance: unknown }).balance ?? 0);
-  const next = Math.max(0, prev + delta);
+  const next = Math.max(0, prev + params.delta);
   const { error: e2 } = await sb
     .from("sacco_member_savings_accounts")
     .update({ balance: next })
-    .eq("id", acctId)
+    .eq("id", params.accountId)
     .eq("organization_id", params.organizationId);
   if (e2) {
     throwIfTellerDbError(e2);
     throw e2;
   }
+}
+
+async function applyPostedTellerTxnToSavingsAccountBalance(params: {
+  organizationId: string;
+  txn: SaccoTellerTransactionRow;
+}): Promise<void> {
+  const acctId = params.txn.sacco_member_savings_account_id;
+  if (!acctId) return;
+  const delta = tellerDeltaForSavingsAccountBalance(String(params.txn.txn_type), Number(params.txn.amount));
+  if (delta === null || delta === 0) return;
+  await applySavingsBalanceDelta({ organizationId: params.organizationId, accountId: acctId, delta });
 }
 
 /**
@@ -885,7 +971,7 @@ async function postJournalForPostedTellerTxn(params: {
         ];
 
   const res = await createJournalEntry({
-    entry_date: businessTodayISO(),
+    entry_date: entryDateForPostedTellerTxn(txn),
     description: `Teller ${t.replace(/_/g, " ")} — ${(txn.member_ref ?? "").trim() || "—"}`,
     reference_type: "sacco_teller",
     reference_id: txn.id,
@@ -938,7 +1024,7 @@ async function insertCashbookLineForTellerTxn(params: {
 
   const { error: insErr } = await sb.from("sacco_cashbook_entries").insert({
     organization_id: organizationId,
-    entry_date: businessTodayISO(),
+    entry_date: entryDateForPostedTellerTxn(txn),
     description: desc,
     reference: txn.id,
     category: "Teller",
@@ -1204,10 +1290,13 @@ export async function createTellerTransaction(params: {
   chequeNumber?: string | null;
   chequeBank?: string | null;
   chequeValueDate?: string | null;
+  /** Business date yyyy-mm-dd (Kampala); defaults to today. */
+  txnDate?: string | null;
   mode: "posted" | "pending_approval";
   journalBatchRef?: string | null;
 }): Promise<SaccoTellerTransactionRow> {
   const status = params.mode === "posted" ? "posted" : "pending_approval";
+  const txnDateRow = normalizeTxnDateColumn(params.txnDate);
   const insertRow = {
     organization_id: params.organizationId,
     session_id: params.sessionId,
@@ -1222,6 +1311,7 @@ export async function createTellerTransaction(params: {
     cheque_number: params.chequeNumber ?? null,
     cheque_bank: params.chequeBank ?? null,
     cheque_value_date: params.chequeValueDate ?? null,
+    txn_date: txnDateRow,
     status,
     maker_staff_id: params.staffId,
     checker_staff_id: null as string | null,
@@ -1369,6 +1459,419 @@ export async function rejectTellerTransaction(params: {
     detail: { reason, txn_type: row.txn_type, amount: row.amount },
   });
   return row;
+}
+
+function snapTxnForAudit(txn: SaccoTellerTransactionRow): Record<string, unknown> {
+  return {
+    id: txn.id,
+    txn_type: txn.txn_type,
+    txn_date: txn.txn_date ?? null,
+    amount: txn.amount,
+    status: txn.status,
+    sacco_member_id: txn.sacco_member_id,
+    sacco_member_savings_account_id: txn.sacco_member_savings_account_id ?? null,
+    posting_purpose: txn.posting_purpose ?? null,
+    counterparty_gl_account_id: txn.counterparty_gl_account_id ?? null,
+    member_ref: txn.member_ref,
+    narration: txn.narration,
+    journal_batch_ref: txn.journal_batch_ref,
+  };
+}
+
+async function insertSaccoTransactionEditAudit(params: {
+  organizationId: string;
+  originalTxnId: string;
+  replacementTxnId?: string | null;
+  editorStaffId: string;
+  editKind: "pending_edit" | "posted_correction";
+  reason: string;
+  oldValues: Record<string, unknown>;
+  newValues: Record<string, unknown>;
+}): Promise<void> {
+  const { error } = await sb.from("sacco_transaction_edits").insert({
+    organization_id: params.organizationId,
+    original_txn_id: params.originalTxnId,
+    replacement_txn_id: params.replacementTxnId ?? null,
+    editor_staff_id: params.editorStaffId,
+    edit_kind: params.editKind,
+    reason: params.reason,
+    old_values: params.oldValues,
+    new_values: params.newValues,
+  });
+  if (error && !isMissingTellerSchemaError(error)) {
+    console.warn("[SACCO] sacco_transaction_edits insert:", error);
+  }
+}
+
+/** Reverse GL for a posted cash deposit/withdrawal (compensating entry). */
+async function postReversalJournalForPostedTellerTxn(params: {
+  staffId: string;
+  txn: SaccoTellerTransactionRow;
+  reason: string;
+}): Promise<string | null> {
+  const t = String(params.txn.txn_type);
+  if (t !== "cash_deposit" && t !== "cash_withdrawal") return null;
+  const cp = params.txn.counterparty_gl_account_id;
+  if (!cp) return null;
+
+  const { cash: cashId } = await getDefaultGlAccounts();
+  if (!cashId) return null;
+
+  const amount = Math.round(Number(params.txn.amount));
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+
+  const lines =
+    t === "cash_deposit"
+      ? [
+          { gl_account_id: cashId, debit: 0, credit: amount, line_description: "Reversal: till cash (in)" },
+          { gl_account_id: cp, debit: amount, credit: 0, line_description: "Reversal" },
+        ]
+      : [
+          { gl_account_id: cp, debit: 0, credit: amount, line_description: "Reversal" },
+          { gl_account_id: cashId, debit: amount, credit: 0, line_description: "Reversal: till cash (out)" },
+        ];
+
+  const res = await createJournalEntry({
+    entry_date: entryDateForPostedTellerTxn(params.txn),
+    description: `Reversal — teller ${t.replace(/_/g, " ")} (${params.reason.slice(0, 80)})`,
+    reference_type: "sacco_teller",
+    reference_id: params.txn.id,
+    lines,
+    created_by: params.staffId,
+  });
+  if (!res.ok) throw new Error(res.error);
+  return res.journalId;
+}
+
+async function insertCashbookReversalForTellerTxn(params: {
+  organizationId: string;
+  txn: SaccoTellerTransactionRow;
+}): Promise<void> {
+  const memberId = params.txn.sacco_member_id;
+  if (!memberId) return;
+  const t = String(params.txn.txn_type);
+  if (t !== "cash_deposit" && t !== "cash_withdrawal") return;
+
+  const amount = Math.round(Number(params.txn.amount));
+  if (!Number.isFinite(amount) || amount <= 0) return;
+
+  const { data: prevRows } = await sb
+    .from("sacco_cashbook_entries")
+    .select("balance")
+    .eq("organization_id", params.organizationId)
+    .eq("sacco_member_id", memberId)
+    .order("created_at", { ascending: false })
+    .limit(1);
+  const prev = Number((prevRows?.[0] as { balance?: unknown } | undefined)?.balance ?? 0) || 0;
+
+  const debit = t === "cash_deposit" ? 0 : amount;
+  const credit = t === "cash_withdrawal" ? 0 : amount;
+  const balance = prev + debit - credit;
+
+  await sb.from("sacco_cashbook_entries").insert({
+    organization_id: params.organizationId,
+    entry_date: entryDateForPostedTellerTxn(params.txn),
+    description: `Reversal (teller correction) — ${(params.txn.member_ref ?? "").trim() || "—"}`,
+    reference: params.txn.id,
+    category: "Teller",
+    sacco_member_id: memberId,
+    member_name: params.txn.member_ref?.includes("—")
+      ? params.txn.member_ref.split("—")[1]?.trim() ?? null
+      : params.txn.member_ref ?? null,
+    debit,
+    credit,
+    balance,
+  });
+}
+
+/** Undo savings balance and cashbook/GL effects of a posted teller transaction. */
+async function reversePostedTellerTxnEffects(params: {
+  organizationId: string;
+  staffId: string;
+  txn: SaccoTellerTransactionRow;
+  reason: string;
+}): Promise<void> {
+  const delta = tellerDeltaForSavingsAccountBalance(String(params.txn.txn_type), Number(params.txn.amount));
+  if (delta !== null && delta !== 0 && params.txn.sacco_member_savings_account_id) {
+    await applySavingsBalanceDelta({
+      organizationId: params.organizationId,
+      accountId: params.txn.sacco_member_savings_account_id,
+      delta: -delta,
+    });
+  }
+  await insertCashbookReversalForTellerTxn({ organizationId: params.organizationId, txn: params.txn });
+  await postReversalJournalForPostedTellerTxn({
+    staffId: params.staffId,
+    txn: params.txn,
+    reason: params.reason,
+  });
+}
+
+/** Only switching between these two is allowed when editing / correcting. */
+function validateDepositWithdrawTxnTypePatch(currentType: string, patch: SaccoTellerTransactionPatch): void {
+  if (patch.txn_type === undefined) return;
+  const from = String(currentType);
+  const to = String(patch.txn_type);
+  const isCash = (t: string) => t === "cash_deposit" || t === "cash_withdrawal";
+  if (!isCash(from)) {
+    throw new Error("Transaction type can only be changed for cash deposit or cash withdrawal.");
+  }
+  if (!isCash(to)) {
+    throw new Error("Can only switch between cash deposit and cash withdrawal.");
+  }
+}
+
+function mergeTxnPatch(txn: SaccoTellerTransactionRow, patch: SaccoTellerTransactionPatch): SaccoTellerTransactionRow {
+  return {
+    ...txn,
+    txn_type: patch.txn_type !== undefined ? patch.txn_type : txn.txn_type,
+    txn_date: patch.txn_date !== undefined ? patch.txn_date : txn.txn_date,
+    amount: patch.amount !== undefined ? patch.amount : txn.amount,
+    narration: patch.narration !== undefined ? patch.narration : txn.narration,
+    member_ref: patch.member_ref !== undefined ? patch.member_ref : txn.member_ref,
+    sacco_member_id: patch.sacco_member_id !== undefined ? patch.sacco_member_id : txn.sacco_member_id,
+    sacco_member_savings_account_id:
+      patch.sacco_member_savings_account_id !== undefined
+        ? patch.sacco_member_savings_account_id
+        : txn.sacco_member_savings_account_id,
+    posting_purpose: patch.posting_purpose !== undefined ? patch.posting_purpose : txn.posting_purpose,
+    counterparty_gl_account_id:
+      patch.counterparty_gl_account_id !== undefined
+        ? patch.counterparty_gl_account_id
+        : txn.counterparty_gl_account_id,
+  };
+}
+
+/** Edit a draft or pending transaction in place (no GL/savings posted yet). */
+export async function editPendingTellerTransaction(params: {
+  organizationId: string;
+  transactionId: string;
+  editorStaffId: string;
+  patch: SaccoTellerTransactionPatch;
+  reason: string;
+}): Promise<SaccoTellerTransactionRow> {
+  const reason = params.reason.trim();
+  if (!reason) throw new Error("A reason is required for transaction edits.");
+
+  const { data: existing, error: e0 } = await sb
+    .from("sacco_teller_transactions")
+    .select("*")
+    .eq("id", params.transactionId)
+    .eq("organization_id", params.organizationId)
+    .maybeSingle();
+  if (e0) {
+    throwIfTellerDbError(e0);
+    throw e0;
+  }
+  if (!existing) throw new Error("Transaction not found.");
+  const ex = existing as SaccoTellerTransactionRow;
+  if (ex.status !== "pending_approval" && ex.status !== "draft") {
+    throw new Error("Only draft or pending transactions can be edited in place. Posted items must be corrected.");
+  }
+  if (params.patch.amount !== undefined && params.patch.amount < 0) {
+    throw new Error("Amount cannot be negative.");
+  }
+  validateDepositWithdrawTxnTypePatch(String(ex.txn_type), params.patch);
+
+  const oldSnap = snapTxnForAudit(ex);
+  const updateRow: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  if (params.patch.txn_type !== undefined) updateRow.txn_type = params.patch.txn_type;
+  if (params.patch.amount !== undefined) updateRow.amount = params.patch.amount;
+  if (params.patch.narration !== undefined) updateRow.narration = params.patch.narration;
+  if (params.patch.member_ref !== undefined) updateRow.member_ref = params.patch.member_ref;
+  if (params.patch.sacco_member_id !== undefined) updateRow.sacco_member_id = params.patch.sacco_member_id;
+  if (params.patch.sacco_member_savings_account_id !== undefined) {
+    updateRow.sacco_member_savings_account_id = params.patch.sacco_member_savings_account_id;
+  }
+  if (params.patch.posting_purpose !== undefined) updateRow.posting_purpose = params.patch.posting_purpose;
+  if (params.patch.counterparty_gl_account_id !== undefined) {
+    updateRow.counterparty_gl_account_id = params.patch.counterparty_gl_account_id;
+  }
+  if (params.patch.txn_date !== undefined) {
+    updateRow.txn_date = normalizeTxnDateColumn(params.patch.txn_date);
+  }
+
+  const { data, error } = await sb
+    .from("sacco_teller_transactions")
+    .update(updateRow)
+    .eq("id", params.transactionId)
+    .eq("organization_id", params.organizationId)
+    .in("status", ["pending_approval", "draft"])
+    .select("*")
+    .single();
+  if (error) {
+    throwIfTellerDbError(error);
+    throw error;
+  }
+  if (!data) throw new Error("Update failed.");
+  const row = data as SaccoTellerTransactionRow;
+
+  await insertSaccoTransactionEditAudit({
+    organizationId: params.organizationId,
+    originalTxnId: row.id,
+    editorStaffId: params.editorStaffId,
+    editKind: "pending_edit",
+    reason,
+    oldValues: oldSnap,
+    newValues: snapTxnForAudit(row),
+  });
+  await appendTellerAuditLog({
+    organizationId: params.organizationId,
+    entityType: "sacco_teller_transactions",
+    entityId: row.id,
+    action: "txn_edited",
+    actorStaffId: params.editorStaffId,
+    detail: { reason, old_values: oldSnap, new_values: snapTxnForAudit(row) },
+  });
+  return row;
+}
+
+/**
+ * Correct a posted teller transaction: reverse effects, mark original reversed,
+ * post a replacement transaction, and record audit trail.
+ */
+export async function correctPostedTellerTransaction(params: {
+  organizationId: string;
+  transactionId: string;
+  editorStaffId: string;
+  patch: SaccoTellerTransactionPatch;
+  reason: string;
+}): Promise<{ original: SaccoTellerTransactionRow; replacement: SaccoTellerTransactionRow }> {
+  const reason = params.reason.trim();
+  if (!reason) throw new Error("A reason is required for transaction corrections.");
+
+  const { data: existing, error: e0 } = await sb
+    .from("sacco_teller_transactions")
+    .select("*")
+    .eq("id", params.transactionId)
+    .eq("organization_id", params.organizationId)
+    .maybeSingle();
+  if (e0) {
+    throwIfTellerDbError(e0);
+    throw e0;
+  }
+  if (!existing) throw new Error("Transaction not found.");
+  const ex = existing as SaccoTellerTransactionRow;
+  if (ex.status !== "posted") {
+    throw new Error("Only posted transactions use the correction workflow.");
+  }
+  const tt = String(ex.txn_type);
+  if (!canCorrectPostedTellerTxnType(tt)) {
+    throw new Error(
+      "Correction for this transaction type is not supported in the app yet. Vault and cheque movements need manual handling."
+    );
+  }
+  validateDepositWithdrawTxnTypePatch(String(ex.txn_type), params.patch);
+  const merged = mergeTxnPatch(ex, params.patch);
+  if (merged.amount < 0) throw new Error("Amount cannot be negative.");
+  if (!merged.session_id) throw new Error("Cannot correct a transaction without a till session.");
+
+  const oldSnap = snapTxnForAudit(ex);
+
+  await reversePostedTellerTxnEffects({
+    organizationId: params.organizationId,
+    staffId: params.editorStaffId,
+    txn: ex,
+    reason,
+  });
+
+  const { data: reversed, error: revErr } = await sb
+    .from("sacco_teller_transactions")
+    .update({
+      status: "reversed",
+      reversed_at: new Date().toISOString(),
+      reversed_by_staff_id: params.editorStaffId,
+      correction_reason: reason,
+    })
+    .eq("id", params.transactionId)
+    .eq("organization_id", params.organizationId)
+    .eq("status", "posted")
+    .select("*")
+    .single();
+  if (revErr) {
+    throwIfTellerDbError(revErr);
+    throw revErr;
+  }
+  if (!reversed) throw new Error("Could not mark transaction as reversed.");
+  const reversedRow = reversed as SaccoTellerTransactionRow;
+
+  const insertRow = {
+    organization_id: params.organizationId,
+    session_id: merged.session_id,
+    txn_type: merged.txn_type,
+    amount: merged.amount,
+    sacco_member_id: merged.sacco_member_id,
+    sacco_member_savings_account_id: merged.sacco_member_savings_account_id ?? null,
+    posting_purpose: merged.posting_purpose ?? null,
+    counterparty_gl_account_id: merged.counterparty_gl_account_id ?? null,
+    member_ref: merged.member_ref,
+    narration: merged.narration,
+    cheque_number: merged.cheque_number,
+    cheque_bank: merged.cheque_bank,
+    cheque_value_date: merged.cheque_value_date,
+    txn_date: normalizeTxnDateColumn(merged.txn_date),
+    status: "posted",
+    maker_staff_id: params.editorStaffId,
+    checker_staff_id: params.editorStaffId,
+    approved_at: new Date().toISOString(),
+    journal_batch_ref: null as string | null,
+    corrects_txn_id: ex.id,
+  };
+
+  const { data: replacement, error: insErr } = await sb
+    .from("sacco_teller_transactions")
+    .insert(insertRow)
+    .select("*")
+    .single();
+  if (insErr) {
+    throwIfTellerDbError(insErr);
+    throw insErr;
+  }
+  let replacementRow = replacement as SaccoTellerTransactionRow;
+
+  try {
+    await finalizePostedTellerTxnEffects({
+      organizationId: params.organizationId,
+      staffId: params.editorStaffId,
+      txn: replacementRow,
+    });
+    const { data: refreshed } = await sb
+      .from("sacco_teller_transactions")
+      .select("*")
+      .eq("id", replacementRow.id)
+      .maybeSingle();
+    if (refreshed) replacementRow = refreshed as SaccoTellerTransactionRow;
+  } catch (e) {
+    await sb.from("sacco_teller_transactions").delete().eq("id", replacementRow.id);
+    throw e;
+  }
+
+  const newSnap = snapTxnForAudit(replacementRow);
+  await insertSaccoTransactionEditAudit({
+    organizationId: params.organizationId,
+    originalTxnId: ex.id,
+    replacementTxnId: replacementRow.id,
+    editorStaffId: params.editorStaffId,
+    editKind: "posted_correction",
+    reason,
+    oldValues: oldSnap,
+    newValues: newSnap,
+  });
+  await appendTellerAuditLog({
+    organizationId: params.organizationId,
+    entityType: "sacco_teller_transactions",
+    entityId: ex.id,
+    action: "txn_corrected",
+    actorStaffId: params.editorStaffId,
+    detail: {
+      reason,
+      replacement_txn_id: replacementRow.id,
+      old_values: oldSnap,
+      new_values: newSnap,
+    },
+  });
+
+  return { original: reversedRow, replacement: replacementRow };
 }
 
 /** Vault loses cash, till gains (posted). */

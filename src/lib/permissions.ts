@@ -6,6 +6,7 @@ export const PERMISSION_KEYS = [
   "vendor_credits",
   "chart_of_accounts",
   "sacco_savings_settings",
+  "sacco_transaction_edit",
   "payroll_prepare",
   "payroll_approve",
   "payroll_post",
@@ -28,6 +29,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "vendor_credits", label: "Return to supplier", group: "Approvals", description: "Create and approve vendor credits/returns." },
   { key: "chart_of_accounts", label: "Chart of Accounts", group: "Approvals", description: "Manage GL accounts." },
   { key: "sacco_savings_settings", label: "Savings settings", group: "Approvals", description: "Edit SACCO savings settings." },
+  { key: "sacco_transaction_edit", label: "Edit SACCO transactions", group: "Approvals", description: "Correct teller transactions (audit trail)." },
   { key: "payroll_prepare", label: "Payroll prepare", group: "Payroll", description: "Prepare and calculate payroll." },
   { key: "payroll_approve", label: "Payroll approve", group: "Payroll", description: "Approve payroll for payment." },
   { key: "payroll_post", label: "Payroll post", group: "Payroll", description: "Post payroll journals to ledger." },
@@ -109,6 +111,7 @@ function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean 
   if (permission === "vendor_credits") return roleKey === "admin" || roleKey === "manager";
   if (permission === "chart_of_accounts") return roleKey === "admin" || roleKey === "manager";
   if (permission === "sacco_savings_settings") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "sacco_transaction_edit") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
   if (permission === "payroll_prepare") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
   if (permission === "payroll_approve") return roleKey === "admin" || roleKey === "manager";
   if (permission === "payroll_post") return roleKey === "admin" || roleKey === "accountant";

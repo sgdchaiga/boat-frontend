@@ -1,9 +1,18 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAppContext } from "@/contexts/AppContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { computeSaccoPerformanceRatios, type PeriodRange } from "@/lib/saccoPerformanceRatios";
+import {
+  fetchGlIncomeExpenseLines,
+  glFetchRangeForDashboard,
+  lastSixBusinessMonths,
+  monthlyIncomeExpenseFromGlLines,
+  totalsFromGlLines,
+  type GlIncomeExpenseJournalLine,
+} from "@/lib/saccoPerformanceGlTotals";
+import { businessTodayISO } from "@/lib/timezone";
 import { PageNotes } from "@/components/common/PageNotes";
 import { BarChart3 } from "lucide-react";
-
 function fmtPct0(n: number | null): string {
   if (n === null || Number.isNaN(n)) return "—";
   return `${n.toFixed(2)}%`;
@@ -14,16 +23,14 @@ function fmtRatio(n: number | null): string {
   return `${n.toFixed(2)}×`;
 }
 
-/** yyyy-mm */
-function monthKey(isoDate: string): string {
-  return isoDate.slice(0, 7);
-}
-
 const SaccoPerformanceDashboardPage: React.FC = () => {
+  const { user } = useAuth();
+  const organizationId = user?.organization_id ?? null;
+  const isSuperAdmin = Boolean(user?.isSuperAdmin);
+
   const { loans, members, cashbook, formatCurrency, saccoLoading } = useAppContext();
 
-  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);
-  const [from, setFrom] = useState(() => {
+  const today = useMemo(() => new Date().toISOString().slice(0, 10), []);  const [from, setFrom] = useState(() => {
     const d = new Date();
     d.setMonth(d.getMonth() - 1);
     return d.toISOString().slice(0, 10);
@@ -60,50 +67,69 @@ const SaccoPerformanceDashboardPage: React.FC = () => {
     const totalLoansCount = loans.filter((l) => l.status !== "rejected").length;
     const cashAvailable = sortedCbAsc.length > 0 ? sortedCbAsc[sortedCbAsc.length - 1].balance : 0;
 
-    const inRange = (d: string) => d >= range.from && d <= range.to;
-    let income = 0;
-    let expenses = 0;
-    for (const e of cashbook) {
-      if (!inRange(e.date)) continue;
-      income += Number(e.credit || 0);
-      expenses += Number(e.debit || 0);
-    }
-
     return {
       loansAtRiskPct,
       atRisk,
       totalLoansCount,
       totalSavings,
       cashAvailable,
-      income,
-      expenses,
       portfolioOutstanding,
     };
-  }, [loans, members, cashbook, sortedCbAsc, range.from, range.to]);
+  }, [loans, members, sortedCbAsc]);
+
+  const businessDate = businessTodayISO();
+  const trendMonthKeys = useMemo(() => lastSixBusinessMonths(), [businessDate]);
+  const glFetchWindow = useMemo(
+    () => glFetchRangeForDashboard(from, to, trendMonthKeys),
+    [from, to, trendMonthKeys]
+  );
+
+  const [glLines, setGlLines] = useState<GlIncomeExpenseJournalLine[]>([]);
+  const [glLoading, setGlLoading] = useState(false);
+  const [glError, setGlError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!organizationId) {
+      setGlLines([]);
+      setGlError(null);
+      setGlLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setGlLoading(true);
+    setGlError(null);
+    void (async () => {
+      const { lines, error } = await fetchGlIncomeExpenseLines(
+        organizationId,
+        isSuperAdmin,
+        glFetchWindow.from,
+        glFetchWindow.to
+      );
+      if (cancelled) return;
+      setGlLoading(false);
+      if (error) {
+        setGlError(error);
+        setGlLines([]);
+      } else {
+        setGlError(null);
+        setGlLines(lines);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [organizationId, isSuperAdmin, glFetchWindow.from, glFetchWindow.to]);
+
+  const glPeriodTotals = useMemo(() => totalsFromGlLines(glLines, range), [glLines, range.from, range.to]);
 
   const trend = useMemo(() => {
-    const keys: string[] = [];
-    const d = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const x = new Date(d.getFullYear(), d.getMonth() - i, 1);
-      keys.push(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}`);
-    }
-    const creditBy = new Map<string, number>();
-    const debitBy = new Map<string, number>();
-    for (const k of keys) {
-      creditBy.set(k, 0);
-      debitBy.set(k, 0);
-    }
-    for (const e of cashbook) {
-      const k = monthKey(e.date);
-      if (!creditBy.has(k)) continue;
-      creditBy.set(k, (creditBy.get(k) ?? 0) + Number(e.credit || 0));
-      debitBy.set(k, (debitBy.get(k) ?? 0) + Number(e.debit || 0));
-    }
+    const keys = trendMonthKeys;
+    const { incomeByMonth, expenseByMonth } = monthlyIncomeExpenseFromGlLines(glLines, keys);
+    const creditBy = incomeByMonth;
+    const debitBy = expenseByMonth;
     const maxVal = Math.max(1, ...keys.map((k) => Math.max(creditBy.get(k) ?? 0, debitBy.get(k) ?? 0)));
     return { keys, creditBy, debitBy, maxVal };
-  }, [cashbook]);
-
+  }, [glLines, trendMonthKeys]);
   const support = [
     { title: "Sustainability", short: "Income vs running costs (approx.)", val: fmtRatio(snapshot.ossApprox) },
     { title: "Cash strength", short: "How activity compares to deposits", val: fmtRatio(snapshot.liquidityProxy) },
@@ -129,9 +155,11 @@ const SaccoPerformanceDashboardPage: React.FC = () => {
           </div>
           <PageNotes ariaLabel="Board dashboard help">
             <p className="text-sm">
-              Figures come from balances and cashbook text in BOAT. Name your ledger categories consistently for tighter accuracy.
-            </p>
-          </PageNotes>
+              Loan and savings figures come from the SACCO workspace.{" "}
+              <strong>Income and expenses</strong> use posted journal activity on chart-of-accounts types{" "}
+              <strong>income</strong> and <strong>expense</strong> (same basis as the income statement), not member deposit /
+              withdrawal lines in the cashbook.
+            </p>          </PageNotes>
         </div>
         <div className="flex flex-wrap items-end gap-2 text-sm">
           <label className="flex flex-col gap-0.5">
@@ -155,8 +183,12 @@ const SaccoPerformanceDashboardPage: React.FC = () => {
         </div>
       </div>
 
-      {saccoLoading && <p className="text-sm text-slate-500 animate-pulse">Refreshing numbers…</p>}
-
+      {(saccoLoading || glLoading) && <p className="text-sm text-slate-500 animate-pulse">Refreshing numbers…</p>}
+      {glError ? (
+        <p className="text-sm text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
+          Could not load GL income/expense totals: {glError}
+        </p>
+      ) : null}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="rounded-2xl border border-rose-100 bg-gradient-to-br from-rose-50 to-white p-5 shadow-sm">
           <p className="text-xs font-semibold uppercase tracking-wide text-rose-700">Loans at risk</p>
@@ -184,16 +216,21 @@ const SaccoPerformanceDashboardPage: React.FC = () => {
           <p className="text-[11px] text-slate-500 mt-2">Latest rolled balance on synced cashbook lines.</p>
         </div>
         <div className="rounded-2xl border border-teal-100 bg-white p-5 shadow-sm">
-          <p className="text-xs font-semibold uppercase text-teal-800">Monthly income ({range.from.slice(5)}→{range.to.slice(5)})</p>
-          <p className="text-2xl font-bold text-teal-950 mt-1 tabular-nums">{formatCurrency(board.income)}</p>
-          <p className="text-[11px] text-slate-500 mt-2">Credits booked in selected window.</p>
+          <p className="text-xs font-semibold uppercase text-teal-800">
+            GL income ({range.from.slice(5)}→{range.to.slice(5)})
+          </p>
+          <p className="text-2xl font-bold text-teal-950 mt-1 tabular-nums">{formatCurrency(glPeriodTotals.income)}</p>
+          <p className="text-[11px] text-slate-500 mt-2">
+            Posted revenue (credit − debit) on accounts typed <strong>income</strong>.
+          </p>
         </div>
         <div className="rounded-2xl border border-amber-100 bg-white p-5 shadow-sm">
-          <p className="text-xs font-semibold uppercase text-amber-800">Expenses</p>
-          <p className="text-2xl font-bold text-amber-950 mt-1 tabular-nums">{formatCurrency(board.expenses)}</p>
-          <p className="text-[11px] text-slate-500 mt-2">Debits in the same window.</p>
-        </div>
-      </div>
+          <p className="text-xs font-semibold uppercase text-amber-800">GL expenses</p>
+          <p className="text-2xl font-bold text-amber-950 mt-1 tabular-nums">{formatCurrency(glPeriodTotals.expenses)}</p>
+          <p className="text-[11px] text-slate-500 mt-2">
+            Posted costs (debit − credit) on accounts typed <strong>expense</strong>.
+          </p>
+        </div>      </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-bold text-slate-900 mb-4">Trend (six months)</h2>
@@ -225,12 +262,11 @@ const SaccoPerformanceDashboardPage: React.FC = () => {
         </div>
         <div className="flex gap-6 text-xs mt-4 text-slate-600">
           <span className="inline-flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-sm bg-teal-500" /> Incoming
+            <span className="inline-block w-3 h-3 rounded-sm bg-teal-500" /> GL income
           </span>
           <span className="inline-flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> Outgoing
-          </span>
-        </div>
+            <span className="inline-block w-3 h-3 rounded-sm bg-amber-400" /> GL expenses
+          </span>        </div>
       </div>
 
       <div className="rounded-xl border border-slate-100 bg-slate-50 p-5">

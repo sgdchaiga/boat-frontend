@@ -364,7 +364,7 @@ export function StockMovementReportPage() {
               <p>
                 <strong>Received</strong> is stock from purchases / GRN. <strong>Total (OS+Rec)</strong> is opening plus
                 received. <strong>Sales</strong> is POS sale quantity. <strong>Sales amount</strong> is sales qty ×
-                product list price (excludes discounts).                 <strong>Rejects</strong> is net adjustment quantity (outs − ins) for the period; positive means net stock
+                product list price (excludes discounts). <strong>Adjustments</strong> is net adjustment quantity (outs − ins) for the period; positive means net stock
                 lost.{" "}
                 <strong>Closing</strong> includes transfers and all other movements.
               </p>
@@ -441,7 +441,7 @@ export function StockMovementReportPage() {
                 <th className="p-3 text-right">Total (OS+Rec)</th>
                 <th className="p-3 text-right">Sales</th>
                 <th className="p-3 text-right">Sales amount</th>
-                <th className="p-3 text-right">Rejects</th>
+                <th className="p-3 text-right">Adjustments</th>
                 <th className="p-3 text-right">Closing stock</th>
               </tr>
             </thead>

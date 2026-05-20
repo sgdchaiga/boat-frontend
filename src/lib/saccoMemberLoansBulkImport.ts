@@ -5,6 +5,7 @@
 import type { Loan, LoanProduct, LoanStatus } from "@/types/saccoWorkspace";
 import type { SaccoBulkImportContext, SaccoBulkImportPreviewRow, SaccoBulkImportResult } from "@/lib/saccoBulkImport";
 import { insertLoanRow, updateLoanRow } from "@/lib/saccoDb";
+import { calculateMonthlyPayment } from "@/lib/saccoLoanMath";
 
 const ALLOWED_STATUS = new Set<LoanStatus>([
   "pending",
@@ -38,17 +39,6 @@ export function parseIsoDateOnly(s: string): string | null {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
   const d = Date.parse(`${t}T12:00:00Z`);
   return Number.isNaN(d) ? null : t;
-}
-
-function calculateMonthlyPayment(P: number, annualRate: number, n: number, basis: "flat" | "declining"): number {
-  if (n <= 0 || P <= 0) return 0;
-  const r = annualRate / 100 / 12;
-  if (basis === "flat") {
-    const totalInterest = P * (annualRate / 100) * (n / 12);
-    return Math.round((P + totalInterest) / n);
-  }
-  if (r === 0) return Math.round(P / n);
-  return Math.round((P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1));
 }
 
 function cell(row: Record<string, string>, keys: string[]): string {

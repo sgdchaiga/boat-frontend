@@ -230,6 +230,7 @@ const MANAGED_PAGE_STATE_KEYS = [
   "crStayId",
   "tellerDesk",
   "tellerTask",
+  "tellerReportsTab",
   "cashbookView",
   "loanReportTab",
   "recoveryView",
@@ -317,6 +318,10 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (tellerDesk) state.tellerDesk = tellerDesk;
   const tellerTask = qp.get("tellerTask");
   if (tellerTask) state.tellerTask = tellerTask;
+  const tellerReportsTab = qp.get("tellerReportsTab");
+  if (tellerReportsTab === "recent_activity" || tellerReportsTab === "daily_summary") {
+    state.tellerReportsTab = tellerReportsTab;
+  }
   const cashbookView = qp.get("cashbookView");
   if (cashbookView === "journal" || cashbookView === "reconciliation") state.cashbookView = cashbookView;
   const loanReportTab = qp.get("loanReportTab");
@@ -917,6 +922,7 @@ function AppContent() {
           <SaccoTellerPage
             tellerDesk={pageState?.tellerDesk as string | undefined}
             tellerTask={pageState?.tellerTask as string | undefined}
+            tellerReportsTab={pageState?.tellerReportsTab as string | undefined}
             onDeskNavigate={navigate}
           />
         );

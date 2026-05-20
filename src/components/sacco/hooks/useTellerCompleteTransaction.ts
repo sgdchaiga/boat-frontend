@@ -15,10 +15,12 @@ import {
   type TellerDashboardSnapshot,
   type TellerInitData,
   type TellerMemberPickRow,
+  type TellerPostingPurpose,
   type TellerSavingsAccountPickRow,
 } from "@/lib/saccoTellerDb";
 import type { TellerTaskAction } from "@/lib/saccoTellerConfig";
 import { incrementActiveAccessTransactions } from "@/lib/localAuthStore";
+import { businessTodayISO } from "@/lib/timezone";
 
 export type TellerFieldErrors = { amount?: string; member?: string; account?: string; gl?: string };
 
@@ -53,6 +55,10 @@ export type UseTellerCompleteTransactionArgs = {
   setSelectedMemberId: (v: string) => void;
   setSelectedSavingsAccountId: (v: string) => void;
   setMemberSearch: (v: string) => void;
+  /** Simple = generic fee posting; accountant = explicit fee type (membership, subscription, etc.). */
+  tellerEntryMode?: "simple" | "accountant";
+  /** When mode is accountant and task is fees, which posting_purpose to use. */
+  accountantFeePostingPurpose?: TellerPostingPurpose | null;
 };
 
 /**
@@ -96,6 +102,8 @@ export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionA
       setSelectedMemberId,
       setSelectedSavingsAccountId,
       setMemberSearch,
+      tellerEntryMode,
+      accountantFeePostingPurpose,
     } = argsRef.current;
 
     if (!canMutate || !organizationId || !staffId) return false;
@@ -117,7 +125,10 @@ export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionA
         defaultId: init?.tellerDefaultCounterpartyGlId ?? null,
       };
 
-      const purpose = postingPurposeForTask(taskAction);
+      const purpose: TellerPostingPurpose =
+        taskAction === "fees" && tellerEntryMode === "accountant" && accountantFeePostingPurpose
+          ? accountantFeePostingPurpose
+          : postingPurposeForTask(taskAction);
       const hint = glHintForTask(taskAction);
       const cpId = resolveTellerCounterpartyGlId({
         allowPerTxn: journalTellerGl.allowPerTxn,
@@ -222,6 +233,7 @@ export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionA
         memberRef: memRef,
         narration: nar,
         ...chq,
+        txnDate: businessTodayISO().slice(0, 10),
         mode,
       });
 

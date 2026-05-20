@@ -6,6 +6,8 @@ import {
   Banknote as BanknoteIcon,
   Building2,
   ClipboardCheck,
+  ChevronLeft,
+  ChevronRight,
   Coins,
   AlertTriangle,
   FileBarChart,
@@ -16,17 +18,18 @@ import {
   Layers,
   Loader2,
   Lock,
+  MessageCircle,
   ScrollText,
   Search,
   Shield,
   ShieldCheck,
   UserCheck,
   Wallet,
+  Eye,
   X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
-import { PageNotes } from "@/components/common/PageNotes";
 import {
   taskRequiresMemberOnly,
   taskRequiresSavingsAccount,
@@ -39,6 +42,9 @@ import {
   approveTellerTransaction,
   buildTellerReportCsv,
   buildTellerReportTable,
+  correctPostedTellerTransaction,
+  canCorrectPostedTellerTxnType,
+  editPendingTellerTransaction,
   closeTellerSession,
   closeTellerSessionByIdAsSupervisor,
   downloadCsv,
@@ -62,17 +68,29 @@ import { fetchSaccoTillInsuredLimit, upsertSaccoTillInsuredLimit } from "@/lib/s
 import { downloadTellerReportPdf } from "@/lib/saccoReportPdf";
 import { SaccoTellerReportPreview } from "@/components/sacco/SaccoTellerReportPreview";
 import { SaccoTillOversightPanel } from "@/components/sacco/SaccoTillOversightPanel";
+import { SaccoEditTellerTransactionModal } from "@/components/sacco/SaccoEditTellerTransactionModal";
+import { canEditSaccoTransactions } from "@/lib/saccoTransactionEditAccess";
+import { isLocalAuthEnvEnabled } from "@/lib/saccoSavingsSettingsAccess";
 import { supabase } from "@/lib/supabase";
+import { toBusinessDateString } from "@/lib/timezone";
 import { useTellerCompleteTransaction } from "@/components/sacco/hooks/useTellerCompleteTransaction";
 import { useTellerInit } from "@/components/sacco/hooks/useTellerInit";
-import type { SaccoTellerTransactionRow, TellerMemberPickRow } from "@/lib/saccoTellerDb";
+import type {
+  SaccoTellerTransactionRow,
+  TellerMemberPickRow,
+  TellerSavingsAccountPickRow,
+  TellerPostingPurpose,
+} from "@/lib/saccoTellerDb";
 
 function formatUgx(n: number | null | undefined): string {
-  if (n === null || n === undefined || Number.isNaN(n)) return "â€”";
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
   return `UGX ${Math.round(n).toLocaleString("en-UG")}`;
 }
 
-/** Digits-only for Supabase / teller hook. */
+const TELLER_ENTRY_MODE_STORAGE_KEY = "sacco_teller_entry_mode";
+
+const RECENT_ACTIVITY_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+
 function digitsOnly(s: string): string {
   return s.replace(/\D/g, "");
 }
@@ -85,18 +103,23 @@ function amountWithCommas(digits: string): string {
   return n.toLocaleString("en-UG");
 }
 
-type MainTab = "transactions" | "till" | "approvals" | "reports" | "controls";
+type MainTab = "transactions" | "till" | "approvals" | "reports" | "controls" | "oversight";
 
-export type SaccoTellerDesk = "receive" | "give" | "transfer" | "daily";
+type ReportsSubTab = "daily_summary" | "recent_activity";
+
+export type SaccoTellerDesk = "receive" | "give" | "transfer" | "daily" | "oversight";
 
 export type SaccoTellerPageProps = {
   tellerDesk?: string | null;
   tellerTask?: string | null;
+  /** When opening the daily desk: `recent_activity` opens the transaction list; default / omitted is daily summary & reports. */
+  tellerReportsTab?: string | null;
   onDeskNavigate?: (page: string, state?: Record<string, unknown>) => void;
 };
 
-function normalizeDesk(v: string | null | undefined): SaccoTellerDesk {
+function normalizeDesk(v: string | null | undefined, allowOversight: boolean): SaccoTellerDesk {
   const x = String(v ?? "receive").toLowerCase();
+  if (allowOversight && x === "oversight") return "oversight";
   if (x === "give" || x === "transfer" || x === "daily") return x;
   return "receive";
 }
@@ -105,6 +128,7 @@ function deskNavState(id: SaccoTellerDesk): Record<string, string> {
   if (id === "receive") return { tellerDesk: "receive" };
   if (id === "give") return { tellerDesk: "give" };
   if (id === "transfer") return { tellerDesk: "transfer" };
+  if (id === "oversight") return { tellerDesk: "oversight" };
   return { tellerDesk: "daily" };
 }
 
@@ -143,8 +167,7 @@ function pendingCardLabel(t: SaccoTellerTransactionRow): string {
 }
 
 /** SACCO teller: task-driven flow, single complete action, no GL on the counter. */
-export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: SaccoTellerPageProps = {}) {
-  const desk = normalizeDesk(tellerDesk);
+export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDeskNavigate }: SaccoTellerPageProps = {}) {
   const { user, isSuperAdmin } = useAuth();
   const { refreshSaccoWorkspace } = useAppContext();
   const [tellerCtx, setTellerCtx] = useState<Awaited<ReturnType<typeof resolveTellerStaffContext>>>(null);
@@ -159,6 +182,14 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const [reportPreviewTable, setReportPreviewTable] = useState<TellerReportTable | null>(null);
   const [activeReportId, setActiveReportId] = useState<TellerReportId | null>(null);
   const [dailyReportDate, setDailyReportDate] = useState(() => new Date().toISOString().slice(0, 10));
+  /** Calendar day (yyyy-mm-dd) for the Recent teller activity table. */
+  const [recentActivityDate, setRecentActivityDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [recentActivityRows, setRecentActivityRows] = useState<SaccoTellerTransactionRow[]>([]);
+  const [recentActivityLoading, setRecentActivityLoading] = useState(false);
+  const [recentActivityPageSize, setRecentActivityPageSize] = useState(25);
+  const [recentActivityPageIndex, setRecentActivityPageIndex] = useState(0);
+  const [editTxn, setEditTxn] = useState<SaccoTellerTransactionRow | null>(null);
+  const [editTxnOpen, setEditTxnOpen] = useState(false);
 
   useEffect(() => {
     if (!user?.id) {
@@ -178,8 +209,32 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const staffLinkMissing = Boolean(user?.id && !tellerCtxLoading && !tellerCtx);
   const showAdminControls =
     Boolean(isSuperAdmin) || ["admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase());
+  const canEditTransactions = canEditSaccoTransactions(user?.role, {
+    isSuperAdmin: Boolean(isSuperAdmin),
+    localAuthEnabled: isLocalAuthEnvEnabled(),
+  });
+
+  const desk = useMemo(() => normalizeDesk(tellerDesk, showAdminControls), [tellerDesk, showAdminControls]);
 
   const [mainTab, setMainTab] = useState<MainTab>("transactions");
+  const [reportsSubTab, setReportsSubTab] = useState<ReportsSubTab>("daily_summary");
+
+  const goMainTab = useCallback(
+    (tab: MainTab) => {
+      setMainTab(tab);
+      if (desk === "oversight" && tab !== "oversight") {
+        onDeskNavigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "receive" });
+        return;
+      }
+      if (tab !== "reports" && onDeskNavigate) {
+        const payload: Record<string, string> = { tellerDesk: desk };
+        if (tellerTask) payload.tellerTask = tellerTask;
+        onDeskNavigate(SACCOPRO_PAGE.teller, payload);
+      }
+    },
+    [desk, onDeskNavigate, tellerTask]
+  );
+
   const [taskAction, setTaskAction] = useState<TellerTaskAction>("deposit");
   const [memberSearch, setMemberSearch] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
@@ -205,11 +260,33 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const [rejectNotes, setRejectNotes] = useState<Record<string, string>>({});
   const [openTillModal, setOpenTillModal] = useState(false);
   const [confirmTxnOpen, setConfirmTxnOpen] = useState(false);
+  const [tellerTipsOpen, setTellerTipsOpen] = useState(false);
+  const [tellerEntryMode, setTellerEntryMode] = useState<"simple" | "accountant">(() => {
+    try {
+      return localStorage.getItem(TELLER_ENTRY_MODE_STORAGE_KEY) === "accountant" ? "accountant" : "simple";
+    } catch {
+      return "simple";
+    }
+  });
+  const [accountantFeePostingPurpose, setAccountantFeePostingPurpose] = useState<
+    Extract<TellerPostingPurpose, "membership_fee" | "subscription" | "shares" | "fee_or_penalty" | "other">
+  >("membership_fee");
 
   useEffect(() => {
-    const d = normalizeDesk(tellerDesk);
+    try {
+      localStorage.setItem(TELLER_ENTRY_MODE_STORAGE_KEY, tellerEntryMode);
+    } catch {
+      /* ignore */
+    }
+  }, [tellerEntryMode]);
+
+  useEffect(() => {
+    const d = normalizeDesk(tellerDesk, showAdminControls);
     if (d === "transfer") setMainTab("till");
-    else if (d === "daily") setMainTab("reports");
+    else if (d === "daily") {
+      setMainTab("reports");
+      setReportsSubTab(tellerReportsTab === "recent_activity" ? "recent_activity" : "daily_summary");
+    } else if (d === "oversight") setMainTab("oversight");
     else setMainTab("transactions");
 
     if (d === "receive") {
@@ -226,7 +303,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         setTaskAction("withdraw");
       }
     }
-  }, [tellerDesk, tellerTask]);
+  }, [tellerDesk, tellerTask, showAdminControls, tellerReportsTab]);
 
   useEffect(() => {
     if (desk === "give" && taskAction === "cheque") setChequeFlow("paid");
@@ -266,6 +343,52 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       setTillPositionsLoading(false);
     }
   }, [orgId, showAdminControls]);
+
+  const fetchRecentActivity = useCallback(
+    async (date: string) => {
+      if (!orgId || snap?.schemaMissing) {
+        setRecentActivityRows([]);
+        return;
+      }
+      setRecentActivityLoading(true);
+      try {
+        const rows = await fetchTellerTransactionsForDateRange(orgId, date, date);
+        setRecentActivityRows([...rows].reverse());
+      } finally {
+        setRecentActivityLoading(false);
+      }
+    },
+    [orgId, snap?.schemaMissing]
+  );
+
+  useEffect(() => {
+    void fetchRecentActivity(recentActivityDate);
+  }, [recentActivityDate, fetchRecentActivity]);
+
+  useEffect(() => {
+    setRecentActivityPageIndex(0);
+  }, [recentActivityDate]);
+
+  useEffect(() => {
+    if (recentActivityRows.length === 0) {
+      setRecentActivityPageIndex(0);
+      return;
+    }
+    const maxIdx = Math.ceil(recentActivityRows.length / recentActivityPageSize) - 1;
+    setRecentActivityPageIndex((prev) => Math.min(prev, Math.max(0, maxIdx)));
+  }, [recentActivityRows.length, recentActivityPageSize]);
+
+  const recentActivityPagedRows = useMemo(() => {
+    const start = recentActivityPageIndex * recentActivityPageSize;
+    return recentActivityRows.slice(start, start + recentActivityPageSize);
+  }, [recentActivityRows, recentActivityPageIndex, recentActivityPageSize]);
+
+  const recentActivityPageCount = useMemo(() => {
+    if (recentActivityRows.length === 0) return 0;
+    return Math.ceil(recentActivityRows.length / recentActivityPageSize);
+  }, [recentActivityRows.length, recentActivityPageSize]);
+
+  const recentActivityDisabled = recentActivityLoading || !orgId || Boolean(snap?.schemaMissing);
 
   useEffect(() => {
     void refreshOrgOpenSessions();
@@ -336,6 +459,15 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const pickMembers = init?.members ?? [];
   const pickSavingsAccounts = init?.savingsAccounts ?? [];
 
+  const recentActivityMemberById = useMemo(
+    () => new Map<string, TellerMemberPickRow>(pickMembers.map((m) => [m.id, m])),
+    [pickMembers]
+  );
+  const recentActivitySavingsById = useMemo(
+    () => new Map<string, TellerSavingsAccountPickRow>(pickSavingsAccounts.map((a) => [a.id, a])),
+    [pickSavingsAccounts]
+  );
+
   const memberQueryLower = memberSearch.trim().toLowerCase();
   const memberMatches: TellerMemberPickRow[] = useMemo(() => {
     if (memberQueryLower.length < 1) return [];
@@ -400,6 +532,9 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
     setSelectedMemberId,
     setSelectedSavingsAccountId,
     setMemberSearch,
+    tellerEntryMode,
+    accountantFeePostingPurpose:
+      tellerEntryMode === "accountant" && taskAction === "fees" ? accountantFeePostingPurpose : null,
   });
 
   const runMutation = useCallback(
@@ -424,6 +559,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
           setActionMessage({ kind: "ok", text: options?.successMessage ?? "Saved." });
         }
         await load({ silent: options?.silentRefresh !== false });
+        void fetchRecentActivity(recentActivityDate);
         await refreshOrgOpenSessions();
       } catch (e) {
         setActionMessage({ kind: "err", text: formatTellerDbError(e) });
@@ -431,7 +567,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         setSaving(false);
       }
     },
-    [orgId, staffId, snap?.schemaMissing, load, refreshOrgOpenSessions]
+    [orgId, staffId, snap?.schemaMissing, load, refreshOrgOpenSessions, fetchRecentActivity, recentActivityDate]
   );
 
   const handleSupervisorCloseSession = (sessionId: string) =>
@@ -539,7 +675,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       setOpenTillModal(false);
       setActionMessage({
         kind: "ok",
-        text: resumed ? "Till session resumed â€” you can post transactions." : "Till session opened.",
+        text: resumed ? "Till session resumed — you can post transactions." : "Till session opened.",
       });
       void session;
     }, { successMessage: false, silentRefresh: false });
@@ -564,13 +700,13 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
   const confirmTransactionSummary = useMemo(() => {
     const amtSrc = taskAction === "cheque" ? chequeAmountStr : amountStr;
     const n = Math.round(Number(digitsOnly(amtSrc) || "0"));
-    const memberLine = selectedMember ? `${selectedMember.member_number} â€” ${selectedMember.full_name}` : "â€”";
+    const memberLine = selectedMember ? `${selectedMember.member_number} — ${selectedMember.full_name}` : "—";
 
     let accountDetail = "";
     if (taskRequiresSavingsAccount(taskAction) && selectedSavingsAccountId) {
       const acc = pickSavingsAccounts.find((x) => x.id === selectedSavingsAccountId);
       if (acc)
-        accountDetail = `${acc.savings_product_code} (${acc.account_number}) Â· balance ${formatUgx(acc.balance)}`;
+        accountDetail = `${acc.savings_product_code} (${acc.account_number}) · balance ${formatUgx(acc.balance)}`;
     }
 
     const verbShort =
@@ -643,7 +779,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       const sess = snap?.openSession;
       if (!sess) throw new Error("No open session to close.");
       const expectedBal = snap?.tillEstimated;
-      if (expectedBal === null || expectedBal === undefined) throw new Error("Expected balance unavailable â€” refresh or check session.");
+      if (expectedBal === null || expectedBal === undefined) throw new Error("Expected balance unavailable — refresh or check session.");
       if (eodCounted.trim() === "" || Number.isNaN(eodCountedNum)) throw new Error("Please enter the counted cash amount.");
       const counted = Math.round(eodCountedNum);
       const overShort = counted - expectedBal;
@@ -693,6 +829,55 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
       { successMessage: "Rejected." }
     );
 
+  const openEditTransaction = (t: SaccoTellerTransactionRow) => {
+    setEditTxn(t);
+    setEditTxnOpen(true);
+  };
+
+  const handleSaveTxnEdit = async (
+    patch: Parameters<typeof editPendingTellerTransaction>[0]["patch"],
+    reason: string
+  ) => {
+    if (!orgId || !staffId || !editTxn) throw new Error("Session not ready.");
+    if (snap?.schemaMissing) throw new Error(TELLER_MIGRATION_HINT);
+    setSaving(true);
+    setActionMessage(null);
+    try {
+      if (editTxn.status === "posted") {
+        await correctPostedTellerTransaction({
+          organizationId: orgId,
+          transactionId: editTxn.id,
+          editorStaffId: staffId,
+          patch,
+          reason,
+        });
+      } else {
+        await editPendingTellerTransaction({
+          organizationId: orgId,
+          transactionId: editTxn.id,
+          editorStaffId: staffId,
+          patch,
+          reason,
+        });
+      }
+      setEditTxnOpen(false);
+      setEditTxn(null);
+      setActionMessage({
+        kind: "ok",
+        text: editTxn.status === "posted" ? "Transaction corrected." : "Transaction updated.",
+      });
+      await load();
+      void fetchRecentActivity(recentActivityDate);
+      await refreshSaccoWorkspace();
+    } catch (e) {
+      const msg = formatTellerDbError(e);
+      setActionMessage({ kind: "err", text: msg });
+      throw new Error(msg);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const reportCards = useMemo(
     () => [
       { id: "cash_position" as TellerReportId, title: "Teller cash position", desc: "Per-till cash on hand vs expected float.", icon: Wallet },
@@ -708,17 +893,54 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
     <div className="flex min-h-0 flex-1 flex-col p-4 md:p-6 max-w-6xl mx-auto pb-28">
       <header className="space-y-4 shrink-0">
         <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2 text-emerald-700">
               <Banknote className="w-8 h-8 shrink-0" />
               <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Teller</h1>
-              <PageNotes ariaLabel="Teller help" variant="comment">
-                <p>
-                  Choose what you are doing, find the member, enter the amount, and use <strong>Complete transaction</strong>. The system posts
-                  small amounts directly and routes larger ones for approval. GL mapping is configured by accounting â€” not on this screen.
-                </p>
-              </PageNotes>
+              <button
+                type="button"
+                onClick={() => setTellerTipsOpen((o) => !o)}
+                aria-expanded={tellerTipsOpen}
+                aria-label={tellerTipsOpen ? "Hide tips and comments" : "Show tips and comments"}
+                title="Tips and comments"
+                className={`rounded-full p-1.5 transition shrink-0 ${
+                  tellerTipsOpen
+                    ? "bg-emerald-200 text-emerald-900 ring-2 ring-emerald-400/50"
+                    : "text-slate-500 hover:bg-slate-200 hover:text-slate-800"
+                }`}
+              >
+                <MessageCircle className="w-5 h-5" aria-hidden />
+              </button>
             </div>
+            {tellerTipsOpen ? (
+              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/95 px-4 py-3 text-sm text-slate-800 space-y-3 shadow-sm">
+                <p>
+                  Choose what you are doing, find the member, enter the amount, and use <strong>Complete transaction</strong>. The system
+                  posts small amounts directly and routes larger ones for approval. GL mapping is configured by accounting — not on this
+                  screen.
+                </p>
+                <p className="rounded-lg border border-emerald-200 bg-emerald-50/90 px-3 py-2 text-emerald-950">
+                  <strong>Heart of BOAT:</strong> savings deposits, withdrawals, loan repayments, and fees are posted here after member
+                  selection. Loans and statements prepare the story — treasury completes the movement.
+                </p>
+                {desk === "transfer" ? (
+                  <p className="text-slate-600">
+                    Move physical cash between the vault and this till below (Till &amp; vault section).
+                  </p>
+                ) : null}
+                {desk === "daily" ? (
+                  <p className="text-slate-600">
+                    Use <strong>Daily summary</strong> for report previews, or <strong>Recent activity</strong> / Reports → Recent
+                    teller activity for dated transactions. Change the date under Reports.
+                  </p>
+                ) : null}
+                {desk === "oversight" ? (
+                  <p className="text-slate-600">
+                    Monitor cash on hand per open till against the insured limit. Configure the limit under Controls.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         </div>
 
@@ -734,16 +956,11 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         )}
         {snap?.schemaMissing && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-950">
-            Teller database objects are missing or out of date. In Supabase â†’ SQL Editor, run migrations starting with{" "}
+            Teller database objects are missing or out of date. In Supabase → SQL Editor, run migrations starting with{" "}
             <code className="text-xs">20260426120007_sacco_teller.sql</code> through{" "}
             <code className="text-xs">20260426120011_journal_gl_teller_counterparty_settings.sql</code>, then refresh.
           </div>
         )}
-
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-950 mb-3">
-          <strong>Heart of BOAT:</strong> savings deposits, withdrawals, loan repayments, and fees are posted here after member
-          selection. Loans and Statements prepare the story â€” treasury completes the movement.
-        </div>
 
         <div className="flex flex-wrap gap-2 mb-3">
           {(
@@ -751,7 +968,6 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               ["receive", "Receive money"],
               ["give", "Give money"],
               ["transfer", "Transfers"],
-              ["daily", "Daily summary"],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -767,6 +983,44 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               {label}
             </button>
           ))}
+          <button
+            type="button"
+            onClick={() => onDeskNavigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "daily" })}
+            className={`rounded-full px-4 py-1.5 text-xs font-semibold border transition-colors ${
+              desk === "daily" && reportsSubTab === "daily_summary"
+                ? "bg-emerald-700 text-white border-emerald-800 shadow-sm"
+                : "bg-white text-slate-700 border-slate-200 hover:border-emerald-400"
+            }`}
+          >
+            Daily summary
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              onDeskNavigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "daily", tellerReportsTab: "recent_activity" })
+            }
+            className={`rounded-full px-4 py-1.5 text-xs font-semibold border transition-colors ${
+              desk === "daily" && reportsSubTab === "recent_activity"
+                ? "bg-emerald-700 text-white border-emerald-800 shadow-sm"
+                : "bg-white text-slate-700 border-slate-200 hover:border-emerald-400"
+            }`}
+          >
+            Recent activity
+          </button>
+          {showAdminControls ? (
+            <button
+              key="oversight"
+              type="button"
+              onClick={() => onDeskNavigate?.(SACCOPRO_PAGE.teller, deskNavState("oversight"))}
+              className={`rounded-full px-4 py-1.5 text-xs font-semibold border transition-colors ${
+                desk === "oversight"
+                  ? "bg-emerald-700 text-white border-emerald-800 shadow-sm"
+                  : "bg-white text-slate-700 border-slate-200 hover:border-emerald-400"
+              }`}
+            >
+              Till oversight
+            </button>
+          ) : null}
         </div>
 
         {(desk === "receive" || desk === "give") && (
@@ -787,14 +1041,13 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                 key={id}
                 type="button"
                 onClick={() => {
-                  const d = normalizeDesk(tellerDesk);
                   setMainTab("transactions");
                   setTaskAction(id);
                   setFieldMsg({});
                   setSelectedSavingsAccountId("");
-                  if (id === "cheque") setChequeFlow(d === "give" ? "paid" : "received");
+                  if (id === "cheque") setChequeFlow(desk === "give" ? "paid" : "received");
                   onDeskNavigate?.(SACCOPRO_PAGE.teller, {
-                    tellerDesk: d === "give" ? "give" : "receive",
+                    tellerDesk: desk === "give" ? "give" : "receive",
                     tellerTask: id,
                   });
                 }}
@@ -809,17 +1062,6 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               </button>
             ))}
           </div>
-        )}
-
-        {desk === "transfer" && (
-          <p className="text-sm text-slate-600 pb-2">
-            Move physical cash between the vault and this till below (Till &amp; vault section).
-          </p>
-        )}
-        {desk === "daily" && (
-          <p className="text-sm text-slate-600 pb-2">
-            Daily summary opens in preview â€” review on screen, then print or download PDF. Change the date under Reports.
-          </p>
         )}
 
         {!snap?.openSession && canMutate && (
@@ -861,28 +1103,28 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         >
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Till</span>
-            <strong className="tabular-nums text-emerald-900">{loading ? "â€¦" : formatUgx(snap?.tillEstimated ?? null)}</strong>
+            <strong className="tabular-nums text-emerald-900">{loading ? "…" : formatUgx(snap?.tillEstimated ?? null)}</strong>
           </span>
           <span className="text-slate-300 hidden sm:inline" aria-hidden>
             |
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Vault</span>
-            <strong className="tabular-nums text-slate-900">{loading ? "â€¦" : formatUgx(snap?.vaultPosition ?? 0)}</strong>
+            <strong className="tabular-nums text-slate-900">{loading ? "…" : formatUgx(snap?.vaultPosition ?? 0)}</strong>
           </span>
           <span className="text-slate-300 hidden sm:inline" aria-hidden>
             |
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Session</span>
-            <strong className="text-slate-900">{loading ? "â€¦" : snap?.openSession ? "Open" : "Closed"}</strong>
+            <strong className="text-slate-900">{loading ? "…" : snap?.openSession ? "Open" : "Closed"}</strong>
           </span>
           <span className="text-slate-300 hidden sm:inline" aria-hidden>
             |
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="text-slate-500">Pending</span>
-            <strong className="tabular-nums text-amber-900">{loading ? "â€¦" : snap?.pendingApprovalCount ?? 0}</strong>
+            <strong className="tabular-nums text-amber-900">{loading ? "…" : snap?.pendingApprovalCount ?? 0}</strong>
           </span>
         </div>
 
@@ -893,17 +1135,6 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
             use to sign in), then refresh.
           </p>
         ) : null}
-        {showAdminControls ? (
-          <SaccoTillOversightPanel
-            positions={tillPositions}
-            insuredLimitUgx={insuredLimitUgx}
-            loading={tillPositionsLoading}
-            onRefresh={() => void refreshTillOversight()}
-            canSupervise
-            saving={saving}
-            onCloseTill={(sessionId) => void handleSupervisorCloseSession(sessionId)}
-          />
-        ) : null}
       </header>
 
       <div className="min-h-0 flex-1 space-y-4 pt-2">
@@ -913,9 +1144,38 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
             {initLoading || loading ? (
               <p className="text-sm text-slate-500 flex items-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" />
-                Loadingâ€¦
+                Loading…
               </p>
             ) : null}
+
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2">
+              <span className="text-xs font-medium text-slate-600">Teller entry</span>
+              <div className="flex rounded-lg border border-slate-200 bg-white p-0.5 text-xs font-medium">
+                <button
+                  type="button"
+                  disabled={!canMutate}
+                  onClick={() => setTellerEntryMode("simple")}
+                  className={`rounded-md px-3 py-1.5 transition ${
+                    tellerEntryMode === "simple" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  Simple
+                </button>
+                <button
+                  type="button"
+                  disabled={!canMutate}
+                  onClick={() => setTellerEntryMode("accountant")}
+                  className={`rounded-md px-3 py-1.5 transition ${
+                    tellerEntryMode === "accountant" ? "bg-emerald-600 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50"
+                  }`}
+                >
+                  Accountant
+                </button>
+              </div>
+              <span className="text-[11px] text-slate-500">
+                Accountant mode asks for fee type on <strong>Fees</strong> tasks.
+              </span>
+            </div>
 
             {taskAction !== "cheque" && (
               <>
@@ -925,7 +1185,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       className={`${field} pl-9`}
-                      placeholder="Search name or member numberâ€¦"
+                      placeholder="Search name or member number…"
                       value={memberSearch}
                       onChange={(e) => {
                         setMemberSearch(e.target.value);
@@ -937,7 +1197,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     />
                     {selectedMember && (
                       <p className="text-xs text-emerald-800 mt-1">
-                        Selected: {selectedMember.member_number} â€” {selectedMember.full_name}
+                        Selected: {selectedMember.member_number} — {selectedMember.full_name}
                       </p>
                     )}
                     {memberMatches.length > 0 && !selectedMemberId && (
@@ -949,11 +1209,11 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                               className="w-full text-left px-3 py-2 hover:bg-emerald-50"
                               onClick={() => {
                                 setSelectedMemberId(m.id);
-                                setMemberSearch(`${m.member_number} â€” ${m.full_name}`);
+                                setMemberSearch(`${m.member_number} — ${m.full_name}`);
                                 setFieldMsg({});
                               }}
                             >
-                              {m.member_number} â€” {m.full_name}
+                              {m.member_number} — {m.full_name}
                             </button>
                           </li>
                         ))}
@@ -965,7 +1225,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
                 {taskRequiresSavingsAccount(taskAction) && selectedMemberId && memberSavings.length > 0 && (
                   <div className="rounded-xl border border-slate-100 bg-slate-50/80 p-4">
-                    <p className="text-sm font-semibold text-slate-900 mb-3">Accounts â€” tap one</p>
+                    <p className="text-sm font-semibold text-slate-900 mb-3">Accounts — tap one</p>
                     <div className="grid gap-3 sm:grid-cols-2">
                       {memberSavings.map((a) => (
                         <button
@@ -983,7 +1243,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                         >
                           <p className="text-base font-semibold text-slate-900 leading-snug">
                             {a.savings_product_code}
-                            <span className="font-normal text-slate-600"> Â· {a.account_number}</span>
+                            <span className="font-normal text-slate-600"> · {a.account_number}</span>
                           </p>
                           <p className="text-sm font-medium text-emerald-900 mt-2 tabular-nums">{formatUgx(a.balance)}</p>
                         </button>
@@ -1014,6 +1274,26 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                   />
                   {fieldMsg.amount && <p className="text-sm text-amber-800">{fieldMsg.amount}</p>}
                 </div>
+
+                {taskAction === "fees" && tellerEntryMode === "accountant" && (
+                  <div>
+                    <label className={label}>Fee type (posting purpose)</label>
+                    <select
+                      className={`${field} [color-scheme:light]`}
+                      value={accountantFeePostingPurpose}
+                      onChange={(e) =>
+                        setAccountantFeePostingPurpose(e.target.value as typeof accountantFeePostingPurpose)
+                      }
+                      disabled={!canMutate}
+                    >
+                      <option value="membership_fee">Membership fee</option>
+                      <option value="subscription">Subscription</option>
+                      <option value="shares">Shares / equity</option>
+                      <option value="fee_or_penalty">Penalty or miscellaneous fee</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </div>
+                )}
               </>
             )}
 
@@ -1025,7 +1305,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                     <input
                       className={`${field} pl-9`}
-                      placeholder="Searchâ€¦"
+                      placeholder="Search…"
                       value={memberSearch}
                       onChange={(e) => {
                         setMemberSearch(e.target.value);
@@ -1041,10 +1321,10 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                               className="w-full text-left px-3 py-2 hover:bg-emerald-50"
                               onClick={() => {
                                 setSelectedMemberId(m.id);
-                                setMemberSearch(`${m.member_number} â€” ${m.full_name}`);
+                                setMemberSearch(`${m.member_number} — ${m.full_name}`);
                               }}
                             >
-                              {m.member_number} â€” {m.full_name}
+                              {m.member_number} — {m.full_name}
                             </button>
                           </li>
                         ))}
@@ -1103,6 +1383,18 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
             {fieldMsg.gl && <p className="text-sm text-amber-800">{fieldMsg.gl}</p>}
 
+            <div className="space-y-2">
+              <label className={label}>Narration (optional)</label>
+              <textarea
+                className={`${field} min-h-[4.5rem] resize-y`}
+                rows={3}
+                placeholder="Shown on receipt or voucher"
+                value={narration}
+                onChange={(e) => setNarration(e.target.value)}
+                disabled={!canMutate}
+              />
+            </div>
+
             <div className="space-y-3 pt-1">
               <button
                 type="button"
@@ -1110,19 +1402,8 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                 onClick={() => requestCompleteTransaction()}
                 className="w-full rounded-2xl bg-emerald-600 py-4 text-center text-lg font-bold uppercase tracking-wide text-white shadow-lg hover:bg-emerald-700 disabled:opacity-50"
               >
-                {saving ? "Workingâ€¦" : "Complete transaction"}
+                {saving ? "Working…" : "Complete transaction"}
               </button>
-              <details className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 px-4 py-2 text-sm">
-                <summary className="cursor-pointer select-none font-medium text-slate-600 hover:text-slate-900">
-                  Narration (optional)
-                </summary>
-                <input
-                  className={`${field} mt-3`}
-                  placeholder="Shown on receipt or voucher"
-                  value={narration}
-                  onChange={(e) => setNarration(e.target.value)}
-                />
-              </details>
               <p className="text-center text-[11px] leading-snug text-slate-500">
                 Large amounts may require supervisor approval after confirm.
               </p>
@@ -1142,7 +1423,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm space-y-1">
                 <div className="flex justify-between">
                   <span className="text-slate-500">Opening float</span>
-                  <span className="font-mono tabular-nums">{snap?.openSession ? formatUgx(snap.openSession.opening_float) : "â€”"}</span>
+                  <span className="font-mono tabular-nums">{snap?.openSession ? formatUgx(snap.openSession.opening_float) : "—"}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Receipts (posted)</span>
@@ -1184,7 +1465,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               )}
 
               <div className="border-t border-slate-100 pt-4 space-y-2">
-                <p className="text-xs font-medium text-slate-800">Vault â†” till</p>
+                <p className="text-xs font-medium text-slate-800">Vault ↔ till</p>
                 <input
                   className={`${field} tabular-nums`}
                   type="number"
@@ -1201,7 +1482,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     onClick={() => void handleVaultFrom()}
                     className="rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-900"
                   >
-                    Vault â†’ till
+                    Vault → till
                   </button>
                   <button
                     type="button"
@@ -1209,7 +1490,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                     onClick={() => void handleVaultTo()}
                     className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
                   >
-                    Till â†’ vault
+                    Till → vault
                   </button>
                 </div>
               </div>
@@ -1248,7 +1529,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
               <div>
                 <p className="text-slate-500 text-xs">Difference</p>
                 <p className={`text-xl font-bold tabular-nums ${eodVariance !== null && eodVariance !== 0 ? "text-amber-800" : "text-slate-900"}`}>
-                  {eodVariance === null ? "â€”" : eodVariance > 0 ? `+${formatUgx(eodVariance).replace("UGX ", "")}` : formatUgx(eodVariance)}
+                  {eodVariance === null ? "—" : eodVariance > 0 ? `+${formatUgx(eodVariance).replace("UGX ", "")}` : formatUgx(eodVariance)}
                 </p>
               </div>
             </div>
@@ -1266,42 +1547,6 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
             >
               Close till
             </button>
-          </div>
-
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 text-sm font-medium">Recent teller activity</div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-left text-xs text-slate-500 border-b">
-                    <th className="p-2">Time</th>
-                    <th className="p-2">Type</th>
-                    <th className="p-2">Member / ref</th>
-                    <th className="p-2">Amount</th>
-                    <th className="p-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(snap?.recentTransactions?.length ?? 0) === 0 ? (
-                    <tr>
-                      <td colSpan={5} className="p-6 text-center text-slate-500">
-                        No transactions yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    snap!.recentTransactions.map((t) => (
-                      <tr key={t.id} className="border-b border-slate-50">
-                        <td className="p-2 text-xs whitespace-nowrap">{new Date(t.created_at).toLocaleString()}</td>
-                        <td className="p-2 text-xs">{formatTxnTypeLabel(String(t.txn_type))}</td>
-                        <td className="p-2 text-xs max-w-[12rem] break-words">{t.member_ref ?? "â€”"}</td>
-                        <td className="p-2 tabular-nums">{formatUgx(t.amount)}</td>
-                        <td className="p-2 text-xs">{t.status}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       )}
@@ -1322,12 +1567,22 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                   >
                     <div className="flex-1 min-w-0 space-y-1">
                       <p className="text-lg font-bold text-slate-900">
-                        {pendingCardLabel(t)} â€” {formatUgx(t.amount)}
+                        {pendingCardLabel(t)} — {formatUgx(t.amount)}
                       </p>
-                      <p className="text-sm text-slate-700 line-clamp-2">{t.member_ref || "â€”"}</p>
+                      <p className="text-sm text-slate-700 line-clamp-2">{t.member_ref || "—"}</p>
                       <p className="text-xs text-slate-500">{new Date(t.created_at).toLocaleString()}</p>
                       {t.narration ? <p className="text-xs text-slate-600 italic">{t.narration}</p> : null}
-                      {isMaker ? <p className="text-xs text-slate-500">You are the maker â€” you may still approve or reject here.</p> : null}
+                      {isMaker ? <p className="text-xs text-slate-500">You are the maker — you may still approve or reject here.</p> : null}
+                      {canEditTransactions ? (
+                        <button
+                          type="button"
+                          disabled={saving}
+                          onClick={() => openEditTransaction(t)}
+                          className="text-xs font-medium text-emerald-700 hover:text-emerald-900 text-left"
+                        >
+                          Edit before approve
+                        </button>
+                      ) : null}
                     </div>
                     <div className="flex flex-col gap-2 sm:w-56 shrink-0">
                       <input
@@ -1366,109 +1621,287 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
 
       {mainTab === "reports" && (
         <div className="space-y-4">
-          {desk === "daily" && (
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 flex flex-wrap items-end gap-3">
-              <label className="text-sm">
-                <span className="block text-xs font-medium text-slate-600 mb-1">Summary date</span>
-                <input
-                  type="date"
-                  value={dailyReportDate}
-                  onChange={(e) => setDailyReportDate(e.target.value)}
-                  className={field + " max-w-[11rem]"}
-                />
-              </label>
-              <button
-                type="button"
-                disabled={!snap || snap.schemaMissing || loading}
-                onClick={() => void openReportPreview("daily_summary", dailyReportDate)}
-                className="rounded-lg bg-emerald-700 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-800 disabled:opacity-50"
-              >
-                Refresh preview
-              </button>
-            </div>
-          )}
-          <div className="grid gap-4 sm:grid-cols-2">
-            {reportCards.map((r) => {
-              const Icon = r.icon;
-              return (
-                <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col gap-2">
-                  <div className="flex items-start gap-3">
-                    <div className="rounded-lg bg-emerald-100 p-2 text-emerald-700">
-                      <Icon className="w-5 h-5" />
+          <div className="flex flex-wrap gap-1 border-b border-slate-200 pb-2">
+            <TabButton
+              active={reportsSubTab === "daily_summary"}
+              onClick={() => {
+                setReportsSubTab("daily_summary");
+                onDeskNavigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "daily" });
+              }}
+            >
+              <FileBarChart className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
+              Daily summary
+            </TabButton>
+            <TabButton
+              active={reportsSubTab === "recent_activity"}
+              onClick={() => {
+                setReportsSubTab("recent_activity");
+                onDeskNavigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "daily", tellerReportsTab: "recent_activity" });
+              }}
+            >
+              <ScrollText className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
+              Recent teller activity
+            </TabButton>
+          </div>
+
+          {reportsSubTab === "daily_summary" ? (
+            <>
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50/80 px-4 py-3 flex flex-wrap items-end gap-3">
+                <label className="text-sm">
+                  <span className="block text-xs font-medium text-slate-600 mb-1">Summary date</span>
+                  <input
+                    type="date"
+                    value={dailyReportDate}
+                    onChange={(e) => setDailyReportDate(e.target.value)}
+                    className={field + " max-w-[11rem]"}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={!snap || snap.schemaMissing || loading}
+                  onClick={() => void openReportPreview("daily_summary", dailyReportDate)}
+                  className="rounded-lg bg-emerald-700 text-white px-4 py-2 text-sm font-medium hover:bg-emerald-800 disabled:opacity-50"
+                >
+                  Refresh preview
+                </button>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-2">
+                {reportCards.map((r) => {
+                  const Icon = r.icon;
+                  return (
+                    <div key={r.id} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm flex flex-col gap-2">
+                      <div className="flex items-start gap-3">
+                        <div className="rounded-lg bg-emerald-100 p-2 text-emerald-700">
+                          <Icon className="w-5 h-5" />
+                        </div>
+                        <div>
+                          <h3 className="font-semibold text-slate-900 text-sm">{r.title}</h3>
+                          <p className="text-xs text-slate-600 mt-1">{r.desc}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-2 mt-auto">
+                        <button
+                          type="button"
+                          disabled={!snap || snap.schemaMissing || loading}
+                          onClick={() =>
+                            void openReportPreview(
+                              r.id,
+                              r.id === "daily_summary" ? dailyReportDate : undefined
+                            )
+                          }
+                          className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700 disabled:opacity-50"
+                        >
+                          Preview
+                        </button>
+                        <button
+                          type="button"
+                          disabled={!snap || snap.schemaMissing || loading}
+                          onClick={() => {
+                            void (async () => {
+                              if (!snap || snap.schemaMissing) return;
+                              const opts = await buildReportOptions(
+                                r.id,
+                                r.id === "daily_summary" ? dailyReportDate : undefined
+                              );
+                              const csv = buildTellerReportCsv(r.id, snap, opts);
+                              downloadCsv(`teller_${r.id}_${dailyReportDate}.csv`, csv);
+                            })();
+                          }}
+                          className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900 disabled:opacity-50"
+                        >
+                          CSV
+                        </button>
+                      </div>
                     </div>
-                    <div>
-                      <h3 className="font-semibold text-slate-900 text-sm">{r.title}</h3>
-                      <p className="text-xs text-slate-600 mt-1">{r.desc}</p>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 mt-auto">
+                  );
+                })}
+              </div>
+              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+                <div className="px-4 py-2 border-b border-slate-100 text-sm font-medium">Audit preview</div>
+                <div className="overflow-x-auto text-sm">
+                  <table className="w-full">
+                    <thead>
+                      <tr className="text-left text-xs text-slate-500 border-b">
+                        <th className="p-2">Time</th>
+                        <th className="p-2">Action</th>
+                        <th className="p-2">Entity</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(snap?.recentAudit?.length ?? 0) === 0 ? (
+                        <tr>
+                          <td colSpan={3} className="p-6 text-center text-slate-500">
+                            No rows yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        snap!.recentAudit.map((a) => (
+                          <tr key={a.id} className="border-b">
+                            <td className="p-2 text-xs whitespace-nowrap">{new Date(a.created_at).toLocaleString()}</td>
+                            <td className="p-2 font-mono text-xs">{a.action}</td>
+                            <td className="p-2 text-xs">{a.entity_type}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
+              <div className="px-4 py-2 border-b border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3">
+                <span className="text-sm font-medium">Recent teller activity</span>
+                <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                  <label className="flex items-center gap-2 shrink-0">
+                    <span>Date</span>
+                    <input
+                      type="date"
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500 max-w-[11rem]"
+                      value={recentActivityDate}
+                      onChange={(e) => setRecentActivityDate(e.target.value.slice(0, 10))}
+                      disabled={recentActivityDisabled}
+                    />
+                  </label>
+                  <label className="flex items-center gap-2 shrink-0">
+                    <span>Per page</span>
+                    <select
+                      className="rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs text-slate-900 outline-none focus:ring-2 focus:ring-emerald-500"
+                      value={recentActivityPageSize}
+                      onChange={(e) => setRecentActivityPageSize(Number(e.target.value))}
+                      disabled={recentActivityDisabled}
+                    >
+                      {RECENT_ACTIVITY_PAGE_SIZE_OPTIONS.map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-slate-500 border-b">
+                      <th className="p-2">Business date</th>
+                      <th className="p-2">Time</th>
+                      <th className="p-2">Type</th>
+                      <th className="p-2">Member</th>
+                      <th className="p-2">Mbr #</th>
+                      <th className="p-2">Savings acct</th>
+                      <th className="p-2">Amount</th>
+                      <th className="p-2">Status</th>
+                      {canEditTransactions ? <th className="p-2 w-16" /> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recentActivityLoading ? (
+                      <tr>
+                        <td colSpan={canEditTransactions ? 9 : 8} className="p-6 text-center text-slate-500">
+                          <span className="inline-flex items-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin shrink-0" />
+                            Loading transactions…
+                          </span>
+                        </td>
+                      </tr>
+                    ) : recentActivityRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={canEditTransactions ? 9 : 8} className="p-6 text-center text-slate-500">
+                          No transactions for this date.
+                        </td>
+                      </tr>
+                    ) : (
+                      recentActivityPagedRows.map((t) => {
+                        const td = t.txn_date?.trim().slice(0, 10) ?? "";
+                        const businessDate =
+                          /^\d{4}-\d{2}-\d{2}$/.test(td) ? td : toBusinessDateString(t.created_at);
+                        const mem = t.sacco_member_id ? recentActivityMemberById.get(t.sacco_member_id) : undefined;
+                        const sav = t.sacco_member_savings_account_id
+                          ? recentActivitySavingsById.get(t.sacco_member_savings_account_id)
+                          : undefined;
+                        return (
+                        <tr key={t.id} className="border-b border-slate-50">
+                          <td className="p-2 text-xs whitespace-nowrap tabular-nums">{businessDate}</td>
+                          <td className="p-2 text-xs whitespace-nowrap">{new Date(t.created_at).toLocaleTimeString()}</td>
+                          <td className="p-2 text-xs">{formatTxnTypeLabel(String(t.txn_type))}</td>
+                          <td className="p-2 text-xs max-w-[8rem] break-words">{mem?.full_name ?? "—"}</td>
+                          <td className="p-2 text-xs tabular-nums">{mem?.member_number ?? "—"}</td>
+                          <td className="p-2 text-xs tabular-nums">{sav?.account_number ?? "—"}</td>
+                          <td className="p-2 tabular-nums">{formatUgx(t.amount)}</td>
+                          <td className="p-2 text-xs">{t.status}</td>
+                          {canEditTransactions ? (
+                            <td className="p-2">
+                              {(t.status === "pending_approval" || t.status === "draft" || (t.status === "posted" && canCorrectPostedTellerTxnType(String(t.txn_type)))) &&
+                              t.status !== "reversed" ? (
+                                <button
+                                  type="button"
+                                  disabled={saving}
+                                  onClick={() => openEditTransaction(t)}
+                                  className="text-xs font-medium text-emerald-700 hover:text-emerald-900"
+                                >
+                                  Edit
+                                </button>
+                              ) : null}
+                            </td>
+                          ) : null}
+                        </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {!recentActivityLoading && recentActivityRows.length > 0 ? (
+                <div className="px-4 py-2 border-t border-slate-100 bg-slate-50 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600">
+                  <span className="tabular-nums">
+                    Showing{" "}
+                    {recentActivityPageIndex * recentActivityPageSize + 1}
+                    –
+                    {Math.min(recentActivityRows.length, (recentActivityPageIndex + 1) * recentActivityPageSize)} of{" "}
+                    {recentActivityRows.length}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="tabular-nums text-slate-500">
+                      Page {recentActivityPageIndex + 1} of {recentActivityPageCount}
+                    </span>
                     <button
                       type="button"
-                      disabled={!snap || snap.schemaMissing || loading}
-                      onClick={() =>
-                        void openReportPreview(
-                          r.id,
-                          r.id === "daily_summary" ? dailyReportDate : undefined
-                        )
-                      }
-                      className="rounded-lg bg-emerald-600 text-white px-3 py-1.5 text-xs font-medium hover:bg-emerald-700 disabled:opacity-50"
+                      disabled={recentActivityPageIndex <= 0}
+                      onClick={() => setRecentActivityPageIndex((p) => Math.max(0, p - 1))}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
                     >
-                      Preview
+                      <ChevronLeft className="w-3.5 h-3.5" aria-hidden />
+                      Previous
                     </button>
                     <button
                       type="button"
-                      disabled={!snap || snap.schemaMissing || loading}
-                      onClick={() => {
-                        void (async () => {
-                          if (!snap || snap.schemaMissing) return;
-                          const opts = await buildReportOptions(
-                            r.id,
-                            r.id === "daily_summary" ? dailyReportDate : undefined
-                          );
-                          const csv = buildTellerReportCsv(r.id, snap, opts);
-                          downloadCsv(`teller_${r.id}_${dailyReportDate}.csv`, csv);
-                        })();
-                      }}
-                      className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-900 disabled:opacity-50"
+                      disabled={recentActivityPageIndex >= recentActivityPageCount - 1}
+                      onClick={() => setRecentActivityPageIndex((p) => Math.min(recentActivityPageCount - 1, p + 1))}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:pointer-events-none"
                     >
-                      CSV
+                      Next
+                      <ChevronRight className="w-3.5 h-3.5" aria-hidden />
                     </button>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-            <div className="px-4 py-2 border-b border-slate-100 text-sm font-medium">Audit preview</div>
-            <div className="overflow-x-auto text-sm">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-left text-xs text-slate-500 border-b">
-                    <th className="p-2">Time</th>
-                    <th className="p-2">Action</th>
-                    <th className="p-2">Entity</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(snap?.recentAudit?.length ?? 0) === 0 ? (
-                    <tr>
-                      <td colSpan={3} className="p-6 text-center text-slate-500">
-                        No rows yet.
-                      </td>
-                    </tr>
-                  ) : (
-                    snap!.recentAudit.map((a) => (
-                      <tr key={a.id} className="border-b">
-                        <td className="p-2 text-xs whitespace-nowrap">{new Date(a.created_at).toLocaleString()}</td>
-                        <td className="p-2 font-mono text-xs">{a.action}</td>
-                        <td className="p-2 text-xs">{a.entity_type}</td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
+              ) : null}
             </div>
-          </div>
+          )}
+        </div>
+      )}
+
+      {mainTab === "oversight" && showAdminControls && (
+        <div className="space-y-4">
+          <SaccoTillOversightPanel
+            positions={tillPositions}
+            insuredLimitUgx={insuredLimitUgx}
+            loading={tillPositionsLoading}
+            onRefresh={() => void refreshTillOversight()}
+            canSupervise
+            saving={saving}
+            onCloseTill={(sessionId) => void handleSupervisorCloseSession(sessionId)}
+          />
         </div>
       )}
 
@@ -1534,24 +1967,36 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         aria-label="Teller sections"
       >
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 md:gap-x-5">
-          <TabButton active={mainTab === "transactions"} onClick={() => setMainTab("transactions")}>
+          <TabButton active={mainTab === "transactions"} onClick={() => goMainTab("transactions")}>
             <ArrowDownToLine className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
             Transactions
           </TabButton>
-          <TabButton active={mainTab === "till"} onClick={() => setMainTab("till")}>
+          <TabButton active={mainTab === "till"} onClick={() => goMainTab("till")}>
             <Landmark className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
             Till
           </TabButton>
-          <TabButton active={mainTab === "approvals"} onClick={() => setMainTab("approvals")}>
+          <TabButton active={mainTab === "approvals"} onClick={() => goMainTab("approvals")}>
             <UserCheck className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
             Approvals
           </TabButton>
-          <TabButton active={mainTab === "reports"} onClick={() => setMainTab("reports")}>
+          <TabButton active={mainTab === "reports"} onClick={() => goMainTab("reports")}>
             <ScrollText className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
             Reports
           </TabButton>
           {showAdminControls ? (
-            <TabButton active={mainTab === "controls"} onClick={() => setMainTab("controls")}>
+            <TabButton
+              active={mainTab === "oversight"}
+              onClick={() => {
+                setMainTab("oversight");
+                onDeskNavigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "oversight" });
+              }}
+            >
+              <Eye className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
+              Till oversight
+            </TabButton>
+          ) : null}
+          {showAdminControls ? (
+            <TabButton active={mainTab === "controls"} onClick={() => goMainTab("controls")}>
               <Shield className="hidden sm:inline h-3.5 w-3.5 opacity-70" />
               Controls
             </TabButton>
@@ -1559,7 +2004,9 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
         </div>
         <button
           type="button"
-          onClick={() => void load()}
+          onClick={() => {
+            void load().then(() => void fetchRecentActivity(recentActivityDate));
+          }}
           disabled={loading || !orgId}
           className="inline-flex items-center gap-1 rounded-md border border-slate-100 bg-slate-50 px-2 py-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-slate-700 disabled:opacity-50 shrink-0"
         >
@@ -1653,7 +2100,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
                 <span className="font-semibold tabular-nums text-right">{confirmTransactionSummary.amountDisplay}</span>
               </div>
               {(taskRequiresMemberOnly(taskAction) || taskRequiresSavingsAccount(taskAction) || taskAction === "cheque") &&
-              confirmTransactionSummary.memberLine !== "â€”" ? (
+              confirmTransactionSummary.memberLine !== "—" ? (
                 <div className="flex justify-between gap-4">
                   <span className="text-slate-500 shrink-0">Member</span>
                   <span className="text-right text-slate-900">{confirmTransactionSummary.memberLine}</span>
@@ -1691,6 +2138,19 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, onDeskNavigate }: Sacc
           </div>
         </div>
       ) : null}
+
+      <SaccoEditTellerTransactionModal
+        open={editTxnOpen}
+        txn={editTxn}
+        members={pickMembers}
+        savingsAccounts={pickSavingsAccounts}
+        saving={saving}
+        onClose={() => {
+          setEditTxnOpen(false);
+          setEditTxn(null);
+        }}
+        onSave={(patch, reason) => handleSaveTxnEdit(patch, reason)}
+      />
 
       <SaccoTellerReportPreview
         open={reportPreviewOpen}

@@ -30,6 +30,7 @@ import {
   upsertProvisioningSettings,
 } from "@/lib/saccoDb";
 import { suggestNextLoanNumber } from "@/lib/saccoLoanNumberSettings";
+import { calculateMonthlyPayment } from "@/lib/saccoLoanMath";
 import { fetchSaccoBranches, pickDefaultBranchCode } from "@/lib/saccoBranches";
 
 export type {
@@ -47,21 +48,7 @@ export type {
   LoanFeeBreakdown,
 } from "@/types/saccoWorkspace";
 
-export function calculateMonthlyPayment(
-  P: number,
-  annualRate: number,
-  n: number,
-  basis: "flat" | "declining"
-): number {
-  if (n <= 0 || P <= 0) return 0;
-  const r = annualRate / 100 / 12;
-  if (basis === "flat") {
-    const totalInterest = P * (annualRate / 100) * (n / 12);
-    return Math.round((P + totalInterest) / n);
-  }
-  if (r === 0) return Math.round(P / n);
-  return Math.round((P * r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1));
-}
+export { calculateMonthlyPayment };
 
 export function calculateLoanFees(
   amount: number,
