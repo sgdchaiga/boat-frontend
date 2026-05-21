@@ -71,7 +71,7 @@ export function KitchenMenuPage({ readOnly = false, onNavigate }: KitchenMenuPag
           .from("products")
           .select("id,name,sales_price,track_inventory,department_id,active,saleable")
           .eq("active", true)
-          .eq("saleable", true)
+          .or("saleable.eq.true,saleable.is.null")
           .order("name"),
         orgId,
         superAdmin

@@ -460,7 +460,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
             .from("products")
             .select("id,name,sales_price,cost_price,track_inventory,department_id,saleable")
             .eq("active", true)
-            .eq("saleable", true),
+            .or("saleable.eq.true,saleable.is.null"),
           orgId,
           superAdmin
         ),
@@ -550,9 +550,13 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
         setVipGuestIds((prev) => ({ ...prev, ...vipMap }));
       }
 
-      // default department to first one so products are always scoped
-      if (!selectedDepartmentId && departmentsRes.data && departmentsRes.data.length > 0) {
-        setSelectedDepartmentId(departmentsRes.data[0].id);
+      // Keep department scope if user already picked one; otherwise show all departments
+      if (
+        selectedDepartmentId &&
+        departmentsRes.data &&
+        !departmentsRes.data.some((d) => d.id === selectedDepartmentId)
+      ) {
+        setSelectedDepartmentId("");
       }
     } catch (e) {
       setProductsError("Failed to load data");
@@ -957,8 +961,11 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
 
   useEffect(() => {
     if (departmentsForPicker.length === 0) return;
-    if (!departmentsForPicker.some((d) => d.id === selectedDepartmentId)) {
-      setSelectedDepartmentId(departmentsForPicker[0].id);
+    if (
+      selectedDepartmentId &&
+      !departmentsForPicker.some((d) => d.id === selectedDepartmentId)
+    ) {
+      setSelectedDepartmentId("");
     }
   }, [departmentsForPicker, selectedDepartmentId]);
 
@@ -970,9 +977,12 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
   };
 
   const filteredProducts = products.filter((p) => {
-    const byDept = selectedDepartmentId ? (p.department_id ?? null) === selectedDepartmentId : true;
+    const byDept = selectedDepartmentId
+      ? (p.department_id ?? null) === selectedDepartmentId || (p.department_id ?? null) === null
+      : true;
     const menuType = getProductMenuType(p);
-    const byMenu = selectedMenuType === "all" ? true : menuType === selectedMenuType;
+    const byMenu =
+      selectedMenuType === "all" ? true : menuType === selectedMenuType || menuType === "all";
     const q = productSearch.trim().toLowerCase();
     const bySearch = !q ? true : String(p.name || "").toLowerCase().includes(q);
     const bySellMode =
@@ -2087,6 +2097,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                   className="border rounded-lg px-3 py-1.5 text-sm"
                   disabled={departmentsForPicker.length === 0}
                 >
+                  <option value="">All departments</option>
                   {departmentsForPicker.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
