@@ -38,6 +38,7 @@ import { PAYROLL_PAGE } from '@/lib/payrollPages';
 import { useAuth } from '../contexts/AuthContext';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from '../lib/moduleAccess';
 import { isPageAllowedForNavRole } from '@/lib/navRoleExperience';
+import { buildRoleNavigation, getRoleBasedNavMenuTitle, hasRoleScopedNavigation } from '@/lib/roleNavigation';
 import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
 import { isSidebarLeafActive } from '@/lib/navSidebarActiveLeaf';
 import {
@@ -57,7 +58,7 @@ interface LayoutProps {
   onNavigate: (page: string, state?: Record<string, unknown>) => void;
 }
 
-type NavLeaf = { name: string; icon: typeof FileText; page: string };
+type NavLeaf = { name: string; icon: typeof FileText; page: string; state?: Record<string, unknown> };
 type NavDivider = { kind: 'divider'; id: string };
 type NavSectionHeader = { kind: 'section-header'; id: string; title: string };
 /** Single link or a labeled subgroup (used under Reports). Optional `state` syncs to URL (e.g. SACCO Teller desk). */
@@ -522,7 +523,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
           },
           {
             group: 'Inventory',
-            items: [{ name: 'Stock Movement', page: 'reports_stock_movement' }],
+            items: [
+              { name: 'Stock Summary', page: 'reports_stock_summary' },
+              { name: 'Stock Movement', page: 'reports_stock_movement' },
+            ],
           },
           {
             group: 'Sales',
@@ -677,8 +681,16 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
     []
   );
 
-  const mainNavigation: NavItem[] =
-    businessType === 'sacco'
+  const roleScopedNav = useMemo(
+    () => buildRoleNavigation(user?.role, businessType),
+    [user?.role, businessType]
+  );
+  const roleNavMenuTitle = getRoleBasedNavMenuTitle(user?.role);
+  const useRoleScopedNav = hasRoleScopedNavigation(user?.role, businessType) && roleScopedNav != null;
+
+  const mainNavigation: NavItem[] = useRoleScopedNav
+    ? roleScopedNav
+    : businessType === 'sacco'
       ? saccoNavigation
       : businessType === 'school'
         ? schoolNavigation
@@ -977,6 +989,11 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                       Property
                     </li>
                   )}
+                  {roleNavMenuTitle ? (
+                    <li className="px-3 pt-2 pb-0.5 text-[9px] font-bold text-slate-500 uppercase tracking-wider">
+                      {roleNavMenuTitle}
+                    </li>
+                  ) : null}
                   {mainNavigation.map((item) => {
                     if ('kind' in item && item.kind === 'divider') {
                       return (
@@ -1193,15 +1210,21 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
                     const isReportsHubLeaf =
                       item.name === 'Reports' &&
                       isSimpleOrgReportHubRoute(businessType, currentPage, pageStateResolved, canShowPage);
-                    const isActive = currentPage === item.page || isReportsHubLeaf;
+                    const leafState = 'state' in item ? item.state : undefined;
+                    const isActive =
+                      isSidebarLeafActive(
+                        { page: item.page, state: leafState },
+                        currentPage,
+                        pageStateResolved
+                      ) || isReportsHubLeaf;
                     if (!canShowPage(item.page)) return null;
                     const readOnly = isReadOnlyPage(item.page);
                     return (
-                      <li key={item.name}>
+                      <li key={`${item.name}-${item.page}-${JSON.stringify(leafState ?? {})}`}>
                         <button
                           type="button"
                           onClick={() => {
-                            onNavigate(item.page);
+                            onNavigate(item.page, leafState);
                             setSidebarOpen(false);
                           }}
                           className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition ${

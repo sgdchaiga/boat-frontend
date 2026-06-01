@@ -25,6 +25,7 @@ export type LocalAuthAccount = {
   full_name?: string;
   role?: string;
   phone?: string;
+  hospitality_branch_id?: string | null;
   created_at: string;
 };
 

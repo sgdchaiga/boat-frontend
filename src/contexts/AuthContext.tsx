@@ -79,6 +79,8 @@ interface AuthUser {
   /** Has a staff row (hotel property workspace) */
   isHotelStaff?: boolean;
   organization_id?: string | null;
+  /** When set, hospitality POS/orders/payments are limited to this branch (see hospitality_branches). */
+  hospitality_branch_id?: string | null;
   business_type?: BusinessType | null;
   subscription_status?: SubscriptionStatus;
   subscription_plan_id?: string | null;
@@ -369,6 +371,7 @@ function toLocalAuthUser(account: LocalAuthAccount): AuthUser {
     role: (account.role as UserRole | undefined) || undefined,
     full_name: account.full_name,
     phone: account.phone,
+    hospitality_branch_id: account.hospitality_branch_id ?? null,
     isSuperAdmin,
     isHotelStaff: true,
     ...localTenantDefaults(),
@@ -692,6 +695,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         role: roleFromMember ?? (meta?.role as UserRole | undefined),
         full_name: membership?.full_name ?? (meta?.full_name as string | undefined),
         phone: membership?.phone ?? (meta?.phone as string | undefined),
+        hospitality_branch_id:
+          (meta?.hospitality_branch_id as string | null | undefined) ?? null,
         ...flags,
         ...tenant,
         ...subscriptionCacheMeta,
@@ -714,14 +719,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       writeStoredActiveOrganizationId(sessionUser.id, organizationId);
       const membership = memberList.find((m) => m.organization_id === organizationId) ?? null;
-      const [flags, tenant, refreshedMembers] = await Promise.all([
+      const [flags, tenant, refreshedMembers, staffBranchRes] = await Promise.all([
         loadUserFlags(sessionUser.id),
         loadTenantProfile(sessionUser.id, organizationId),
         loadMembershipsForUser(sessionUser.id).catch(() => memberList),
+        supabase.from("staff").select("hospitality_branch_id").eq("id", sessionUser.id).maybeSingle(),
       ]);
+      const branchMeta = {
+        ...meta,
+        hospitality_branch_id:
+          (staffBranchRes.data as { hospitality_branch_id?: string | null } | null)?.hospitality_branch_id ??
+          null,
+      };
       setMemberships(refreshedMembers);
       setNeedsOrganizationPicker(false);
-      setUser(buildAuthUser(sessionUser, flags, tenant, membership, meta));
+      setUser(buildAuthUser(sessionUser, flags, tenant, membership, branchMeta));
     },
     [buildAuthUser]
   );
@@ -887,12 +899,15 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     if (!user?.id) return;
     const activeOrgId = user.organization_id ?? readStoredActiveOrganizationId(user.id);
-    const [flags, tenant] = await Promise.all([
+    const [flags, tenant, staffBranchRes] = await Promise.all([
       loadUserFlags(user.id),
       loadTenantProfile(user.id, activeOrgId),
+      supabase.from("staff").select("hospitality_branch_id").eq("id", user.id).maybeSingle(),
     ]);
     const subscriptionCacheMeta = getSubscriptionCacheMeta(user.id);
     const membership = memberships.find((m) => m.organization_id === activeOrgId) ?? null;
+    const hospitality_branch_id =
+      (staffBranchRes.data as { hospitality_branch_id?: string | null } | null)?.hospitality_branch_id ?? null;
     setUser((u) =>
       u
         ? {
@@ -903,6 +918,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
             role: (membership?.role as UserRole | undefined) ?? u.role,
             full_name: membership?.full_name ?? u.full_name,
             phone: membership?.phone ?? u.phone,
+            hospitality_branch_id,
           }
         : null
     );
@@ -919,16 +935,23 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           try {
             const { data: staffRow } = await supabase
               .from("staff")
-              .select("full_name,phone,role")
+              .select("full_name,phone,role,hospitality_branch_id")
               .eq("id", account.id)
               .maybeSingle();
-            const row = (staffRow as { full_name?: string | null; phone?: string | null; role?: string | null } | null) ?? null;
+            const row =
+              (staffRow as {
+                full_name?: string | null;
+                phone?: string | null;
+                role?: string | null;
+                hospitality_branch_id?: string | null;
+              } | null) ?? null;
             if (row) {
               effectiveAccount = {
                 ...account,
                 full_name: row.full_name ?? account.full_name,
                 phone: row.phone ?? account.phone,
                 role: row.role ?? account.role,
+                hospitality_branch_id: row.hospitality_branch_id ?? null,
               };
               const nextAccounts = accounts.map((a) => (a.id === account.id ? effectiveAccount! : a));
               writeLocalAccounts(nextAccounts);
@@ -1034,11 +1057,22 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signInWithPin = async (staffCode: string, pin: string) => {
-    if (!IS_LOCAL_AUTH_MODE) {
-      return { error: new Error("Quick PIN login is available in desktop local mode.") };
-    }
     const code = normalizeStaffCode(staffCode);
     const enteredPin = normalizePin(pin);
+    if (!IS_LOCAL_AUTH_MODE) {
+      const { data, error } = await supabase.functions.invoke("staff-pin-login", {
+        body: {
+          staff_code: code,
+          pin: enteredPin,
+          redirect_to: `${window.location.origin}${window.location.pathname || "/"}`,
+        },
+      });
+      if (error) return { error: error as Error };
+      if (!data?.ok) return { error: new Error(data?.error || data?.message || "PIN login failed") };
+      if (!data.action_link) return { error: new Error("PIN login did not return a session link.") };
+      window.location.assign(data.action_link);
+      return { error: null };
+    }
     const account = readLocalAccounts().find((a) => normalizeStaffCode(a.staff_code || "") === code);
     if (!account || !account.pin) {
       return { error: new Error("Invalid staff code or PIN") };

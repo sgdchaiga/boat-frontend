@@ -1,137 +1,179 @@
 import type { BusinessType } from "@/contexts/AuthContext";
 
-export type NavRoleExperience = "full" | "cashier" | "storekeeper";
+import {
 
-/** POS counter, guest linkage, retail till, hotel bar/kitchen pipelines. */
-export const NAV_ROLE_CASHIER_PAGE_IDS = new Set<string>([
-  "dashboard",
-  "hotel_customers",
-  "retail_customers",
-  "hotel_pos_waiter",
-  "hotel_pos_kitchen_bar",
-  "hotel_pos_supervisor",
-  "hotel_pos_reports",
-  "retail_dashboard",
-  "clinic_dashboard",
-  "clinic_patients",
-  "clinic_consultation",
-  "clinic_laboratory",
-  "clinic_pos",
-  "retail_pos",
-  "retail_pos_orders",
-  "retail_credit_invoices",
-  "Kitchen Orders",
-  "Bar Orders",
-  "kitchen_display",
-  "kitchen_menu",
-  /** Simple nav — money in / out often used at the counter */
-  "cash_receipts",
-  "payments",
-  "transactions",
-  "wallet",
-  "purchases_expenses",
-  "purchases_payments",
-  /** Money Out → other expenditures (manual journal) */
-  "accounting_manual",
-  /** Front Desk (hotel / mixed) */
-  "reservations",
-  "checkin",
-  "stays",
-  "housekeeping",
-  "rooms",
-  "billing",
-  "reports_daily_purchases_summary",
-  "reports_expenses",
-  "reports_stock_movement",
-  "accounting_cashflow",
-]);
+  defaultLandingPageForRole,
 
-/** Stores + procure-to-pay; includes expense capture used as operational buying. */
-export const NAV_ROLE_STOREKEEPER_PAGE_IDS = new Set<string>([
-  "dashboard",
-  "Products",
-  "inventory_barcodes",
-  "inventory_stock_adjustments",
-  "inventory_stock_balances",
-  "inventory_store_requisitions",
-  "purchases_vendors",
-  "purchases_orders",
-  "purchases_bills",
-  "purchases_payments",
-  "purchases_credits",
-  "purchases_expenses",
-  "cash_receipts",
-  "accounting_manual",
-  "transactions",
-  "wallet",
-  "payments",
-  "reports_daily_purchases_summary",
-  "reports_expenses",
-  "reports_stock_movement",
-  "reports_purchases_by_item",
-  "retail_credit_invoices",
-  "accounting_cashflow",
-]);
+  defaultLandingStateForRole,
+
+  getRolePageAllowList,
+
+} from "@/lib/roleNavigation";
+
+
+
+export type NavRoleExperience =
+
+  | "full"
+
+  | "waitress"
+
+  | "bartender"
+
+  | "kitchen"
+
+  | "cashier"
+
+  | "accountant"
+
+  | "manager"
+
+  | "storekeeper";
+
+
+
+/** Maps org role_key values to a nav experience (admin → full sidebar). */
+
+export function normalizeNavRoleKey(roleKey: string | undefined | null): string {
+
+  const r = (roleKey ?? "").trim().toLowerCase();
+
+  if (r === "waiter" || r === "waitress") return "waitress";
+
+  if (r === "barman" || r === "bartender" || r === "bar_staff") return "bartender";
+
+  if (r === "kitchen_staff" || r === "chef" || r === "cook" || r === "kitchen") return "kitchen";
+
+  if (r === "supervisor") return "manager";
+
+  return r;
+
+}
+
+
 
 export function getNavRoleExperience(roleKey: string | undefined | null): NavRoleExperience {
-  const r = (roleKey ?? "").trim().toLowerCase();
-  if (!r) return "full";
+
+  const r = normalizeNavRoleKey(roleKey);
+
+  if (!r || r === "admin") return "full";
+
+  if (r === "waitress") return "waitress";
+
+  if (r === "bartender") return "bartender";
+
+  if (r === "kitchen") return "kitchen";
+
   if (r === "cashier") return "cashier";
+
+  if (r === "accountant") return "accountant";
+
+  if (r === "manager") return "manager";
+
   if (r === "storekeeper") return "storekeeper";
-  /** Manager / admin / receptionist / accountant etc. retain full sidebar (module gates still apply). */
+
   return "full";
+
 }
+
+
 
 export function shouldApplyNavRoleScope(businessType: BusinessType | null | undefined): boolean {
+
   if (!businessType) return false;
+
   return (
+
     businessType === "hotel" ||
+
     businessType === "mixed" ||
+
     businessType === "restaurant" ||
+
     businessType === "retail" ||
-    businessType === "clinic"
+
+    businessType === "clinic" ||
+
+    businessType === "manufacturing"
+
   );
+
 }
+
+
 
 export function shouldApplyStorekeeperScope(businessType: BusinessType | null | undefined): boolean {
+
   return shouldApplyNavRoleScope(businessType) || businessType === "manufacturing";
+
 }
 
-/**
- * Sidebar + route guard: when scope applies and role narrows UX, pages outside the allow‑list are hidden.
- */
+
+
 export function isPageAllowedForNavRole(
+
   page: string,
+
   roleKey: string | undefined | null,
+
   businessType: BusinessType | null | undefined
+
 ): boolean {
+
   const xp = getNavRoleExperience(roleKey);
+
   if (xp === "full") return true;
 
-  if (xp === "storekeeper") {
-    if (!shouldApplyStorekeeperScope(businessType)) return true;
-    return NAV_ROLE_STOREKEEPER_PAGE_IDS.has(page);
-  }
 
-  /** cashier */
-  if (!shouldApplyNavRoleScope(businessType)) return true;
-  return NAV_ROLE_CASHIER_PAGE_IDS.has(page);
+
+  const allow = getRolePageAllowList(xp);
+
+  if (!allow) return true;
+
+
+
+  if (xp === "storekeeper" && !shouldApplyStorekeeperScope(businessType)) return true;
+
+  if (xp !== "storekeeper" && !shouldApplyNavRoleScope(businessType)) return true;
+
+
+
+  return allow.has(page);
+
 }
+
+
 
 export function defaultLandingPageForNavRole(
+
   roleKey: string | undefined | null,
+
   businessType: BusinessType | null | undefined
+
 ): string | null {
+
   const xp = getNavRoleExperience(roleKey);
+
   if (xp === "full") return null;
 
-  if (xp === "storekeeper") {
-    if (!shouldApplyStorekeeperScope(businessType)) return null;
-    return "Products";
-  }
+  if (xp === "storekeeper" && !shouldApplyStorekeeperScope(businessType)) return null;
 
-  if (!shouldApplyNavRoleScope(businessType)) return null;
-  if (businessType === "clinic") return "clinic_pos";
-  if (businessType === "retail") return "retail_pos";
-  return "hotel_pos_waiter";
+  if (xp !== "storekeeper" && !shouldApplyNavRoleScope(businessType)) return null;
+
+  return defaultLandingPageForRole(roleKey, businessType);
+
 }
+
+
+
+export function defaultLandingStateForNavRole(
+
+  roleKey: string | undefined | null
+
+): Record<string, unknown> | undefined {
+
+  return defaultLandingStateForRole(roleKey);
+
+}
+
+

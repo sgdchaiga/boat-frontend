@@ -123,6 +123,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         payment_method: t.method,
         amount: t.amount,
         payment_status: t.status,
+        reference: t.reference ?? null,
       })),
     };
     const created = await desktopApi.createRetailSale(payload);
@@ -209,7 +210,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     department_id: line.departmentId,
     track_inventory: line.trackInventory,
   }));
-  const paymentPayload = tenders.map((t) => ({ method: t.method, amount: t.amount, status: t.status }));
+  const paymentPayload = tenders.map((t) => ({ method: t.method, amount: t.amount, status: t.status, reference: t.reference ?? null }));
   const bumpCustomerCreditExposure = async () => {
     if (!saleCustomer.id || amountDue <= 0) return;
     const { data: cRow } = await supabase
@@ -306,6 +307,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
           customer_name: saleCustomer.name,
           customer_phone: saleCustomer.phone,
           cashier_session_id: activeSessionId,
+          mobile_money_tx_ref: tender.reference ?? null,
+          gateway_transaction_id: tender.gatewayTransactionId ?? null,
         },
       },
       tender.method

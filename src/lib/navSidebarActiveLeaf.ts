@@ -1,4 +1,5 @@
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
+import { HOTEL_PAGE } from "@/lib/hotelPages";
 
 /** Active when every key in required `state` matches `pageState` (defaults: tellerDesk receive, cashbookView journal). */
 export function isSidebarLeafActive(
@@ -26,6 +27,21 @@ export function isSidebarLeafActive(
     const want = (leaf.state?.invoiceTab as string | undefined) ?? "invoices";
     const pv = pageState.invoiceTab as string | undefined;
     if (want === "invoices") return pv === undefined || pv === null || String(pv) === "" || pv === "invoices";
+    return pv === want;
+  }
+
+  if (leaf.page === HOTEL_PAGE.posWaiter || leaf.page === "POS") {
+    const want = (leaf.state?.posPanel as string | undefined) ?? "tables";
+    const pv = pageState.posPanel as string | undefined;
+    if (want === "tables") return pv === undefined || pv === null || String(pv) === "" || pv === "tables";
+    if (want === "new") return pv === "new";
+    return pv === want;
+  }
+
+  if (leaf.page === "Bar Orders") {
+    const want = (leaf.state?.barView as string | undefined) ?? "queue";
+    const pv = pageState.barView as string | undefined;
+    if (want === "queue") return pv === undefined || pv === null || String(pv) === "" || pv === "queue";
     return pv === want;
   }
 

@@ -21,6 +21,7 @@ import { supabase } from "../lib/supabase";
 import { businessTodayISO, computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { applyHospitalityBranchFilter } from "../lib/hospitalityBranchScope";
 import {
   hotelRevenueBucket,
   isHotelHospitalityPayment,
@@ -167,7 +168,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         .eq("payment_status", "completed")
         .gte("paid_at", minPay)
         .lt("paid_at", maxPay);
-      paymentsPromise = filterByOrganizationId(paymentsPromise, orgId, superAdmin);
+      paymentsPromise = applyHospitalityBranchFilter(
+        filterByOrganizationId(paymentsPromise, orgId, superAdmin),
+        user
+      );
 
       let billingPromise = supabase
         .from("billing")
@@ -182,7 +186,10 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         .select("id", { count: "exact", head: true })
         .gte("created_at", revFrom.toISOString())
         .lt("created_at", revTo.toISOString());
-      kitchenQueuePromise = filterByOrganizationId(kitchenQueuePromise, orgId, superAdmin);
+      kitchenQueuePromise = applyHospitalityBranchFilter(
+        filterByOrganizationId(kitchenQueuePromise, orgId, superAdmin),
+        user
+      );
 
       const [
         roomsResult,

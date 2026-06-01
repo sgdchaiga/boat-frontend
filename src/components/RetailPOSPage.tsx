@@ -40,6 +40,7 @@ import { useProductCatalog } from "./retail-pos/hooks/useProductCatalog";
 import { useCustomerProfileActions } from "./retail-pos/hooks/useCustomerProfileActions";
 import {
   collectMobileMoneyPayments,
+  type MobileMoneyGatewayProvider,
   type SaleCustomerContext,
 } from "./retail-pos/services/checkoutService";
 import { processSaleOnline } from "./retail-pos/services/processSaleOnline";
@@ -83,6 +84,7 @@ interface ReceiptOrgHeader {
   name: string;
   address: string | null;
   stkPushEnabled: boolean;
+  mobileMoneyGateway: MobileMoneyGatewayProvider;
 }
 
 interface RetailCustomerRow {
@@ -284,20 +286,28 @@ export function RetailPOSPage({
           name: "BOAT Retail",
           address: null,
           stkPushEnabled: false,
+          mobileMoneyGateway: "flutterwave",
         });
         return;
       }
       const { data } = await supabase
         .from("organizations")
-        .select("name,address,retail_stk_push_enabled")
+        .select("name,address,retail_stk_push_enabled,retail_mobile_money_gateway")
         .eq("id", orgId)
         .maybeSingle();
-      const row = data as { name?: string | null; address?: string | null; retail_stk_push_enabled?: boolean | null } | null;
+      const row = data as {
+        name?: string | null;
+        address?: string | null;
+        retail_stk_push_enabled?: boolean | null;
+        retail_mobile_money_gateway?: string | null;
+      } | null;
       if (row?.name?.trim()) {
+        const gateway: MobileMoneyGatewayProvider = row.retail_mobile_money_gateway === "dpo" ? "dpo" : "flutterwave";
         setReceiptOrgHeader({
           name: row.name.trim(),
           address: row.address?.trim() ? row.address.trim() : null,
           stkPushEnabled: row.retail_stk_push_enabled === true,
+          mobileMoneyGateway: gateway,
         });
       } else {
         setReceiptOrgHeader(null);
@@ -842,6 +852,7 @@ export function RetailPOSPage({
           customerName: customerNameDraft.trim() || L.defaultPayerName,
           customerEmail: user?.email ?? "no-reply@boat.local",
           organizationId: orgId ?? null,
+          gatewayProvider: receiptOrgHeader?.mobileMoneyGateway ?? "flutterwave",
         })
       : ctx.tenders;
   };

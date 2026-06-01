@@ -170,11 +170,18 @@ export const LoginPage: React.FC = () => {
                 ? "Reset your password"
                 : mode === "login"
                   ? "Sign in to access your account"
+                  : mode === "pin"
+                    ? "Quick staff PIN access"
                   : "Create a new staff account"}
           </p>
           {localAuthEnabled && (
             <p className="mt-2 text-xs text-emerald-200">
               Desktop local mode: accounts are stored on this computer and internet is optional.
+            </p>
+          )}
+          {!localAuthEnabled && mode === "pin" && (
+            <p className="mt-2 text-xs text-emerald-200">
+              Online PIN uses staff code + PIN, then opens a normal secure BOAT session.
             </p>
           )}
 
@@ -194,18 +201,16 @@ export const LoginPage: React.FC = () => {
             >
               <Mail size={14} /> Full Login
             </button>
-            {localAuthEnabled && (
-              <button
-                onClick={() => switchMode("pin")}
-                className={`flex-1 py-3 text-sm font-medium border-b-2 flex items-center justify-center gap-1.5 ${
-                  mode === "pin"
-                    ? "border-emerald-500 text-emerald-600"
-                    : "border-transparent text-slate-400"
-                }`}
-              >
-                <KeyRound size={14} /> PIN
-              </button>
-            )}
+            <button
+              onClick={() => switchMode("pin")}
+              className={`flex-1 py-3 text-sm font-medium border-b-2 flex items-center justify-center gap-1.5 ${
+                mode === "pin"
+                  ? "border-emerald-500 text-emerald-600"
+                  : "border-transparent text-slate-400"
+              }`}
+            >
+              <KeyRound size={14} /> PIN
+            </button>
             <button
               onClick={() => switchMode("signup")}
               className={`flex-1 py-3 text-sm font-medium border-b-2 ${

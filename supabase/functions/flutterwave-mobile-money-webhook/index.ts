@@ -19,6 +19,11 @@ const normalizeStatus = (raw: unknown): "pending" | "successful" | "failed" | "c
   return "pending";
 };
 
+const asMoney = (value: unknown) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ ok: false, error: "Method not allowed" }, 405);
@@ -46,8 +51,26 @@ Deno.serve(async (req) => {
   }
 
   const serviceClient = createClient(supabaseUrl, serviceRoleKey);
+  const { data: existingAttempt, error: lookupError } = await serviceClient
+    .from("mobile_money_attempts")
+    .select("amount,currency")
+    .eq("tx_ref", txRef)
+    .maybeSingle();
+  if (lookupError) return json({ ok: false, error: lookupError.message }, 500);
+  if (!existingAttempt) return json({ ok: true, ignored: true, reason: "attempt_not_found" }, 202);
+
+  const returnedAmount = asMoney(data.amount);
+  const expectedAmount = asMoney((existingAttempt as { amount?: unknown }).amount);
+  if (Number.isFinite(returnedAmount) && returnedAmount !== expectedAmount) {
+    return json({ ok: false, error: "Gateway amount mismatch" }, 400);
+  }
+  const returnedCurrency = String(data.currency || (existingAttempt as { currency?: string }).currency || "UGX").toUpperCase();
+  const expectedCurrency = String((existingAttempt as { currency?: string }).currency || "UGX").toUpperCase();
+  if (returnedCurrency !== expectedCurrency) {
+    return json({ ok: false, error: "Gateway currency mismatch" }, 400);
+  }
+
   const updatePayload: Record<string, unknown> = {
-    tx_ref: txRef,
     status,
     gateway_response: payload,
     updated_at: new Date().toISOString(),
@@ -62,8 +85,11 @@ Deno.serve(async (req) => {
     updatePayload.last_error = String(payload.message || data.processor_response || "Payment not successful");
   }
 
-  const { error } = await serviceClient.from("mobile_money_attempts").upsert(updatePayload, { onConflict: "tx_ref" });
+  const { error } = await serviceClient.from("mobile_money_attempts").update(updatePayload).eq("tx_ref", txRef);
   if (error) return json({ ok: false, error: error.message }, 500);
+
+  const { error: reconcileError } = await serviceClient.rpc("reconcile_mobile_money_attempt", { p_tx_ref: txRef });
+  if (reconcileError) return json({ ok: false, error: reconcileError.message }, 500);
 
   return json({ ok: true });
 });

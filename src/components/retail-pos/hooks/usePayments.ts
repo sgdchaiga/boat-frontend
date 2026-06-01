@@ -44,7 +44,7 @@ export function usePayments(total: number) {
     }
     const status = isPendingMethod(method) ? "pending" : "completed";
     setPaymentMethod(method);
-    const nextLine = { id: randomUuid(), method, amount: Math.round(target * 100) / 100, status };
+    const nextLine: PaymentLine = { id: randomUuid(), method, amount: Math.round(target * 100) / 100, status };
     setPaymentLines((prev) => (paymentMode === "simple" ? [nextLine] : [...prev, nextLine]));
   };
 

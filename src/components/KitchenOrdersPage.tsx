@@ -5,6 +5,7 @@ import type { Database } from "../lib/database.types";
 import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { applyHospitalityBranchFilter } from "../lib/hospitalityBranchScope";
 import { PageNotes } from "./common/PageNotes";
 import { excludeLineFromKitchenQueue } from "../lib/posCatalogMode";
 import { loadHotelConfig } from "../lib/hotelConfig";
@@ -35,7 +36,12 @@ interface KitchenOrder {
 
 type KitchenDateRangeKey = DateRangeKey | "all";
 
-export function KitchenOrdersPage() {
+interface KitchenOrdersPageProps {
+  readOnly?: boolean;
+  hidePricing?: boolean;
+}
+
+export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: KitchenOrdersPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -82,12 +88,13 @@ export function KitchenOrdersPage() {
 
       const [departmentsRes, ordersRes, productsRes] = await Promise.all([
         filterByOrganizationId(supabase.from("departments").select("id,name,pos_catalog_mode"), orgId, superAdmin),
-        filterByOrganizationId(
-          (() => {
-            let q = supabase
-              .from("kitchen_orders")
-              .select(
-              `
+        applyHospitalityBranchFilter(
+          filterByOrganizationId(
+            (() => {
+              let q = supabase
+                .from("kitchen_orders")
+                .select(
+                  `
             id,
             room_id,
             table_number,
@@ -96,15 +103,17 @@ export function KitchenOrdersPage() {
             created_at,
             kitchen_order_items(quantity, notes, product_id)
           `
-              )
-              .order("created_at", { ascending: true });
-            if (fromIso && toIso) {
-              q = q.gte("created_at", fromIso).lt("created_at", toIso);
-            }
-            return q;
-          })(),
-          orgId,
-          superAdmin
+                )
+                .order("created_at", { ascending: true });
+              if (fromIso && toIso) {
+                q = q.gte("created_at", fromIso).lt("created_at", toIso);
+              }
+              return q;
+            })(),
+            orgId,
+            superAdmin
+          ),
+          user
         ),
         filterByOrganizationId(supabase.from("products").select("id, name, department_id, sales_price"), orgId, superAdmin),
       ]);

@@ -535,6 +535,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_purchases_by_item",
     "reports_sales_by_item",
     "reports_stock_movement",
+    "reports_stock_summary",
     "reports_school_fee_collections",
     "reports_school_outstanding",
     "reports_school_enrollment",

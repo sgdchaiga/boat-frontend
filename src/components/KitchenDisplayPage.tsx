@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { computeRangeInTimezone } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { applyHospitalityBranchFilter } from "../lib/hospitalityBranchScope";
 import { PageNotes } from "./common/PageNotes";
 import { getNextOrderStatus, formatKitchenBarAdvanceLabel } from "../lib/hotelPosOrderStatus";
 import { loadHotelConfig } from "../lib/hotelConfig";
@@ -25,7 +26,11 @@ interface KitchenOrder {
   kitchen_order_items: KitchenItem[];
 }
 
-export function KitchenDisplayPage() {
+interface KitchenDisplayPageProps {
+  hidePricing?: boolean;
+}
+
+export function KitchenDisplayPage({ hidePricing: _hidePricing = false }: KitchenDisplayPageProps = {}) {
   const { user, isSuperAdmin } = useAuth();
   const orgId = user?.organization_id ?? null;
 
@@ -62,15 +67,18 @@ export function KitchenDisplayPage() {
       const { from, to } = computeRangeInTimezone(rangeKey, customFrom, customTo);
 
       const [ordersRes, deptRes, productsRes] = await Promise.all([
-        filterByOrganizationId(
-          supabase
-            .from("kitchen_orders")
-            .select(`id, room_id, table_number, customer_name, order_status, created_at, kitchen_order_items(quantity, notes, product_id)`)
-            .gte("created_at", from.toISOString())
-            .lt("created_at", to.toISOString())
-            .order("created_at", { ascending: true }),
-          orgId,
-          isSuperAdmin
+        applyHospitalityBranchFilter(
+          filterByOrganizationId(
+            supabase
+              .from("kitchen_orders")
+              .select(`id, room_id, table_number, customer_name, order_status, created_at, kitchen_order_items(quantity, notes, product_id)`)
+              .gte("created_at", from.toISOString())
+              .lt("created_at", to.toISOString())
+              .order("created_at", { ascending: true }),
+            orgId,
+            isSuperAdmin
+          ),
+          user
         ),
         filterByOrganizationId(supabase.from("departments").select("id, name"), orgId, isSuperAdmin),
         filterByOrganizationId(supabase.from("products").select("id, name, department_id"), orgId, isSuperAdmin),

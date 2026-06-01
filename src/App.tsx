@@ -39,6 +39,7 @@ import { InventoryBarcodesPage } from './components/InventoryBarcodesPage';
 import { ReportsPage } from './components/ReportsPage';
 import { DailySalesReportPage } from './components/DailySalesReportPage';
 import { StockMovementReportPage } from './components/reports/StockMovementReportPage';
+import { StockSummaryReportPage } from './components/reports/StockSummaryReportPage';
 import { FinancialRevenueByChargeTypePage } from './components/reports/FinancialRevenueByChargeTypePage';
 import { FinancialPaymentsByMethodPage } from './components/reports/FinancialPaymentsByMethodPage';
 import { FinancialPaymentsByChargeTypePage } from './components/reports/FinancialPaymentsByChargeTypePage';
@@ -112,7 +113,12 @@ import SaccoFinancialSummariesPage from './components/sacco/SaccoFinancialSummar
 import SaccoSavingsInterest from './components/sacco/SaccoSavingsInterest';
 import SaccoClientDashboard from './components/sacco/SaccoClientDashboard';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from './lib/moduleAccess';
-import { defaultLandingPageForNavRole, isPageAllowedForNavRole } from './lib/navRoleExperience';
+import {
+  defaultLandingPageForNavRole,
+  defaultLandingStateForNavRole,
+  isPageAllowedForNavRole,
+} from './lib/navRoleExperience';
+import { getRoleCapabilities } from './lib/roleCapabilities';
 import { SACCOPRO_HOME_PAGE, SACCOPRO_PAGE } from './lib/saccoproPages';
 import { SCHOOL_HOME_PAGE, SCHOOL_PAGE } from './lib/schoolPages';
 import { VSLA_HOME_PAGE, VSLA_PAGE } from './lib/vslaPages';
@@ -239,6 +245,8 @@ const MANAGED_PAGE_STATE_KEYS = [
   "clinicIntent",
   "highlightLabOrderId",
   "labTab",
+  "posPanel",
+  "barView",
 ] as const;
 
 function getPageStateFromUrl(): Record<string, unknown> {
@@ -345,6 +353,10 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (highlightLabOrderId) state.highlightLabOrderId = highlightLabOrderId;
   const labTab = qp.get("labTab");
   if (labTab === "orders" || labTab === "results") state.labTab = labTab;
+  const posPanel = qp.get("posPanel");
+  if (posPanel === "tables" || posPanel === "orders" || posPanel === "new") state.posPanel = posPanel;
+  const barView = qp.get("barView");
+  if (barView === "queue" || barView === "pending" || barView === "completed") state.barView = barView;
   return state;
 }
 
@@ -491,9 +503,10 @@ function AppContent() {
     const bt = user.business_type ?? null;
     if (isPageAllowedForNavRole(currentPage, user.role, bt)) return;
     const next = defaultLandingPageForNavRole(user.role, bt);
+    const nextState = defaultLandingStateForNavRole(user.role);
     if (next && next !== currentPage) {
       setCurrentPage(next);
-      setPageState({});
+      setPageState(nextState ?? {});
     }
   }, [user, currentPage]);
 
@@ -948,8 +961,21 @@ function AppContent() {
           <ActiveStaysPage highlightGuestId={pageState?.highlightGuestId as string | undefined} onNavigate={navigate} />
         );
       case 'POS':
-      case HOTEL_PAGE.posWaiter:
-        return <POSPage readOnly={access.readOnly} compactMode="waiter" />;
+      case HOTEL_PAGE.posWaiter: {
+        const caps = getRoleCapabilities(user?.role);
+        const panel =
+          pageState?.posPanel === "orders" || pageState?.posPanel === "tables" || pageState?.posPanel === "new"
+            ? pageState.posPanel
+            : "tables";
+        return (
+          <POSPage
+            readOnly={access.readOnly || !caps.canEditPrices}
+            compactMode="waiter"
+            posPanel={panel}
+            hidePricing={caps.hidePricing}
+          />
+        );
+      }
       case HOTEL_PAGE.posKitchenBar:
         return <HotelPosKitchenBarPage />;
       case HOTEL_PAGE.posSupervisor:
@@ -1028,10 +1054,27 @@ function AppContent() {
             onNavigate={navigate}
           />
         );
-      case 'Bar Orders':
-        return <BarOrdersPage />;
+      case 'Bar Orders': {
+        const caps = getRoleCapabilities(user?.role);
+        const barView =
+          pageState?.barView === "queue" || pageState?.barView === "pending" || pageState?.barView === "completed"
+            ? pageState.barView
+            : "queue";
+        return (
+          <BarOrdersPage
+            readOnly={access.readOnly || !caps.canEditPrices}
+            initialBarView={barView}
+            hidePricing={caps.hidePricing}
+          />
+        );
+      }
       case 'Kitchen Orders':
-        return <KitchenOrdersPage />;
+        return (
+          <KitchenOrdersPage
+            readOnly={access.readOnly}
+            hidePricing={getRoleCapabilities(user?.role).hidePricing}
+          />
+        );
       case 'kitchen_menu':
         return <KitchenMenuPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'billing':
@@ -1055,7 +1098,7 @@ function AppContent() {
       case 'transactions':
         return <TransactionsPage highlightTransactionId={pageState?.highlightTransactionId as string | undefined} />;
       case 'kitchen_display':
-        return <KitchenDisplayPage />;
+        return <KitchenDisplayPage hidePricing={getRoleCapabilities(user?.role).hidePricing} />;
       case 'housekeeping':
         return <HousekeepingPage />;
       case 'Products':
@@ -1094,6 +1137,8 @@ function AppContent() {
         return <ExpensesReportPage />;
       case 'reports_stock_movement':
         return <StockMovementReportPage />;
+      case 'reports_stock_summary':
+        return <StockSummaryReportPage />;
       case 'reports_purchases_by_item':
         return <PurchasesByItemReportPage />;
       case 'reports_sales_by_item':

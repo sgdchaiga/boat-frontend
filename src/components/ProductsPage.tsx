@@ -153,10 +153,21 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
   const [serviceConsumables, setServiceConsumables] = useState<ServiceConsumableDraft[]>([]);
   const saveProductInFlightRef = useRef(false);
+  const urlEditProductOpenedRef = useRef<string | null>(null);
 
   useEffect(() => {
     void loadAll();
   }, [orgId, superAdmin]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const editProductId = new URLSearchParams(window.location.search).get("editProductId");
+    if (!editProductId || urlEditProductOpenedRef.current === editProductId) return;
+    const product = products.find((p) => p.id === editProductId);
+    if (!product) return;
+    urlEditProductOpenedRef.current = editProductId;
+    editProduct(product);
+  }, [products]);
 
   useEffect(() => {
     if (!modalOpen) {

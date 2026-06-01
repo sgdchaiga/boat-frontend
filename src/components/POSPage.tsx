@@ -33,6 +33,7 @@ import {
   type ServiceType,
 } from "../lib/hotelPosOrderStatus";
 import { loadHotelConfig, type HotelConfig } from "../lib/hotelConfig";
+import { applyHospitalityBranchFilter, getStaffHospitalityBranchId } from "../lib/hospitalityBranchScope";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 type PropertyCustomer = Database["public"]["Tables"]["hotel_customers"]["Row"];
@@ -171,9 +172,14 @@ const OFFLINE_DB = "boat_pos_sync_db";
 const OFFLINE_STORE = "hotel_pos_orders";
 const BASE_TABLES = ["T1", "T2", "T3", "T4", "VIP1", "VIP2", "B1", "B2"];
 
+export type WaiterPosPanel = "new" | "tables" | "orders";
+
 interface POSPageProps {
   readOnly?: boolean;
   compactMode?: "full" | "waiter";
+  /** Waiter sidebar: new order, tables, or orders queue focus */
+  posPanel?: WaiterPosPanel;
+  hidePricing?: boolean;
 }
 
 function isTerminalKitchenOrderStatus(status: string): boolean {
@@ -181,7 +187,12 @@ function isTerminalKitchenOrderStatus(status: string): boolean {
   return s === "served" || s === "completed" || s === "cancelled";
 }
 
-export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps = {}) {
+export function POSPage({
+  readOnly = false,
+  compactMode = "full",
+  posPanel = "tables",
+  hidePricing = false,
+}: POSPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const [hotelBizConfig, setHotelBizConfig] = useState<HotelConfig>(() => loadHotelConfig(orgId));
@@ -258,8 +269,23 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
   const [showPrintBill, setShowPrintBill] = useState(false);
   const printRef = useRef<HTMLDivElement | null>(null);
   const isWaiterCompact = compactMode === "waiter";
-  const [showTableLayout, setShowTableLayout] = useState(true);
-  const [showOrderQueue, setShowOrderQueue] = useState(!isWaiterCompact);
+  const waiterPosPanel: WaiterPosPanel =
+    posPanel === "orders" ? "orders" : posPanel === "new" ? "new" : "tables";
+  const [showTableLayout, setShowTableLayout] = useState(
+    !isWaiterCompact || waiterPosPanel === "tables" || waiterPosPanel === "new"
+  );
+  const [showOrderQueue, setShowOrderQueue] = useState(!isWaiterCompact || waiterPosPanel === "orders");
+
+  useEffect(() => {
+    if (!isWaiterCompact) return;
+    if (waiterPosPanel === "orders") {
+      setShowTableLayout(false);
+      setShowOrderQueue(true);
+    } else {
+      setShowTableLayout(true);
+      setShowOrderQueue(false);
+    }
+  }, [isWaiterCompact, waiterPosPanel]);
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [showPostedTransactions, setShowPostedTransactions] = useState(false);
   const [queueDate, setQueueDate] = useState(() => {
@@ -453,6 +479,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
         ordersQuery = ordersQuery.eq("order_status", queueStatusFilter);
       }
       ordersQuery = filterByOrganizationId(ordersQuery, orgId, superAdmin);
+      ordersQuery = applyHospitalityBranchFilter(ordersQuery, user);
 
       const [productsRes, staysRes, ordersRes, departmentsRes, customersRes, roomsRes, waitersRes, profilesRes] = await Promise.all([
         filterByOrganizationId(
@@ -1499,12 +1526,20 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
               return g ? `${g.first_name} ${g.last_name}`.trim() : null;
             })();
 
-      const basePayload: { room_id: string | null; table_number: string | null; order_status: string; created_by?: string | null } = {
+      const branchId = getStaffHospitalityBranchId(user);
+      const basePayload: {
+        room_id: string | null;
+        table_number: string | null;
+        order_status: string;
+        created_by?: string | null;
+        hospitality_branch_id?: string | null;
+      } = {
         room_id: roomId,
         table_number: orderTable,
         order_status: "pending",
       };
       if (staffRow?.id) basePayload.created_by = staffRow.id;
+      if (branchId) basePayload.hospitality_branch_id = branchId;
 
       const waiterName = selectedTableWaiterName ? ` [Waiter: ${selectedTableWaiterName}]` : "";
       const withCustomer = orderCustomer ? { ...basePayload, customer_name: `${orderCustomer}${waiterName}` } : basePayload;
@@ -1918,6 +1953,7 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
         <ReadOnlyNotice />
       )}
 
+      {(!isWaiterCompact || waiterPosPanel !== "orders") && (
       <div className="mb-4 bg-white rounded-xl border border-slate-200 p-3">
         <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
           <div className="flex items-center gap-2">
@@ -2045,7 +2081,9 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
           </div>
         )}
       </div>
+      )}
 
+      {(!isWaiterCompact || waiterPosPanel !== "orders") && (
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         {/* Products */}
         <div className="lg:col-span-2">
@@ -2155,9 +2193,11 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
                     <p className={`font-semibold text-slate-900 ${touchMode ? "text-base" : "text-sm"} truncate`}>
                       {p.name}
                     </p>
-                    <p className={`text-slate-600 tabular-nums ${touchMode ? "text-sm" : "text-xs"}`}>
-                      {getUnitPrice(p).toFixed(2)}
-                    </p>
+                    {!hidePricing ? (
+                      <p className={`text-slate-600 tabular-nums ${touchMode ? "text-sm" : "text-xs"}`}>
+                        {getUnitPrice(p).toFixed(2)}
+                      </p>
+                    ) : null}
                   </button>
                 ))}
               </div>
@@ -2514,9 +2554,10 @@ export function POSPage({ readOnly = false, compactMode = "full" }: POSPageProps
           </div>
         </div>
       </div>
+      )}
 
       {/* Order queue */}
-      {!isWaiterCompact ? (
+      {!isWaiterCompact || waiterPosPanel === "orders" ? (
       <div className="mt-8">
         <div className="flex flex-wrap items-center justify-between gap-4 mb-3">
           <h2 className="text-lg font-bold text-slate-900">Order Queue</h2>

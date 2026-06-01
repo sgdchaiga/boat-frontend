@@ -2,7 +2,9 @@ import { supabase } from "../../../lib/supabase";
 import type { OfflineRetailLine, OfflineRetailPayment } from "../../../lib/retailOfflineQueue";
 import type { PaymentMethodCode } from "../../../lib/paymentMethod";
 
-type MobileCollectionResponse = { status?: string; message?: string };
+export type MobileMoneyGatewayProvider = "flutterwave" | "dpo";
+
+type MobileCollectionResponse = { status?: string; message?: string; transaction_id?: string | number; tx_ref?: string };
 
 export interface SaleCustomerContext {
   id: string | null;
@@ -38,6 +40,7 @@ export interface CollectMobileMoneyPaymentsArgs {
   customerName: string;
   customerEmail: string;
   organizationId: string | null;
+  gatewayProvider?: MobileMoneyGatewayProvider;
 }
 
 export const normalizeMobilePhone = (raw: string) => {
@@ -56,13 +59,17 @@ export async function collectMobileMoneyPayments({
   customerName,
   customerEmail,
   organizationId,
+  gatewayProvider = "flutterwave",
 }: CollectMobileMoneyPaymentsArgs): Promise<Array<OfflineRetailPayment & { id: string }>> {
   const pending = tenders.filter((t) => t.status === "pending");
   if (pending.length === 0) return tenders;
   const normalizedPhone = normalizeMobilePhone(phone);
+  const completedRefs = new Map<string, { txRef: string; transactionId: number | null }>();
   for (const line of pending) {
     const network = line.method === "mtn_mobile_money" ? "mtn" : "airtel";
-    const { data, error } = await supabase.functions.invoke("flutterwave-mobile-money", {
+    const txRef = `${saleId}-${line.id}`;
+    const functionName = gatewayProvider === "dpo" ? "dpo-mobile-money" : "flutterwave-mobile-money";
+    const { data, error } = await supabase.functions.invoke(functionName, {
       body: {
         action: "collect",
         network,
@@ -71,7 +78,7 @@ export async function collectMobileMoneyPayments({
         phone_number: normalizedPhone,
         customer_name: customerName,
         customer_email: customerEmail,
-        tx_ref: `${saleId}-${line.id}`,
+        tx_ref: txRef,
         sale_id: saleId,
         organization_id: organizationId,
         payment_method: line.method,
@@ -86,8 +93,21 @@ export async function collectMobileMoneyPayments({
       const detail = (data as MobileCollectionResponse | null)?.message || "Mobile money payment failed.";
       throw new Error(detail);
     }
+    completedRefs.set(line.id, {
+      txRef: (data as MobileCollectionResponse | null)?.tx_ref || txRef,
+      transactionId: (data as MobileCollectionResponse | null)?.transaction_id ?? null,
+    });
   }
-  return tenders.map((t) => (t.status === "pending" ? { ...t, status: "completed" } : t));
+  return tenders.map((t) => {
+    if (t.status !== "pending") return t;
+    const ref = completedRefs.get(t.id);
+    return {
+      ...t,
+      status: "completed",
+      reference: ref?.txRef ?? t.reference ?? null,
+      gatewayTransactionId: ref?.transactionId ?? t.gatewayTransactionId ?? null,
+    };
+  });
 }
 
 export async function persistRetailSaleLedger({
@@ -164,6 +184,7 @@ export async function persistRetailSaleLedger({
     payment_method: p.method as PaymentMethodCode,
     amount: p.amount,
     payment_status: p.status,
+    reference: p.reference ?? null,
   }));
   if (payRows.length > 0) {
     await supabase.from("retail_sale_payments").insert(payRows);

@@ -5,6 +5,7 @@ import type { Database } from "../lib/database.types";
 import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { applyHospitalityBranchFilter } from "../lib/hospitalityBranchScope";
 import { PageNotes } from "./common/PageNotes";
 import { getNextOrderStatus, formatKitchenBarAdvanceLabel } from "../lib/hotelPosOrderStatus";
 import { loadHotelConfig } from "../lib/hotelConfig";
@@ -33,7 +34,25 @@ interface BarOrder {
   payments_total?: number;
 }
 
-export function BarOrdersPage() {
+type BarView = "queue" | "pending" | "completed";
+
+interface BarOrdersPageProps {
+  readOnly?: boolean;
+  initialBarView?: BarView;
+  hidePricing?: boolean;
+}
+
+function barViewToPaymentFilter(view: BarView): "all" | "outstanding" | "partially_paid" | "paid" | "unpaid" {
+  if (view === "completed") return "paid";
+  if (view === "pending") return "outstanding";
+  return "outstanding";
+}
+
+export function BarOrdersPage({
+  readOnly = false,
+  initialBarView = "queue",
+  hidePricing = false,
+}: BarOrdersPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -63,7 +82,13 @@ export function BarOrdersPage() {
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderDate, setEditingOrderDate] = useState("");
   const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
-  const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">("all");
+  const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">(
+    () => barViewToPaymentFilter(initialBarView)
+  );
+
+  useEffect(() => {
+    setPaymentFilter(barViewToPaymentFilter(initialBarView));
+  }, [initialBarView]);
 
   const [dateRange, setDateRange] = useState<DateRangeKey>("last_30_days");
   const [customFrom, setCustomFrom] = useState("");
@@ -96,11 +121,12 @@ export function BarOrdersPage() {
 
       const [departmentsRes, ordersRes, productsRes] = await Promise.all([
         filterByOrganizationId(supabase.from("departments").select("id,name"), orgId, superAdmin),
-        filterByOrganizationId(
-          supabase
-            .from("kitchen_orders")
-            .select(
-              `
+        applyHospitalityBranchFilter(
+          filterByOrganizationId(
+            supabase
+              .from("kitchen_orders")
+              .select(
+                `
             id,
             order_status,
             table_number,
@@ -109,12 +135,14 @@ export function BarOrdersPage() {
             created_by,
             kitchen_order_items(quantity, notes, product_id)
           `
-            )
-            .gte("created_at", fromIso)
-            .lt("created_at", toIso)
-            .order("created_at", { ascending: true }),
-          orgId,
-          superAdmin
+              )
+              .gte("created_at", fromIso)
+              .lt("created_at", toIso)
+              .order("created_at", { ascending: true }),
+            orgId,
+            superAdmin
+          ),
+          user
         ),
         filterByOrganizationId(supabase.from("products").select("id, name, department_id, sales_price"), orgId, superAdmin),
       ]);

@@ -4,6 +4,8 @@ export interface OfflineRetailPayment {
   method: "cash" | "card" | "bank_transfer" | "mtn_mobile_money" | "airtel_money";
   amount: number;
   status: "pending" | "completed";
+  reference?: string | null;
+  gatewayTransactionId?: string | number | null;
 }
 
 export interface OfflineRetailLine {

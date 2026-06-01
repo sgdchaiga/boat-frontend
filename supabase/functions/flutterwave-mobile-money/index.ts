@@ -30,6 +30,31 @@ const json = (body: unknown, status = 200) =>
 
 type AttemptStatus = "initiated" | "pending" | "successful" | "failed" | "timeout" | "cancelled";
 
+const asMoney = (value: unknown) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n * 100) / 100 : NaN;
+};
+
+const verifyMatchesRequest = (
+  verifyData: Record<string, unknown>,
+  payload: CollectRequest
+): { ok: true } | { ok: false; message: string } => {
+  const returnedRef = String(verifyData.tx_ref || "");
+  if (returnedRef && returnedRef !== payload.tx_ref) {
+    return { ok: false, message: "Gateway transaction reference mismatch" };
+  }
+  const returnedCurrency = String(verifyData.currency || payload.currency || "UGX").toUpperCase();
+  const expectedCurrency = String(payload.currency || "UGX").toUpperCase();
+  if (returnedCurrency !== expectedCurrency) {
+    return { ok: false, message: "Gateway currency mismatch" };
+  }
+  const returnedAmount = asMoney(verifyData.amount);
+  if (!Number.isFinite(returnedAmount) || returnedAmount !== asMoney(payload.amount)) {
+    return { ok: false, message: "Gateway amount mismatch" };
+  }
+  return { ok: true };
+};
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ ok: false, error: "Method not allowed" }, 405);
@@ -57,7 +82,13 @@ Deno.serve(async (req) => {
   const baseUrl = Deno.env.get("FLW_BASE_URL") || "https://api.flutterwave.com/v3";
   const timeoutSeconds = Math.min(Math.max(payload.timeout_seconds ?? 60, 15), 60);
   const staffOrgRes = await authClient.from("staff").select("organization_id").eq("id", userData.user.id).maybeSingle();
-  const organizationId = payload.organization_id ?? ((staffOrgRes.data as { organization_id?: string | null } | null)?.organization_id ?? null);
+  if (staffOrgRes.error) return json({ ok: false, error: staffOrgRes.error.message }, 500);
+  const staffOrganizationId = (staffOrgRes.data as { organization_id?: string | null } | null)?.organization_id ?? null;
+  if (!staffOrganizationId) return json({ ok: false, error: "Authenticated staff organization not found" }, 403);
+  if (payload.organization_id && payload.organization_id !== staffOrganizationId) {
+    return json({ ok: false, error: "Organization mismatch" }, 403);
+  }
+  const organizationId = staffOrganizationId;
 
   const writeAttempt = async (status: AttemptStatus, patch: Record<string, unknown> = {}) => {
     await serviceClient.from("mobile_money_attempts").upsert(
@@ -65,6 +96,7 @@ Deno.serve(async (req) => {
         tx_ref: payload.tx_ref,
         sale_id: payload.sale_id ?? null,
         organization_id: organizationId,
+        gateway_provider: "flutterwave",
         payment_method: payload.payment_method ?? payload.network,
         network: payload.network,
         phone_number: payload.phone_number,
@@ -161,6 +193,16 @@ Deno.serve(async (req) => {
     const txStatus = String(verifyData.status || "").toLowerCase();
 
     if (txStatus === "successful") {
+      const verified = verifyMatchesRequest(verifyData, payload);
+      if (!verified.ok) {
+        await writeAttempt("failed", {
+          flutterwave_tx_id: transactionId,
+          gateway_response: verifyJson,
+          attempts: verifyAttempts,
+          last_error: verified.message,
+        });
+        return json({ ok: false, status: "failed", transaction_id: transactionId, tx_ref: payload.tx_ref, message: verified.message }, 400);
+      }
       await writeAttempt("successful", {
         flutterwave_tx_id: transactionId,
         gateway_response: verifyJson,

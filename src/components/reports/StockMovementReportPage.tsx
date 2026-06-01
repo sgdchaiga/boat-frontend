@@ -32,6 +32,12 @@ interface Row {
   rejectsHasMixedSources?: boolean;
 }
 
+function initialProductIdFromUrl(): string {
+  if (typeof window === "undefined") return "";
+  const qp = new URLSearchParams(window.location.search);
+  return qp.get("productId") || qp.get("selectedProductId") || "";
+}
+
 export function StockMovementReportPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
@@ -43,7 +49,7 @@ export function StockMovementReportPage() {
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLocation, setSelectedLocation] = useState<string>("");
-  const [selectedProductId, setSelectedProductId] = useState<string>("");
+  const [selectedProductId, setSelectedProductId] = useState<string>(() => initialProductIdFromUrl());
   const [productsList, setProductsList] = useState<{ id: string; name: string }[]>([]);
 
   const sourceTypeToPage = (sourceType: string | null | undefined): string | null => {
@@ -554,4 +560,3 @@ export function StockMovementReportPage() {
     </div>
   );
 }
-

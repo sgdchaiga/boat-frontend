@@ -41,6 +41,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const superAdmin = !!user?.isSuperAdmin;
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const useLocalDesktopNewStaff = localAuthEnabled && desktopApi.isAvailable();
+  const pinAccessAvailable = useLocalDesktopNewStaff || !localAuthEnabled;
 
   const [staff, setStaff] = useState<Staff[]>([]);
   const [roleTypes, setRoleTypes] = useState<OrgRoleType[]>([]);
@@ -162,6 +163,32 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     setShowStaffModal(true);
   };
 
+  const saveOnlineStaffPin = async (staffId: string) => {
+    if (useLocalDesktopNewStaff || !orgId || !pin.trim()) return true;
+    const code = normalizeStaffCode(staffCode);
+    if (!code) {
+      alert("Enter a staff code before setting a PIN.");
+      return false;
+    }
+    const pinError = validatePin(normalizePin(pin));
+    if (pinError) {
+      alert(pinError);
+      return false;
+    }
+    const { error } = await supabase.rpc("set_staff_pin_credential", {
+      p_staff_id: staffId,
+      p_organization_id: orgId,
+      p_staff_code: code,
+      p_pin: normalizePin(pin),
+      p_force_change: forcePinChange,
+    });
+    if (error) {
+      alert(error.message);
+      return false;
+    }
+    return true;
+  };
+
   const openEditStaff = (member: Staff) => {
     setEditingStaff(member);
     setFullName(member.full_name);
@@ -173,6 +200,21 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     setStaffCode(account?.staff_code || "");
     setPin("");
     setForcePinChange(account?.pin_change_required ?? false);
+    if (!useLocalDesktopNewStaff && orgId) {
+      void supabase
+        .from("staff_pin_credentials")
+        .select("staff_code,pin_change_required")
+        .eq("staff_id", member.id)
+        .maybeSingle()
+        .then(({ data, error }: { data: { staff_code?: string | null; pin_change_required?: boolean | null } | null; error: { message?: string } | null }) => {
+          if (error) {
+            console.warn("Failed to load staff PIN settings", error.message);
+            return;
+          }
+          setStaffCode(data?.staff_code || "");
+          setForcePinChange(data?.pin_change_required ?? false);
+        });
+    }
     setShowStaffModal(true);
   };
 
@@ -187,15 +229,15 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       return;
     }
     if (editingStaff) {
-      if (useLocalDesktopNewStaff && staffCode.trim()) {
+      if (pinAccessAvailable && staffCode.trim()) {
         const code = normalizeStaffCode(staffCode);
         const accounts = readLocalAccounts();
-        if (accounts.some((a) => a.id !== editingStaff.id && normalizeStaffCode(a.staff_code || "") === code)) {
+        if (useLocalDesktopNewStaff && accounts.some((a) => a.id !== editingStaff.id && normalizeStaffCode(a.staff_code || "") === code)) {
           alert("That staff code is already assigned.");
           return;
         }
       }
-      if (useLocalDesktopNewStaff && pin.trim()) {
+      if (pinAccessAvailable && pin.trim()) {
         const pinError = validatePin(normalizePin(pin));
         if (pinError) {
           alert(pinError);
@@ -239,6 +281,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         ...(pin.trim() ? { pin: normalizePin(pin) } : {}),
         pin_change_required: forcePinChange,
       });
+      if (!(await saveOnlineStaffPin(editingStaff.id))) return;
     } else {
       if (password.length < 6) {
         alert("Password must be at least 6 characters.");
@@ -350,6 +393,24 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
               alert(inviteErr.message);
               return;
             }
+            if (pin.trim()) {
+              const { data: existingStaff, error: staffLookupErr } = await supabase
+                .from("staff")
+                .select("id")
+                .eq("email", email.trim())
+                .eq("organization_id", orgId)
+                .maybeSingle();
+              if (staffLookupErr) {
+                alert(staffLookupErr.message);
+                return;
+              }
+              const existingStaffId = (existingStaff as { id?: string } | null)?.id;
+              if (!existingStaffId) {
+                alert("Staff login was linked, but the staff row could not be found for PIN setup.");
+                return;
+              }
+              if (!(await saveOnlineStaffPin(existingStaffId))) return;
+            }
           } else {
             alert(signUpErr.message);
             return;
@@ -374,6 +435,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
             alert(error.message);
             return;
           }
+          if (!(await saveOnlineStaffPin(authUserId))) return;
         }
       }
     }
@@ -740,7 +802,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                   ))}
                 </select>
               </div>
-              {useLocalDesktopNewStaff && (
+              {pinAccessAvailable && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
                     <label className="block text-sm font-medium text-slate-700 mb-1">Staff code</label>
