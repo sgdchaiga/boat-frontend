@@ -1,9 +1,8 @@
-import { TransactionsPage } from "./TransactionsPage";
+import { PosSalesReportPage } from "./reports/PosSalesReportPage";
 
 /**
- * Daily Sales Report is generated from the Transactions page.
- * This route shows the Transactions view with filters and Export CSV.
+ * Focused POS sales report with department, date, and accounting-basis filters.
  */
 export function DailySalesReportPage() {
-  return <TransactionsPage />;
+  return <PosSalesReportPage />;
 }

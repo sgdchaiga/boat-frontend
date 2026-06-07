@@ -1583,13 +1583,13 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
 
       {showModal && (
         <div
-          className="fixed inset-0 z-[100] flex items-start justify-center bg-black/50 px-4 py-6 overflow-y-auto"
+          className="fixed inset-0 z-[100] flex items-center justify-center overflow-hidden bg-black/50 p-2 sm:p-4"
           onClick={(e) => {
             if (e.target === e.currentTarget && !saving) closeModal();
           }}
         >
           <div
-            className={`relative z-10 my-auto flex w-full flex-col overflow-hidden rounded-xl bg-white shadow-xl max-h-[calc(100vh-1rem)] ${
+            className={`relative z-10 flex max-h-[calc(100dvh-1rem)] min-h-0 w-full flex-col overflow-hidden rounded-xl bg-white shadow-xl sm:max-h-[calc(100dvh-2rem)] ${
               simpleExpenseMode ? "max-w-2xl" : "max-w-6xl"
             }`}
             onClick={(ev) => ev.stopPropagation()}
@@ -2020,7 +2020,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                 )}
                 </div>
 
-                <div className="flex shrink-0 justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4">
+                <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3 sm:py-4">
                   <button
                     type="button"
                     onClick={() => !saving && closeModal()}

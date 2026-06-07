@@ -9,7 +9,17 @@ import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../.
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import { Info } from "lucide-react";
 
-type AccountTotal = { account_code: string; account_name: string; total: number };
+type AccountTotal = { account_id: string; account_code: string; account_name: string; account_type: "asset" | "liability" | "equity"; total: number };
+type DrillLine = {
+  id: string;
+  entry_date: string;
+  description: string;
+  transaction_id: string | null;
+  reference_type: string | null;
+  debit: number;
+  credit: number;
+  line_description: string | null;
+};
 const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense", "school_payment"] as const;
 
 function accountBalanceDelta(
@@ -49,6 +59,10 @@ export function BalanceSheetPage() {
   const [previousTotalEquity, setPreviousTotalEquity] = useState(0);
   const [previousNetIncome, setPreviousNetIncome] = useState(0);
   const [previousLabel, setPreviousLabel] = useState("Previous");
+  const [drillAccount, setDrillAccount] = useState<AccountTotal | null>(null);
+  const [drillRows, setDrillRows] = useState<DrillLine[]>([]);
+  const [drillLoading, setDrillLoading] = useState(false);
+  const [drillError, setDrillError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -118,7 +132,13 @@ export function BalanceSheetPage() {
     Object.entries(byAccount).forEach(([id, total]) => {
       const acc = accMap[id];
       if (!acc) return;
-      const row = { account_code: acc.account_code, account_name: acc.account_name, total };
+      const row = {
+        account_id: acc.id,
+        account_code: acc.account_code,
+        account_name: acc.account_name,
+        account_type: acc.account_type as "asset" | "liability" | "equity",
+        total,
+      };
       if (acc.account_type === "asset") { a.push(row); ta += total; }
       else if (acc.account_type === "liability") { li.push(row); tl += total; }
       else if (acc.account_type === "equity") { eq.push(row); te += total; }
@@ -238,6 +258,65 @@ export function BalanceSheetPage() {
   const previousAssetsByCode = useMemo(() => new Map(previousAssets.map((r) => [r.account_code, r.total])), [previousAssets]);
   const previousLiabilitiesByCode = useMemo(() => new Map(previousLiabilities.map((r) => [r.account_code, r.total])), [previousLiabilities]);
   const previousEquityByCode = useMemo(() => new Map(previousEquity.map((r) => [r.account_code, r.total])), [previousEquity]);
+  const drillRowsWithBalance = useMemo(() => {
+    if (!drillAccount) return [];
+    let runningBalance = 0;
+    return drillRows.map((row) => {
+      const impact = accountBalanceDelta(drillAccount.account_type, row.debit, row.credit);
+      runningBalance += impact;
+      return { ...row, impact, runningBalance };
+    });
+  }, [drillAccount, drillRows]);
+
+  const openDrilldown = async (account: AccountTotal) => {
+    setDrillAccount(account);
+    setDrillRows([]);
+    setDrillError(null);
+    setDrillLoading(true);
+    try {
+      const query = supabase
+        .from("journal_entry_lines")
+        .select(
+          "id, debit, credit, line_description, journal_entries!inner(id, entry_date, description, transaction_id, reference_type), gl_accounts!inner(id)"
+        )
+        .eq("gl_account_id", account.account_id)
+        .lte("journal_entries.entry_date", asOfDate)
+        .eq("journal_entries.is_posted", true)
+        .order("entry_date", { ascending: true, referencedTable: "journal_entries" });
+      if (basis === "cash") {
+        query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+      }
+      const { data, error } = await filterJournalLinesByOrganizationId(query, orgId, superAdmin);
+      if (error) throw new Error(error.message);
+      setDrillRows(
+        ((data || []) as Array<{
+          id: string;
+          debit: number;
+          credit: number;
+          line_description: string | null;
+          journal_entries: {
+            entry_date: string;
+            description: string;
+            transaction_id: string | null;
+            reference_type: string | null;
+          } | null;
+        }>).map((row) => ({
+          id: row.id,
+          entry_date: row.journal_entries?.entry_date || "",
+          description: row.journal_entries?.description || "",
+          transaction_id: row.journal_entries?.transaction_id ?? null,
+          reference_type: row.journal_entries?.reference_type ?? null,
+          debit: Number(row.debit) || 0,
+          credit: Number(row.credit) || 0,
+          line_description: row.line_description,
+        }))
+      );
+    } catch (e) {
+      setDrillError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setDrillLoading(false);
+    }
+  };
 
   const exportExcel = () => {
     const data: (string | number)[][] = [
@@ -394,7 +473,11 @@ export function BalanceSheetPage() {
               {assetsDisplayed.map((r) => (
                 <tr key={r.account_code} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
-                  <td className="p-3">{r.account_name}</td>
+                   <td className="p-3">
+                     <button type="button" onClick={() => void openDrilldown(r)} className="text-left text-blue-700 hover:underline">
+                       {r.account_name}
+                     </button>
+                   </td>
                   <td className="p-3 text-right">{r.total.toFixed(2)}</td>
                   {compareRange !== "none" && <td className="p-3 text-right">{(previousAssetsByCode.get(r.account_code) ?? 0).toFixed(2)}</td>}
                 </tr>
@@ -432,7 +515,11 @@ export function BalanceSheetPage() {
               {liabilitiesDisplayed.map((r) => (
                 <tr key={r.account_code} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
-                  <td className="p-3">{r.account_name}</td>
+                   <td className="p-3">
+                     <button type="button" onClick={() => void openDrilldown(r)} className="text-left text-blue-700 hover:underline">
+                       {r.account_name}
+                     </button>
+                   </td>
                   <td className="p-3 text-right">{r.total.toFixed(2)}</td>
                   {compareRange !== "none" && <td className="p-3 text-right">{(previousLiabilitiesByCode.get(r.account_code) ?? 0).toFixed(2)}</td>}
                 </tr>
@@ -470,7 +557,11 @@ export function BalanceSheetPage() {
               {equityDisplayed.map((r) => (
                 <tr key={r.account_code} className="border-t">
                   <td className="p-3 font-mono">{r.account_code}</td>
-                  <td className="p-3">{r.account_name}</td>
+                   <td className="p-3">
+                     <button type="button" onClick={() => void openDrilldown(r)} className="text-left text-blue-700 hover:underline">
+                       {r.account_name}
+                     </button>
+                   </td>
                   <td className="p-3 text-right">{r.total.toFixed(2)}</td>
                   {compareRange !== "none" && <td className="p-3 text-right">{(previousEquityByCode.get(r.account_code) ?? 0).toFixed(2)}</td>}
                 </tr>
@@ -544,6 +635,91 @@ export function BalanceSheetPage() {
               </table>
             </div>
           )}
+        </div>
+      )}
+      {drillAccount && (
+        <div className="fixed inset-0 z-50 bg-black/40 p-4 overflow-y-auto" onClick={() => setDrillAccount(null)}>
+          <div
+            className="mx-auto mt-8 w-full max-w-5xl rounded-xl bg-white border border-slate-200 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="flex items-center justify-between p-4 border-b border-slate-200">
+              <div>
+                <h3 className="text-lg font-semibold text-slate-900">
+                  Drill-down: {drillAccount.account_code} {drillAccount.account_name}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Posted {basis} basis transactions through {asOfDate}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDrillAccount(null)}
+                className="rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+              >
+                Close
+              </button>
+            </div>
+            <div className="p-4">
+              {drillLoading ? (
+                <div className="text-slate-500">Loading transactions...</div>
+              ) : drillError ? (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">{drillError}</div>
+              ) : (
+                <div className="overflow-auto max-h-[65vh]">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-100 sticky top-0">
+                      <tr>
+                        <th className="p-2 text-left">Date</th>
+                        <th className="p-2 text-left">Description</th>
+                        <th className="p-2 text-left">Journal</th>
+                        <th className="p-2 text-right">Debit</th>
+                        <th className="p-2 text-right">Credit</th>
+                        <th className="p-2 text-right">Impact</th>
+                        <th className="p-2 text-right">Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {drillRowsWithBalance.map((row) => {
+                        return (
+                          <tr key={row.id} className="border-t">
+                            <td className="p-2 whitespace-nowrap">{row.entry_date}</td>
+                            <td className="p-2">
+                              <div>{row.description || "—"}</div>
+                              {row.line_description ? <div className="text-xs text-slate-500">{row.line_description}</div> : null}
+                            </td>
+                            <td className="p-2 text-xs text-slate-600">
+                              {row.transaction_id || "—"}
+                              {row.reference_type ? <div>{row.reference_type}</div> : null}
+                            </td>
+                            <td className="p-2 text-right">{row.debit.toFixed(2)}</td>
+                            <td className="p-2 text-right">{row.credit.toFixed(2)}</td>
+                            <td className="p-2 text-right">{row.impact.toFixed(2)}</td>
+                            <td className="p-2 text-right font-medium">{row.runningBalance.toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                      {drillRows.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="p-4 text-center text-slate-500">
+                            No posted transactions found for this account and filter.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                    {drillRows.length > 0 && (
+                      <tfoot className="bg-slate-100 font-medium sticky bottom-0">
+                        <tr>
+                          <td colSpan={6} className="p-2 text-right">Balance as of {asOfDate}</td>
+                          <td className="p-2 text-right">{drillAccount.total.toFixed(2)}</td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>

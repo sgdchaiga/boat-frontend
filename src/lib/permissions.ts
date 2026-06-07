@@ -12,6 +12,7 @@ export const PERMISSION_KEYS = [
   "payroll_post",
   "pos_orders_edit",
   "cash_receipts_edit",
+  "stock_adjustments_delete",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -19,7 +20,7 @@ export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 export type PermissionDef = {
   key: PermissionKey;
   label: string;
-  group: "Approvals" | "Payroll" | "Sales Operations";
+  group: "Approvals" | "Payroll" | "Sales Operations" | "Inventory";
   description: string;
 };
 
@@ -35,9 +36,107 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "payroll_post", label: "Payroll post", group: "Payroll", description: "Post payroll journals to ledger." },
   { key: "pos_orders_edit", label: "Edit POS orders", group: "Sales Operations", description: "Edit/reverse POS orders." },
   { key: "cash_receipts_edit", label: "Edit cash receipts", group: "Sales Operations", description: "Edit/reverse cash receipts." },
+  { key: "stock_adjustments_delete", label: "Delete stock adjustments", group: "Inventory", description: "Delete complete stock adjustment batches." },
 ];
 
 const CACHE_KEY = "boat.permissions.snapshot.v2";
+const PAGE_PERMISSION_PREFIX = "page:";
+
+export type PageAccessDef = {
+  page: string;
+  label: string;
+  group:
+    | "Dashboard"
+    | "Front desk"
+    | "POS"
+    | "Customers"
+    | "Cash"
+    | "Purchases"
+    | "Inventory"
+    | "Reports"
+    | "Accounting"
+    | "Payroll"
+    | "Admin";
+};
+
+export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
+  { page: "dashboard", label: "Dashboard", group: "Dashboard" },
+  { page: "retail_dashboard", label: "Retail dashboard", group: "Dashboard" },
+  { page: "clinic_dashboard", label: "Clinic dashboard", group: "Dashboard" },
+  { page: "rooms", label: "Rooms", group: "Front desk" },
+  { page: "reservations", label: "Reservations", group: "Front desk" },
+  { page: "checkin", label: "Check in", group: "Front desk" },
+  { page: "stays", label: "Active stays", group: "Front desk" },
+  { page: "housekeeping", label: "Housekeeping", group: "Front desk" },
+  { page: "POS", label: "Hotel POS", group: "POS" },
+  { page: "hotel_pos_waiter", label: "Waiter POS", group: "POS" },
+  { page: "hotel_pos_kitchen_bar", label: "Kitchen / bar POS", group: "POS" },
+  { page: "hotel_pos_supervisor", label: "Supervisor POS", group: "POS" },
+  { page: "hotel_pos_reports", label: "POS analytics", group: "POS" },
+  { page: "retail_pos", label: "Retail POS", group: "POS" },
+  { page: "retail_pos_orders", label: "Retail POS orders", group: "POS" },
+  { page: "clinic_pos", label: "Clinic POS", group: "POS" },
+  { page: "Kitchen Orders", label: "Kitchen orders", group: "POS" },
+  { page: "Bar Orders", label: "Bar orders", group: "POS" },
+  { page: "kitchen_display", label: "Kitchen display", group: "POS" },
+  { page: "kitchen_menu", label: "Kitchen menu", group: "POS" },
+  { page: "hotel_customers", label: "Hotel customers", group: "Customers" },
+  { page: "retail_customers", label: "Retail customers", group: "Customers" },
+  { page: "retail_credit_invoices", label: "Credit invoices / debtors", group: "Customers" },
+  { page: "clinic_patients", label: "Clinic patients", group: "Customers" },
+  { page: "clinic_consultation", label: "Clinic consultation", group: "Customers" },
+  { page: "clinic_laboratory", label: "Clinic laboratory", group: "Customers" },
+  { page: "billing", label: "Billing", group: "Cash" },
+  { page: "payments", label: "Payments", group: "Cash" },
+  { page: "cash_receipts", label: "Cash receipts", group: "Cash" },
+  { page: "transactions", label: "Transactions", group: "Cash" },
+  { page: "wallet", label: "Wallet", group: "Cash" },
+  { page: "purchases_vendors", label: "Vendors", group: "Purchases" },
+  { page: "purchases_orders", label: "Purchase orders", group: "Purchases" },
+  { page: "purchases_bills", label: "GRN / bills", group: "Purchases" },
+  { page: "purchases_payments", label: "Vendor payments", group: "Purchases" },
+  { page: "purchases_credits", label: "Return to supplier", group: "Purchases" },
+  { page: "purchases_expenses", label: "Spend money / expenses", group: "Purchases" },
+  { page: "Products", label: "Items", group: "Inventory" },
+  { page: "inventory_barcodes", label: "Barcodes", group: "Inventory" },
+  { page: "inventory_stock_adjustments", label: "Stock adjustments", group: "Inventory" },
+  { page: "inventory_stock_balances", label: "Stock balances", group: "Inventory" },
+  { page: "inventory_store_requisitions", label: "Store requisitions", group: "Inventory" },
+  { page: "reports", label: "Reports hub", group: "Reports" },
+  { page: "reports_daily_sales", label: "Daily sales", group: "Reports" },
+  { page: "reports_daily_summary", label: "Daily summary", group: "Reports" },
+  { page: "reports_retail_shift_variance", label: "Shift variance", group: "Reports" },
+  { page: "reports_retail_sales_insights", label: "Sales insights", group: "Reports" },
+  { page: "reports_sales_by_item", label: "Sales by item", group: "Reports" },
+  { page: "reports_room_billing", label: "Room billing", group: "Reports" },
+  { page: "reports_daily_purchases_summary", label: "Purchases summary", group: "Reports" },
+  { page: "reports_purchases_by_item", label: "Purchases by item", group: "Reports" },
+  { page: "reports_expenses", label: "Expenses report", group: "Reports" },
+  { page: "reports_stock_summary", label: "Stock summary", group: "Reports" },
+  { page: "reports_stock_movement", label: "Stock movement", group: "Reports" },
+  { page: "gl_accounts", label: "Chart of accounts", group: "Accounting" },
+  { page: "accounting_journal", label: "Journal entries", group: "Accounting" },
+  { page: "accounting_manual", label: "Manual journals", group: "Accounting" },
+  { page: "accounting_gl", label: "General ledger", group: "Accounting" },
+  { page: "accounting_trial", label: "Trial balance", group: "Accounting" },
+  { page: "accounting_income", label: "Income statement", group: "Accounting" },
+  { page: "accounting_balance", label: "Balance sheet", group: "Accounting" },
+  { page: "accounting_cashflow", label: "Cash flow", group: "Accounting" },
+  { page: "fixed_assets", label: "Fixed assets", group: "Accounting" },
+  { page: "payroll_hub", label: "Payroll overview", group: "Payroll" },
+  { page: "payroll_staff", label: "Payroll staff", group: "Payroll" },
+  { page: "payroll_settings", label: "Payroll settings", group: "Payroll" },
+  { page: "payroll_loans", label: "Payroll loans", group: "Payroll" },
+  { page: "payroll_periods", label: "Payroll periods", group: "Payroll" },
+  { page: "payroll_run", label: "Payroll process", group: "Payroll" },
+  { page: "payroll_audit", label: "Payroll audit", group: "Payroll" },
+  { page: "staff", label: "Staff", group: "Admin" },
+  { page: "admin", label: "Admin settings", group: "Admin" },
+];
+
+export function pagePermissionKey(page: string): string {
+  return `${PAGE_PERMISSION_PREFIX}${page}`;
+}
 
 type PermissionSnapshot = {
   orgId: string;
@@ -47,7 +146,7 @@ type PermissionSnapshot = {
   loadedAt: number;
 };
 
-function readSnapshot(): PermissionSnapshot | null {
+export function readPermissionSnapshot(): PermissionSnapshot | null {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
     if (!raw) return null;
@@ -76,7 +175,10 @@ export async function loadPermissionSnapshot(input: {
   const role = (input.role || "").toLowerCase();
   if (!orgId || !staffId) return {};
   if (input.isSuperAdmin) {
-    const grants = Object.fromEntries(PERMISSION_KEYS.map((k) => [k, true]));
+    const grants = Object.fromEntries([
+      ...PERMISSION_KEYS.map((k) => [k, true] as const),
+      ...PAGE_ACCESS_DEFS.map((p) => [pagePermissionKey(p.page), true] as const),
+    ]);
     writeSnapshot({ orgId, staffId, role, grants, loadedAt: Date.now() });
     return grants;
   }
@@ -118,15 +220,30 @@ function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean 
   if (permission === "pos_orders_edit" || permission === "cash_receipts_edit") {
     return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant" || roleKey === "supervisor";
   }
+  if (permission === "stock_adjustments_delete") return roleKey === "admin" || roleKey === "manager";
   return false;
 }
 
 export function canApprove(permission: PermissionKey, role?: string | null): boolean {
   const rl = String(role || "").toLowerCase();
-  const snapshot = readSnapshot();
+  const snapshot = readPermissionSnapshot();
   if (snapshot?.grants && Object.prototype.hasOwnProperty.call(snapshot.grants, permission)) {
     return !!snapshot.grants[permission];
   }
   return roleDefaultAllows(permission, rl);
+}
+
+export function hasConfiguredPageAccess(): boolean {
+  const snapshot = readPermissionSnapshot();
+  return Object.keys(snapshot?.grants ?? {}).some((key) => key.startsWith(PAGE_PERMISSION_PREFIX));
+}
+
+export function pageAccessDecision(page: string): boolean | null {
+  const snapshot = readPermissionSnapshot();
+  const grants = snapshot?.grants ?? {};
+  const key = pagePermissionKey(page);
+  if (Object.prototype.hasOwnProperty.call(grants, key)) return !!grants[key];
+  if (Object.keys(grants).some((k) => k.startsWith(PAGE_PERMISSION_PREFIX))) return false;
+  return null;
 }
 

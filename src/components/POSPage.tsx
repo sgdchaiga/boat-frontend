@@ -6,6 +6,7 @@ import { useAuth } from "../contexts/AuthContext";
 import {
   createJournalForPosOrder,
   createJournalForBillToRoom,
+  syncHotelPosOrderJournal,
   sumPosCogsByDept,
   sumPosSalesByDept,
   type PosJournalGlOverrides,
@@ -157,6 +158,7 @@ interface PendingOfflineOrder {
   selectedGuestId: string;
   selectedStayId: string | null;
   paymentMethod: PaymentMethodCode;
+  transactionDate?: string;
   items: Array<{ productId: string; quantity: number; note?: string; total: number }>;
 }
 
@@ -636,6 +638,8 @@ export function POSPage({
       };
       const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payQueueMethod);
       if (error) throw error;
+      const journal = await syncHotelPosOrderJournal(payQueueOrder.id, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Payment saved, but GL sync failed: ${journal.error}`);
       incrementActiveAccessTransactions();
       setPayQueueOrder(null);
       await loadData();
@@ -814,25 +818,12 @@ export function POSPage({
       const { from, to } = computeRangeInTimezone("custom", queueDate, queueDate);
       const orgId = user?.organization_id ?? undefined;
       const superAdmin = !!user?.isSuperAdmin;
-      let ordersByDateQuery = supabase
-        .from("kitchen_orders")
-        .select("id")
-        .gte("created_at", from.toISOString())
-        .lt("created_at", to.toISOString());
-      ordersByDateQuery = filterByOrganizationId(ordersByDateQuery, orgId, superAdmin);
-      const { data: orderRows, error: ordersErr } = await ordersByDateQuery;
-      if (ordersErr) throw ordersErr;
-      const orderIds = ((orderRows || []) as Array<{ id: string }>).map((r) => r.id);
-      if (orderIds.length === 0) {
-        setPostedTransactions([]);
-        setPostedTransactionDrafts({});
-        return;
-      }
       let query = supabase
         .from("payments")
         .select("id, transaction_id, paid_at, amount, payment_method, payment_status, edited_at, edited_by_name")
         .eq("payment_source", "pos_hotel")
-        .in("transaction_id", orderIds)
+        .gte("paid_at", from.toISOString())
+        .lt("paid_at", to.toISOString())
         .order("paid_at", { ascending: false });
       query = filterByOrganizationId(query, orgId, superAdmin);
       let data: any[] | null = null;
@@ -846,7 +837,8 @@ export function POSPage({
           .from("payments")
           .select("id, transaction_id, paid_at, amount, payment_method, payment_status")
           .eq("payment_source", "pos_hotel")
-          .in("transaction_id", orderIds)
+          .gte("paid_at", from.toISOString())
+          .lt("paid_at", to.toISOString())
           .order("paid_at", { ascending: false });
         fallbackQuery = filterByOrganizationId(fallbackQuery, orgId, superAdmin);
         const fallbackRes = await fallbackQuery;
@@ -944,6 +936,10 @@ export function POSPage({
         })
         .eq("id", transactionId);
       if (error) throw error;
+      if (existing?.saleId) {
+        const journal = await syncHotelPosOrderJournal(existing.saleId, user?.id ?? null, orgId ?? null);
+        if (!journal.ok) throw new Error(`Transaction saved, but GL sync failed: ${journal.error}`);
+      }
       await loadPostedTransactions();
       alert("Transaction updated.");
     } catch (err: unknown) {
@@ -1204,6 +1200,8 @@ export function POSPage({
         const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
         if (insErr) throw insErr;
       }
+      const journal = await syncHotelPosOrderJournal(editingOrderId, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Order saved, but GL sync failed: ${journal.error}`);
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderItems([]);
@@ -1418,6 +1416,7 @@ export function POSPage({
       selectedGuestId,
       selectedStayId: selectedStay?.id ?? null,
       paymentMethod,
+      transactionDate: queueDate,
       items: cart.map((i) => ({
         productId: i.product.id,
         quantity: i.quantity,
@@ -1452,12 +1451,13 @@ export function POSPage({
       setTableNumber(item.tableNumber);
       setSelectedGuestId(item.selectedGuestId);
       setPaymentMethod(item.paymentMethod);
+      setQueueDate(item.transactionDate || item.createdAt.slice(0, 10));
       if (item.selectedStayId) {
         const stay = activeStays.find((s) => s.id === item.selectedStayId);
         setSelectedStay(stay || null);
       }
       try {
-        await processOrder(item.action, true);
+        await processOrder(item.action, true, item.transactionDate || item.createdAt.slice(0, 10));
       } catch {
         item.retryCount = Number(item.retryCount || 0) + 1;
         item.status = item.retryCount > 3 ? "conflict" : "failed";
@@ -1471,7 +1471,7 @@ export function POSPage({
     }
   };
 
-  const processOrder = async (action: PosAction, isSyncRun = false) => {
+  const processOrder = async (action: PosAction, isSyncRun = false, transactionDateOverride?: string) => {
     if (submitLockRef.current) return;
     if (readOnly) {
       alert("Subscription inactive: Hotel POS is in read-only mode.");
@@ -1527,16 +1527,20 @@ export function POSPage({
             })();
 
       const branchId = getStaffHospitalityBranchId(user);
+      const entryDate = transactionDateOverride || queueDate || businessTodayISO();
+      const transactionTimestamp = `${entryDate}T12:00:00`;
       const basePayload: {
         room_id: string | null;
         table_number: string | null;
         order_status: string;
+        created_at: string;
         created_by?: string | null;
         hospitality_branch_id?: string | null;
       } = {
         room_id: roomId,
         table_number: orderTable,
         order_status: "pending",
+        created_at: transactionTimestamp,
       };
       if (staffRow?.id) basePayload.created_by = staffRow.id;
       if (branchId) basePayload.hospitality_branch_id = branchId;
@@ -1572,15 +1576,15 @@ export function POSPage({
           quantity_out: i.quantity_out,
           unit_cost: i.unit_cost,
           note: i.note,
+          movement_date: transactionTimestamp,
         }));
-        await supabase.from("product_stock_movements").insert(stockMoves);
+        const { error: stockMoveError } = await supabase.from("product_stock_movements").insert(stockMoves);
+        if (stockMoveError) throw new Error(stockMoveError.message || "Failed to record stock movements.");
       }
 
       const cartDescription = cart
         .map((i) => `${i.quantity}× ${i.product.name}${i.note ? ` (${i.note})` : ""}${i.menuType && i.menuType !== "all" ? ` [${i.menuType}]` : ""}`)
         .join(", ") + (promoEnabled && promoCode.trim() ? ` [PROMO:${promoCode.trim().toUpperCase()}]` : "");
-      const entryDate = queueDate || businessTodayISO();
-
       if (action === "bill_to_room" && selectedStay) {
         const { data: billingRow } = await supabase
           .from("billing")
@@ -1648,6 +1652,38 @@ export function POSPage({
             amount: Number((prevCogs?.amount ?? 0) + cogsAmount),
           });
         });
+        if (consumption.length > 0 && consumption.every((line) => line.unit_cost != null && Number.isFinite(Number(line.unit_cost)))) {
+          const soleDepartmentId = new Set(cart.map((item) => item.product.department_id).filter(Boolean)).size === 1
+            ? cart.find((item) => item.product.department_id)?.product.department_id ?? null
+            : null;
+          const departmentByItemName = new Map(
+            cart.map((item) => [normalizeName(item.product.name), item.product.department_id ?? null])
+          );
+          const productDepartmentById = new Map(products.map((product) => [product.id, product.department_id ?? null]));
+          const movementCogs = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();
+          let completeMovementAllocation = true;
+          consumption.forEach((line) => {
+            const recipeItemName = /^recipe for\s+(.+)$/i.exec(line.note || "")?.[1] ?? null;
+            const departmentId =
+              (recipeItemName ? departmentByItemName.get(normalizeName(recipeItemName)) : null) ??
+              productDepartmentById.get(line.product_id) ??
+              soleDepartmentId;
+            if (!departmentId) {
+              completeMovementAllocation = false;
+              return;
+            }
+            const previous = movementCogs.get(departmentId);
+            movementCogs.set(departmentId, {
+              departmentId,
+              departmentName: deptNameById.get(departmentId) ?? null,
+              amount: Number((previous?.amount ?? 0) + line.quantity_out * Number(line.unit_cost)),
+            });
+          });
+          if (completeMovementAllocation) {
+            groupedCogsByDepartment.clear();
+            movementCogs.forEach((line, key) => groupedCogsByDepartment.set(key, line));
+          }
+        }
         const cogsByDept = sumPosCogsByDept(
           cart.map((i) => ({
             quantity: i.quantity,
@@ -1667,9 +1703,10 @@ export function POSPage({
         const vatRate = js.default_vat_percent;
         const useVatJournal =
           posVatEnabled && vatRate != null && Number.isFinite(vatRate) && vatRate > 0;
-        if (action === "pay_now") {
+        if (action === "pay_now" || action === "credit_sale") {
           const jr = await createJournalForPosOrder(orderData.id, payableTotal, cartDescription, entryDate, staffRow?.id ?? null, {
             paymentMethod,
+            amountPaid: action === "pay_now" ? payableTotal : 0,
             cogsByDept,
             cogsByDepartment: Array.from(groupedCogsByDepartment.values()),
             salesByDept,
@@ -1679,7 +1716,7 @@ export function POSPage({
             organizationId: orgId ?? null,
           });
           if (!jr.ok) {
-            alert(`Payment recorded but journal was not posted: ${jr.error}`);
+            alert(`Order recorded but journal was not posted: ${jr.error}`);
           }
         }
       }
@@ -2846,7 +2883,7 @@ export function POSPage({
         {showPostedTransactions ? (
         <>
         <p className="text-xs text-slate-500 mb-3">
-          Edit posted POS payments for {queueDate}. Changes update the `payments` record only.
+          Edit posted POS payments for {queueDate}. Changes also resynchronize the linked POS sale journal.
         </p>
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1 mb-3">
           Refunded transactions are locked and cannot be edited.

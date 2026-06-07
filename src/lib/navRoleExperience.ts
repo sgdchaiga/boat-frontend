@@ -9,6 +9,7 @@ import {
   getRolePageAllowList,
 
 } from "@/lib/roleNavigation";
+import { pageAccessDecision } from "@/lib/permissions";
 
 
 
@@ -119,6 +120,10 @@ export function isPageAllowedForNavRole(
   businessType: BusinessType | null | undefined
 
 ): boolean {
+
+  const configuredDecision = pageAccessDecision(page);
+
+  if (configuredDecision !== null) return configuredDecision;
 
   const xp = getNavRoleExperience(roleKey);
 

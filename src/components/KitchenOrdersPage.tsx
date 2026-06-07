@@ -14,6 +14,7 @@ import {
   PAYMENT_METHOD_SELECT_OPTIONS,
   insertPaymentWithMethodCompat,
 } from "../lib/paymentMethod";
+import { syncHotelPosOrderJournal } from "../lib/journal";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 
@@ -32,6 +33,7 @@ interface KitchenOrder {
   created_at: string;
   kitchen_order_items: KitchenItem[];
   payments_total?: number;
+  journal_transaction_id?: string | null;
 }
 
 type KitchenDateRangeKey = DateRangeKey | "all";
@@ -74,10 +76,11 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
   const [editingOrderDate, setEditingOrderDate] = useState("");
   const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
   const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">("all");
+  const [sourceTransactionSearch, setSourceTransactionSearch] = useState("");
 
   useEffect(() => {
     fetchOrders();
-  }, [dateRange, customFrom, customTo, orgId, superAdmin, hotelPosCfg.pos_kitchen_orders_department_id]);
+  }, [dateRange, customFrom, customTo, orgId, superAdmin, hotelPosCfg.pos_kitchen_orders_department_id, sourceTransactionSearch]);
 
   const fetchOrders = async () => {
     try {
@@ -85,6 +88,24 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
       const fromTo = dateRange === "all" ? null : computeRangeInTimezone(dateRange, customFrom, customTo);
       const fromIso = fromTo?.from.toISOString();
       const toIso = fromTo?.to.toISOString();
+      const search = sourceTransactionSearch.trim().replace(/^pos\s*#?/i, "").trim();
+      const searchedOrderIds = new Set<string>();
+      if (search) {
+        const journalRes = await filterByOrganizationId(
+          supabase
+            .from("journal_entries")
+            .select("reference_id")
+            .eq("reference_type", "pos")
+            .ilike("transaction_id", `%${search}%`),
+          orgId,
+          superAdmin
+        );
+        if (journalRes.error) throw journalRes.error;
+        ((journalRes.data || []) as Array<{ reference_id: string | null }>).forEach((journal) => {
+          if (journal.reference_id) searchedOrderIds.add(journal.reference_id);
+        });
+        if (/^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(search)) searchedOrderIds.add(search);
+      }
 
       const [departmentsRes, ordersRes, productsRes] = await Promise.all([
         filterByOrganizationId(supabase.from("departments").select("id,name,pos_catalog_mode"), orgId, superAdmin),
@@ -105,7 +126,9 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
           `
                 )
                 .order("created_at", { ascending: true });
-              if (fromIso && toIso) {
+              if (search) {
+                q = q.in("id", searchedOrderIds.size > 0 ? Array.from(searchedOrderIds) : ["00000000-0000-0000-0000-000000000000"]);
+              } else if (fromIso && toIso) {
                 q = q.gte("created_at", fromIso).lt("created_at", toIso);
               }
               return q;
@@ -195,12 +218,26 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
 
       const orderIds = data.map((o) => o.id);
       let paymentsMap: Record<string, number> = {};
+      const journalTransactionByOrderId: Record<string, string> = {};
       if (orderIds.length > 0) {
-        const { data: paymentsData, error: payError } = await filterByOrganizationId(
-          supabase.from("payments").select("amount, payment_status, transaction_id").in("transaction_id", orderIds),
-          orgId,
-          superAdmin
-        );
+        const [paymentsResult, journalsResult] = await Promise.all([
+          filterByOrganizationId(
+            supabase.from("payments").select("amount, payment_status, transaction_id").in("transaction_id", orderIds),
+            orgId,
+            superAdmin
+          ),
+          filterByOrganizationId(
+            supabase
+              .from("journal_entries")
+              .select("reference_id,transaction_id")
+              .eq("reference_type", "pos")
+              .eq("is_deleted", false)
+              .in("reference_id", orderIds),
+            orgId,
+            superAdmin
+          ),
+        ]);
+        const { data: paymentsData, error: payError } = paymentsResult;
 
         if (payError) {
           console.error("Kitchen payments error:", payError);
@@ -212,11 +249,19 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
             }
           });
         }
+        if (journalsResult.error) {
+          console.error("Kitchen journal references error:", journalsResult.error);
+        } else {
+          ((journalsResult.data || []) as Array<{ reference_id: string | null; transaction_id: string | null }>).forEach((journal) => {
+            if (journal.reference_id && journal.transaction_id) journalTransactionByOrderId[journal.reference_id] = journal.transaction_id;
+          });
+        }
       }
 
       const withPayments = data.map((o) => ({
         ...o,
         payments_total: paymentsMap[o.id] || 0,
+        journal_transaction_id: journalTransactionByOrderId[o.id] || null,
       }));
 
       setOrders(withPayments);
@@ -298,6 +343,8 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
         const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
         if (insErr) throw insErr;
       }
+      const journal = await syncHotelPosOrderJournal(editingOrderId, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Order saved, but GL sync failed: ${journal.error}`);
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderItems([]);
@@ -333,6 +380,8 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
       };
       const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payMethod);
       if (error) throw error;
+      const journal = await syncHotelPosOrderJournal(payingOrder.id, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Payment saved, but GL sync failed: ${journal.error}`);
       setPayingOrder(null);
       setPayAmount("");
       await fetchOrders();
@@ -384,6 +433,12 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
           ) : null}
         </div>
         <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center">
+          <input
+            value={sourceTransactionSearch}
+            onChange={(event) => setSourceTransactionSearch(event.target.value)}
+            placeholder="Source transaction ID / JE-01167"
+            className="min-w-[230px] border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          />
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value as KitchenDateRangeKey)}
@@ -460,6 +515,9 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
               </div>
               <p className="text-xs text-slate-500 mb-2">
                 Transaction date: {new Date(order.created_at).toLocaleString()}
+              </p>
+              <p className="text-xs text-slate-500 mb-2">
+                Source transaction: <span className="font-mono">{order.journal_transaction_id || order.id}</span>
               </p>
 
               <div className="space-y-2 mb-4">

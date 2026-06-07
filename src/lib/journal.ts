@@ -12,7 +12,7 @@ import {
   type FixedAssetCategoryGlRow,
 } from "./fixedAssetCategoryGlSettings";
 import type { PaymentMethodCode } from "./paymentMethod";
-import { businessTodayISO, toBusinessDateString } from "./timezone";
+import { businessDayRangeForDateString, businessTodayISO, toBusinessDateString } from "./timezone";
 import { normalizeGlAccountRows } from "./glAccountNormalize";
 
 export type JournalReferenceType =
@@ -319,12 +319,47 @@ export async function createJournalEntry(params: CreateJournalEntryParams): Prom
   return { ok: true, journalId: data };
 }
 
-/** Removes the journal header (lines cascade). Use before reposting when editing a transaction. */
+/** Retires journals for a source transaction before reposting it. */
 export async function deleteJournalEntryByReference(
   referenceType: JournalReferenceType,
   referenceId: string
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const orgId = await resolveOrganizationId();
+  const { data: existing, error: existingError } = await filterByOrganizationId(
+    supabase
+      .from("journal_entries")
+      .select("id")
+      .eq("reference_type", referenceType)
+      .eq("reference_id", referenceId)
+      .eq("is_deleted", false),
+    orgId,
+    false
+  );
+  if (existingError) return { ok: false, error: existingError.message };
+  const entryIds = ((existing || []) as Array<{ id: string }>).map((entry) => entry.id);
+  if (entryIds.length > 0) {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { data: softDeletedCount, error: softDeleteError } = await supabase.rpc("bulk_soft_delete_journal_entries", {
+      p_entry_ids: entryIds,
+      p_user_id: user?.id ?? null,
+    });
+    if (!softDeleteError) {
+      if (Number(softDeletedCount || 0) !== entryIds.length) {
+        return {
+          ok: false,
+          error: "Existing journal could not be retired. Check the accounting period lock before reposting this transaction.",
+        };
+      }
+      return { ok: true };
+    }
+    if (!/bulk_soft_delete_journal_entries|function/i.test(softDeleteError.message)) {
+      return { ok: false, error: softDeleteError.message };
+    }
+  }
+
+  // Compatibility fallback for installations without journal soft-delete support.
   const { error } = await filterByOrganizationId(
     supabase
       .from("journal_entries")
@@ -709,6 +744,87 @@ export async function createJournalForRoomCharge(
   });
 }
 
+export type RoomJournalSyncResult =
+  | { ok: true; journalId: string | null }
+  | { ok: false; error: string };
+
+/** Rebuild a room-charge journal from its billing source row. */
+export async function syncRoomChargeJournal(billingId: string): Promise<RoomJournalSyncResult> {
+  const organizationId = await resolveOrganizationId();
+  if (!organizationId) return { ok: false, error: "Sign in under an organization before syncing room journals." };
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) return { ok: false, error: "Sign in before syncing room journals." };
+
+  const { data, error } = await filterByOrganizationId(
+    supabase
+      .from("billing")
+      .select("id,amount,description,charged_at,charge_type")
+      .eq("id", billingId)
+      .maybeSingle(),
+    organizationId,
+    false
+  );
+  if (error) return { ok: false, error: error.message };
+
+  const remove = await deleteJournalEntryByReference("room_charge", billingId);
+  if (!remove.ok) return remove;
+  const row = data as {
+    id: string;
+    amount: number | null;
+    description: string | null;
+    charged_at: string | null;
+    charge_type: string | null;
+  } | null;
+  if (!row || row.charge_type !== "room") return { ok: true, journalId: null };
+
+  return createJournalForRoomCharge(
+    row.id,
+    Number(row.amount || 0),
+    row.description || "Room charge",
+    row.charged_at || new Date().toISOString(),
+    user.id,
+    undefined,
+    organizationId
+  );
+}
+
+export interface RoomJournalRepairResult {
+  repaired: number;
+  errors: string[];
+}
+
+/** Rebuild every room-charge journal from billing so GL room revenue matches room billing. */
+export async function repairRoomChargeJournals(options?: {
+  onProgress?: (processed: number, total: number) => void;
+}): Promise<RoomJournalRepairResult> {
+  const organizationId = await resolveOrganizationId();
+  if (!organizationId) throw new Error("Sign in under an organization before repairing room journals.");
+
+  const { data, error } = await filterByOrganizationId(
+    supabase
+      .from("billing")
+      .select("id")
+      .eq("charge_type", "room")
+      .order("charged_at", { ascending: true }),
+    organizationId,
+    false
+  );
+  if (error) throw error;
+
+  const rows = (data || []) as Array<{ id: string }>;
+  const result: RoomJournalRepairResult = { repaired: 0, errors: [] };
+  options?.onProgress?.(0, rows.length);
+  for (let index = 0; index < rows.length; index++) {
+    const sync = await syncRoomChargeJournal(rows[index].id);
+    if (sync.ok && sync.journalId) result.repaired += 1;
+    else if (!sync.ok) result.errors.push(`Billing ${rows[index].id}: ${sync.error}`);
+    options?.onProgress?.(index + 1, rows.length);
+  }
+  return result;
+}
+
 export async function createJournalForPayment(
   paymentId: string,
   amount: number,
@@ -1013,6 +1129,8 @@ export async function createJournalForPosOrder(
   createdBy: string | null,
   options?: {
     paymentMethod?: PosPaymentMethod;
+    /** Completed payments received against this order. The unpaid balance posts to receivables. */
+    amountPaid?: number;
     cogsByDept?: PosCogsByDept;
     cogsByDepartment?: PosDepartmentAmountLine[];
     /** Line totals by bar/kitchen/room; splits net revenue across department sales GLs (unless a single revenue override is set). */
@@ -1031,6 +1149,8 @@ export async function createJournalForPosOrder(
   const receiptGl = o?.receiptGlAccountId?.trim()
     ? o.receiptGlAccountId
     : resolvePosReceiptGlAccountId(acc, options?.paymentMethod);
+  const amountPaid = Math.min(roundMoney(Math.max(0, Number(options?.amountPaid ?? total))), roundMoney(total));
+  const receivableAmount = roundMoney(total - amountPaid);
   const revenueId = o?.revenueGlAccountId?.trim() ? o.revenueGlAccountId : acc.revenue;
   const salesByDept = options?.salesByDept;
   const salesByDepartment = (options?.salesByDepartment || [])
@@ -1042,11 +1162,17 @@ export async function createJournalForPosOrder(
   const useRevenueSplit =
     !o?.revenueGlAccountId?.trim() && ((!!salesByDepartment.length && totalSalesByDepartment > 0.001) || (!!salesByDept && totalSales > 0.001));
 
-  if (!receiptGl) {
+  if (amountPaid > 0.001 && !receiptGl) {
     return {
       ok: false,
       error:
         "Missing GL account for receipt (cash/bank/mobile money). Pick under Hotel POS (this sale), or configure Accounting → Journal account settings.",
+    };
+  }
+  if (receivableAmount > 0.001 && !acc.receivable) {
+    return {
+      ok: false,
+      error: "Missing receivable GL account for the unpaid POS balance. Configure Accounting > Journal account settings.",
     };
   }
 
@@ -1093,7 +1219,13 @@ export async function createJournalForPosOrder(
     vatOut = roundMoney(gross - revenueCredit);
   }
 
-  const lines: JournalLine[] = [{ gl_account_id: receiptGl, debit: gross, credit: 0, line_description: description }];
+  const lines: JournalLine[] = [];
+  if (amountPaid > 0.001 && receiptGl) {
+    lines.push({ gl_account_id: receiptGl, debit: amountPaid, credit: 0, line_description: `${description} - received` });
+  }
+  if (receivableAmount > 0.001 && acc.receivable) {
+    lines.push({ gl_account_id: acc.receivable, debit: receivableAmount, credit: 0, line_description: `${description} - outstanding` });
+  }
 
   if (useRevenueSplit && salesByDepartment.length > 0) {
     let remaining = revenueCredit;
@@ -1110,6 +1242,7 @@ export async function createJournalForPosOrder(
           debit: 0,
           credit: lineNet,
           line_description: `${line.departmentName || "Department"} sales`,
+          dimensions: line.departmentId ? { department_id: line.departmentId } : null,
         });
       }
     }
@@ -1159,12 +1292,14 @@ export async function createJournalForPosOrder(
         debit: line.amount,
         credit: 0,
         line_description: `${line.departmentName || "Department"} purchases (COGS)`,
+        dimensions: line.departmentId ? { department_id: line.departmentId } : null,
       });
       lines.push({
         gl_account_id: stockId,
         debit: 0,
         credit: line.amount,
         line_description: `${line.departmentName || "Department"} stock`,
+        dimensions: line.departmentId ? { department_id: line.departmentId } : null,
       });
     }
   } else if (cogs) {
@@ -1223,6 +1358,379 @@ export async function createJournalForPosOrder(
     lines,
     created_by: createdBy,
   });
+}
+
+/** Rebuild a Hotel POS journal after an order, status, or payment changes. */
+export async function syncHotelPosOrderJournal(
+  orderId: string,
+  createdBy: string | null,
+  organizationId?: string | null
+): Promise<JournalPostResult | { ok: true; journalId: null }> {
+  const { data: order, error: orderError } = await (supabase as any)
+    .from("kitchen_orders")
+    .select("id,order_status,created_at")
+    .eq("id", orderId)
+    .maybeSingle();
+  if (orderError) return { ok: false, error: orderError.message };
+  if (!order) return { ok: false, error: "Hotel POS order was not found." };
+
+  const [
+    { data: rawOrderItems, error: orderItemsError },
+    { data: payments, error: paymentError },
+    { data: rawStockMovements, error: stockMovementsError },
+  ] = await Promise.all([
+    (supabase as any).from("kitchen_order_items").select("quantity,product_id").eq("order_id", orderId),
+    (supabase as any)
+      .from("payments")
+      .select("amount,payment_method,payment_status,paid_at")
+      .eq("payment_source", "pos_hotel")
+      .eq("transaction_id", orderId)
+      .order("paid_at", { ascending: false }),
+    (supabase as any)
+      .from("product_stock_movements")
+      .select("product_id,quantity_out,unit_cost,note")
+      .eq("source_type", "sale")
+      .eq("source_id", orderId),
+  ]);
+  if (orderItemsError) return { ok: false, error: orderItemsError.message };
+  if (paymentError) return { ok: false, error: paymentError.message };
+  if (stockMovementsError) return { ok: false, error: stockMovementsError.message };
+
+  const voidStatus = ["cancelled", "canceled", "reversed", "void", "voided"].includes(
+    String(order.order_status || "").toLowerCase()
+  );
+  const completedPayments = ((payments || []) as any[]).filter(
+    (payment) => String(payment.payment_status || "").toLowerCase() === "completed"
+  );
+  if (voidStatus) {
+    const remove = await deleteJournalEntryByReference("pos", orderId);
+    return remove.ok ? { ok: true, journalId: null } : remove;
+  }
+
+  const orderProductIds = ((rawOrderItems || []) as any[]).map((item) => String(item.product_id || "")).filter(Boolean);
+  const movementProductIds = ((rawStockMovements || []) as any[])
+    .map((movement) => String(movement.product_id || ""))
+    .filter(Boolean);
+  const productIds = Array.from(new Set([...orderProductIds, ...movementProductIds]));
+  const productById = new Map<string, any>();
+  if (productIds.length > 0) {
+    const { data: products, error: productsError } = await (supabase as any)
+      .from("products")
+      .select("id,name,sales_price,cost_price,department_id")
+      .in("id", productIds);
+    if (productsError) return { ok: false, error: productsError.message };
+    ((products || []) as any[]).forEach((product) => productById.set(String(product.id), product));
+  }
+  const missingProductIds = Array.from(new Set(orderProductIds)).filter((productId) => !productById.has(productId));
+  if (missingProductIds.length > 0) {
+    return {
+      ok: false,
+      error: `Order has ${missingProductIds.length} item(s) whose product record no longer exists.`,
+    };
+  }
+
+  const items = ((rawOrderItems || []) as any[])
+    .map((item) => {
+      const product = productById.get(String(item.product_id || ""));
+      return {
+        quantity: Number(item.quantity || 0),
+        name: String(product?.name || "Item"),
+        salesPrice: Number(product?.sales_price || 0),
+        costPrice: Number(product?.cost_price || 0),
+        departmentId: product?.department_id ? String(product.department_id) : null,
+      };
+    })
+    .filter((item) => item.quantity > 0);
+  const itemTotal = roundMoney(items.reduce((sum, item) => sum + item.quantity * item.salesPrice, 0));
+  const total = itemTotal;
+  const amountPaid = roundMoney(completedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
+  if (total <= 0) return { ok: false, error: "Hotel POS order total is zero; journal was removed but not reposted." };
+
+  const departmentIds = Array.from(new Set(items.map((item) => item.departmentId).filter((id): id is string => !!id)));
+  const departmentNameById = new Map<string, string>();
+  if (departmentIds.length > 0) {
+    const { data: departments, error: departmentError } = await (supabase as any)
+      .from("departments")
+      .select("id,name")
+      .in("id", departmentIds);
+    if (departmentError) return { ok: false, error: departmentError.message };
+    ((departments || []) as any[]).forEach((department) =>
+      departmentNameById.set(String(department.id), String(department.name || "Department"))
+    );
+  }
+  const departmentGlMap = await loadPosDepartmentGlMap(organizationId);
+  const missingSalesGlDepartments = departmentIds.filter((departmentId) => !departmentGlMap.get(departmentId)?.sales);
+  if (missingSalesGlDepartments.length > 0) {
+    const labels = missingSalesGlDepartments.map(
+      (departmentId) => departmentNameById.get(departmentId) || departmentId
+    );
+    return {
+      ok: false,
+      error:
+        `Missing sales GL mapping for department(s): ${labels.join(", ")}. ` +
+        "Set each department's Sales revenue under Admin > Journal account settings, then rerun POS repair.",
+    };
+  }
+  if (items.some((item) => !item.departmentId)) {
+    return {
+      ok: false,
+      error:
+        "One or more products on this order have no department. Assign their department, then rerun POS repair.",
+    };
+  }
+  const salesGlOwners = new Map<string, string[]>();
+  departmentIds.forEach((departmentId) => {
+    const salesGl = departmentGlMap.get(departmentId)?.sales;
+    if (!salesGl) return;
+    salesGlOwners.set(salesGl, [...(salesGlOwners.get(salesGl) || []), departmentId]);
+  });
+  const sharedSalesGlDepartments = Array.from(salesGlOwners.values()).find((owners) => owners.length > 1);
+  if (sharedSalesGlDepartments) {
+    return {
+      ok: false,
+      error:
+        `Departments ${sharedSalesGlDepartments
+          .map((departmentId) => departmentNameById.get(departmentId) || departmentId)
+          .join(", ")} share the same Sales revenue GL account. ` +
+        "Map each department to its own sales account before rerunning POS repair.",
+    };
+  }
+
+  const groupAmounts = (kind: "sales" | "cogs"): PosDepartmentAmountLine[] => {
+    const grouped = new Map<string, PosDepartmentAmountLine>();
+    items.forEach((item) => {
+      const key = item.departmentId ?? "__unassigned__";
+      const previous = grouped.get(key);
+      grouped.set(key, {
+        departmentId: item.departmentId,
+        departmentName: item.departmentId ? departmentNameById.get(item.departmentId) ?? null : null,
+        amount: roundMoney((previous?.amount ?? 0) + item.quantity * (kind === "sales" ? item.salesPrice : item.costPrice)),
+      });
+    });
+    return Array.from(grouped.values());
+  };
+  const groupSaleTimeCogs = (): PosDepartmentAmountLine[] | null => {
+    const stockMovements = ((rawStockMovements || []) as any[]).filter(
+      (movement) => Number(movement.quantity_out || 0) > 0
+    );
+    if (stockMovements.length === 0) return null;
+
+    const soleDepartmentId = departmentIds.length === 1 ? departmentIds[0] : null;
+    const departmentByItemName = new Map(
+      items.map((item) => [item.name.trim().toLowerCase(), item.departmentId] as const)
+    );
+    const grouped = new Map<string, PosDepartmentAmountLine>();
+    for (const movement of stockMovements) {
+      const quantityOut = Number(movement.quantity_out || 0);
+      if (movement.unit_cost == null) return null;
+      const unitCost = Number(movement.unit_cost);
+      if (!Number.isFinite(unitCost) || unitCost < 0) return null;
+
+      const note = String(movement.note || "").trim();
+      const recipeItemName = /^recipe for\s+(.+)$/i.exec(note)?.[1]?.trim().toLowerCase() ?? null;
+      const movementProduct = productById.get(String(movement.product_id || ""));
+      const departmentId =
+        (recipeItemName ? departmentByItemName.get(recipeItemName) : null) ??
+        (movementProduct?.department_id ? String(movementProduct.department_id) : null) ??
+        soleDepartmentId;
+      if (!departmentId) return null;
+
+      const previous = grouped.get(departmentId);
+      grouped.set(departmentId, {
+        departmentId,
+        departmentName: departmentNameById.get(departmentId) ?? null,
+        amount: roundMoney((previous?.amount ?? 0) + quantityOut * unitCost),
+      });
+    }
+    return Array.from(grouped.values()).filter((line) => line.amount > 0.001);
+  };
+  const salesByDepartment = groupAmounts("sales");
+  // Historical sale movements preserve the unit cost used when stock was consumed.
+  // Fall back to product cost only for legacy orders without a complete movement-cost snapshot.
+  const cogsByDepartment = groupSaleTimeCogs() ?? groupAmounts("cogs");
+
+  const remove = await deleteJournalEntryByReference("pos", orderId);
+  if (!remove.ok) return remove;
+  const posted = await createJournalForPosOrder(
+    orderId,
+    total,
+    items.map((item) => `${item.quantity}x ${item.name}`).join(", "),
+    String(order.created_at),
+    createdBy,
+    {
+      paymentMethod: completedPayments[0]?.payment_method as PosPaymentMethod | undefined,
+      amountPaid,
+      salesByDept: sumPosSalesByDept(
+        items.map((item) => ({ lineTotal: item.quantity * item.salesPrice, departmentId: item.departmentId })),
+        departmentNameById
+      ),
+      salesByDepartment,
+      cogsByDepartment,
+      organizationId,
+    }
+  );
+  if (!posted.ok) return posted;
+
+  const expectedSalesByDepartment = new Map(
+    salesByDepartment.map((line) => [
+      `${String(line.departmentName || "Department").trim().toLowerCase()} sales`,
+      roundMoney(line.amount),
+    ])
+  );
+  const expectedCogsByDepartment = new Map(
+    cogsByDepartment.map((line) => [
+      `${String(line.departmentName || "Department").trim().toLowerCase()} purchases (cogs)`,
+      roundMoney(line.amount),
+    ])
+  );
+  const { data: postedLines, error: postedLinesError } = await (supabase as any)
+    .from("journal_entry_lines")
+    .select("debit,credit,line_description")
+    .eq("journal_entry_id", posted.journalId);
+  if (postedLinesError) return { ok: false, error: postedLinesError.message };
+  const actualSalesByDepartment = new Map<string, number>();
+  const actualCogsByDepartment = new Map<string, number>();
+  ((postedLines || []) as any[]).forEach((line) => {
+    const departmentLabel = String(line.line_description || "").trim().toLowerCase();
+    if (departmentLabel.endsWith(" sales")) {
+      actualSalesByDepartment.set(
+        departmentLabel,
+        roundMoney((actualSalesByDepartment.get(departmentLabel) || 0) + Number(line.credit || 0))
+      );
+    }
+    if (departmentLabel.endsWith(" purchases (cogs)")) {
+      actualCogsByDepartment.set(
+        departmentLabel,
+        roundMoney((actualCogsByDepartment.get(departmentLabel) || 0) + Number(line.debit || 0))
+      );
+    }
+  });
+  const salesMismatch = Array.from(expectedSalesByDepartment.entries()).find(
+    ([departmentLabel, expected]) => Math.abs(expected - (actualSalesByDepartment.get(departmentLabel) || 0)) > 0.01
+  );
+  const cogsMismatch = Array.from(expectedCogsByDepartment.entries()).find(
+    ([departmentLabel, expected]) => Math.abs(expected - (actualCogsByDepartment.get(departmentLabel) || 0)) > 0.01
+  );
+  if (salesMismatch || cogsMismatch) {
+    const retired = await deleteJournalEntryByReference("pos", orderId);
+    if (!retired.ok) return retired;
+    return {
+      ok: false,
+      error:
+        salesMismatch
+          ? `Journal revenue did not match source POS sales for ${salesMismatch[0]}. The mismatched journal was retired.`
+          : `Journal COGS did not match sale-time stock costs for ${cogsMismatch![0]}. The mismatched journal was retired.`,
+    };
+  }
+  return posted;
+}
+
+export interface PosJournalRepairResult {
+  repaired: number;
+  removed: number;
+  errors: string[];
+}
+
+/** Re-sync every historical Hotel POS order for the signed-in organization. */
+export async function repairHotelPosOrderJournals(options?: {
+  onProgress?: (processed: number, total: number) => void;
+  journalOrOrder?: string | null;
+  departmentId?: string | null;
+  fromDate?: string | null;
+  toDate?: string | null;
+}): Promise<PosJournalRepairResult> {
+  const organizationId = await resolveOrganizationId();
+  if (!organizationId) throw new Error("Sign in under an organization before repairing POS journals.");
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) throw new Error("Sign in before repairing POS journals.");
+
+  let specificOrderId: string | null = null;
+  const journalOrOrder = options?.journalOrOrder?.trim() || "";
+  if (journalOrOrder) {
+    const uuidLike = /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(journalOrOrder);
+    if (uuidLike) {
+      specificOrderId = journalOrOrder;
+    } else {
+      const normalizedTransactionId = journalOrOrder.replace(/^pos\s*#?/i, "").trim();
+      const { data: journal, error: journalError } = await filterByOrganizationId(
+        supabase
+          .from("journal_entries")
+          .select("reference_id")
+          .eq("reference_type", "pos")
+          .ilike("transaction_id", normalizedTransactionId)
+          .maybeSingle(),
+        organizationId,
+        false
+      );
+      if (journalError) throw journalError;
+      specificOrderId = (journal as { reference_id?: string | null } | null)?.reference_id ?? null;
+      if (!specificOrderId) throw new Error(`Could not find POS journal ${journalOrOrder}.`);
+    }
+  }
+
+  const fromRange = options?.fromDate ? businessDayRangeForDateString(options.fromDate) : null;
+  const toRange = options?.toDate ? businessDayRangeForDateString(options.toDate) : null;
+  if (options?.fromDate && !fromRange) throw new Error("Invalid POS repair start date.");
+  if (options?.toDate && !toRange) throw new Error("Invalid POS repair end date.");
+
+  let orderIds: string[] = [];
+  const pageSize = 500;
+  for (let from = 0; ; from += pageSize) {
+    let query = (supabase as any)
+      .from("kitchen_orders")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .order("created_at", { ascending: true });
+    if (specificOrderId) query = query.eq("id", specificOrderId);
+    if (fromRange) query = query.gte("created_at", fromRange.from.toISOString());
+    if (toRange) query = query.lt("created_at", toRange.to.toISOString());
+    const { data, error } = await query.range(from, from + pageSize - 1);
+    if (error) throw error;
+    orderIds.push(...((data || []) as Array<{ id: string }>).map((row) => row.id));
+    if (!data || data.length < pageSize) break;
+  }
+
+  if (options?.departmentId && orderIds.length > 0) {
+    const { data: departmentProducts, error: productsError } = await (supabase as any)
+      .from("products")
+      .select("id")
+      .eq("organization_id", organizationId)
+      .eq("department_id", options.departmentId);
+    if (productsError) throw productsError;
+    const productIds = ((departmentProducts || []) as Array<{ id: string }>).map((row) => row.id);
+    if (productIds.length === 0) {
+      orderIds = [];
+    } else {
+      const matchingOrderIds = new Set<string>();
+      for (let offset = 0; offset < orderIds.length; offset += 200) {
+        const { data: items, error: itemsError } = await (supabase as any)
+          .from("kitchen_order_items")
+          .select("order_id,product_id")
+          .in("order_id", orderIds.slice(offset, offset + 200))
+          .in("product_id", productIds);
+        if (itemsError) throw itemsError;
+        ((items || []) as Array<{ order_id: string }>).forEach((item) => matchingOrderIds.add(item.order_id));
+      }
+      orderIds = orderIds.filter((orderId) => matchingOrderIds.has(orderId));
+    }
+  }
+
+  const result: PosJournalRepairResult = { repaired: 0, removed: 0, errors: [] };
+  options?.onProgress?.(0, orderIds.length);
+  for (let index = 0; index < orderIds.length; index++) {
+    const orderId = orderIds[index];
+    const sync = await syncHotelPosOrderJournal(orderId, user.id, organizationId);
+    if (sync.ok) {
+      if (sync.journalId) result.repaired += 1;
+      else result.removed += 1;
+    } else {
+      result.errors.push(`POS ${orderId}: ${sync.error}`);
+    }
+    options?.onProgress?.(index + 1, orderIds.length);
+  }
+  return result;
 }
 
 export async function createJournalForBillToRoom(
@@ -1764,12 +2272,18 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Bills
-  const { data: bills } = await supabase.from("bills").select("id, amount, description, bill_date");
+  const { data: bills } = await supabase.from("bills").select("id, amount, description, bill_date, status");
   const billsList = bills || [];
   reportProgress("bill", "Backfilling bills", 0, billsList.length);
   let billsProcessed = 0;
   for (const b of billsList) {
-    const row = b as { id: string; amount: number; description: string | null; bill_date: string | null };
+    const row = b as { id: string; amount: number; description: string | null; bill_date: string | null; status?: string | null };
+    const status = String(row.status || "").toLowerCase();
+    if (["pending", "pending_approval", "rejected", "cancelled"].includes(status)) {
+      billsProcessed += 1;
+      reportProgress("bill", "Backfilling bills", billsProcessed, billsList.length);
+      continue;
+    }
     if (has("bill", row.id)) continue;
     const jr = dryRun
       ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)

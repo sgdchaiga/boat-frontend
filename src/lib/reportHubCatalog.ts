@@ -6,7 +6,7 @@ export type ReportHubLeaf = { name: string; page: string; state?: Record<string,
 
 export type ReportHubCategory = { id: string; label: string; items: ReportHubLeaf[] };
 
-const SALES_PAGES = new Set(["reports_daily_summary", "reports_daily_sales", "reports_sales_by_item"]);
+const SALES_PAGES = new Set(["reports_daily_summary", "reports_daily_sales", "reports_sales_by_item", "reports_room_billing"]);
 const PURCHASES_PAGES = new Set([
   "reports_daily_purchases_summary",
   "reports_purchases_by_item",

@@ -14,6 +14,7 @@ import {
   PAYMENT_METHOD_SELECT_OPTIONS,
   insertPaymentWithMethodCompat,
 } from "../lib/paymentMethod";
+import { syncHotelPosOrderJournal } from "../lib/journal";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 
@@ -79,6 +80,8 @@ export function SaunaOrdersPage() {
     try {
       const { error } = await supabase.from("kitchen_orders").update({ order_status: newStatus }).eq("id", orderId);
       if (error) throw error;
+      const journal = await syncHotelPosOrderJournal(orderId, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Status saved, but GL sync failed: ${journal.error}`);
       await fetchOrders();
     } catch (err) {
       console.error("Sauna update status error:", err);
@@ -232,6 +235,8 @@ export function SaunaOrdersPage() {
       };
       const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payMethod);
       if (error) throw error;
+      const journal = await syncHotelPosOrderJournal(payingOrder.id, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Payment saved, but GL sync failed: ${journal.error}`);
       setPayingOrder(null);
       setPayAmount("");
       await fetchOrders();
@@ -279,6 +284,8 @@ export function SaunaOrdersPage() {
         const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
         if (insErr) throw insErr;
       }
+      const journal = await syncHotelPosOrderJournal(editingOrderId, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Order saved, but GL sync failed: ${journal.error}`);
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderItems([]);

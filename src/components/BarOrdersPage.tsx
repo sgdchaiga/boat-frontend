@@ -14,6 +14,7 @@ import {
   PAYMENT_METHOD_SELECT_OPTIONS,
   insertPaymentWithMethodCompat,
 } from "../lib/paymentMethod";
+import { syncHotelPosOrderJournal } from "../lib/journal";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 
@@ -45,7 +46,7 @@ interface BarOrdersPageProps {
 function barViewToPaymentFilter(view: BarView): "all" | "outstanding" | "partially_paid" | "paid" | "unpaid" {
   if (view === "completed") return "paid";
   if (view === "pending") return "outstanding";
-  return "outstanding";
+  return "all";
 }
 
 export function BarOrdersPage({
@@ -93,16 +94,19 @@ export function BarOrdersPage({
   const [dateRange, setDateRange] = useState<DateRangeKey>("last_30_days");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const [sourceOrderId, setSourceOrderId] = useState("");
 
   useEffect(() => {
     fetchOrders();
-  }, [dateRange, customFrom, customTo, orgId, superAdmin, hotelCfg.pos_bar_department_id]);
+  }, [dateRange, customFrom, customTo, orgId, superAdmin, hotelCfg.pos_bar_department_id, sourceOrderId]);
 
   const updateStatus = async (orderId: string, newStatus: string) => {
     setUpdatingId(orderId);
     try {
       const { error } = await supabase.from("kitchen_orders").update({ order_status: newStatus }).eq("id", orderId);
       if (error) throw error;
+      const journal = await syncHotelPosOrderJournal(orderId, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Status saved, but GL sync failed: ${journal.error}`);
       await fetchOrders();
     } catch (err) {
       console.error("Bar update status error:", err);
@@ -121,8 +125,8 @@ export function BarOrdersPage({
 
       const [departmentsRes, ordersRes, productsRes] = await Promise.all([
         filterByOrganizationId(supabase.from("departments").select("id,name"), orgId, superAdmin),
-        applyHospitalityBranchFilter(
-          filterByOrganizationId(
+        (() => {
+          let query = filterByOrganizationId(
             supabase
               .from("kitchen_orders")
               .select(
@@ -136,14 +140,15 @@ export function BarOrdersPage({
             kitchen_order_items(quantity, notes, product_id)
           `
               )
-              .gte("created_at", fromIso)
-              .lt("created_at", toIso)
               .order("created_at", { ascending: true }),
             orgId,
             superAdmin
-          ),
-          user
-        ),
+          );
+          const sourceId = sourceOrderId.trim();
+          if (sourceId) return query.eq("id", sourceId);
+          query = query.gte("created_at", fromIso).lt("created_at", toIso);
+          return applyHospitalityBranchFilter(query, user);
+        })(),
         filterByOrganizationId(supabase.from("products").select("id, name, department_id, sales_price"), orgId, superAdmin),
       ]);
 
@@ -292,6 +297,8 @@ export function BarOrdersPage({
       };
       const { error } = await insertPaymentWithMethodCompat(supabase, insertPayload, payMethod);
       if (error) throw error;
+      const journal = await syncHotelPosOrderJournal(payingOrder.id, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Payment saved, but GL sync failed: ${journal.error}`);
       setPayingOrder(null);
       setPayAmount("");
       await fetchOrders();
@@ -339,6 +346,8 @@ export function BarOrdersPage({
         const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
         if (insErr) throw insErr;
       }
+      const journal = await syncHotelPosOrderJournal(editingOrderId, user?.id ?? null, orgId ?? null);
+      if (!journal.ok) throw new Error(`Order saved, but GL sync failed: ${journal.error}`);
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderItems([]);
@@ -360,6 +369,8 @@ export function BarOrdersPage({
     order.created_by || "Unknown";
 
   const filteredOrders = useMemo(() => {
+    const tracedId = sourceOrderId.trim();
+    if (tracedId) return orders.filter((order) => order.id === tracedId);
     if (!barDepartment) return orders;
     const byDepartment = orders
       .map((o) => {
@@ -373,7 +384,7 @@ export function BarOrdersPage({
       if (paymentFilter === "outstanding") return bucket !== "paid";
       return bucket === paymentFilter;
     });
-  }, [orders, barDepartment, paymentFilter]);
+  }, [orders, barDepartment, paymentFilter, sourceOrderId]);
 
   return (
     <div className="p-6 md:p-8">
@@ -421,6 +432,13 @@ export function BarOrdersPage({
             <option value="last_year">Last Year</option>
             <option value="custom">Custom</option>
           </select>
+          <input
+            value={sourceOrderId}
+            onChange={(e) => setSourceOrderId(e.target.value.trim())}
+            placeholder="Trace source order ID"
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[210px]"
+            title="Paste the journal Source reference ID to find the order regardless of date or payment status"
+          />
           <select
             value={paymentFilter}
             onChange={(e) => setPaymentFilter(e.target.value as typeof paymentFilter)}
@@ -452,6 +470,12 @@ export function BarOrdersPage({
         </div>
       </div>
 
+      {sourceOrderId.trim() && !loading && orders.length === 0 && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          No hotel POS order exists for source reference ID <strong>{sourceOrderId.trim()}</strong>. Check the journal
+          drill-down for a retail POS source, linked payment, or deleted source diagnostic.
+        </div>
+      )}
       {loading ? (
         <p className="text-slate-500 text-sm">Loading bar orders...</p>
       ) : filteredOrders.length === 0 ? (
@@ -464,6 +488,11 @@ export function BarOrdersPage({
               className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col justify-between"
             >
               <div>
+                {sourceOrderId.trim() && barDepartment && !order.kitchen_order_items.some((item) => item.products?.department_id === barDepartment.id) && (
+                  <div className="mb-2 rounded border border-amber-200 bg-amber-50 px-2 py-1 text-xs text-amber-800">
+                    Source order found, but none of its current product records belong to the configured bar department.
+                  </div>
+                )}
                 <div className="flex items-center justify-between mb-1">
                   <p className="font-semibold text-slate-900">
                     {order.customer_name || `Order #${order.id.slice(0, 6)}`}

@@ -1,7 +1,16 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { getReferenceTypeLabel, backfillJournalEntries, type BackfillProgress, type BackfillResult } from "../../lib/journal";
-import { RefreshCw, Pencil, Trash2, Save, X, Plus, Star } from "lucide-react";
+import {
+  getReferenceTypeLabel,
+  backfillJournalEntries,
+  repairHotelPosOrderJournals,
+  repairRoomChargeJournals,
+  type BackfillProgress,
+  type BackfillResult,
+  type PosJournalRepairResult,
+  type RoomJournalRepairResult,
+} from "../../lib/journal";
+import { ChevronLeft, ChevronRight, RefreshCw, Pencil, Trash2, Save, X, Plus, Star } from "lucide-react";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { orderGlAccountsWithExpensePreferences, fetchExpenseGlAccountPreferenceOrder } from "../../lib/manualJournalGlOptions";
@@ -110,17 +119,30 @@ export function JournalEntriesPage() {
   const [expenseGlPreferenceOrder, setExpenseGlPreferenceOrder] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [sourceFilter, setSourceFilter] = useState("");
+  const [entryDateFilter, setEntryDateFilter] = useState("");
+  const [journalNumberFilter, setJournalNumberFilter] = useState("");
   const [searchDescription, setSearchDescription] = useState("");
   const [searchAccount, setSearchAccount] = useState("");
   const [searchAmount, setSearchAmount] = useState("");
   const [page, setPage] = useState(0);
   const [hasMorePages, setHasMorePages] = useState(false);
+  const [totalEntries, setTotalEntries] = useState<number | null>(null);
   const [favoriteAccountIds, setFavoriteAccountIds] = useState<string[]>([]);
   const [recentAccountIds, setRecentAccountIds] = useState<string[]>([]);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillResult, setBackfillResult] = useState<BackfillResult | null>(null);
   const [backfillProgress, setBackfillProgress] = useState<BackfillProgress | null>(null);
   const [dryRunBackfill, setDryRunBackfill] = useState(false);
+  const [repairingPos, setRepairingPos] = useState(false);
+  const [posRepairProgress, setPosRepairProgress] = useState({ processed: 0, total: 0 });
+  const [posRepairResult, setPosRepairResult] = useState<PosJournalRepairResult | null>(null);
+  const [posRepairJournal, setPosRepairJournal] = useState("");
+  const [posRepairDepartmentId, setPosRepairDepartmentId] = useState("");
+  const [posRepairFrom, setPosRepairFrom] = useState("");
+  const [posRepairTo, setPosRepairTo] = useState("");
+  const [repairingRooms, setRepairingRooms] = useState(false);
+  const [roomRepairProgress, setRoomRepairProgress] = useState({ processed: 0, total: 0 });
+  const [roomRepairResult, setRoomRepairResult] = useState<RoomJournalRepairResult | null>(null);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [runningBulkAction, setRunningBulkAction] = useState<null | "delete" | "post" | "unpost">(null);
   const [expandedEntryIds, setExpandedEntryIds] = useState<string[]>([]);
@@ -207,7 +229,7 @@ export function JournalEntriesPage() {
 
   useEffect(() => {
     void fetchData();
-  }, [orgId, superAdmin, page]);
+  }, [orgId, superAdmin, page, entryDateFilter, journalNumberFilter]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -219,10 +241,15 @@ export function JournalEntriesPage() {
       setLoading(false);
       return;
     }
-    const entriesQuery = supabase
+    let entriesQuery = supabase
       .from("journal_entries")
-      .select("*, journal_entry_lines(*, gl_accounts(id, account_code, account_name, account_type))")
-      .eq("is_deleted", false)
+      .select("*, journal_entry_lines(*, gl_accounts(id, account_code, account_name, account_type))", { count: "exact" })
+      .eq("is_deleted", false);
+    if (entryDateFilter) entriesQuery = entriesQuery.eq("entry_date", entryDateFilter);
+    if (journalNumberFilter.trim()) {
+      entriesQuery = entriesQuery.ilike("transaction_id", `%${journalNumberFilter.trim()}%`);
+    }
+    entriesQuery = entriesQuery
       .order("entry_date", { ascending: false })
       .range(page * 50, page * 50 + 49);
     const accountsQuery = supabase
@@ -244,7 +271,9 @@ export function JournalEntriesPage() {
     ]);
     const fetchedEntries = (entRes.data || []) as JournalEntry[];
     setEntries(fetchedEntries);
-    setHasMorePages(fetchedEntries.length === 50);
+    const total = typeof entRes.count === "number" ? entRes.count : null;
+    setTotalEntries(total);
+    setHasMorePages(total !== null ? (page + 1) * 50 < total : fetchedEntries.length === 50);
     const normalizedAccounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
       .filter((row) => row.is_active)
       .map((row) => ({
@@ -258,6 +287,40 @@ export function JournalEntriesPage() {
     setExpenseGlPreferenceOrder(prefOrder);
     setLoading(false);
   };
+
+  const movePage = (nextPage: number) => {
+    setSelectedEntryIds([]);
+    setExpandedEntryIds([]);
+    setPage(Math.max(0, nextPage));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const paginationControls = (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => movePage(page - 1)}
+        disabled={page === 0}
+        className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        <ChevronLeft className="h-4 w-4" />
+        Previous
+      </button>
+      <span className="text-sm text-slate-600">
+        Page {page + 1}
+        {totalEntries !== null ? ` of ${Math.max(1, Math.ceil(totalEntries / 50))}` : ""}
+      </span>
+      <button
+        type="button"
+        onClick={() => movePage(page + 1)}
+        disabled={!hasMorePages}
+        className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        Next
+        <ChevronRight className="h-4 w-4" />
+      </button>
+    </div>
+  );
 
   const openEdit = (e: JournalEntry) => {
     setEditingEntry(e);
@@ -530,6 +593,57 @@ export function JournalEntriesPage() {
     }
   };
 
+  const handleRepairPastPosJournals = async () => {
+    if (repairingPos) return;
+    if (posRepairFrom && posRepairTo && posRepairFrom > posRepairTo) {
+      alert("POS repair start date cannot be after the end date.");
+      return;
+    }
+    const scopes = [
+      posRepairJournal.trim() ? `journal/order ${posRepairJournal.trim()}` : "",
+      posRepairDepartmentId ? `department ${departments.find((department) => department.id === posRepairDepartmentId)?.name || posRepairDepartmentId}` : "",
+      posRepairFrom || posRepairTo ? `dates ${posRepairFrom || "earliest"} to ${posRepairTo || "latest"}` : "",
+    ].filter(Boolean);
+    if (!confirm(`Rebuild Hotel POS journals for ${scopes.length ? scopes.join(", ") : "all past orders"} and recalculate COGS from sale-time stock movement costs?`)) return;
+    setRepairingPos(true);
+    setPosRepairResult(null);
+    setPosRepairProgress({ processed: 0, total: 0 });
+    try {
+      const result = await repairHotelPosOrderJournals({
+        onProgress: (processed, total) => setPosRepairProgress({ processed, total }),
+        journalOrOrder: posRepairJournal,
+        departmentId: posRepairDepartmentId,
+        fromDate: posRepairFrom,
+        toDate: posRepairTo,
+      });
+      setPosRepairResult(result);
+      await fetchData();
+    } catch (e) {
+      setPosRepairResult({ repaired: 0, removed: 0, errors: [e instanceof Error ? e.message : String(e)] });
+    } finally {
+      setRepairingPos(false);
+    }
+  };
+
+  const handleRepairRoomChargeJournals = async () => {
+    if (repairingRooms) return;
+    if (!confirm("Rebuild all room-charge journals from room billing? This uses the currently configured room revenue account.")) return;
+    setRepairingRooms(true);
+    setRoomRepairResult(null);
+    setRoomRepairProgress({ processed: 0, total: 0 });
+    try {
+      const result = await repairRoomChargeJournals({
+        onProgress: (processed, total) => setRoomRepairProgress({ processed, total }),
+      });
+      setRoomRepairResult(result);
+      await fetchData();
+    } catch (e) {
+      setRoomRepairResult({ repaired: 0, errors: [e instanceof Error ? e.message : String(e)] });
+    } finally {
+      setRepairingRooms(false);
+    }
+  };
+
   const toggleExpandedEntry = (entryId: string) => {
     setExpandedEntryIds((prev) => (prev.includes(entryId) ? prev.filter((id) => id !== entryId) : [...prev, entryId]));
   };
@@ -538,6 +652,67 @@ export function JournalEntriesPage() {
     setDrillEntry(entry);
     setDrillSourceData(null);
     if (!entry.reference_id || !entry.reference_type) return;
+    if (entry.reference_type === "pos") {
+      const referenceId = entry.reference_id;
+      const [hotelOrderRes, retailSaleRes, paymentsRes, stockMovesRes] = await Promise.all([
+        filterByOrganizationId(
+          supabase.from("kitchen_orders").select("*, kitchen_order_items(quantity,product_id,notes)").eq("id", referenceId).maybeSingle(),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase
+            .from("retail_sales")
+            .select("*, retail_sale_lines(description,quantity,unit_price,line_total,department_id)")
+            .eq("id", referenceId)
+            .maybeSingle(),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase
+            .from("payments")
+            .select("id,amount,payment_method,payment_status,paid_at,payment_source,transaction_id")
+            .ilike("transaction_id", `${referenceId}%`),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase
+            .from("product_stock_movements")
+            .select("id,product_id,quantity_out,movement_date,source_type,source_id,note")
+            .eq("source_type", "sale")
+            .eq("source_id", referenceId),
+          orgId,
+          superAdmin
+        ),
+      ]);
+      const hotelOrder = hotelOrderRes.data as Record<string, unknown> | null;
+      const retailSale = retailSaleRes.data as Record<string, unknown> | null;
+      const payments = (paymentsRes.data || []) as unknown[];
+      const stockMovements = (stockMovesRes.data || []) as unknown[];
+      setDrillSourceData({
+        trace_status: hotelOrder
+          ? "Found in hotel POS orders"
+          : retailSale
+            ? "Found in retail POS sales"
+            : "Source POS order is missing",
+        journal_transaction_id: entry.transaction_id,
+        journal_reference_id: referenceId,
+        explanation:
+          "The JE number identifies the journal only. The journal reference ID is the POS order/sale ID used to trace the source.",
+        source_order: hotelOrder ?? retailSale,
+        linked_payments: payments,
+        linked_stock_movements: stockMovements,
+        missing_source_diagnostic:
+          !hotelOrder && !retailSale
+            ? payments.length > 0 || stockMovements.length > 0
+              ? "The POS order/sale row is missing, but linked payment or stock records prove that the transaction existed."
+              : "No POS order, payment, or stock movement was found for this reference ID. The journal may have been imported, manually changed, or its source deleted."
+            : null,
+      });
+      return;
+    }
     const tableByRef: Record<string, string> = {
       room_charge: "billing",
       payment: "payments",
@@ -604,25 +779,45 @@ export function JournalEntriesPage() {
               Bulk Delete
             </button>
           </div>
-          <div className="flex items-center gap-2">
+          {paginationControls}
+          <label className="inline-flex items-center gap-2 text-sm text-slate-700">
+            Entry date
+            <input
+              type="date"
+              value={entryDateFilter}
+              onChange={(e) => {
+                setEntryDateFilter(e.target.value);
+                setPage(0);
+                setSelectedEntryIds([]);
+              }}
+              className="border rounded-lg px-3 py-2 bg-white"
+            />
+          </label>
+          <input
+            value={journalNumberFilter}
+            onChange={(e) => {
+              setJournalNumberFilter(e.target.value);
+              setPage(0);
+              setSelectedEntryIds([]);
+            }}
+            placeholder="Journal number, e.g. JE-01167"
+            className="border rounded-lg px-3 py-2 bg-white min-w-[220px]"
+          />
+          {(entryDateFilter || journalNumberFilter) && (
             <button
               type="button"
-              onClick={() => setPage((p) => Math.max(0, p - 1))}
-              disabled={page === 0}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={() => {
+                setEntryDateFilter("");
+                setJournalNumberFilter("");
+                setPage(0);
+                setSelectedEntryIds([]);
+              }}
+              className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"
             >
-              Prev
+              <X className="h-4 w-4" />
+              Clear date/number
             </button>
-            <span className="text-sm text-slate-600">Page {page + 1}</span>
-            <button
-              type="button"
-              onClick={() => setPage((p) => p + 1)}
-              disabled={!hasMorePages}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Next
-            </button>
-          </div>
+          )}
           <select
             value={sourceFilter}
             onChange={(e) => setSourceFilter(e.target.value)}
@@ -680,15 +875,114 @@ export function JournalEntriesPage() {
           <button
             type="button"
             onClick={handleBackfill}
-            disabled={backfilling}
+            disabled={backfilling || repairingPos || repairingRooms}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Create journal entries for all existing transactions that don't have one yet"
           >
             <RefreshCw className={`w-4 h-4 ${backfilling ? "animate-spin" : ""}`} />
             {backfilling ? "Running…" : dryRunBackfill ? "Dry run backfill" : "Backfill past transactions"}
           </button>
+          <button
+            type="button"
+            onClick={handleRepairPastPosJournals}
+            disabled={repairingPos || backfilling || repairingRooms}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Rebuild Hotel POS journals and recalculate COGS from sale-time stock movement costs"
+          >
+            <RefreshCw className={`w-4 h-4 ${repairingPos ? "animate-spin" : ""}`} />
+            {repairingPos ? "Recalculating POS COGS..." : "Repair POS journals / recalculate COGS"}
+          </button>
+          <button
+            type="button"
+            onClick={handleRepairRoomChargeJournals}
+            disabled={repairingRooms || repairingPos || backfilling}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Rebuild room-charge journals from billing using the current room revenue account"
+          >
+            <RefreshCw className={`w-4 h-4 ${repairingRooms ? "animate-spin" : ""}`} />
+            {repairingRooms ? "Repairing room journals..." : "Repair room journals"}
+          </button>
         </div>
       </div>
+
+      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+        <p className="mb-2 text-sm font-medium text-amber-950">POS journal repair scope</p>
+        <div className="flex flex-wrap gap-2">
+          <input
+            value={posRepairJournal}
+            onChange={(event) => setPosRepairJournal(event.target.value)}
+            placeholder="Journal JE-01167 or order UUID"
+            className="min-w-[230px] rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+          />
+          <select
+            value={posRepairDepartmentId}
+            onChange={(event) => setPosRepairDepartmentId(event.target.value)}
+            className="min-w-[180px] rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm"
+          >
+            <option value="">All departments</option>
+            {departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+          </select>
+          <label className="inline-flex items-center gap-1 text-xs text-amber-950">
+            From
+            <input type="date" value={posRepairFrom} onChange={(event) => setPosRepairFrom(event.target.value)} className="rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm" />
+          </label>
+          <label className="inline-flex items-center gap-1 text-xs text-amber-950">
+            To
+            <input type="date" value={posRepairTo} onChange={(event) => setPosRepairTo(event.target.value)} className="rounded-lg border border-amber-300 bg-white px-2 py-2 text-sm" />
+          </label>
+          <button
+            type="button"
+            onClick={() => {
+              setPosRepairJournal("");
+              setPosRepairDepartmentId("");
+              setPosRepairFrom("");
+              setPosRepairTo("");
+            }}
+            className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm text-amber-900 hover:bg-amber-100"
+          >
+            Clear scope
+          </button>
+        </div>
+        <p className="mt-2 text-xs text-amber-800">Filters are combined. Leave every field blank to repair all Hotel POS journals.</p>
+      </div>
+
+      {repairingPos && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          Repairing POS journals: {posRepairProgress.processed}/{posRepairProgress.total}
+        </div>
+      )}
+
+      {repairingRooms && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+          Repairing room journals: {roomRepairProgress.processed}/{roomRepairProgress.total}
+        </div>
+      )}
+
+      {roomRepairResult && (
+        <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
+          <p className="font-medium">Room journal repair complete: {roomRepairResult.repaired} rebuilt.</p>
+          {roomRepairResult.errors.length > 0 && (
+            <ul className="mt-2 list-disc list-inside text-xs">
+              {roomRepairResult.errors.slice(0, 10).map((error, index) => <li key={index}>{error}</li>)}
+              {roomRepairResult.errors.length > 10 && <li>... and {roomRepairResult.errors.length - 10} more</li>}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {posRepairResult && (
+        <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+          <p className="font-medium">
+            POS journal repair complete: {posRepairResult.repaired} rebuilt, {posRepairResult.removed} removed.
+          </p>
+          {posRepairResult.errors.length > 0 && (
+            <ul className="mt-2 list-disc list-inside text-xs">
+              {posRepairResult.errors.slice(0, 10).map((error, index) => <li key={index}>{error}</li>)}
+              {posRepairResult.errors.length > 10 && <li>... and {posRepairResult.errors.length - 10} more</li>}
+            </ul>
+          )}
+        </div>
+      )}
 
       {backfilling && backfillProgress && (
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3">
@@ -863,6 +1157,7 @@ export function JournalEntriesPage() {
           </tbody>
         </table>
       </div>
+      <div className="mt-4 flex justify-end">{paginationControls}</div>
 
       {editingEntry && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 overflow-y-auto">
@@ -1019,15 +1314,22 @@ export function JournalEntriesPage() {
             </div>
             <div className="text-sm text-slate-700 space-y-1 mb-3">
               <p>
-                <strong>Entry:</strong> {drillEntry.id}
+                <strong>Journal transaction:</strong> {drillEntry.transaction_id || drillEntry.id}
               </p>
               <p>
                 <strong>Source:</strong> {getReferenceTypeLabel(drillEntry.reference_type)} ({drillEntry.reference_type || "—"})
               </p>
               <p>
-                <strong>Reference ID:</strong> {drillEntry.reference_id || "—"}
+                <strong>Source reference ID:</strong> {drillEntry.reference_id || "—"}
               </p>
             </div>
+            {drillEntry.reference_type === "pos" && (
+              <div className="mb-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                A number such as <strong>{drillEntry.transaction_id || "JE-xxxxx"}</strong> identifies this journal only.
+                Trace the POS order using the <strong>Source reference ID</strong>. The trace below searches hotel POS,
+                retail POS, linked payments, and stock movements.
+              </div>
+            )}
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Source transaction payload</p>
               <pre className="text-xs text-slate-800 whitespace-pre-wrap">{JSON.stringify(drillSourceData, null, 2)}</pre>

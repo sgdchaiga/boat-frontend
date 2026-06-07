@@ -175,7 +175,12 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
           ? acc.posAirtelMoney ?? acc.posMtnMobileMoney ?? acc.cash
           : acc.posMtnMobileMoney ?? acc.cash;
   const journalLines: Array<{ gl_account_id: string; debit: number; credit: number; line_description: string }> = [];
-  if (receiptGl && acc.revenue) {
+  if (!receiptGl || !acc.revenue) {
+    throw new Error(
+      "POS sale cannot be posted because the receipt or sales revenue GL account is missing. Configure Admin > Journal account settings."
+    );
+  }
+  {
     journalLines.push(
       { gl_account_id: receiptGl, debit: total, credit: 0, line_description: "Retail sale receipt" },
       { gl_account_id: acc.revenue, debit: 0, credit: total, line_description: "Retail sales" }

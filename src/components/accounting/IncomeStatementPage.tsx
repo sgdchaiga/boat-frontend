@@ -18,7 +18,12 @@ import {
   getIncomeStatementMode,
 } from "../../lib/incomeStatementLayout";
 import { LineChart, Line, CartesianGrid, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts";
-import { Info } from "lucide-react";
+import { Eye, EyeOff, Info } from "lucide-react";
+import {
+  fetchHotelOperationalRevenue,
+  type BarSalesReconciliation,
+  type OperationalRevenueDetail,
+} from "../../lib/hotelOperationalRevenue";
 
 type TrendPoint = { period: string; revenue: number; expenses: number };
 type ExpenseSlice = { name: string; value: number };
@@ -46,9 +51,12 @@ type TotalsSnapshot = {
   branches: string[];
   trend: TrendPoint[];
   expenseBreakdown: ExpenseSlice[];
+  barReconciliation: BarSalesReconciliation | null;
+  operationalRevenueRows: AccountTotal[];
+  operationalRevenueDetails: OperationalRevenueDetail[];
 };
 
-const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense", "school_payment"] as const;
+const CASH_BASIS_REFERENCE_TYPES = ["payment", "vendor_payment", "expense", "school_payment"] as const;
 
 export function IncomeStatementPage() {
   const { user } = useAuth();
@@ -87,7 +95,11 @@ export function IncomeStatementPage() {
   const [companyName, setCompanyName] = useState("Business");
   const [trendData, setTrendData] = useState<TrendPoint[]>([]);
   const [expenseBreakdown, setExpenseBreakdown] = useState<ExpenseSlice[]>([]);
-  const [drillAccount, setDrillAccount] = useState<{ id: string; code: string; name: string; type: "income" | "expense" } | null>(null);
+  const [barReconciliation, setBarReconciliation] = useState<BarSalesReconciliation | null>(null);
+  const [operationalRevenueRows, setOperationalRevenueRows] = useState<AccountTotal[]>([]);
+  const [operationalRevenueDetails, setOperationalRevenueDetails] = useState<OperationalRevenueDetail[]>([]);
+  const [showPosFigures, setShowPosFigures] = useState(false);
+  const [drillAccount, setDrillAccount] = useState<{ id: string; code: string; name: string; type: "income" | "expense"; source?: "gl" | "pos" } | null>(null);
   const [drillRows, setDrillRows] = useState<DrillLine[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillError, setDrillError] = useState<string | null>(null);
@@ -113,6 +125,10 @@ export function IncomeStatementPage() {
   const opexDisplayed = useMemo(
     () => (showZeroBalanceAccounts ? opexRows : opexRows.filter((r) => isNonZeroGlAmount(r.total))),
     [opexRows, showZeroBalanceAccounts]
+  );
+  const operationalRevenueTotal = useMemo(
+    () => operationalRevenueRows.reduce((sum, row) => sum + row.total, 0),
+    [operationalRevenueRows]
   );
 
   type SaccoSummaryLine = [label: string, amount: number, bold?: boolean];
@@ -197,6 +213,9 @@ export function IncomeStatementPage() {
     setTotalCogs(0);
     setTotalOpex(0);
     setTotalExpenses(0);
+    setBarReconciliation(null);
+    setOperationalRevenueRows([]);
+    setOperationalRevenueDetails([]);
   };
 
   const fetchData = async () => {
@@ -226,11 +245,12 @@ export function IncomeStatementPage() {
       const linesQuery = supabase
         .from("journal_entry_lines")
         .select(
-          "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date)"
+          "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
         )
         .gte("journal_entries.entry_date", fromDate)
         .lte("journal_entries.entry_date", toDateInclusive)
         .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false)
         .in("gl_accounts.account_type", ["income", "expense"]);
       if (basis === "cash") {
         linesQuery.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
@@ -251,6 +271,75 @@ export function IncomeStatementPage() {
       if (linesRes.error) throw new Error(linesRes.error.message);
       if (accRes.error) throw new Error(accRes.error.message);
 
+      let effectiveLines = (linesRes.data || []) as Array<{
+        debit: number;
+        credit: number;
+        gl_accounts: { id: string; account_code: string; account_name: string; account_type: string; category?: string | null } | null;
+        journal_entries?: { entry_date: string; reference_type?: string | null; reference_id?: string | null } | null;
+      }>;
+      if (basis === "cash") {
+        const paidToExclusive = new Date(`${toDateInclusive}T00:00:00Z`);
+        paidToExclusive.setUTCDate(paidToExclusive.getUTCDate() + 1);
+        const paymentsRes = await filterByOrganizationId(
+          supabase
+            .from("payments")
+            .select("transaction_id,amount,payment_status,paid_at")
+            .eq("payment_status", "completed")
+            .in("payment_source", ["pos_hotel", "pos_retail"])
+            .gte("paid_at", `${fromDate}T00:00:00Z`)
+            .lt("paid_at", paidToExclusive.toISOString()),
+          orgId,
+          superAdmin
+        );
+        if (paymentsRes.error) throw new Error(paymentsRes.error.message);
+        const paidByOrder = new Map<string, number>();
+        const paidDateByOrder = new Map<string, string>();
+        ((paymentsRes.data || []) as Array<{ transaction_id: string | null; amount: number | null; paid_at: string | null }>).forEach((payment) => {
+          const id = String(payment.transaction_id || "").split("[")[0].trim();
+          if (!id) return;
+          paidByOrder.set(id, (paidByOrder.get(id) || 0) + Number(payment.amount || 0));
+          if (!paidDateByOrder.has(id)) paidDateByOrder.set(id, String(payment.paid_at || fromDate).slice(0, 10));
+        });
+        const posReferenceIds = Array.from(paidByOrder.keys());
+        if (posReferenceIds.length > 0) {
+          const posLinesRes = await filterJournalLinesByOrganizationId(
+            supabase
+              .from("journal_entry_lines")
+              .select(
+                "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
+              )
+              .eq("journal_entries.reference_type", "pos")
+              .eq("journal_entries.is_posted", true)
+              .eq("journal_entries.is_deleted", false)
+              .in("journal_entries.reference_id", posReferenceIds)
+              .in("gl_accounts.account_type", ["income", "expense"]),
+            orgId,
+            superAdmin
+          );
+          if (posLinesRes.error) throw new Error(posLinesRes.error.message);
+          const posLines = (posLinesRes.data || []) as typeof effectiveLines;
+          const salesByOrder = new Map<string, number>();
+          posLines.forEach((line) => {
+            const id = line.journal_entries?.reference_type === "pos" ? String(line.journal_entries.reference_id || "") : "";
+            if (!id || line.gl_accounts?.account_type !== "income") return;
+            salesByOrder.set(id, (salesByOrder.get(id) || 0) + Number(line.credit || 0) - Number(line.debit || 0));
+          });
+          const cashPosLines = posLines.map((line) => {
+            const id = line.journal_entries?.reference_type === "pos" ? String(line.journal_entries.reference_id || "") : "";
+            if (!id) return line;
+            const sold = Math.abs(salesByOrder.get(id) || 0);
+            const factor = sold > 0 ? Math.min(1, Math.max(0, (paidByOrder.get(id) || 0) / sold)) : 0;
+            return {
+              ...line,
+              debit: Number(line.debit || 0) * factor,
+              credit: Number(line.credit || 0) * factor,
+              journal_entries: { ...line.journal_entries!, entry_date: paidDateByOrder.get(id) || fromDate },
+            };
+          });
+          effectiveLines = [...effectiveLines, ...cashPosLines];
+        }
+      }
+
       type AccRow = {
         id: string;
         account_code: string;
@@ -269,7 +358,7 @@ export function IncomeStatementPage() {
         }));
       const accMap: Record<string, AccRow> = Object.fromEntries(accounts.map((a) => [a.id, a]));
       const byAccount: Record<string, number> = {};
-      (linesRes.data || []).forEach((l: {
+      effectiveLines.forEach((l: {
         debit: number;
         credit: number;
         gl_accounts: AccRow | null;
@@ -309,11 +398,11 @@ export function IncomeStatementPage() {
           te += total;
         }
       });
-      (linesRes.data || []).forEach((l: {
+      effectiveLines.forEach((l: {
         debit: number;
         credit: number;
         gl_accounts: { account_type: string } | null;
-        journal_entries: { entry_date: string } | null;
+        journal_entries?: { entry_date: string } | null;
       }) => {
         const accType = l.gl_accounts?.account_type;
         const entryDate = l.journal_entries?.entry_date || "";
@@ -332,6 +421,21 @@ export function IncomeStatementPage() {
           revenue: byPeriod[period].revenue,
           expenses: byPeriod[period].expenses,
         }));
+
+      let barReconciliation: BarSalesReconciliation | null = null;
+      let operationalRevenueRows: AccountTotal[] = [];
+      let operationalRevenueDetails: OperationalRevenueDetail[] = [];
+      if (businessType === "hotel" || businessType === "mixed") {
+        const operationalRevenue = await fetchHotelOperationalRevenue(
+          fromDate,
+          toDateInclusive,
+          orgId,
+          superAdmin
+        );
+        barReconciliation = operationalRevenue.barReconciliation;
+        operationalRevenueRows = operationalRevenue.rows;
+        operationalRevenueDetails = operationalRevenue.details;
+      }
 
       let cogsRows: AccountTotal[] = [];
       let opexRows: AccountTotal[] = [];
@@ -394,6 +498,9 @@ export function IncomeStatementPage() {
         branches: [] as string[],
         trend,
         expenseBreakdown,
+        barReconciliation,
+        operationalRevenueRows,
+        operationalRevenueDetails,
       };
       totalsCacheRef.current.set(cacheKey, snapshot);
       return snapshot;
@@ -415,6 +522,9 @@ export function IncomeStatementPage() {
       setTotalExpenses(currentRes.totalExpenses);
       setTrendData(currentRes.trend);
       setExpenseBreakdown(currentRes.expenseBreakdown);
+      setBarReconciliation(currentRes.barReconciliation);
+      setOperationalRevenueRows(currentRes.operationalRevenueRows);
+      setOperationalRevenueDetails(currentRes.operationalRevenueDetails);
 
       if (compareRange === "none") {
         setPreviousTotalRevenue(0);
@@ -541,7 +651,7 @@ export function IncomeStatementPage() {
   const pieColors = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#14b8a6", "#6366f1", "#84cc16", "#ec4899", "#22c55e", "#f97316", "#64748b"];
 
   const openDrilldown = async (account: { id: string; code: string; name: string; type: "income" | "expense" }) => {
-    setDrillAccount(account);
+    setDrillAccount({ ...account, source: "gl" });
     setDrillRows([]);
     setDrillError(null);
     setDrillLoading(true);
@@ -560,6 +670,7 @@ export function IncomeStatementPage() {
         .gte("journal_entries.entry_date", fromStr)
         .lte("journal_entries.entry_date", toStrInclusive)
         .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false)
         .order("entry_date", { ascending: false, referencedTable: "journal_entries" });
       if (basis === "cash") {
         q.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
@@ -588,6 +699,32 @@ export function IncomeStatementPage() {
     } finally {
       setDrillLoading(false);
     }
+  };
+
+  const openPosDrilldown = (account: AccountTotal) => {
+    setDrillAccount({
+      id: account.account_id,
+      code: account.account_code,
+      name: account.account_name,
+      type: "income",
+      source: "pos",
+    });
+    setDrillError(null);
+    setDrillLoading(false);
+    setDrillRows(
+      operationalRevenueDetails
+        .filter((detail) => detail.accountId === account.account_id)
+        .map((detail) => ({
+          id: detail.id,
+          entry_date: detail.date,
+          description: detail.description,
+          transaction_id: detail.reference,
+          reference_type: "pos",
+          debit: 0,
+          credit: detail.amount,
+          line_description: detail.description,
+        }))
+    );
   };
 
   const ugxOpts = { currency: "UGX" as const, locale: "en-UG" as const };
@@ -781,11 +918,33 @@ export function IncomeStatementPage() {
           Cash basis view is enabled. This report is generated from posted journal entries.
         </div>
       )}
+      {!fetchError && showPosFigures && barReconciliation && (
+        <div className="mb-4 space-y-2">
+          {[
+            ["Bar", barReconciliation.posBarSales, barReconciliation.glBarSales, barReconciliation.variance],
+            ["Kitchen", barReconciliation.posKitchenSales, barReconciliation.glKitchenSales, barReconciliation.kitchenVariance],
+          ].map(([label, posAmount, glAmount, variance]) => (
+            <div
+              key={String(label)}
+              className={`rounded-lg border px-4 py-3 text-sm ${
+                Math.abs(Number(variance)) < 0.01
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-amber-200 bg-amber-50 text-amber-900"
+              }`}
+            >
+              <strong>{String(label)} sales reconciliation:</strong> POS {fmtUgx(Number(posAmount))}; general ledger{" "}
+              {fmtUgx(Number(glAmount))}; variance {fmtUgx(Number(variance))}.
+              {Math.abs(Number(variance)) < 0.01
+                ? " The figures agree."
+                : " The figures do not agree. Repair past POS journals and confirm the department sales GL mapping."}
+            </div>
+          ))}
+        </div>
+      )}
       {!fetchError && showBasisHelp && (
         <div className="mb-4 rounded-lg border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-700" role="status">
-          Basis help: accrual includes all posted journals for the period. Cash includes posted journals with reference types:
-          <code className="text-xs"> payment</code>, <code className="text-xs">pos</code>, <code className="text-xs">vendor_payment</code>,{" "}
-          <code className="text-xs">expense</code>.
+          Basis help: accrual includes full posted sales and COGS for the sale period. Cash recognizes POS sales and COGS
+          in proportion to completed payments received during the selected period, plus cash-basis payment and expense journals.
         </div>
       )}
 
@@ -827,6 +986,18 @@ export function IncomeStatementPage() {
           >
             <Info className="h-4 w-4" />
           </button>
+          {operationalRevenueRows.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setShowPosFigures((visible) => !visible)}
+              className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-slate-300 px-3 text-sm text-slate-700 hover:bg-slate-50"
+              title={showPosFigures ? "Hide POS figures" : "Show POS figures"}
+              aria-label={showPosFigures ? "Hide POS figures" : "Show POS figures"}
+            >
+              {showPosFigures ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              {showPosFigures ? "Hide POS" : "Show POS"}
+            </button>
+          )}
           <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none">
             <input
               type="checkbox"
@@ -940,13 +1111,17 @@ export function IncomeStatementPage() {
                     <tr key={r.account_code} className="border-t">
                       <td className="p-3 font-mono">{r.account_code}</td>
                       <td className="p-3">
-                        <button
-                          type="button"
-                          onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "income" })}
-                          className="text-left text-blue-700 hover:underline"
-                        >
-                          {r.account_name}
-                        </button>
+                        {r.account_id.startsWith("operational-revenue:") ? (
+                          r.account_name
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "income" })}
+                            className="text-left text-blue-700 hover:underline"
+                          >
+                            {r.account_name}
+                          </button>
+                        )}
                       </td>
                       <td className="p-3 text-right text-slate-600">
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}
@@ -1058,13 +1233,17 @@ export function IncomeStatementPage() {
                     <tr key={r.account_code} className="border-t">
                       <td className="p-3 font-mono">{r.account_code}</td>
                       <td className="p-3">
-                        <button
-                          type="button"
-                          onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "income" })}
-                          className="text-left text-blue-700 hover:underline"
-                        >
-                          {r.account_name}
-                        </button>
+                        {r.account_id.startsWith("operational-revenue:") ? (
+                          r.account_name
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "income" })}
+                            className="text-left text-blue-700 hover:underline"
+                          >
+                            {r.account_name}
+                          </button>
+                        )}
                       </td>
                       <td className="p-3 text-right text-slate-600">
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}
@@ -1098,6 +1277,46 @@ export function IncomeStatementPage() {
                   </tr>
                 </tfoot>
               </table>
+              {showPosFigures && operationalRevenueRows.length > 0 && (
+                <>
+                  <div className="border-t border-b bg-blue-50 p-4">
+                    <div className="font-medium text-blue-950">POS and room-billing figures</div>
+                    <div className="text-xs text-blue-800">Supporting operational figures only; these do not change the GL income statement totals.</div>
+                  </div>
+                  <table className="w-full text-sm">
+                    <thead className="bg-blue-50/60">
+                      <tr>
+                        <th className="p-3 text-left">Code</th>
+                        <th className="p-3 text-left">Operational source</th>
+                        <th className="p-3 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {operationalRevenueRows.map((row) => (
+                        <tr key={row.account_id} className="border-t border-blue-100">
+                          <td className="p-3 font-mono">{row.account_code}</td>
+                          <td className="p-3">
+                            <button
+                              type="button"
+                              onClick={() => openPosDrilldown(row)}
+                              className="text-left text-blue-700 hover:underline"
+                            >
+                              {row.account_name}
+                            </button>
+                          </td>
+                          <td className="p-3 text-right font-medium">{fmtUgx(row.total)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-blue-50 font-medium">
+                      <tr>
+                        <td colSpan={2} className="p-3 text-right">Total operational figures</td>
+                        <td className="p-3 text-right">{fmtUgx(operationalRevenueTotal)}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </>
+              )}
               <div className="p-4 border-t border-b bg-slate-50 font-medium">Cost of goods sold</div>
               <table className="w-full text-sm">
                 <thead className="bg-slate-100">
@@ -1376,7 +1595,9 @@ export function IncomeStatementPage() {
                 <h3 className="text-lg font-semibold text-slate-900">
                   Drill-down: {drillAccount.code} {drillAccount.name}
                 </h3>
-                <p className="text-xs text-slate-500 capitalize">{drillAccount.type} transactions in selected period/filters</p>
+                <p className="text-xs text-slate-500">
+                  {drillAccount.source === "pos" ? "POS items / billing charges" : `${drillAccount.type} general ledger transactions`} in selected period
+                </p>
               </div>
               <button
                 type="button"

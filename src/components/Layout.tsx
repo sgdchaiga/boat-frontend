@@ -28,6 +28,7 @@ import {
   BarChart3,
   AlertTriangle,
   Link2,
+  ArrowLeft,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -56,6 +57,8 @@ interface LayoutProps {
   /** Mirrors `pageState` / query string for active nav on pages with sub-views (e.g. SACCO Teller). */
   pageState?: Record<string, unknown>;
   onNavigate: (page: string, state?: Record<string, unknown>) => void;
+  onBack?: () => void;
+  canGoBack?: boolean;
 }
 
 type NavLeaf = { name: string; icon: typeof FileText; page: string; state?: Record<string, unknown> };
@@ -206,7 +209,7 @@ function navSectionAccent(sectionName: string) {
 const singleNavActive = 'bg-brand-600 text-white shadow-sm';
 const singleNavIdle = 'text-slate-400 hover:bg-slate-800/80 hover:text-white';
 
-export function Layout({ children, currentPage, pageState = {}, onNavigate }: LayoutProps) {
+export function Layout({ children, currentPage, pageState = {}, onNavigate, onBack, canGoBack = false }: LayoutProps) {
   const { user, clockOut, lockTerminal, accessSession, isSuperAdmin, isHotelStaff, memberships, switchOrganization } =
     useAuth();
   const [orgSwitching, setOrgSwitching] = useState(false);
@@ -1330,6 +1333,18 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate }: La
 
       <div className="lg:pl-64 min-w-0 max-w-full">
         <main className="pt-14 lg:pt-0 min-w-0 max-w-full">
+          <div className="px-4 lg:px-8 pt-3">
+            <button
+              type="button"
+              onClick={onBack}
+              disabled={!canGoBack}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+              title={canGoBack ? "Return to previous page" : "No previous page"}
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </button>
+          </div>
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">

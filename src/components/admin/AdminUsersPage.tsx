@@ -750,15 +750,15 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       </section>
 
       {showStaffModal && (
-        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
-            <div className="flex items-center gap-2 mb-6">
+        <div className="fixed inset-0 z-50 flex items-center justify-center overflow-hidden bg-black/40 p-2 sm:p-4">
+          <div className="flex max-h-[calc(100dvh-1rem)] min-h-0 w-full max-w-md flex-col overflow-hidden rounded-xl bg-white shadow-xl sm:max-h-[calc(100dvh-2rem)]">
+            <div className="flex shrink-0 items-center gap-2 border-b border-slate-200 px-5 py-4 sm:px-6">
               <Shield className="w-5 h-5 text-slate-600" />
               <h3 className="text-lg font-semibold text-slate-900">
                 {editingStaff ? "Edit User" : "Add User"}
               </h3>
             </div>
-            <div className="space-y-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-5 py-4 sm:px-6">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
                 <input
@@ -882,7 +882,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                 </div>
               )}
             </div>
-            <div className="flex justify-end gap-2 mt-6">
+            <div className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-slate-200 bg-white px-5 py-3 sm:px-6 sm:py-4">
               <button
                 type="button"
                 onClick={() => setShowStaffModal(false)}

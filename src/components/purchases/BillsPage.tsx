@@ -255,7 +255,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setRejectingId(bill.id);
     try {
       const jr = await deleteJournalEntryByReference("bill", bill.id);
-      if (!jr.ok) console.warn("[bills] remove journal on reject:", jr.error);
+      if (!jr.ok) throw new Error(`Could not remove the bill journal: ${jr.error}`);
       let { error } = await supabase
         .from("bills")
         .update({
@@ -671,20 +671,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         const { error } = await supabase.from("bills").update(payload).eq("id", editingBill.id);
         if (error) throw error;
       } else {
-        const { data: inserted, error } = await supabase.from("bills").insert({ ...payload, status: "pending_approval" }).select("id, bill_date").single();
+        const { error } = await supabase.from("bills").insert({ ...payload, status: "pending_approval" });
         if (error) throw error;
-        if (inserted) {
-          const jr = await createJournalForBill(
-            (inserted as { id: string }).id,
-            amt,
-            payload.description,
-            (inserted as { bill_date: string }).bill_date ?? billDateVal,
-            user?.id ?? null
-          );
-          if (!jr.ok) {
-            alert(`Bill saved but journal was not posted: ${jr.error}`);
-          }
-        }
+        // Pending bills do not affect the ledger. Approval posts the bill journal.
       }
       closeModal();
       fetchData();

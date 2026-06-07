@@ -1,4 +1,5 @@
-import { Calendar, Filter, RotateCcw, X } from "lucide-react";
+import { Calendar, ChevronDown, ChevronUp, Filter, RotateCcw, X } from "lucide-react";
+import { useState } from "react";
 import type { DateRangeKey } from "@/lib/timezone";
 
 const DATE_RANGE_OPTIONS: { value: DateRangeKey; label: string }[] = [
@@ -37,6 +38,8 @@ export type ItemReportFiltersPanelProps = {
   itemFilters: string[];
   onItemFiltersChange: (items: string[]) => void;
   items: string[];
+  compact?: boolean;
+  hideCustomer?: boolean;
 };
 
 function countActiveFilters(props: ItemReportFiltersPanelProps): number {
@@ -73,7 +76,10 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
     itemFilters,
     onItemFiltersChange,
     items,
+    compact = false,
+    hideCustomer = false,
   } = props;
+  const [showItems, setShowItems] = useState(!compact);
 
   const activeCount = countActiveFilters(props);
 
@@ -99,15 +105,15 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
   const clearItems = () => onItemFiltersChange([]);
 
   return (
-    <div className="mb-6 rounded-xl border border-slate-200/90 bg-gradient-to-br from-white via-white to-slate-50/90 p-4 shadow-card md:p-5">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 pb-3">
+    <div className={`mb-4 rounded-xl border border-slate-200/90 bg-white shadow-sm ${compact ? "p-3" : "p-4 md:p-5"}`}>
+      <div className={`${compact ? "mb-3" : "mb-4 border-b border-slate-100 pb-3"} flex flex-wrap items-center justify-between gap-3`}>
         <div className="flex items-center gap-2">
           <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-brand-700/10 text-brand-800">
             <Filter className="h-4 w-4" aria-hidden />
           </span>
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Filters</h2>
-            <p className="text-xs text-slate-500">Narrow the report by period, department, and items</p>
+            {!compact ? <p className="text-xs text-slate-500">Narrow the report by period, department, and items</p> : null}
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -127,8 +133,8 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <div className="sm:col-span-2 lg:col-span-2">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${hideCustomer ? "lg:grid-cols-3" : "lg:grid-cols-4"} ${compact ? "gap-2" : "gap-4"}`}>
+        <div>
           <label className={labelClass}>
             <span className="inline-flex items-center gap-1">
               <Calendar className="h-3 w-3" aria-hidden />
@@ -178,7 +184,7 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
           </select>
         </div>
 
-        <div>
+        {!hideCustomer ? <div>
           <label className={labelClass}>Customer</label>
           <select
             value={customerFilter}
@@ -194,7 +200,7 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
             ))}
             {customerDisabled ? <option value="none">{customerDisabledHint}</option> : null}
           </select>
-        </div>
+        </div> : null}
 
         <div>
           <label className={labelClass}>Vendor</label>
@@ -215,9 +221,12 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
         </div>
       </div>
 
-      <div className="mt-4">
+      <div className={compact ? "mt-3" : "mt-4"}>
         <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <label className={labelClass}>Items {items.length > 0 ? `(${items.length})` : ""}</label>
+          <button type="button" onClick={() => setShowItems((value) => !value)} className="inline-flex items-center gap-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
+            Items {itemFilters.length > 0 ? `(${itemFilters.length} selected)` : `(${items.length})`}
+            {showItems ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+          </button>
           <div className="flex gap-2">
             <button
               type="button"
@@ -262,7 +271,7 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
           <p className="mb-2 text-xs text-slate-500">All items included — pick specific lines below to filter.</p>
         )}
 
-        <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white/80 p-2 shadow-inner">
+        {showItems ? <div className="max-h-40 overflow-y-auto rounded-lg border border-slate-200 bg-white/80 p-2 shadow-inner">
           {items.length === 0 ? (
             <p className="px-2 py-3 text-center text-sm text-slate-500">No items in this period yet.</p>
           ) : (
@@ -289,7 +298,7 @@ export function ItemReportFiltersPanel(props: ItemReportFiltersPanelProps) {
               })}
             </ul>
           )}
-        </div>
+        </div> : null}
       </div>
     </div>
   );

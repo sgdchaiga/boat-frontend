@@ -3,7 +3,7 @@ import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon, Pencil } from 
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
-import { createJournalForRoomCharge } from "../lib/journal";
+import { createJournalForRoomCharge, syncRoomChargeJournal } from "../lib/journal";
 import { businessTodayISO } from "../lib/timezone";
 import {
   type ActiveStayOption,
@@ -235,7 +235,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
 
       const { data: inserted, error } = await supabase.from("billing").insert(payload).select("id, charged_at").single();
       if (error) throw error;
-      if (inserted) {
+      if (inserted && chargeType === "room") {
         const chargedAt = (inserted as { charged_at?: string }).charged_at ?? new Date().toISOString();
         const jr = await createJournalForRoomCharge(
           (inserted as { id: string }).id,
@@ -324,6 +324,10 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
       };
       const { error } = await supabase.from("billing").update(payload).eq("id", editBilling.id);
       if (error) throw error;
+      const journalSync = await syncRoomChargeJournal(editBilling.id);
+      if (!journalSync.ok) {
+        alert(`Charge updated but its journal was not synchronized: ${journalSync.error}`);
+      }
       await fetchData();
       closeEditBilling();
     } catch (error) {

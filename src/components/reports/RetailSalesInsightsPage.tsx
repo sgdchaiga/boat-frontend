@@ -8,6 +8,7 @@ import { fetchClinicDispensingSaleIdsInRange } from "../../lib/clinicDispensingH
 import { fetchPaymentsForRetailSalesInPeriod } from "../../lib/clinicPosAnalyticsSummary";
 import { toast } from "../ui/use-toast";
 import { useAuth } from "../../contexts/AuthContext";
+import { businessDayRangeForDateString, businessTodayISO } from "../../lib/timezone";
 
 type SalesDateFilter = "today" | "custom";
 
@@ -25,6 +26,14 @@ interface TopProductRow {
   name: string;
   qty: number;
   amount: number;
+}
+
+interface RetailSaleSummaryRow {
+  id: string;
+  sale_at: string;
+  total_amount: number;
+  sale_status: "draft" | "queued_offline" | "posted" | "void" | "refunded";
+  payment_status: "pending" | "partial" | "completed" | "overpaid" | "refunded";
 }
 
 interface OpenCreditSaleRow {
@@ -55,9 +64,11 @@ export type RetailSalesInsightsPageProps = {
 export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: RetailSalesInsightsPageProps = {}) {
   const { user } = useAuth();
   const [salesDateFilter, setSalesDateFilter] = useState<SalesDateFilter>("today");
-  const [salesFromDate, setSalesFromDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [salesToDate, setSalesToDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [salesFromDate, setSalesFromDate] = useState(businessTodayISO);
+  const [salesToDate, setSalesToDate] = useState(businessTodayISO);
   const [sales, setSales] = useState<RetailSalePaymentRow[]>([]);
+  const [saleHeaders, setSaleHeaders] = useState<RetailSaleSummaryRow[]>([]);
+  const [previousSaleHeaders, setPreviousSaleHeaders] = useState<RetailSaleSummaryRow[]>([]);
   const [openCreditSales, setOpenCreditSales] = useState<OpenCreditSaleRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [showOverdueOnly, setShowOverdueOnly] = useState(false);
@@ -70,7 +81,6 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
   const [reminderHistoryBySaleId, setReminderHistoryBySaleId] = useState<Record<string, CreditReminderRow[]>>({});
   const [loadingReminderSaleId, setLoadingReminderSaleId] = useState<string | null>(null);
   const [salesSearch, setSalesSearch] = useState("");
-  const [previousSales, setPreviousSales] = useState<RetailSalePaymentRow[]>([]);
   const [topProducts, setTopProducts] = useState<TopProductRow[]>([]);
 
   const loadData = async () => {
@@ -83,14 +93,14 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
       let start: Date;
       let end: Date;
       if (salesDateFilter === "today") {
-        start = new Date();
-        start.setHours(0, 0, 0, 0);
-        end = new Date(start);
-        end.setDate(end.getDate() + 1);
+        const range = businessDayRangeForDateString(businessTodayISO());
+        start = range?.from ?? new Date();
+        end = range?.to ?? new Date(start.getTime() + 24 * 60 * 60 * 1000);
       } else {
-        start = new Date(`${salesFromDate}T00:00:00`);
-        end = new Date(`${salesToDate}T00:00:00`);
-        end.setDate(end.getDate() + 1);
+        const fromRange = businessDayRangeForDateString(salesFromDate);
+        const toRange = businessDayRangeForDateString(salesToDate);
+        start = fromRange?.from ?? new Date(`${salesFromDate}T00:00:00`);
+        end = toRange?.to ?? new Date(`${salesToDate}T23:59:59.999`);
       }
       const msPerDay = 24 * 60 * 60 * 1000;
       const daySpan = Math.max(1, Math.round((end.getTime() - start.getTime()) / msPerDay));
@@ -112,6 +122,17 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
           orgId,
           skipOrgFilter
         );
+
+      const salesInRange = (rangeStart: Date, rangeEnd: Date) => {
+        let query = supabase
+          .from("retail_sales")
+          .select("id,sale_at,total_amount,sale_status,payment_status")
+          .gte("sale_at", rangeStart.toISOString())
+          .lt("sale_at", rangeEnd.toISOString())
+          .not("sale_status", "in", '("draft","void","queued_offline")');
+        if (clinicOnly) query = query.not("clinic_patient_id", "is", null);
+        return filterByOrganizationId(query, orgId, skipOrgFilter);
+      };
 
       let openCreditSalesQuery = filterByOrganizationId(
         supabase
@@ -159,32 +180,26 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
       })();
 
       const superAdmin = Boolean(user?.isSuperAdmin);
-      const [clinicSaleIds, previousClinicSaleIds] = clinicOnly
-        ? await Promise.all([
-            fetchClinicDispensingSaleIdsInRange(orgId, superAdmin, start, end),
-            fetchClinicDispensingSaleIdsInRange(orgId, superAdmin, previousStart, previousEnd),
-          ])
-        : [new Set<string>(), new Set<string>()];
+      const clinicSaleIds = clinicOnly
+        ? await fetchClinicDispensingSaleIdsInRange(orgId, superAdmin, start, end)
+        : new Set<string>();
 
-      const [payRowsResolved, creditRes, previousPayRowsResolved, lineRows] = await Promise.all([
+      const [payRowsResolved, creditRes, lineRows, saleHeadersRes, previousSaleHeadersRes] = await Promise.all([
         clinicOnly
           ? fetchPaymentsForRetailSalesInPeriod(orgId, superAdmin, start, end)
-          : paymentsInRange(start, end).then((r) => {
+          : paymentsInRange(start, end).then((r: { error: { message: string } | null; data: unknown[] | null }) => {
               if (r.error) throw new Error(r.error.message);
               return r.data || [];
             }),
         openCreditSalesQuery,
-        clinicOnly
-          ? fetchPaymentsForRetailSalesInPeriod(orgId, superAdmin, previousStart, previousEnd)
-          : paymentsInRange(previousStart, previousEnd).then((r) => {
-              if (r.error) throw new Error(r.error.message);
-              return r.data || [];
-            }),
         lineRowsPromise,
+        salesInRange(start, end),
+        salesInRange(previousStart, previousEnd),
       ]);
       const payRows = payRowsResolved;
       const creditRows = creditRes.data;
-      const previousPayRows = previousPayRowsResolved;
+      if (saleHeadersRes.error) throw new Error(saleHeadersRes.error.message);
+      if (previousSaleHeadersRes.error) throw new Error(previousSaleHeadersRes.error.message);
 
       const filterClinic = (
         rows: Array<{
@@ -248,20 +263,6 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
         cashierName: p.processed_by ? cashierNameById.get(p.processed_by) ?? null : null,
       }));
 
-      const previousRawPayments = (clinicOnly
-        ? ((previousPayRows || []) as PayRow[])
-        : filterClinic((previousPayRows || []) as PayRow[], previousClinicSaleIds)
-      ).map((p) => ({
-        paymentId: p.id,
-        saleId: String(p.transaction_id || ""),
-        paidAt: p.paid_at,
-        amount: Number(p.amount ?? 0),
-        paymentMethod: normalizePaymentMethod(p.payment_method as string),
-        paymentStatus: p.payment_status,
-        processedBy: p.processed_by ?? null,
-        cashierName: p.processed_by ? cashierNameById.get(p.processed_by) ?? null : null,
-      }));
-
       const byProduct = new Map<string, TopProductRow>();
       (
         (lineRows || []) as Array<{
@@ -281,8 +282,9 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
         .slice(0, 8);
 
       setSales(mappedPayments);
+      setSaleHeaders((saleHeadersRes.data || []) as RetailSaleSummaryRow[]);
+      setPreviousSaleHeaders((previousSaleHeadersRes.data || []) as RetailSaleSummaryRow[]);
       setOpenCreditSales((creditRows || []) as OpenCreditSaleRow[]);
-      setPreviousSales(previousRawPayments);
       setTopProducts(top);
     } finally {
       setLoading(false);
@@ -316,10 +318,9 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
   }, [sales, salesSearch]);
 
   const summary = useMemo(() => {
-    const completed = sales.filter((s) => s.paymentStatus === "completed");
-    const refunded = sales.filter((s) => s.paymentStatus === "refunded");
-    const totalSalesValue = completed.reduce((sum, s) => sum + s.amount, 0);
-    const refundedValue = refunded.reduce((sum, s) => sum + s.amount, 0);
+    const refunded = saleHeaders.filter((sale) => sale.sale_status === "refunded");
+    const totalSalesValue = saleHeaders.reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0);
+    const refundedValue = refunded.reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0);
     const outstandingCredit = openCreditSales.reduce((sum, s) => sum + Number(s.amount_due || 0), 0);
     const overdueCredit = openCreditSales
       .filter((s) => s.credit_due_date && new Date(`${s.credit_due_date}T00:00:00`).getTime() < Date.now())
@@ -327,21 +328,20 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
     return {
       totalSalesValue,
       refundedValue,
-      completedCount: completed.length,
+      completedCount: saleHeaders.length,
       outstandingCredit,
       overdueCredit,
     };
-  }, [sales, openCreditSales]);
+  }, [saleHeaders, openCreditSales]);
 
   const previousSummary = useMemo(() => {
-    const completed = previousSales.filter((s) => s.paymentStatus === "completed");
-    const refunded = previousSales.filter((s) => s.paymentStatus === "refunded");
+    const refunded = previousSaleHeaders.filter((sale) => sale.sale_status === "refunded");
     return {
-      totalSalesValue: completed.reduce((sum, s) => sum + s.amount, 0),
-      refundedValue: refunded.reduce((sum, s) => sum + s.amount, 0),
-      completedCount: completed.length,
+      totalSalesValue: previousSaleHeaders.reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0),
+      refundedValue: refunded.reduce((sum, sale) => sum + Number(sale.total_amount || 0), 0),
+      completedCount: previousSaleHeaders.length,
     };
-  }, [previousSales]);
+  }, [previousSaleHeaders]);
 
   const formatDelta = (current: number, previous: number) => {
     const diff = current - previous;
@@ -390,8 +390,8 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
       ["Range", rangeLabel],
       [],
       ["KPI", "Value"],
-      ["Completed sales", String(summary.completedCount)],
-      ["Sales value", summary.totalSalesValue.toFixed(2)],
+      ["Posted POS sales", String(summary.completedCount)],
+      ["Posted POS sales value", summary.totalSalesValue.toFixed(2)],
       ["Refunded value", summary.refundedValue.toFixed(2)],
       ["Open credit", summary.outstandingCredit.toFixed(2)],
       ["Overdue credit", summary.overdueCredit.toFixed(2)],
@@ -414,7 +414,7 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
       ]),
     ];
     const csv = rows
-      .map((r) => r.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
       .join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -460,7 +460,15 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
         .update({ amount_paid: nextPaid, amount_due: nextDue, payment_status: nextStatus, sale_type: nextDue <= 0 ? "cash" : "mixed" })
         .eq("id", sale.id);
       setSettleAmountDraftBySaleId((prev) => ({ ...prev, [sale.id]: "" }));
-      setOpenCreditSales((prev) => prev.map((s) => (s.id === sale.id ? { ...s, amount_due: nextDue, payment_status: nextStatus } : s)).filter((s) => s.amount_due > 0));
+      setOpenCreditSales((prev) =>
+        prev
+          .map((s) =>
+            s.id === sale.id
+              ? { ...s, amount_due: nextDue, payment_status: nextStatus as OpenCreditSaleRow["payment_status"] }
+              : s
+          )
+          .filter((s) => s.amount_due > 0)
+      );
       toast({ title: "Balance received", description: `Outstanding is now ${nextDue.toFixed(2)}.` });
     } catch (error: unknown) {
       toast({ title: "Settlement failed", description: error instanceof Error ? error.message : "Try again." });
@@ -622,7 +630,7 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="bg-white rounded-xl border border-slate-200 p-3">
           <p className="text-xs uppercase tracking-wide text-slate-500">
-            {clinicOnly ? "Completed dispensings" : "Completed sales"}
+            {clinicOnly ? "Posted dispensings" : "Posted POS sales"}
           </p>
           <p className="text-xl font-bold text-slate-900">{summary.completedCount}</p>
           <p className={`text-xs ${formatDelta(summary.completedCount, previousSummary.completedCount).tone}`}>
@@ -630,7 +638,7 @@ export function RetailSalesInsightsPage({ clinicOnly = false, onNavigate }: Reta
           </p>
         </div>
         <div className="bg-white rounded-xl border border-slate-200 p-3">
-          <p className="text-xs uppercase tracking-wide text-slate-500">Sales value</p>
+          <p className="text-xs uppercase tracking-wide text-slate-500">Posted POS sales value</p>
           <p className="text-xl font-bold text-slate-900">{summary.totalSalesValue.toFixed(2)}</p>
           <p className={`text-xs ${formatDelta(summary.totalSalesValue, previousSummary.totalSalesValue).tone}`}>
             vs prev: {formatDelta(summary.totalSalesValue, previousSummary.totalSalesValue).label}

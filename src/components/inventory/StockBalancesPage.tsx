@@ -3,6 +3,8 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { PageNotes } from "../common/PageNotes";
+import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
+import { businessDayRangeForDateString, businessTodayISO } from "../../lib/timezone";
 
 interface Product {
   id: string;
@@ -28,10 +30,11 @@ export function StockBalancesPage() {
   const [search, setSearch] = useState("");
   const [lowStockThreshold, setLowStockThreshold] = useState("5");
   const [showLowOnly, setShowLowOnly] = useState(false);
+  const [asAtDate, setAsAtDate] = useState(businessTodayISO);
 
   useEffect(() => {
     void loadBalances();
-  }, [orgId, superAdmin]);
+  }, [orgId, superAdmin, asAtDate]);
 
   const loadBalances = async () => {
     setLoading(true);
@@ -46,27 +49,39 @@ export function StockBalancesPage() {
         }
       }
 
-      const [productsRes, movesRes] = await Promise.all([
-        filterByOrganizationId(
-          supabase.from("products").select("id,name,track_inventory").order("name"),
-          orgId,
-          superAdmin
-        ),
-        filterStockMovementsByOrganizationId(
-          supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out"),
-          orgId
-        ),
-      ]);
-
-      if (productsRes.error) throw productsRes.error;
-      if (movesRes.error) throw movesRes.error;
-
-      const products = (productsRes.data || []) as Product[];
-      const moves = (movesRes.data || []) as Array<{
+      const productsRes = await filterByOrganizationId(
+        supabase.from("products").select("id,name,track_inventory").order("name"),
+        orgId,
+        superAdmin
+      );
+      const moves: Array<{
         product_id: string;
         quantity_in: number | null;
         quantity_out: number | null;
-      }>;
+        movement_date: string | null;
+        source_type: string | null;
+        note: string | null;
+      }> = [];
+      const pageSize = 1000;
+      for (let from = 0; ; from += pageSize) {
+        const movesRes = await filterStockMovementsByOrganizationId(
+          supabase
+            .from("product_stock_movements")
+            .select("product_id,quantity_in,quantity_out,movement_date,source_type,note")
+            .order("movement_date", { ascending: true })
+            .range(from, from + pageSize - 1),
+          orgId
+        );
+        if (movesRes.error) throw movesRes.error;
+        const page = (movesRes.data || []) as typeof moves;
+        moves.push(...page);
+        if (page.length < pageSize) break;
+      }
+
+      if (productsRes.error) throw productsRes.error;
+
+      const products = (productsRes.data || []) as Product[];
+      const asAtEnd = businessDayRangeForDateString(asAtDate)?.to.getTime() ?? Number.POSITIVE_INFINITY;
 
       const map: Record<string, BalanceRow> = {};
       products.forEach((p) => {
@@ -82,8 +97,11 @@ export function StockBalancesPage() {
 
       moves.forEach((m) => {
         if (!map[m.product_id]) return;
-        map[m.product_id].qty_in += Number(m.quantity_in || 0);
-        map[m.product_id].qty_out += Number(m.quantity_out || 0);
+        const movementMs = new Date(m.movement_date || "").getTime();
+        if (!Number.isFinite(movementMs) || movementMs >= asAtEnd) return;
+        const { inQty, outQty } = effectiveStockMovementInOut(m);
+        map[m.product_id].qty_in += inQty;
+        map[m.product_id].qty_out += outQty;
       });
 
       const result = Object.values(map)
@@ -116,9 +134,9 @@ export function StockBalancesPage() {
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">Current Stock Balances</h1>
+            <h1 className="text-3xl font-bold text-slate-900">Stock Balances</h1>
             <PageNotes ariaLabel="Stock balances help">
-              <p>Live on-hand quantity per inventory item.</p>
+              <p>On-hand quantity per inventory item at the end of the selected business date.</p>
             </PageNotes>
           </div>
         </div>
@@ -133,6 +151,15 @@ export function StockBalancesPage() {
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+          <label className="text-sm text-slate-700">
+            <span className="mb-1 block font-medium">Balance as at</span>
+            <input
+              type="date"
+              value={asAtDate}
+              onChange={(e) => setAsAtDate(e.target.value)}
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            />
+          </label>
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}

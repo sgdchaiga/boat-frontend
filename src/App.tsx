@@ -51,6 +51,7 @@ import { RetailShiftVarianceReportPage } from './components/reports/RetailShiftV
 import { RetailSalesInsightsPage } from './components/reports/RetailSalesInsightsPage';
 import { PurchasesByItemReportPage } from './components/reports/PurchasesByItemReportPage';
 import { SalesByItemReportPage } from './components/reports/SalesByItemReportPage';
+import { RoomBillingReportPage } from './components/reports/RoomBillingReportPage';
 import { StaffPage } from './components/StaffPage';
 import { GLAccountsPage } from './components/GLAccountsPage';
 import { VendorsPage } from './components/purchases/VendorsPage';
@@ -364,15 +365,20 @@ function AppContent() {
   const { user, loading, needsOrganizationPicker, isSuperAdmin, isHotelStaff } = useAuth();
   const [currentPage, setCurrentPage] = useState(() => getPageFromUrl('dashboard'));
   const [pageState, setPageState] = useState<Record<string, unknown>>(() => getPageStateFromUrl());
+  const [pageHistory, setPageHistory] = useState<Array<{ page: string; state: Record<string, unknown> }>>([]);
   const navigate = (page: string, state?: Record<string, unknown>) => {
-    setCurrentPage(normalizeLegacyPage(page));
+    const nextPage = normalizeLegacyPage(page);
+    let nextState: Record<string, unknown> = {};
     if (!state || Object.keys(state).length === 0) {
+      if (nextPage === currentPage && Object.keys(pageState).length === 0) return;
+      setPageHistory((history) => [...history.slice(-49), { page: currentPage, state: pageState }]);
+      setCurrentPage(nextPage);
       setPageState({});
       return;
     }
     /** Normalize hotel → Receive money deep-link fields for URL sync */
     if (String(state.source) === "hotel_checkout") {
-      setPageState({
+      nextState = {
         crSource: "hotel_checkout",
         crGuestId: String(state.guest_id ?? ""),
         crGuestName: String(state.guest_name ?? ""),
@@ -380,10 +386,23 @@ function AppContent() {
         crReference: String(state.reference ?? ""),
         crDescription: String(state.description ?? ""),
         crStayId: String(state.stay_id ?? ""),
-      });
-      return;
+      };
+    } else {
+      nextState = state;
     }
-    setPageState(state);
+    if (nextPage === currentPage && JSON.stringify(nextState) === JSON.stringify(pageState)) return;
+    setPageHistory((history) => [...history.slice(-49), { page: currentPage, state: pageState }]);
+    setCurrentPage(nextPage);
+    setPageState(nextState);
+  };
+  const navigateBack = () => {
+    setPageHistory((history) => {
+      const previous = history[history.length - 1];
+      if (!previous) return history;
+      setCurrentPage(previous.page);
+      setPageState(previous.state);
+      return history.slice(0, -1);
+    });
   };
 
   useEffect(() => {
@@ -598,7 +617,7 @@ function AppContent() {
   const renderPage = () => {
     // Special-case: retail users should never see the hotel dashboard/access-denied notice.
     if (user?.business_type === "retail" && currentPage === "dashboard") {
-      return <RetailDashboard onNavigate={setCurrentPage} />;
+      return <RetailDashboard onNavigate={navigate} />;
     }
     if (user?.business_type === "clinic" && currentPage === "dashboard") {
       return <ClinicDashboardPage onNavigate={navigate} />;
@@ -671,7 +690,7 @@ function AppContent() {
     if (!access.visible) {
       const fallback =
         user?.business_type === "retail" ? (
-          <RetailDashboard onNavigate={setCurrentPage} />
+          <RetailDashboard onNavigate={navigate} />
         ) : user?.business_type === "clinic" ? (
           <ClinicDashboardPage onNavigate={navigate} />
         ) : user?.business_type === "sacco" ? (
@@ -683,7 +702,7 @@ function AppContent() {
         ) : user?.business_type === "manufacturing" && user?.enable_manufacturing !== false ? (
           <ManufacturingPage readOnly={false} onNavigate={navigate} />
         ) : (
-          <Dashboard onNavigate={setCurrentPage} />
+          <Dashboard onNavigate={navigate} />
         );
       return (
         <>
@@ -728,15 +747,15 @@ function AppContent() {
           />
         );
       case 'dashboard':
-        return <Dashboard onNavigate={setCurrentPage} />;
+        return <Dashboard onNavigate={navigate} />;
       case 'retail_dashboard':
-        return <RetailDashboard onNavigate={setCurrentPage} />;
+        return <RetailDashboard onNavigate={navigate} />;
       case SACCOPRO_PAGE.dashboard:
         return <SaccoDashboard />;
       case SACCOPRO_PAGE.performanceDashboard:
         return <SaccoPerformanceDashboardPage />;
       case SACCOPRO_PAGE.overview:
-        return <SaccoOverviewPage onNavigate={setCurrentPage} />;
+        return <SaccoOverviewPage onNavigate={navigate} />;
       case SACCOPRO_PAGE.members:
         return (
           <SaccoMembersPage
@@ -1143,6 +1162,8 @@ function AppContent() {
         return <PurchasesByItemReportPage />;
       case 'reports_sales_by_item':
         return <SalesByItemReportPage />;
+      case 'reports_room_billing':
+        return <RoomBillingReportPage />;
       case 'reports_manufacturing_daily_production':
         return <ManufacturingDailyProductionReportPage />;
       case 'inventory_stock_adjustments':
@@ -1246,7 +1267,7 @@ function AppContent() {
         return <FixedAssetsPage readOnly={access.readOnly} />;
       default:
         return user?.business_type === "retail" ? (
-          <RetailDashboard onNavigate={setCurrentPage} />
+          <RetailDashboard onNavigate={navigate} />
         ) : user?.business_type === "clinic" ? (
           <ClinicDashboardPage onNavigate={navigate} />
         ) : user?.business_type === "sacco" ? (
@@ -1258,14 +1279,20 @@ function AppContent() {
         ) : user?.business_type === "manufacturing" && user?.enable_manufacturing !== false ? (
           <ManufacturingPage readOnly={false} onNavigate={navigate} />
         ) : (
-          <Dashboard onNavigate={setCurrentPage} />
+          <Dashboard onNavigate={navigate} />
         );
     }
   };
 
   return (
     <AppProvider navigate={(p, state) => navigate(normalizeLegacyPage(p), state)}>
-      <Layout currentPage={currentPage} pageState={pageState} onNavigate={(page, state) => navigate(page, state)}>
+      <Layout
+        currentPage={currentPage}
+        pageState={pageState}
+        onNavigate={(page, state) => navigate(page, state)}
+        onBack={navigateBack}
+        canGoBack={pageHistory.length > 0}
+      >
         {renderPage()}
       </Layout>
     </AppProvider>

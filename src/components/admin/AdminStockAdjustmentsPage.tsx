@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
-import { Plus, Save, Upload } from "lucide-react";
+import { Plus, Save, Trash2, Upload } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { randomUuid } from "../../lib/randomUuid";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../../lib/supabaseOrgFilter";
-import { ensureActiveOrganization } from "../../lib/stockBulkImport";
+import { ensureActiveOrganization, loadStockBulkImportContext } from "../../lib/stockBulkImport";
 import { PageNotes } from "../common/PageNotes";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import { StockBulkImportPanel } from "../inventory/StockBulkImportPanel";
+import { businessTodayISO, toBusinessDateString } from "../../lib/timezone";
+import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
+import { canApprove } from "../../lib/permissions";
 
 interface Product {
   id: string;
@@ -32,12 +35,30 @@ interface AdjustmentRow {
 interface AdjustmentHistoryRow {
   source_id: string;
   movement_date: string;
+  created_at: string | null;
+  created_by_staff_id: string | null;
+  created_by_name: string | null;
   note: string | null;
   lines: number;
   totalAmount: number;
+  closingStock: number | null;
 }
 
 type AdjustmentTab = "manual" | "import";
+
+function closingStockFromNote(note: string | null): number | null {
+  const raw = /\[CLOSING_STOCK:([+-]?\d+(?:\.\d+)?)\]/.exec(String(note || ""))?.[1];
+  if (!raw) return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+function adjustmentReasonFromNote(note: string | null): string {
+  return String(note || "Manual adjustment")
+    .replace(/^GL .*?\| /, "")
+    .replace(/\s*\[CLOSING_STOCK:[^\]]+\]\s*$/, "")
+    .trim();
+}
 
 export function AdminStockAdjustmentsPage({
   highlightAdjustmentSourceId,
@@ -49,10 +70,11 @@ export function AdminStockAdjustmentsPage({
   const { user, isSuperAdmin } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = Boolean(isSuperAdmin);
+  const canDeleteAdjustments = superAdmin || canApprove("stock_adjustments_delete", user?.role);
   const [tab, setTab] = useState<AdjustmentTab>("manual");
   const [products, setProducts] = useState<Product[]>([]);
   const [currentStock, setCurrentStock] = useState<Record<string, number>>({});
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(businessTodayISO);
   const [reason, setReason] = useState("");
   const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
   const [glAccountId, setGlAccountId] = useState("");
@@ -67,24 +89,44 @@ export function AdminStockAdjustmentsPage({
   ]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadingStockSnapshot, setLoadingStockSnapshot] = useState(false);
   const [history, setHistory] = useState<AdjustmentHistoryRow[]>([]);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
+  const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
 
-  const loadStockSnapshot = async () => {
+  const loadStockSnapshot = async (asAtDate = date) => {
     if (orgId) await ensureActiveOrganization(orgId);
-    const { data: moves } = await filterStockMovementsByOrganizationId(
-      supabase.from("product_stock_movements").select("product_id, quantity_in, quantity_out"),
-      orgId
-    );
-    const stock: Record<string, number> = {};
-    (moves || []).forEach((m: any) => {
-      const pid = m.product_id as string;
-      const delta = Number(m.quantity_in) - Number(m.quantity_out);
-      stock[pid] = (stock[pid] || 0) + delta;
-    });
+    const context = await loadStockBulkImportContext(orgId, superAdmin, asAtDate);
+    const stock = context.currentStock;
     setCurrentStock(stock);
     return stock;
+  };
+
+  const handleDateChange = async (nextDate: string) => {
+    setDate(nextDate);
+    if (!nextDate || !/^\d{4}-\d{2}-\d{2}$/.test(nextDate)) return;
+    setLoadingStockSnapshot(true);
+    try {
+      const stock = await loadStockSnapshot(nextDate);
+      setRows((prev) =>
+        prev.map((row) => {
+          if (!row.product_id) return row;
+          const currentQty = stock[row.product_id] ?? 0;
+          const newQtyNumber = row.newQty === "" ? Number.NaN : Number(row.newQty);
+          return {
+            ...row,
+            currentQty,
+            qtyDelta: Number.isFinite(newQtyNumber) ? String(newQtyNumber - currentQty) : "",
+          };
+        })
+      );
+    } catch (e) {
+      console.error("[Stock adjustments] dated stock snapshot failed:", e);
+      alert("Failed to load stock balances for the selected date.");
+    } finally {
+      setLoadingStockSnapshot(false);
+    }
   };
 
   const loadAdjustmentHistory = async () => {
@@ -92,34 +134,68 @@ export function AdminStockAdjustmentsPage({
     const { data } = await filterStockMovementsByOrganizationId(
       supabase
         .from("product_stock_movements")
-        .select("source_id,movement_date,note,quantity_in,quantity_out")
+        .select("source_id,movement_date,created_at,created_by_staff_id,note,quantity_in,quantity_out")
         .eq("source_type", "adjustment")
         .not("source_id", "is", null)
-        .order("movement_date", { ascending: false }),
+        .order("created_at", { ascending: false }),
       orgId
     );
+    const staffIds = Array.from(
+      new Set(
+        (data || [])
+          .map((row: any) => String(row.created_by_staff_id || ""))
+          .filter(Boolean)
+      )
+    );
+    const staffNameById = new Map<string, string>();
+    if (staffIds.length > 0) {
+      const { data: staffData } = await filterByOrganizationId(
+        supabase.from("staff").select("id,full_name").in("id", staffIds),
+        orgId,
+        superAdmin
+      );
+      (staffData || []).forEach((staff: { id: string; full_name: string }) => {
+        staffNameById.set(staff.id, staff.full_name);
+      });
+    }
     const grouped = new Map<string, AdjustmentHistoryRow>();
     (data || []).forEach((row: any) => {
       const sourceId = String(row.source_id || "");
       if (!sourceId) return;
       const qtyDelta = Number(row.quantity_in || 0) - Number(row.quantity_out || 0);
+      const createdByStaffId = row.created_by_staff_id ? String(row.created_by_staff_id) : null;
       const prev = grouped.get(sourceId) || {
         source_id: sourceId,
         movement_date: String(row.movement_date || new Date().toISOString()),
+        created_at: row.created_at ? String(row.created_at) : null,
+        created_by_staff_id: createdByStaffId,
+        created_by_name: createdByStaffId ? staffNameById.get(createdByStaffId) ?? null : null,
         note: (row.note as string | null) ?? null,
         lines: 0,
         totalAmount: 0,
+        closingStock: closingStockFromNote((row.note as string | null) ?? null),
       };
       prev.lines += 1;
       prev.totalAmount += qtyDelta;
+      if (prev.lines > 1) prev.closingStock = null;
       if (new Date(row.movement_date).getTime() > new Date(prev.movement_date).getTime()) {
         prev.movement_date = row.movement_date;
+      }
+      if (
+        row.created_at &&
+        (!prev.created_at || new Date(row.created_at).getTime() > new Date(prev.created_at).getTime())
+      ) {
+        prev.created_at = row.created_at;
+        prev.created_by_staff_id = createdByStaffId;
+        prev.created_by_name = createdByStaffId ? staffNameById.get(createdByStaffId) ?? null : null;
       }
       grouped.set(sourceId, prev);
     });
     setHistory(
       Array.from(grouped.values()).sort(
-        (a, b) => new Date(b.movement_date).getTime() - new Date(a.movement_date).getTime()
+        (a, b) =>
+          new Date(b.created_at || b.movement_date).getTime() -
+          new Date(a.created_at || a.movement_date).getTime()
       )
     );
   };
@@ -128,16 +204,13 @@ export function AdminStockAdjustmentsPage({
     const loadData = async () => {
       try {
         if (orgId) await ensureActiveOrganization(orgId);
-        const [{ data: productsData }, { data: moves }, { data: glData }] = await Promise.all([
+        const [{ data: productsData }, stockContext, { data: glData }] = await Promise.all([
           filterByOrganizationId(
             supabase.from("products").select("id, name, track_inventory").order("name"),
             orgId,
             superAdmin
           ),
-          filterStockMovementsByOrganizationId(
-            supabase.from("product_stock_movements").select("product_id, quantity_in, quantity_out"),
-            orgId
-          ),
+          loadStockBulkImportContext(orgId, superAdmin, date),
           supabase.from("gl_accounts").select("*").order("account_code"),
         ]);
         setProducts((productsData || []) as Product[]);
@@ -150,11 +223,7 @@ export function AdminStockAdjustmentsPage({
           }));
         setGlAccounts(normalizedGl as GLAccount[]);
         const stock: Record<string, number> = {};
-        (moves || []).forEach((m: any) => {
-          const pid = m.product_id as string;
-          const delta = Number(m.quantity_in) - Number(m.quantity_out);
-          stock[pid] = (stock[pid] || 0) + delta;
-        });
+        Object.assign(stock, stockContext.currentStock);
         setCurrentStock(stock);
         await loadAdjustmentHistory();
       } catch (e) {
@@ -239,24 +308,76 @@ export function AdminStockAdjustmentsPage({
       quantity_out: number;
     }>;
     if (rowsData.length === 0) return;
-    const stock = await loadStockSnapshot();
+    const effectiveDate = toBusinessDateString(rowsData[0].movement_date);
+    const { data: allMovementData } = await filterStockMovementsByOrganizationId(
+      supabase
+        .from("product_stock_movements")
+        .select("product_id,source_id,movement_date,quantity_in,quantity_out,source_type,note"),
+      orgId
+    );
+    const effectiveEnd = new Date(`${effectiveDate}T23:59:59.999+03:00`).getTime();
     setSelectedSourceId(sourceId);
     setEditingSourceId(sourceId);
-    setDate(new Date(rowsData[0].movement_date).toISOString().slice(0, 10));
-    setReason(String(rowsData[0].note || "").replace(/^GL .*?\| /, ""));
+    setDate(effectiveDate);
+    setReason(adjustmentReasonFromNote(rowsData[0].note));
+    const glCode = /^GL\s+(.+?)\s+-\s+/.exec(String(rowsData[0].note || ""))?.[1]?.trim();
+    setGlAccountId(glCode ? glAccounts.find((account) => account.account_code === glCode)?.id ?? "" : "");
     setRows(
       rowsData.map((row) => {
         const qtyDelta = Number(row.quantity_in || 0) - Number(row.quantity_out || 0);
-        const currentQty = (stock[row.product_id] || 0) - qtyDelta;
+        const recordedClosingQty = closingStockFromNote(row.note);
+        const currentQty = (allMovementData || []).reduce((total: number, movement: any) => {
+          if (String(movement.product_id) !== row.product_id || String(movement.source_id || "") === sourceId) return total;
+          const movementMs = new Date(movement.movement_date).getTime();
+          if (!Number.isFinite(movementMs) || movementMs > effectiveEnd) return total;
+          const { inQty, outQty } = effectiveStockMovementInOut(movement);
+          return total + inQty - outQty;
+        }, 0);
         return {
           id: randomUuid(),
           product_id: row.product_id,
           currentQty,
-          newQty: (currentQty + qtyDelta).toString(),
+          newQty: String(recordedClosingQty ?? currentQty + qtyDelta),
           qtyDelta: qtyDelta.toString(),
         };
       })
     );
+  };
+
+  const deleteAdjustmentBatch = async (adjustment: AdjustmentHistoryRow) => {
+    if (readOnly || !canDeleteAdjustments || deletingSourceId) return;
+    const effectiveDate = toBusinessDateString(adjustment.movement_date);
+    const confirmed = window.confirm(
+      `Delete stock adjustment ${adjustment.source_id.slice(0, 8)}?\n\n` +
+        `Effective date: ${effectiveDate}\n` +
+        `Reason: ${adjustmentReasonFromNote(adjustment.note)}\n` +
+        `Lines: ${adjustment.lines}\n` +
+        `Net stock effect: ${adjustment.totalAmount.toFixed(2)}\n\n` +
+        "This removes every stock movement in this adjustment batch and recalculates stock balances."
+    );
+    if (!confirmed) return;
+
+    setDeletingSourceId(adjustment.source_id);
+    try {
+      if (orgId) await ensureActiveOrganization(orgId);
+      const { data: deletedCount, error } = await supabase.rpc("delete_stock_adjustment_batch", {
+        p_source_id: adjustment.source_id,
+      });
+      if (error) throw error;
+      if (Number(deletedCount || 0) === 0) {
+        throw new Error("No movements were deleted. Check your permission or whether this adjustment still exists.");
+      }
+      if (editingSourceId === adjustment.source_id) {
+        setEditingSourceId(null);
+        setSelectedSourceId(null);
+      }
+      await Promise.all([loadStockSnapshot(), loadAdjustmentHistory()]);
+    } catch (e) {
+      console.error("[Stock adjustments] delete failed:", e);
+      alert(e instanceof Error ? `Failed to delete adjustment: ${e.message}` : "Failed to delete adjustment.");
+    } finally {
+      setDeletingSourceId(null);
+    }
   };
 
   const handleSave = async () => {
@@ -269,9 +390,8 @@ export function AdminStockAdjustmentsPage({
       return;
     }
     if (!glAccountId) {
-      if (!confirm("No GL account selected. Continue without tagging an account?")) {
-        return;
-      }
+      alert("Select the GL account affected before saving the adjustment.");
+      return;
     }
     setSaving(true);
     try {
@@ -424,13 +544,17 @@ export function AdminStockAdjustmentsPage({
         </div>
         <div className="flex flex-wrap gap-4 mb-2">
           <div>
-            <label className="block text-sm font-medium mb-1">Date</label>
+            <label className="block text-sm font-medium mb-1">Effective date</label>
             <input
               type="date"
               className="border rounded-lg px-3 py-2"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => void handleDateChange(e.target.value)}
+              disabled={loadingStockSnapshot}
             />
+            <p className="mt-1 text-xs text-slate-500">
+              {loadingStockSnapshot ? "Loading balance for selected date..." : "Current Qty is shown as at this date."}
+            </p>
           </div>
           <div className="flex-1 min-w-[200px]">
             <label className="block text-sm font-medium mb-1">Reason</label>
@@ -442,7 +566,7 @@ export function AdminStockAdjustmentsPage({
             />
           </div>
           <div className="min-w-[220px]">
-            <label className="block text-sm font-medium mb-1">GL account affected (optional)</label>
+            <label className="block text-sm font-medium mb-1">GL account affected (required)</label>
             <select
               className="border rounded-lg px-3 py-2 w-full"
               value={glAccountId}
@@ -522,7 +646,7 @@ export function AdminStockAdjustmentsPage({
           </button>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || loadingStockSnapshot}
             className="inline-flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
@@ -537,14 +661,18 @@ export function AdminStockAdjustmentsPage({
         {history.length === 0 ? (
           <p className="text-sm text-slate-500">No saved adjustments yet.</p>
         ) : (
-          <table className="w-full text-sm min-w-[720px]">
+          <table className="w-full text-sm min-w-[980px]">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
-                <th className="p-2 text-left">Date</th>
+                <th className="p-2 text-left">Staff</th>
+                <th className="p-2 text-left">Done at</th>
+                <th className="p-2 text-left">Effective date</th>
                 <th className="p-2 text-left">Reference</th>
                 <th className="p-2 text-left">Reason</th>
                 <th className="p-2 text-right">Lines</th>
-                <th className="p-2 text-right">Amount</th>
+                <th className="p-2 text-right">Closing stock</th>
+                <th className="p-2 text-right">Net adjustment</th>
+                <th className="p-2 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -553,10 +681,17 @@ export function AdminStockAdjustmentsPage({
                   key={h.source_id}
                   className={`border-t border-slate-100 ${selectedSourceId === h.source_id ? "bg-amber-50" : ""}`}
                 >
-                  <td className="p-2">{new Date(h.movement_date).toLocaleString()}</td>
+                  <td className="p-2">{h.created_by_name || "Unknown / legacy"}</td>
+                  <td className="p-2 whitespace-nowrap">
+                    {h.created_at ? new Date(h.created_at).toLocaleString() : "Not recorded (legacy)"}
+                  </td>
+                  <td className="p-2 whitespace-nowrap">{toBusinessDateString(h.movement_date)}</td>
                   <td className="p-2 font-mono text-xs">{h.source_id.slice(0, 8)}</td>
-                  <td className="p-2">{h.note || "Manual adjustment"}</td>
+                  <td className="p-2">{adjustmentReasonFromNote(h.note)}</td>
                   <td className="p-2 text-right">{h.lines}</td>
+                  <td className="p-2 text-right">
+                    {h.closingStock === null ? (h.lines > 1 ? "View lines" : "Not recorded") : h.closingStock.toFixed(2)}
+                  </td>
                   <td className="p-2 text-right">
                     <button
                       type="button"
@@ -564,6 +699,24 @@ export function AdminStockAdjustmentsPage({
                       onClick={() => void openAdjustmentDetails(h.source_id)}
                     >
                       {h.totalAmount.toFixed(2)}
+                    </button>
+                  </td>
+                  <td className="p-2 text-right">
+                    <button
+                      type="button"
+                      disabled={readOnly || !canDeleteAdjustments || deletingSourceId !== null}
+                      onClick={() => void deleteAdjustmentBatch(h)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                      title={
+                        readOnly
+                          ? "Read-only access"
+                          : !canDeleteAdjustments
+                            ? "You do not have permission to delete stock adjustments"
+                            : "Delete this entire adjustment batch"
+                      }
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      {deletingSourceId === h.source_id ? "Deleting..." : "Delete"}
                     </button>
                   </td>
                 </tr>
@@ -575,4 +728,3 @@ export function AdminStockAdjustmentsPage({
     </div>
   );
 }
-

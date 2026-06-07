@@ -6,6 +6,8 @@ import { randomUuid } from "./randomUuid";
 import { normalizeGlAccountRows } from "./glAccountNormalize";
 import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "./supabaseOrgFilter";
 import { parseBulkImportFile } from "./saccoBulkImport";
+import { effectiveStockMovementInOut } from "./stockMovementEffective";
+import { businessDayRangeForDateString, businessTodayISO, toBusinessDateString } from "./timezone";
 
 export { parseBulkImportFile };
 
@@ -44,7 +46,45 @@ type MovementMini = {
   quantity_in: number;
   quantity_out: number;
   movement_date: string;
+  source_type: string | null;
+  note: string | null;
 };
+
+async function fetchAllStockMovements(organizationId?: string | null): Promise<MovementMini[]> {
+  const rows: MovementMini[] = [];
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await filterStockMovementsByOrganizationId(
+      supabase
+        .from("product_stock_movements")
+        .select("product_id, quantity_in, quantity_out, movement_date, source_type, note")
+        .order("movement_date", { ascending: true })
+        .range(from, from + pageSize - 1),
+      organizationId
+    );
+    if (error) throw new Error(error.message);
+    const page = (data || []) as Array<{
+      product_id: unknown;
+      quantity_in: unknown;
+      quantity_out: unknown;
+      movement_date: unknown;
+      source_type: unknown;
+      note: unknown;
+    }>;
+    rows.push(
+      ...page.map((movement) => ({
+        product_id: String(movement.product_id),
+        quantity_in: Number(movement.quantity_in ?? 0),
+        quantity_out: Number(movement.quantity_out ?? 0),
+        movement_date: String(movement.movement_date ?? ""),
+        source_type: movement.source_type ? String(movement.source_type) : null,
+        note: movement.note ? String(movement.note) : null,
+      }))
+    );
+    if (page.length < pageSize) break;
+  }
+  return rows;
+}
 
 export type StockBulkImportContext = {
   productsById: Map<string, ProductMini>;
@@ -62,19 +102,20 @@ export type StockBulkImportContext = {
 };
 
 function stockOnHandAsAt(movements: MovementMini[], productId: string, dateOnly: string): number {
-  const endMs = endOfDateUtcMs(dateOnly);
+  const endMs = endOfBusinessDateMs(dateOnly);
   let total = 0;
   for (const m of movements) {
     if (m.product_id !== productId) continue;
     const movementMs = new Date(m.movement_date).getTime();
-    if (Number.isNaN(movementMs) || movementMs > endMs) continue;
-    total += m.quantity_in - m.quantity_out;
+    if (Number.isNaN(movementMs) || movementMs >= endMs) continue;
+    const { inQty, outQty } = effectiveStockMovementInOut(m);
+    total += inQty - outQty;
   }
   return total;
 }
 
 export function getStockBulkImportTemplate(closingDate?: string): string {
-  const asAt = closingDate?.trim().slice(0, 10) || new Date().toISOString().slice(0, 10);
+  const asAt = closingDate?.trim().slice(0, 10) || businessTodayISO();
   return `product_name,closing_stock,movement_date,reason
 Amoxicillin tablets 250mg,120,${asAt},Stock count (closing) as at ${asAt}
 Paracetamol 500mg,85,${asAt},Stock count (closing) as at ${asAt}`;
@@ -133,12 +174,14 @@ function keyLower(v: string): string {
 
 function normalizeDateOnly(value: string): string | null {
   const d = value.trim().slice(0, 10);
-  return /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : null;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const parsed = new Date(`${d}T12:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === d ? d : null;
 }
 
-/** End of UTC calendar day for movement_date <= comparisons. */
-function endOfDateUtcMs(dateOnly: string): number {
-  return new Date(`${dateOnly}T23:59:59.999Z`).getTime();
+/** Exclusive end of the selected business calendar day. */
+function endOfBusinessDateMs(dateOnly: string): number {
+  return businessDayRangeForDateString(dateOnly)?.to.getTime() ?? Number.NaN;
 }
 
 /** Closing quantity from file (new_quantity is an alias for closing_stock). */
@@ -224,16 +267,9 @@ export async function loadStockBulkImportContext(
   }
 
   const asAt = closingDate ? normalizeDateOnly(closingDate) : null;
-  const asAtEndMs = asAt ? endOfDateUtcMs(asAt) : null;
-
-  const [productsData, { data: moves }, { data: glData }] = await Promise.all([
+  const [productsData, movementRows, { data: glData }] = await Promise.all([
     fetchProductsForImport(organizationId, isSuperAdmin),
-    filterStockMovementsByOrganizationId(
-      supabase
-        .from("product_stock_movements")
-        .select("product_id, quantity_in, quantity_out, movement_date"),
-      organizationId
-    ),
+    fetchAllStockMovements(organizationId),
     supabase.from("gl_accounts").select("*").order("account_code"),
   ]);
 
@@ -265,13 +301,6 @@ export async function loadStockBulkImportContext(
     productsByName.set(nameKey, list);
   }
 
-  const movementRows: MovementMini[] = (moves ?? []).map((m) => ({
-    product_id: String(m.product_id),
-    quantity_in: Number(m.quantity_in ?? 0),
-    quantity_out: Number(m.quantity_out ?? 0),
-    movement_date: String(m.movement_date ?? ""),
-  }));
-
   const currentStock: Record<string, number> = {};
   if (asAt) {
     for (const p of allProducts) {
@@ -279,8 +308,9 @@ export async function loadStockBulkImportContext(
     }
   } else {
     for (const m of movementRows) {
+      const { inQty, outQty } = effectiveStockMovementInOut(m);
       currentStock[m.product_id] =
-        (currentStock[m.product_id] ?? 0) + (m.quantity_in - m.quantity_out);
+        (currentStock[m.product_id] ?? 0) + (inQty - outQty);
     }
   }
 
@@ -411,7 +441,12 @@ function resolveGlAccount(
   defaultGlAccountId: string | null
 ): { glAccountId: string | null } | { error: string } {
   const code = asText(row.gl_account_code || row.gl_code || row.account_code);
-  if (!code) return { glAccountId: defaultGlAccountId };
+  if (!code) {
+    if (!defaultGlAccountId) {
+      return { error: "GL account is required. Provide gl_account_code in the file or select a default GL account." };
+    }
+    return { glAccountId: defaultGlAccountId };
+  }
   const gl = ctx.glByCode.get(keyLower(code));
   if (!gl) return { error: `Unknown GL account code "${code}"` };
   return { glAccountId: gl.id };
@@ -429,9 +464,37 @@ function parseMovementDate(row: Record<string, string>, defaultDate: string): st
       row.as_at_date
   );
   if (!raw) return normalizeDateOnly(defaultDate);
+
+  const isoDate = normalizeDateOnly(raw);
+  if (isoDate) return isoDate;
+
+  // Excel date cells are commonly returned as serial numbers by sheet_to_json.
+  if (/^\d{4,6}(?:\.\d+)?$/.test(raw)) {
+    const serial = Number(raw);
+    const excelEpochMs = Date.UTC(1899, 11, 30);
+    const excelDate = new Date(excelEpochMs + Math.floor(serial) * 86_400_000);
+    if (!Number.isNaN(excelDate.getTime())) return excelDate.toISOString().slice(0, 10);
+  }
+
+  // Local imports commonly use day/month/year.
+  const localDate = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(raw);
+  if (localDate) {
+    const [, day, month, year] = localDate;
+    const normalized = `${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}`;
+    const parsed = new Date(`${normalized}T12:00:00.000Z`);
+    if (
+      parsed.getUTCFullYear() === Number(year) &&
+      parsed.getUTCMonth() + 1 === Number(month) &&
+      parsed.getUTCDate() === Number(day)
+    ) {
+      return normalized;
+    }
+    return null;
+  }
+
   const d = new Date(raw);
   if (Number.isNaN(d.getTime())) return null;
-  return d.toISOString().slice(0, 10);
+  return toBusinessDateString(d);
 }
 
 function defaultClosingReason(closingDate: string, rowReason: string, fallback: string): string {
@@ -452,6 +515,7 @@ export function planStockAdjustmentImports(
 ): { plans: StockAdjustmentPlan[]; preview: StockBulkImportPreviewRow[] } {
   const plans: StockAdjustmentPlan[] = [];
   const preview: StockBulkImportPreviewRow[] = [];
+  const firstLineByProductId = new Map<string, number>();
 
   rows.forEach((row, idx) => {
     const line = idx + 2;
@@ -461,6 +525,16 @@ export function planStockAdjustmentImports(
       return;
     }
     const { product } = productRes;
+    const firstLine = firstLineByProductId.get(product.id);
+    if (firstLine !== undefined) {
+      preview.push({
+        line,
+        status: "error",
+        summary: `${product.name}: duplicate product; already provided on line ${firstLine}. Use one closing_stock row per product.`,
+      });
+      return;
+    }
+    firstLineByProductId.set(product.id, line);
 
     if (product.track_inventory === false) {
       preview.push({ line, status: "skip", summary: `${product.name}: inventory tracking disabled` });
@@ -473,8 +547,7 @@ export function planStockAdjustmentImports(
       return;
     }
 
-    const closingDate =
-      parseMovementDate(row, defaults.closingDate) ?? normalizeDateOnly(defaults.closingDate);
+    const closingDate = parseMovementDate(row, defaults.closingDate);
     if (!closingDate) {
       preview.push({ line, status: "error", summary: "Invalid closing / movement date" });
       return;
@@ -580,13 +653,14 @@ function buildMovementNote(
   } else if (glPrefix) {
     note = glPrefix;
   }
-  return note + plan.reason;
+  return `${note}${plan.reason} [CLOSING_STOCK:${plan.newQty}]`;
 }
 
 function movementDateIso(dateOnly: string): string {
   const d = dateOnly.trim().slice(0, 10);
   if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
-    return `${d}T12:00:00.000Z`;
+    const range = businessDayRangeForDateString(d);
+    if (range) return new Date(range.to.getTime() - 1).toISOString();
   }
   const parsed = new Date(dateOnly);
   return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
@@ -608,6 +682,20 @@ async function countAdjustmentMovements(
   return count ?? 0;
 }
 
+async function verifyClosingStockPlans(
+  plans: StockAdjustmentPlan[],
+  organizationId: string
+): Promise<string[]> {
+  const movements = await fetchAllStockMovements(organizationId);
+  return plans.flatMap((plan) => {
+    const actual = stockOnHandAsAt(movements, plan.productId, plan.movementDate);
+    if (Math.abs(actual - plan.newQty) <= 0.0001) return [];
+    return [
+      `${plan.productLabel}: closing stock as at ${plan.movementDate} is ${actual.toFixed(2)}, expected ${plan.newQty.toFixed(2)}.`,
+    ];
+  });
+}
+
 export async function applyStockAdjustmentPlans(
   plans: StockAdjustmentPlan[],
   ctx: StockBulkImportContext,
@@ -616,6 +704,14 @@ export async function applyStockAdjustmentPlans(
   const sourceId = options?.sourceId ?? randomUuid();
   if (plans.length === 0) {
     return { updated: 0, errors: 0, messages: [], sourceId };
+  }
+  if (plans.some((plan) => !plan.glAccountId)) {
+    return {
+      updated: 0,
+      errors: plans.length,
+      messages: ["Every stock adjustment requires a GL account."],
+      sourceId,
+    };
   }
 
   const orgId = options?.organizationId;
@@ -670,7 +766,13 @@ export async function applyStockAdjustmentPlans(
   if (!rpcUnavailable && !rpcError) {
     const verified = await countAdjustmentMovements(sourceId, orgId);
     if (verified === plans.length) {
-      return { updated: verified, errors: 0, messages: [], sourceId };
+      const closingErrors = await verifyClosingStockPlans(plans, orgId);
+      return {
+        updated: verified,
+        errors: closingErrors.length,
+        messages: closingErrors,
+        sourceId,
+      };
     }
     messages.push(
       `Bulk apply finished but only ${verified} of ${plans.length} movement(s) are visible for your organization.`
@@ -702,5 +804,11 @@ export async function applyStockAdjustmentPlans(
     return { updated: verified, errors: plans.length - verified, messages, sourceId };
   }
 
-  return { updated: verified, errors: 0, messages: [], sourceId };
+  const closingErrors = await verifyClosingStockPlans(plans, orgId);
+  return {
+    updated: verified,
+    errors: closingErrors.length,
+    messages: closingErrors,
+    sourceId,
+  };
 }
