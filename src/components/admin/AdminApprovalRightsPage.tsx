@@ -2,8 +2,16 @@ import { useEffect, useMemo, useState } from "react";
 import { Save } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
+import { fetchOrganizationMembers } from "../../lib/orgMembership";
 import { PageNotes } from "../common/PageNotes";
-import { PERMISSIONS, type PermissionKey, loadPermissionSnapshot } from "../../lib/permissions";
+import {
+  PAGE_ACCESS_DEFS,
+  PERMISSIONS,
+  isSuperAdminControlledReportPage,
+  loadPermissionSnapshot,
+  pagePermissionKey,
+  type PermissionKey,
+} from "../../lib/permissions";
 import { saveApprovalRights, type ApprovalRightsConfig } from "../../lib/approvalRights";
 
 type RoleTypeRow = {
@@ -36,6 +44,7 @@ export function AdminApprovalRightsPage({
   const [focusStaffId, setFocusStaffId] = useState<string | null>(initialFocusStaffId ?? null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     setFocusStaffId(initialFocusStaffId ?? null);
@@ -48,18 +57,18 @@ export function AdminApprovalRightsPage({
         return;
       }
       setLoading(true);
+      setLoadError(null);
       try {
-        const [roleRes, staffRes, rolePermRes, staffOvRes] = await Promise.all([
+        const [roleRes, memberRows, rolePermRes, staffOvRes] = await Promise.all([
           supabase
             .from("organization_role_types")
             .select("role_key,display_name,can_edit_pos_orders,can_edit_cash_receipts")
             .eq("organization_id", orgId)
             .order("sort_order", { ascending: true }),
-          supabase
-            .from("staff")
-            .select("id,full_name,role")
-            .eq("organization_id", orgId)
-            .order("full_name", { ascending: true }),
+          fetchOrganizationMembers({ organizationId: orgId }).catch((error) => {
+            console.warn("Organization members unavailable; using legacy staff list.", error);
+            return [];
+          }),
           supabase
             .from("organization_permissions")
             .select("role_key,permission_key,allowed")
@@ -70,13 +79,24 @@ export function AdminApprovalRightsPage({
             .eq("organization_id", orgId),
         ]);
         if (roleRes.error) throw roleRes.error;
-        if (staffRes.error) throw staffRes.error;
         if (rolePermRes.error) throw rolePermRes.error;
         if (staffOvRes.error) throw staffOvRes.error;
 
         const roleRows = (roleRes.data || []) as RoleTypeRow[];
+        let staffRows = memberRows
+          .map((member) => ({ id: member.user_id, full_name: member.full_name, role: member.role }))
+          .sort((a, b) => a.full_name.localeCompare(b.full_name));
+        if (staffRows.length === 0) {
+          const { data: legacyStaff, error: legacyStaffError } = await supabase
+            .from("staff")
+            .select("id,full_name,role")
+            .eq("organization_id", orgId)
+            .order("full_name", { ascending: true });
+          if (legacyStaffError) throw legacyStaffError;
+          staffRows = (legacyStaff || []) as StaffRow[];
+        }
         setRoles(roleRows);
-        setStaff((staffRes.data || []) as StaffRow[]);
+        setStaff(staffRows);
 
         const rp: Record<string, Record<string, boolean>> = {};
         roleRows.forEach((r) => {
@@ -94,10 +114,13 @@ export function AdminApprovalRightsPage({
         setRolePerms(rp);
 
         const so: Record<string, Record<string, boolean | null>> = {};
-        (staffRes.data || []).forEach((s: any) => {
+        staffRows.forEach((s) => {
           so[String(s.id)] = {};
           PERMISSIONS.forEach((p) => {
             so[String(s.id)][p.key] = null;
+          });
+          PAGE_ACCESS_DEFS.forEach((p) => {
+            so[String(s.id)][pagePermissionKey(p.page)] = null;
           });
         });
         (staffOvRes.data || []).forEach((row: any) => {
@@ -109,6 +132,7 @@ export function AdminApprovalRightsPage({
         setStaffOverrides(so);
       } catch (e) {
         console.error("Permissions load failed:", e);
+        setLoadError(e instanceof Error ? e.message : "Could not load permissions for this hotel.");
       } finally {
         setLoading(false);
       }
@@ -117,6 +141,12 @@ export function AdminApprovalRightsPage({
   }, [orgId]);
 
   const roleLabelByKey = useMemo(() => Object.fromEntries(roles.map((r) => [r.role_key, r.display_name])), [roles]);
+  const selectedStaff = staff.find((member) => member.id === focusStaffId) ?? staff[0] ?? null;
+  const pageGroups = useMemo(() => {
+    const grouped = new Map<string, typeof PAGE_ACCESS_DEFS>();
+    PAGE_ACCESS_DEFS.forEach((page) => grouped.set(page.group, [...(grouped.get(page.group) || []), page]));
+    return Array.from(grouped.entries());
+  }, []);
 
   const toggleRolePermission = (roleKey: string, key: PermissionKey) => {
     if (readOnly) return;
@@ -141,10 +171,23 @@ export function AdminApprovalRightsPage({
     });
   };
 
+  const setStaffPageAccess = (staffId: string, page: string, allowed: boolean) => {
+    if (readOnly) return;
+    const key = pagePermissionKey(page);
+    setStaffOverrides((prev) => ({
+      ...prev,
+      [staffId]: { ...(prev[staffId] || {}), [key]: allowed },
+    }));
+  };
+
   const save = async () => {
     if (readOnly || !orgId) return;
     setSaving(true);
     try {
+      const editablePageKeys = PAGE_ACCESS_DEFS
+        .filter((page) => user?.isSuperAdmin || !isSuperAdminControlledReportPage(page))
+        .map((page) => pagePermissionKey(page.page));
+      const editableOverrideKeys = [...PERMISSIONS.map((permission) => permission.key), ...editablePageKeys];
       const roleUpserts = roles.flatMap((r) =>
         PERMISSIONS.map((p) => ({
           organization_id: orgId,
@@ -155,7 +198,7 @@ export function AdminApprovalRightsPage({
       );
       const roleOverrides = Object.entries(staffOverrides).flatMap(([staffId, perms]) =>
         Object.entries(perms || {})
-          .filter(([, v]) => v !== null)
+          .filter(([permissionKey, v]) => v !== null && editableOverrideKeys.includes(permissionKey as PermissionKey))
           .map(([permission_key, allowed]) => ({
             organization_id: orgId,
             staff_id: staffId,
@@ -167,7 +210,11 @@ export function AdminApprovalRightsPage({
         supabase
           .from("organization_permissions")
           .upsert(roleUpserts, { onConflict: "organization_id,role_key,permission_key" }),
-        supabase.from("staff_permission_overrides").delete().eq("organization_id", orgId),
+        supabase
+          .from("staff_permission_overrides")
+          .delete()
+          .eq("organization_id", orgId)
+          .in("permission_key", editableOverrideKeys),
         Promise.resolve({ error: null as any }),
       ]);
       if (roleSave.error) throw roleSave.error;
@@ -229,12 +276,17 @@ export function AdminApprovalRightsPage({
 
   return (
     <div className="space-y-6">
+      {loadError ? (
+        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          Could not load page access for this hotel: {loadError}
+        </div>
+      ) : null}
       {!embedded ? (
         <div className="flex flex-wrap justify-between items-center gap-3">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-semibold text-slate-900">Permissions</h2>
             <PageNotes ariaLabel="Permissions help">
-              <p>Role-based permissions with optional staff-specific overrides. This replaces Approval Rights.</p>
+              <p>Operational permissions may follow roles. Page visibility is selected per user and defaults to visible.</p>
             </PageNotes>
           </div>
           <button
@@ -297,6 +349,76 @@ export function AdminApprovalRightsPage({
             ))}
           </tbody>
         </table>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl p-4">
+        <div className="flex flex-wrap items-end justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-semibold text-slate-900">Pages each user can view</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Pages are visible by default. Untick a page to hide it for the selected user. Report access can only be changed by a super admin.
+            </p>
+          </div>
+          <label className="min-w-[240px] text-sm font-medium text-slate-700">
+            User
+            <select
+              value={selectedStaff?.id ?? ""}
+              onChange={(event) => setFocusStaffId(event.target.value || null)}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
+            >
+              {staff.map((member) => (
+                <option key={member.id} value={member.id}>
+                  {member.full_name} ({roleLabelByKey[member.role] ?? member.role})
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {selectedStaff ? (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            {pageGroups.map(([group, pages]) => {
+              return (
+                <section key={group} className="rounded-lg border border-slate-200 p-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold text-slate-800">{group}</h4>
+                    {group === "Reports" && !user?.isSuperAdmin ? (
+                      <span className="text-[11px] font-medium text-amber-700">Super admin controls reports</span>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    {pages.map((page) => {
+                      const key = pagePermissionKey(page.page);
+                      const configured = staffOverrides?.[selectedStaff.id]?.[key] ?? null;
+                      const allowed = configured !== false;
+                      const reportLocked =
+                        !user?.isSuperAdmin && isSuperAdminControlledReportPage(page);
+                      return (
+                        <label
+                          key={page.page}
+                          className={`flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm ${
+                            allowed ? "border-emerald-200 bg-emerald-50/60" : "border-slate-200 bg-slate-50 text-slate-500"
+                          } ${reportLocked ? "opacity-60" : "cursor-pointer"}`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allowed}
+                            onChange={(event) => setStaffPageAccess(selectedStaff.id, page.page, event.target.checked)}
+                            disabled={readOnly || reportLocked}
+                            className="mt-0.5"
+                          />
+                          <span>{page.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </section>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">Add a staff user before configuring page visibility.</p>
+        )}
       </div>
 
       <div className="bg-white border border-slate-200 rounded-xl p-4">

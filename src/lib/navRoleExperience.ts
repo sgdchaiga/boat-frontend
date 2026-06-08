@@ -6,8 +6,6 @@ import {
 
   defaultLandingStateForRole,
 
-  getRolePageAllowList,
-
 } from "@/lib/roleNavigation";
 import { pageAccessDecision } from "@/lib/permissions";
 
@@ -115,35 +113,16 @@ export function isPageAllowedForNavRole(
 
   page: string,
 
-  roleKey: string | undefined | null,
+  _roleKey: string | undefined | null,
 
-  businessType: BusinessType | null | undefined
+  _businessType: BusinessType | null | undefined
 
 ): boolean {
 
   const configuredDecision = pageAccessDecision(page);
 
   if (configuredDecision !== null) return configuredDecision;
-
-  const xp = getNavRoleExperience(roleKey);
-
-  if (xp === "full") return true;
-
-
-
-  const allow = getRolePageAllowList(xp);
-
-  if (!allow) return true;
-
-
-
-  if (xp === "storekeeper" && !shouldApplyStorekeeperScope(businessType)) return true;
-
-  if (xp !== "storekeeper" && !shouldApplyNavRoleScope(businessType)) return true;
-
-
-
-  return allow.has(page);
+  return true;
 
 }
 

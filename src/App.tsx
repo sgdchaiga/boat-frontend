@@ -683,7 +683,7 @@ function AppContent() {
       access = {
         visible: false,
         readOnly: true,
-        blockedReason: "This workspace is not available for your role.",
+        blockedReason: "This workspace is hidden by your user page-access settings.",
       };
     }
 

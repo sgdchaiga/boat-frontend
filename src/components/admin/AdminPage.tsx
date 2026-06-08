@@ -62,7 +62,7 @@ const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "business", label: "Business Configuration", icon: Building2 },
   { id: "products", label: "Products & Departments", icon: Package },
   { id: "recipes", label: "Recipe Management", icon: Package },
-  { id: "approval", label: "Permissions", icon: ShieldCheck },
+  { id: "approval", label: "Permissions & Page Access", icon: ShieldCheck },
   { id: "journal_accounts", label: "Journal account settings", icon: BookOpen },
   { id: "gender_types", label: "Gender Types", icon: Users },
   { id: "hotel_pos", label: "Hotel POS Controls", icon: ShieldCheck },

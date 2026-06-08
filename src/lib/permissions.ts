@@ -107,6 +107,9 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "reports_daily_summary", label: "Daily summary", group: "Reports" },
   { page: "reports_retail_shift_variance", label: "Shift variance", group: "Reports" },
   { page: "reports_retail_sales_insights", label: "Sales insights", group: "Reports" },
+  { page: "reports_financial_revenue_by_type", label: "Revenue by type", group: "Reports" },
+  { page: "reports_financial_payments_by_method", label: "Payments by method", group: "Reports" },
+  { page: "reports_financial_payments_by_charge_type", label: "Payments by charge type", group: "Reports" },
   { page: "reports_sales_by_item", label: "Sales by item", group: "Reports" },
   { page: "reports_room_billing", label: "Room billing", group: "Reports" },
   { page: "reports_daily_purchases_summary", label: "Purchases summary", group: "Reports" },
@@ -114,6 +117,9 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "reports_expenses", label: "Expenses report", group: "Reports" },
   { page: "reports_stock_summary", label: "Stock summary", group: "Reports" },
   { page: "reports_stock_movement", label: "Stock movement", group: "Reports" },
+  { page: "reports_budget_variance", label: "Budget variance", group: "Reports" },
+  { page: "retail_credit_sales_report", label: "Credit sales report", group: "Reports" },
+  { page: "reports_manufacturing_daily_production", label: "Daily production", group: "Reports" },
   { page: "gl_accounts", label: "Chart of accounts", group: "Accounting" },
   { page: "accounting_journal", label: "Journal entries", group: "Accounting" },
   { page: "accounting_manual", label: "Manual journals", group: "Accounting" },
@@ -122,6 +128,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "accounting_income", label: "Income statement", group: "Accounting" },
   { page: "accounting_balance", label: "Balance sheet", group: "Accounting" },
   { page: "accounting_cashflow", label: "Cash flow", group: "Accounting" },
+  { page: "accounting_budgeting", label: "Budgeting", group: "Accounting" },
   { page: "fixed_assets", label: "Fixed assets", group: "Accounting" },
   { page: "payroll_hub", label: "Payroll overview", group: "Payroll" },
   { page: "payroll_staff", label: "Payroll staff", group: "Payroll" },
@@ -136,6 +143,18 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
 
 export function pagePermissionKey(page: string): string {
   return `${PAGE_PERMISSION_PREFIX}${page}`;
+}
+
+const SUPER_ADMIN_REPORT_PAGES = new Set([
+  "hotel_pos_reports",
+  "accounting_trial",
+  "accounting_income",
+  "accounting_balance",
+  "accounting_cashflow",
+]);
+
+export function isSuperAdminControlledReportPage(page: PageAccessDef): boolean {
+  return page.group === "Reports" || SUPER_ADMIN_REPORT_PAGES.has(page.page);
 }
 
 type PermissionSnapshot = {
@@ -200,7 +219,12 @@ export async function loadPermissionSnapshot(input: {
 
   /** Only keys present in DB — missing rows fall back to role defaults in `canApprove`. */
   const grants: Record<string, boolean> = {};
-  for (const row of roleRows || []) grants[String(row.permission_key)] = !!row.allowed;
+  // Page visibility is controlled per user. Historical role-level page rows are
+  // intentionally ignored so a role cannot silently hide operational pages.
+  for (const row of roleRows || []) {
+    const key = String(row.permission_key);
+    if (!key.startsWith(PAGE_PERMISSION_PREFIX)) grants[key] = !!row.allowed;
+  }
   for (const row of overrideRows || []) grants[String(row.permission_key)] = !!row.allowed;
 
   writeSnapshot({ orgId, staffId, role, grants, loadedAt: Date.now() });
@@ -243,7 +267,6 @@ export function pageAccessDecision(page: string): boolean | null {
   const grants = snapshot?.grants ?? {};
   const key = pagePermissionKey(page);
   if (Object.prototype.hasOwnProperty.call(grants, key)) return !!grants[key];
-  if (Object.keys(grants).some((k) => k.startsWith(PAGE_PERMISSION_PREFIX))) return false;
   return null;
 }
 

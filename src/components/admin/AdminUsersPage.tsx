@@ -667,7 +667,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
               className="flex items-center gap-2 border border-slate-300 bg-white text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-50"
             >
               <KeyRound className="w-4 h-4" />
-              Manage Permissions
+              Manage Page Access
             </button>
             <button
               type="button"
