@@ -929,8 +929,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         </div>
       </div>
 
-      <div className={`fixed inset-y-0 left-0 w-64 bg-slate-950 border-r border-slate-800 transform transition-transform duration-200 ease-in-out z-40 shadow-xl ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
-        <div className="flex flex-col h-full">
+      <div className={`fixed inset-y-0 left-0 h-[100dvh] max-h-[100dvh] w-64 overflow-hidden bg-slate-950 border-r border-slate-800 transform transition-transform duration-200 ease-in-out z-40 shadow-xl ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} lg:translate-x-0`}>
+        <div className="flex min-h-0 h-full flex-col overflow-hidden">
           <div className="px-3 py-2.5 border-b border-slate-800 shrink-0">
             <div className="flex items-center gap-2">
               <div className="bg-brand-600 p-1.5 rounded-md shadow-sm shrink-0">
@@ -1252,7 +1252,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             </ul>
           </nav>
 
-          <div className="px-2 py-2 border-t border-slate-800 shrink-0">
+          <div className="max-h-[45vh] overflow-y-auto px-2 pt-2 border-t border-slate-800 shrink-0">
             <div className="px-2 py-1 mb-1">
               <p className="text-xs font-medium text-slate-200 truncate">{user?.full_name}</p>
               <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
@@ -1312,15 +1312,16 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                 <span className="font-medium">Lock Terminal</span>
               </button>
             )}
-            <button
-              type="button"
-              onClick={clockOut}
-              className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-red-400 hover:bg-red-950/40 rounded-md transition"
-            >
-              <LogOut className="w-4 h-4 shrink-0" />
-              <span className="font-medium">{isLocalAuthMode ? "Clock Out" : "Sign Out"}</span>
-            </button>
           </div>
+          <button
+            type="button"
+            onClick={clockOut}
+            className="w-full shrink-0 flex items-center gap-2 border-t border-red-950/70 bg-slate-950 px-4 py-3 text-sm font-semibold text-red-400 transition hover:bg-red-950/40 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-red-500"
+          >
+            <LogOut className="w-4 h-4 shrink-0" />
+            <span>Sign Out</span>
+          </button>
+          <div className="h-5 shrink-0 bg-slate-950" aria-hidden="true" />
         </div>
       </div>
 
