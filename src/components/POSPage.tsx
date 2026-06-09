@@ -254,6 +254,7 @@ export function POSPage({
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const submitLockRef = useRef(false);
+  const realtimeReloadTimerRef = useRef<number | null>(null);
   const autoSessionHadActiveRef = useRef<{ key: string; hadActive: boolean }>({ key: "", hadActive: false });
   const [productsError, setProductsError] = useState<string | null>(null);
   const [queueError, setQueueError] = useState<string | null>(null);
@@ -448,19 +449,24 @@ export function POSPage({
     const channel = supabase
       .channel("hotel-pos-live")
       .on("postgres_changes", { event: "*", schema: "public", table: "kitchen_orders" }, () => {
-        void loadData();
+        if (realtimeReloadTimerRef.current !== null) window.clearTimeout(realtimeReloadTimerRef.current);
+        realtimeReloadTimerRef.current = window.setTimeout(() => {
+          realtimeReloadTimerRef.current = null;
+          void loadData(false);
+        }, 400);
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "payments" }, () => {
         void loadPostedTransactions();
       })
       .subscribe();
     return () => {
+      if (realtimeReloadTimerRef.current !== null) window.clearTimeout(realtimeReloadTimerRef.current);
       void supabase.removeChannel(channel);
     };
   }, [queueDate, queueStatusFilter, user?.organization_id, user?.isSuperAdmin]);
 
-  const loadData = async () => {
-    setLoading(true);
+  const loadData = async (showLoading = true) => {
+    if (showLoading) setLoading(true);
     setProductsError(null);
     setQueueError(null);
 
@@ -591,7 +597,7 @@ export function POSPage({
       setProductsError("Failed to load data");
       console.error(e);
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
   };
 

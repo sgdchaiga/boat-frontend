@@ -150,16 +150,28 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       let roomsPromise = supabase.from("rooms").select("status");
       roomsPromise = filterByOrganizationId(roomsPromise, orgId, superAdmin);
 
-      let staysPromise = supabase.from("stays").select("actual_check_in, actual_check_out");
+      let staysPromise = supabase
+        .from("stays")
+        .select("actual_check_in, actual_check_out")
+        .lt("actual_check_in", revTo.toISOString())
+        .or(`actual_check_out.is.null,actual_check_out.gte.${revFrom.toISOString()}`);
       staysPromise = filterByOrganizationId(staysPromise, orgId, superAdmin);
 
       let reservationsPromise = supabase.from("reservations").select("status, check_in_date, check_out_date, created_at");
       reservationsPromise = filterByOrganizationId(reservationsPromise, orgId, superAdmin);
 
-      let customersPromise = supabase.from("hotel_customers").select("id, created_at");
+      let customersPromise = supabase
+        .from("hotel_customers")
+        .select("id, created_at")
+        .gte("created_at", revFrom.toISOString())
+        .lt("created_at", revTo.toISOString());
       customersPromise = filterByOrganizationId(customersPromise, orgId, superAdmin);
 
-      let housekeepingPromise = supabase.from("housekeeping_tasks").select("status, created_at");
+      let housekeepingPromise = supabase
+        .from("housekeeping_tasks")
+        .select("status, created_at")
+        .gte("created_at", revFrom.toISOString())
+        .lt("created_at", revTo.toISOString());
       housekeepingPromise = filterByOrganizationId(housekeepingPromise, orgId, superAdmin);
 
       let paymentsPromise = supabase

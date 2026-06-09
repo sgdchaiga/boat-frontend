@@ -164,7 +164,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
 
   useEffect(() => {
     void fetchData();
-  }, [orgId, superAdmin]);
+  }, [orgId, superAdmin, billingDateFrom, billingDateTo]);
 
   const fetchData = async () => {
     try {
@@ -175,7 +175,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
         setLoadError("Missing organization on your staff profile. Contact admin to link your account.");
         return;
       }
-      const billingsQuery = filterByOrganizationId(
+      let billingsQuery = filterByOrganizationId(
         supabase
           .from("billing")
           .select("*, stays(rooms(room_number), hotel_customers(first_name, last_name))")
@@ -183,6 +183,9 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
         orgId,
         superAdmin
       );
+      if (billingDateFrom) billingsQuery = billingsQuery.gte("charged_at", `${billingDateFrom}T00:00:00`);
+      if (billingDateTo) billingsQuery = billingsQuery.lte("charged_at", `${billingDateTo}T23:59:59.999`);
+      if (!billingDateFrom && !billingDateTo) billingsQuery = billingsQuery.limit(500);
       const staysQuery = filterByOrganizationId(
         supabase
           .from("stays")
@@ -401,7 +404,6 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
 
   const billingDateFilterActive = billingRange !== "all";
   const totalBilling = filteredBillings.reduce((sum, b) => sum + Number(b.amount), 0);
-  const totalBillingAllTime = billings.reduce((sum, b) => sum + Number(b.amount), 0);
 
   return (
     <div className="p-6 md:p-8">
@@ -503,8 +505,9 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
           <p>Total Charges</p>
         </div>
         <p className="text-2xl font-bold">{totalBilling.toFixed(2)}</p>
-        {billingDateFilterActive && (
-          <p className="text-xs text-slate-500 mt-1">In range · All time: {totalBillingAllTime.toFixed(2)}</p>
+        {billingDateFilterActive && <p className="text-xs text-slate-500 mt-1">Total for selected range</p>}
+        {!billingDateFilterActive && billings.length >= 500 && (
+          <p className="text-xs text-amber-700 mt-1">Showing the latest 500 charges. Select a date range for older records.</p>
         )}
       </div>
 

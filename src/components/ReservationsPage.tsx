@@ -78,12 +78,14 @@ export function ReservationsPage() {
         rooms(id, room_number)
       `
               )
-              .order("check_in_date", { ascending: true }),
+              .gte("check_out_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+              .order("check_in_date", { ascending: true })
+              .limit(500),
             orgId,
             superAdmin
           ),
           filterByOrganizationId(
-            supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name"),
+            supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name").limit(1000),
             orgId,
             superAdmin
           ),
