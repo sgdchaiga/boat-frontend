@@ -61,7 +61,8 @@ export function GeneralLedgerPage() {
         )
         .gte("journal_entries.entry_date", fromStr)
         .lte("journal_entries.entry_date", toStr)
-        .eq("journal_entries.is_posted", true),
+        .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false),
       orgId,
       superAdmin
     );

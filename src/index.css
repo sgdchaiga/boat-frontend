@@ -19,7 +19,7 @@
 /* Design tokens — use these classes for consistent colour coding app-wide */
 @layer components {
   .app-page {
-    @apply min-h-screen bg-gradient-to-br from-surface-page via-slate-100/80 to-brand-50/30;
+    @apply min-h-screen w-full max-w-full min-w-0 overflow-x-hidden bg-gradient-to-br from-surface-page via-slate-100/80 to-brand-50/30;
   }
 
   .app-card {

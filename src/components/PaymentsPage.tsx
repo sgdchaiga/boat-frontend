@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { DollarSign, CreditCard, X, ArrowUp, ArrowDown, ArrowUpDown, Pencil } from "lucide-react";
+import { DollarSign, CreditCard, X, ArrowUp, ArrowDown, ArrowUpDown, Pencil, Wrench } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
-import { createJournalForPayment, deleteJournalEntryByReference } from "../lib/journal";
+import {
+  createJournalForPayment,
+  deleteJournalEntryByReference,
+  repairMisclassifiedPosPaymentJournals,
+} from "../lib/journal";
 import {
   type ActiveStayOption,
   type PaymentWithCustomer,
@@ -187,6 +191,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
   const [editTxId, setEditTxId] = useState("");
   const [editPaidDate, setEditPaidDate] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [repairingPaymentJournals, setRepairingPaymentJournals] = useState(false);
 
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; dir: "asc" | "desc" } | null>(null);
   const highlightDismissed = useRef(false);
@@ -894,6 +899,35 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
     .filter((p) => p.payment_status === "completed")
     .reduce((sum, p) => sum + Number(p.amount), 0);
 
+  const repairPosPaymentJournals = async () => {
+    if (readOnly || repairingPaymentJournals) return;
+    const rangeLabel =
+      paymentDateFrom || paymentDateTo
+        ? `${paymentDateFrom || "the beginning"} through ${paymentDateTo || "today"}`
+        : "all dates";
+    if (
+      !window.confirm(
+        `Retire duplicate payment journals linked to POS cash receipts for ${rangeLabel}?\n\nThis preserves the POS journals and payment records, but removes the duplicate Cash debit and Accounts Receivable credit.`
+      )
+    ) {
+      return;
+    }
+    setRepairingPaymentJournals(true);
+    setPaymentError(null);
+    try {
+      const result = await repairMisclassifiedPosPaymentJournals({
+        fromDate: paymentDateFrom || null,
+        toDate: paymentDateTo || null,
+      });
+      const errorSuffix = result.errors.length ? ` ${result.errors.length} error(s) require review.` : "";
+      alert(`Checked ${result.checked} POS payment(s); retired ${result.removed} duplicate payment journal(s).${errorSuffix}`);
+    } catch (err) {
+      setPaymentError(formatSupabaseError(err));
+    } finally {
+      setRepairingPaymentJournals(false);
+    }
+  };
+
   const recordDisabled =
     readOnly ||
     savingPayment ||
@@ -953,6 +987,18 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-3 border-b border-slate-200 mb-4 pb-2">
+        {!readOnly ? (
+          <button
+            type="button"
+            onClick={() => void repairPosPaymentJournals()}
+            disabled={repairingPaymentJournals}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-900 hover:bg-amber-100 disabled:opacity-50"
+            title="Retire duplicate payment journals created for POS cash receipts"
+          >
+            <Wrench className="w-3.5 h-3.5" />
+            {repairingPaymentJournals ? "Repairing..." : "Repair POS payment journals"}
+          </button>
+        ) : null}
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <span className="whitespace-nowrap">Date range</span>
           <select

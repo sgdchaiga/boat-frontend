@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
@@ -28,17 +28,29 @@ type ExpenseLineRow = {
   amount: number;
   vat_amount: number;
   comment: string | null;
+  quantity: number | null;
 };
 
 type DetailRow = {
   expenseId: string;
   expenseDate: string;
   category: string;
+  item: string;
+  department: string;
   description: string;
   vendor: string;
   glLabel: string;
+  quantity: number;
+  unitPrice: number;
   amount: number;
 };
+
+type DetailSortKey = "expenseDate" | "category" | "item" | "department" | "vendor" | "glLabel" | "quantity" | "unitPrice" | "amount";
+type SortDirection = "asc" | "desc";
+
+function normalizeItemName(value: string | null | undefined): string {
+  return String(value || "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
 
 function formatMoney(amount: number) {
   return Number.isFinite(amount)
@@ -61,6 +73,9 @@ export function ExpensesReportPage() {
   const [loading, setLoading] = useState(true);
   const [details, setDetails] = useState<DetailRow[]>([]);
   const [categoryFilter, setCategoryFilter] = useState<string>("all");
+  const [itemFilter, setItemFilter] = useState("all");
+  const [departmentFilter, setDepartmentFilter] = useState("all");
+  const [sort, setSort] = useState<{ key: DetailSortKey; direction: SortDirection }>({ key: "expenseDate", direction: "desc" });
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,17 +111,58 @@ export function ExpensesReportPage() {
 
       const { data: lineData, error: lineErr } = await supabase
         .from("expense_lines")
-        .select("expense_id, expense_gl_account_id, amount, vat_amount, comment")
+        .select("expense_id, expense_gl_account_id, amount, vat_amount, comment, quantity")
         .in("expense_id", expenseIds);
       if (lineErr) throw lineErr;
 
       const lines = (lineData || []) as ExpenseLineRow[];
       const glIds = [...new Set(lines.map((l) => l.expense_gl_account_id).filter(Boolean))];
+      const [productsRes, departmentsRes, departmentGlRes] = await Promise.all([
+        filterByOrganizationId(supabase.from("products").select("name, department_id, purchasable"), orgId, superAdmin),
+        filterByOrganizationId(supabase.from("departments").select("id, name"), orgId, superAdmin),
+        filterByOrganizationId(
+          supabase.from("journal_gl_department_settings").select("department_id, purchases_gl_account_id"),
+          orgId,
+          superAdmin
+        ),
+      ]);
+      const products = (productsRes.data || []) as Array<{ name: string; department_id: string | null; purchasable: boolean | null }>;
+      const departments = (departmentsRes.data || []) as Array<{ id: string; name: string }>;
+      const departmentGlRows = (departmentGlRes.data || []) as Array<{ department_id: string; purchases_gl_account_id: string | null }>;
+      const departmentById = new Map(departments.map((department) => [department.id, department.name]));
+      const departmentByPurchasesGl = new Map(
+        departmentGlRows
+          .filter((row) => !!row.purchases_gl_account_id)
+          .map((row) => [String(row.purchases_gl_account_id), departmentById.get(row.department_id) || "Unassigned"])
+      );
+      const purchasableProducts = products.filter((product) => product.purchasable !== false);
+      const productByName = new Map(purchasableProducts.map((product) => [normalizeItemName(product.name), product]));
+      const productsByLongestName = [...purchasableProducts].sort(
+        (a, b) => normalizeItemName(b.name).length - normalizeItemName(a.name).length
+      );
+      const findProduct = (value: string) => {
+        const normalized = normalizeItemName(value);
+        if (!normalized) return null;
+        return productByName.get(normalized) || productsByLongestName.find((product) => {
+          const productName = normalizeItemName(product.name);
+          return productName.length >= 3 && normalized.includes(productName);
+        }) || null;
+      };
       let glById = new Map<string, NormalizedGlAccount>();
       if (glIds.length > 0) {
         const { data: glRows } = await supabase.from("gl_accounts").select("*").in("id", glIds);
         glById = new Map(normalizeGlAccountRows((glRows || []) as unknown[]).map((g) => [g.id, g]));
       }
+      const departmentForPurchasesGl = (glAccountId: string) => {
+        const configured = departmentByPurchasesGl.get(glAccountId);
+        if (configured) return configured;
+        const gl = glById.get(glAccountId);
+        const code = String(gl?.account_code || "").trim();
+        const name = String(gl?.account_name || "").toLowerCase();
+        if (code === "5001" || /\bbar\b.*\b(purchases?|cogs|cost)/i.test(name)) return "Bar";
+        if (code === "5002" || /\bkitchen\b.*\b(purchases?|cogs|cost)/i.test(name)) return "Kitchen";
+        return null;
+      };
 
       const expById = new Map(expenses.map((e) => [e.id, e]));
       const built: DetailRow[] = [];
@@ -122,13 +178,21 @@ export function ExpensesReportPage() {
           (exp.description || "").trim() ||
           gl?.account_name ||
           "Expense";
+        const product = findProduct(desc);
+        const quantity = Math.max(0, Number(line.quantity ?? 1)) || 1;
         built.push({
           expenseId: exp.id,
           expenseDate: exp.expense_date || fromDate,
           category,
+          item: product?.name || desc,
+          department: product?.department_id
+            ? departmentById.get(product.department_id) || "Unassigned"
+            : departmentForPurchasesGl(line.expense_gl_account_id) || "Unassigned",
           description: desc,
           vendor: exp.vendors?.name?.trim() || "—",
           glLabel: gl ? `${gl.account_code} ${gl.account_name}`.trim() : "—",
+          quantity,
+          unitPrice: amt / quantity,
           amount: amt,
         });
       }
@@ -143,9 +207,13 @@ export function ExpensesReportPage() {
           expenseId: exp.id,
           expenseDate: exp.expense_date || fromDate,
           category: SIMPLE_EXPENSE_CATEGORY_LABELS.Other,
+          item: (exp.description || "").trim() || "Expense",
+          department: "Unassigned",
           description: (exp.description || "").trim() || "Expense",
           vendor: exp.vendors?.name?.trim() || "—",
           glLabel: "—",
+          quantity: 1,
+          unitPrice: amt,
           amount: amt,
         });
       }
@@ -182,9 +250,48 @@ export function ExpensesReportPage() {
   }, [details]);
 
   const filtered = useMemo(() => {
-    if (categoryFilter === "all") return details;
-    return details.filter((d) => d.category === categoryFilter);
-  }, [details, categoryFilter]);
+    return details.filter((detail) => {
+      if (categoryFilter !== "all" && detail.category !== categoryFilter) return false;
+      if (itemFilter !== "all" && detail.item !== itemFilter) return false;
+      if (departmentFilter !== "all" && detail.department !== departmentFilter) return false;
+      return true;
+    });
+  }, [details, categoryFilter, itemFilter, departmentFilter]);
+
+  const sortedFiltered = useMemo(() => {
+    const direction = sort.direction === "asc" ? 1 : -1;
+    return [...filtered].sort((a, b) => {
+      const left = a[sort.key];
+      const right = b[sort.key];
+      if (typeof left === "number" && typeof right === "number") return (left - right) * direction;
+      return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: "base" }) * direction;
+    });
+  }, [filtered, sort]);
+
+  const itemOptions = useMemo(
+    () => Array.from(new Set(details.map((detail) => detail.item))).sort((a, b) => a.localeCompare(b)),
+    [details]
+  );
+  const departmentOptions = useMemo(
+    () => Array.from(new Set(details.map((detail) => detail.department))).sort((a, b) => a.localeCompare(b)),
+    [details]
+  );
+  const toggleSort = (key: DetailSortKey) => {
+    setSort((current) => ({ key, direction: current.key === key && current.direction === "asc" ? "desc" : "asc" }));
+  };
+  const sortIcon = (key: DetailSortKey) => {
+    if (sort.key !== key) return <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" aria-hidden />;
+    return sort.direction === "asc"
+      ? <ArrowUp className="h-3.5 w-3.5 text-brand-700" aria-hidden />
+      : <ArrowDown className="h-3.5 w-3.5 text-brand-700" aria-hidden />;
+  };
+  const sortHeader = (key: DetailSortKey, label: string, align: "left" | "right" = "left") => (
+    <th className={`${align === "right" ? "text-right" : "text-left"} p-3 whitespace-nowrap`}>
+      <button type="button" onClick={() => toggleSort(key)} className="inline-flex items-center gap-1 font-semibold">
+        {label}{sortIcon(key)}
+      </button>
+    </th>
+  );
 
   const categoryTotals = useMemo(() => {
     const map = new Map<string, { count: number; total: number }>();
@@ -200,15 +307,17 @@ export function ExpensesReportPage() {
   }, [details]);
 
   const grandTotal = useMemo(() => details.reduce((s, r) => s + r.amount, 0), [details]);
+  const filteredAmount = useMemo(() => filtered.reduce((sum, row) => sum + row.amount, 0), [filtered]);
+  const filteredQuantity = useMemo(() => filtered.reduce((sum, row) => sum + row.quantity, 0), [filtered]);
 
   const exportCsv = () => {
-    const header = ["Date", "Category", "Description", "Vendor", "GL account", "Amount"].join(",");
-    const rows = filtered.map((r) =>
-      [r.expenseDate, r.category, r.description, r.vendor, r.glLabel, r.amount]
+    const header = ["Date", "Category", "Item", "Department", "Vendor", "GL account", "Quantity", "Unit price", "Amount spent"].join(",");
+    const rows = sortedFiltered.map((r) =>
+      [r.expenseDate, r.category, r.item, r.department, r.vendor, r.glLabel, r.quantity, r.unitPrice, r.amount]
         .map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`)
         .join(",")
     );
-    const summary = ["", "", "", "", "Total", grandTotal.toFixed(2)].join(",");
+    const summary = ["", "", "", "", "", "Filtered totals", filteredQuantity, "", filteredAmount.toFixed(2)].join(",");
     const csv = [header, ...rows, "", summary].join("\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
@@ -290,24 +399,48 @@ export function ExpensesReportPage() {
             </option>
           ))}
         </select>
+        <select
+          value={departmentFilter}
+          onChange={(e) => setDepartmentFilter(e.target.value)}
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+        >
+          <option value="all">All departments</option>
+          {departmentOptions.map((department) => (
+            <option key={department} value={department}>{department}</option>
+          ))}
+        </select>
+        <select
+          value={itemFilter}
+          onChange={(e) => setItemFilter(e.target.value)}
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm min-w-[220px]"
+        >
+          <option value="all">All items</option>
+          {itemOptions.map((item) => (
+            <option key={item} value={item}>{item}</option>
+          ))}
+        </select>
       </div>
 
       {loading ? (
         <p className="text-slate-500 py-4">Loading expenses…</p>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
             <div className="bg-white rounded-xl border border-slate-200 p-4">
               <p className="text-xs text-slate-500">Total expenses</p>
               <p className="text-2xl font-bold text-slate-900">{formatMoney(grandTotal)}</p>
             </div>
             <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <p className="text-xs text-slate-500">Line items</p>
-              <p className="text-2xl font-bold text-slate-900">{details.length}</p>
+              <p className="text-xs text-slate-500">Filtered amount spent</p>
+              <p className="text-2xl font-bold text-slate-900">{formatMoney(filteredAmount)}</p>
             </div>
             <div className="bg-white rounded-xl border border-slate-200 p-4">
-              <p className="text-xs text-slate-500">Categories</p>
-              <p className="text-2xl font-bold text-slate-900">{categoryTotals.length}</p>
+              <p className="text-xs text-slate-500">Filtered quantity</p>
+              <p className="text-2xl font-bold text-slate-900">{filteredQuantity.toLocaleString()}</p>
+            </div>
+            <div className="bg-white rounded-xl border border-slate-200 p-4">
+              <p className="text-xs text-slate-500">Filtered lines</p>
+              <p className="text-2xl font-bold text-slate-900">{filtered.length}</p>
             </div>
           </div>
 
@@ -346,41 +479,55 @@ export function ExpensesReportPage() {
           </div>
 
           <h2 className="text-sm font-semibold text-slate-800 mb-2">Detail</h2>
-          <div className="app-card overflow-hidden">
-            <table className="w-full text-sm">
+          <div className="app-card overflow-x-auto">
+            <table className="w-full min-w-[980px] text-sm">
               <thead className="bg-slate-50">
                 <tr>
-                  <th className="text-left p-3">Date</th>
-                  <th className="text-left p-3">Category</th>
-                  <th className="text-left p-3">Description</th>
-                  <th className="text-left p-3">Vendor</th>
-                  <th className="text-left p-3">GL account</th>
-                  <th className="text-right p-3">Amount</th>
+                  {sortHeader("expenseDate", "Date")}
+                  {sortHeader("category", "Category")}
+                  {sortHeader("item", "Item")}
+                  {sortHeader("department", "Department")}
+                  {sortHeader("vendor", "Vendor")}
+                  {sortHeader("glLabel", "GL account")}
+                  {sortHeader("quantity", "Quantity", "right")}
+                  {sortHeader("unitPrice", "Unit price", "right")}
+                  {sortHeader("amount", "Amount spent", "right")}
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 ? (
+                {sortedFiltered.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-500">
+                    <td colSpan={9} className="p-8 text-center text-slate-500">
                       No matching expenses.
                     </td>
                   </tr>
                 ) : (
-                  filtered.map((row) => (
+                  sortedFiltered.map((row) => (
                     <tr key={`${row.expenseId}-${row.description}-${row.amount}`} className="border-t border-slate-100">
                       <td className="p-3 whitespace-nowrap">{row.expenseDate}</td>
                       <td className="p-3">{row.category}</td>
-                      <td className="p-3 max-w-[240px] truncate" title={row.description}>
-                        {row.description}
+                      <td className="p-3 max-w-[240px] truncate" title={row.item}>
+                        {row.item}
                       </td>
+                      <td className="p-3">{row.department}</td>
                       <td className="p-3 max-w-[140px] truncate">{row.vendor}</td>
                       <td className="p-3 max-w-[180px] truncate text-slate-600" title={row.glLabel}>
                         {row.glLabel}
                       </td>
+                      <td className="p-3 text-right tabular-nums">{row.quantity.toLocaleString()}</td>
+                      <td className="p-3 text-right tabular-nums">{formatMoney(row.unitPrice)}</td>
                       <td className="p-3 text-right tabular-nums font-medium">{formatMoney(row.amount)}</td>
                     </tr>
                   ))
                 )}
+                {sortedFiltered.length > 0 ? (
+                  <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold">
+                    <td colSpan={6} className="p-3 text-right">Filtered totals</td>
+                    <td className="p-3 text-right tabular-nums">{filteredQuantity.toLocaleString()}</td>
+                    <td className="p-3" />
+                    <td className="p-3 text-right tabular-nums">{formatMoney(filteredAmount)}</td>
+                  </tr>
+                ) : null}
               </tbody>
             </table>
           </div>

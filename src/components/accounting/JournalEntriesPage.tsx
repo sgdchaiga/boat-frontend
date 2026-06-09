@@ -4,6 +4,9 @@ import {
   getReferenceTypeLabel,
   backfillJournalEntries,
   repairHotelPosOrderJournals,
+  repairDuplicateExpenseJournals,
+  repairMissingKitchenExpenseJournals,
+  reconcileInventoryLedgersToStockSummary,
   repairRoomChargeJournals,
   type BackfillProgress,
   type BackfillResult,
@@ -141,6 +144,10 @@ export function JournalEntriesPage() {
   const [posRepairFrom, setPosRepairFrom] = useState("");
   const [posRepairTo, setPosRepairTo] = useState("");
   const [repairingRooms, setRepairingRooms] = useState(false);
+  const [repairingDuplicateExpenses, setRepairingDuplicateExpenses] = useState(false);
+  const [repairingKitchenExpenses, setRepairingKitchenExpenses] = useState(false);
+  const [reconcilingInventory, setReconcilingInventory] = useState(false);
+  const [inventoryReconciliationMessage, setInventoryReconciliationMessage] = useState<string | null>(null);
   const [roomRepairProgress, setRoomRepairProgress] = useState({ processed: 0, total: 0 });
   const [roomRepairResult, setRoomRepairResult] = useState<RoomJournalRepairResult | null>(null);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
@@ -625,6 +632,27 @@ export function JournalEntriesPage() {
     }
   };
 
+  const handleRepairJunePosJournals = async () => {
+    if (repairingPos) return;
+    if (!confirm("Rebuild Hotel POS journals from June 1 through June 8, 2026 using the active department GL mappings?")) return;
+    setRepairingPos(true);
+    setPosRepairResult(null);
+    setPosRepairProgress({ processed: 0, total: 0 });
+    try {
+      const result = await repairHotelPosOrderJournals({
+        onProgress: (processed, total) => setPosRepairProgress({ processed, total }),
+        fromDate: "2026-06-01",
+        toDate: "2026-06-08",
+      });
+      setPosRepairResult(result);
+      await fetchData();
+    } catch (e) {
+      setPosRepairResult({ repaired: 0, removed: 0, errors: [e instanceof Error ? e.message : String(e)] });
+    } finally {
+      setRepairingPos(false);
+    }
+  };
+
   const handleRepairRoomChargeJournals = async () => {
     if (repairingRooms) return;
     if (!confirm("Rebuild all room-charge journals from room billing? This uses the currently configured room revenue account.")) return;
@@ -641,6 +669,60 @@ export function JournalEntriesPage() {
       setRoomRepairResult({ repaired: 0, errors: [e instanceof Error ? e.message : String(e)] });
     } finally {
       setRepairingRooms(false);
+    }
+  };
+
+  const handleRepairDuplicateExpenses = async () => {
+    if (repairingDuplicateExpenses) return;
+    if (!confirm("Retire May 2026 expense journals that exactly duplicate vendor-payment Cash credits?")) return;
+    setRepairingDuplicateExpenses(true);
+    try {
+      const result = await repairDuplicateExpenseJournals({ fromDate: "2026-05-01", toDate: "2026-05-31" });
+      alert(
+        `Matched ${result.matched} duplicate expense journal(s) totaling ${result.amount.toFixed(2)}; retired ${result.removed}.`
+      );
+      await fetchData();
+    } catch (e) {
+      alert(`Duplicate expense repair failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRepairingDuplicateExpenses(false);
+    }
+  };
+
+  const handleRepairMissingKitchenExpenses = async () => {
+    if (repairingKitchenExpenses) return;
+    if (!confirm("Rewrite missing May 2026 Spend Money journals that contain Kitchen Purchase lines? Existing active expense journals will not be duplicated.")) return;
+    setRepairingKitchenExpenses(true);
+    try {
+      const result = await repairMissingKitchenExpenseJournals({ fromDate: "2026-05-01", toDate: "2026-05-31" });
+      alert(
+        `Rewrote ${result.repaired} of ${result.checked} missing Kitchen Spend Money journal(s), totaling ${result.kitchenAmount.toFixed(2)} in Kitchen purchases.` +
+          (result.errors.length ? ` Errors: ${result.errors.join("; ")}` : "")
+      );
+      await fetchData();
+    } catch (e) {
+      alert(`Kitchen expense journal rewrite failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setRepairingKitchenExpenses(false);
+    }
+  };
+
+  const handleReconcileInventory = async () => {
+    if (reconcilingInventory) return;
+    if (!confirm("Post a balanced adjustment so Bar and Kitchen inventory GL balances match the Stock Summary weighted-average valuation?")) return;
+    setReconcilingInventory(true);
+    setInventoryReconciliationMessage(null);
+    try {
+      const result = await reconcileInventoryLedgersToStockSummary(orgId);
+      setInventoryReconciliationMessage(
+        `Inventory reconciliation posted. Bar ${result.barBefore.toFixed(2)} -> ${result.barTarget.toFixed(2)}; ` +
+          `Kitchen ${result.kitchenBefore.toFixed(2)} -> ${result.kitchenTarget.toFixed(2)}.`
+      );
+      await fetchData();
+    } catch (e) {
+      setInventoryReconciliationMessage(`Inventory reconciliation failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setReconcilingInventory(false);
     }
   };
 
@@ -902,6 +984,48 @@ export function JournalEntriesPage() {
             <RefreshCw className={`w-4 h-4 ${repairingRooms ? "animate-spin" : ""}`} />
             {repairingRooms ? "Repairing room journals..." : "Repair room journals"}
           </button>
+          <button
+            type="button"
+            onClick={handleRepairJunePosJournals}
+            disabled={repairingPos || backfilling || repairingRooms}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Rebuild June 1-8 Hotel POS journals using active department GL mappings"
+          >
+            <RefreshCw className={`w-4 h-4 ${repairingPos ? "animate-spin" : ""}`} />
+            {repairingPos ? "Repairing June POS journals..." : "Repair June 1-8 POS journals"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRepairDuplicateExpenses()}
+            disabled={repairingDuplicateExpenses || runningBulkAction !== null}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-300 bg-red-50 text-red-900 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Retire May expense journals that duplicate vendor-payment Cash credits"
+          >
+            <Trash2 className="w-4 h-4" />
+            {repairingDuplicateExpenses ? "Repairing duplicate expenses..." : "Repair May duplicate expenses"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleRepairMissingKitchenExpenses()}
+            disabled={repairingKitchenExpenses || runningBulkAction !== null}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Rewrite missing May Spend Money journals containing Kitchen Purchase lines"
+          >
+            <RefreshCw className={`w-4 h-4 ${repairingKitchenExpenses ? "animate-spin" : ""}`} />
+            {repairingKitchenExpenses ? "Rewriting Kitchen expenses..." : "Rewrite May Kitchen Spend Money journals"}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleReconcileInventory()}
+            disabled={reconcilingInventory}
+            className="px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+            title="Post a balanced adjustment so Bar and Kitchen inventory ledgers match Stock Summary weighted-average values"
+          >
+            {reconcilingInventory ? "Reconciling inventory..." : "Reconcile inventory ledgers"}
+          </button>
+          {inventoryReconciliationMessage ? (
+            <p className="text-sm text-slate-700">{inventoryReconciliationMessage}</p>
+          ) : null}
         </div>
       </div>
 

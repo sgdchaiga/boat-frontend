@@ -982,6 +982,30 @@ export function POSPage({
     });
   }, [departments, posSellMode]);
 
+  const sendToKitchenRestrictedDepartmentIds = useMemo(() => {
+    const ids = new Set<string>();
+    const configuredBarId = hotelBizConfig.pos_bar_department_id?.trim();
+    const configuredSaunaId = hotelBizConfig.pos_sauna_department_id?.trim();
+    if (configuredBarId) ids.add(configuredBarId);
+    if (configuredSaunaId) ids.add(configuredSaunaId);
+    departments.forEach((department) => {
+      const name = String(department.name || "").trim().toLowerCase();
+      if (name.includes("bar") || name.includes("sauna") || name.includes("spa") || name.includes("steam")) {
+        ids.add(department.id);
+      }
+    });
+    return ids;
+  }, [departments, hotelBizConfig.pos_bar_department_id, hotelBizConfig.pos_sauna_department_id]);
+
+  const cartHasBarOrSaunaItems = useMemo(
+    () =>
+      cart.some(
+        (item) =>
+          !!item.product.department_id && sendToKitchenRestrictedDepartmentIds.has(item.product.department_id)
+      ),
+    [cart, sendToKitchenRestrictedDepartmentIds]
+  );
+
   useEffect(() => {
     if (departmentsForPicker.length === 0) return;
     if (
@@ -1073,6 +1097,10 @@ export function POSPage({
         .update({ order_status: next })
         .eq("id", orderId);
       if (error) throw error;
+      if (String(next).toLowerCase() === "served") {
+        const journal = await syncHotelPosOrderJournal(orderId, user?.id ?? null, orgId ?? null);
+        if (!journal.ok) throw new Error(`Order served, but GL sync failed: ${journal.error}`);
+      }
       await loadData();
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to update order status.");
@@ -1479,6 +1507,10 @@ export function POSPage({
     }
     if (cart.length === 0) {
       alert("Cart is empty");
+      return;
+    }
+    if (action === "send_kitchen" && cartHasBarOrSaunaItems) {
+      alert("Send to Kitchen is only available for kitchen items. Use Pay Now, Credit Sale, or Bill Room for Bar or Sauna items.");
       return;
     }
     if (action === "bill_to_room" && !selectedStay) {
@@ -2332,7 +2364,8 @@ export function POSPage({
           <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5 mb-3">
             <button
               onClick={() => processOrder("send_kitchen")}
-              disabled={sending || cart.length === 0 || readOnly}
+              disabled={sending || cart.length === 0 || readOnly || cartHasBarOrSaunaItems}
+              title={cartHasBarOrSaunaItems ? "Bar and Sauna items cannot be sent to Kitchen" : "Send order to Kitchen"}
               className="bg-amber-600 hover:bg-amber-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium py-1.5 text-xs"
             >
               {sending ? "..." : "Kitchen"}

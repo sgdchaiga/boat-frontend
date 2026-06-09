@@ -59,6 +59,7 @@ export function TrialBalancePage() {
           .gte("journal_entries.entry_date", fromDate)
           .lte("journal_entries.entry_date", toDate)
           .eq("journal_entries.is_posted", true)
+          .eq("journal_entries.is_deleted", false)
           .eq("gl_accounts.is_active", true),
         orgId,
         superAdmin

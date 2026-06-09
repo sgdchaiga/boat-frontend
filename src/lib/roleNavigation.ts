@@ -147,6 +147,7 @@ export function getRolePageAllowList(xp: NavRoleExperience): Set<string> | null 
 
 export function getRoleBasedNavMenuTitle(roleKey: string | undefined | null): string | null {
   const r = (roleKey ?? "").trim().toLowerCase();
+  if (normalizeNavRoleKey(r) === "manager") return null;
   const titles: Record<string, string> = {
     waitress: "Waitress Menu",
     waiter: "Waiter Menu",
@@ -156,7 +157,6 @@ export function getRoleBasedNavMenuTitle(roleKey: string | undefined | null): st
     kitchen_staff: "Kitchen Menu",
     cashier: "Cashier Menu",
     accountant: "Accountant Menu",
-    manager: "Manager Dashboard",
     storekeeper: "Store Menu",
   };
   return titles[r] ?? null;
@@ -268,6 +268,9 @@ export function hasRoleScopedNavigation(
     businessType === "hotel" || businessType === "mixed" || businessType === "restaurant";
   const xp = getNavRoleExperience(roleKey);
   if (xp === "full") return false;
+  // Managers oversee the whole operation and need the normal module navigation
+  // (POS / Orders, Money In, Money Out, Stock, Reports, and Settings).
+  if (xp === "manager") return false;
   if (xp === "storekeeper") {
     return businessType === "retail" || businessType === "clinic" || hospitality || businessType === "manufacturing";
   }

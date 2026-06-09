@@ -953,7 +953,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             </div>
           </div>
 
-          <nav className="flex-1 p-2 pt-1 overflow-y-auto">
+          <nav className="flex-1 min-h-0 p-2 pt-1 overflow-y-auto">
             <ul className="space-y-0.5">
               {showPlatform && (
                 <>
@@ -1331,8 +1331,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         />
       )}
 
-      <div className="lg:pl-64 min-w-0 max-w-full">
-        <main className="pt-14 lg:pt-0 min-w-0 max-w-full">
+      <div className="lg:pl-64 min-w-0 max-w-full overflow-x-hidden">
+        <main className="pt-14 lg:pt-0 min-w-0 max-w-full overflow-x-auto">
           <div className="px-4 lg:px-8 pt-3">
             <button
               type="button"

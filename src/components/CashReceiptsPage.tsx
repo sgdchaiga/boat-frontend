@@ -78,6 +78,7 @@ export function CashReceiptsPage({
   const [savingEdit, setSavingEdit] = useState(false);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [referenceFilter, setReferenceFilter] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [productFilter, setProductFilter] = useState("all");
   const [txDepartments, setTxDepartments] = useState<Record<string, string[]>>({});
@@ -334,6 +335,7 @@ export function CashReceiptsPage({
   const filteredRows = useMemo(() => {
     return rows.filter((r) => {
       const tx = baseSaleOrOrderId(r.transaction_id);
+      if (referenceFilter.trim() && !tx.toLowerCase().includes(referenceFilter.trim().toLowerCase())) return false;
       if (dateFrom && new Date(r.paid_at).getTime() < new Date(`${dateFrom}T00:00:00`).getTime()) return false;
       if (dateTo && new Date(r.paid_at).getTime() > new Date(`${dateTo}T23:59:59`).getTime()) return false;
       if (departmentFilter !== "all") {
@@ -346,13 +348,13 @@ export function CashReceiptsPage({
       }
       return true;
     });
-  }, [rows, dateFrom, dateTo, departmentFilter, productFilter, txDepartments, txProducts]);
+  }, [rows, referenceFilter, dateFrom, dateTo, departmentFilter, productFilter, txDepartments, txProducts]);
 
   const sorted = useMemo(() => {
     if (!sort) return filteredRows;
     const { key, dir } = sort;
     const m = dir === "asc" ? 1 : -1;
-    return [...rows].sort((a, b) => {
+    return [...filteredRows].sort((a, b) => {
       let cmp = 0;
       switch (key) {
         case "transaction_id":
@@ -701,7 +703,17 @@ export function CashReceiptsPage({
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Order / sale ref</label>
+            <input
+              type="search"
+              value={referenceFilter}
+              onChange={(e) => setReferenceFilter(e.target.value)}
+              placeholder="Search reference"
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono"
+            />
+          </div>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">From date</label>
             <input

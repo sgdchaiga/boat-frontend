@@ -39,8 +39,12 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
   const { businessType } = args;
   const isHotelOrMixed = businessType === "hotel" || businessType === "mixed";
   const periodPurchasesReport: NavChild = {
-    name: isHotelOrMixed ? "Expenses & purchases (period)" : "Purchases report",
+    name: isHotelOrMixed ? "Purchases summary (bills & payments)" : "Purchases summary",
     page: "reports_daily_purchases_summary",
+  };
+  const purchasesByItemReport: NavChild = {
+    name: isHotelOrMixed ? "Purchases report (items & departments)" : "Purchases by item",
+    page: "reports_purchases_by_item",
   };
 
   const clinicPriorityReports: NavChild[] =
@@ -57,10 +61,10 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     ...clinicPriorityReports,
     { name: "Daily summary", page: "reports_daily_summary" },
     { name: "Sales report", page: "reports_daily_sales" },
+    purchasesByItemReport,
     ...(businessType === "clinic" ? [] : [periodPurchasesReport]),
     ...(businessType !== "clinic" ? [{ name: "Expense report", page: "reports_expenses" as const }] : []),
     { name: "Sales by item", page: "reports_sales_by_item" },
-    { name: "Purchases by item", page: "reports_purchases_by_item" },
     { name: "Stock summary", page: "reports_stock_summary" },
     ...(businessType === "manufacturing"
       ? [{ name: "Daily production", page: "reports_manufacturing_daily_production" as const }]
@@ -155,6 +159,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Suppliers", page: "purchases_vendors" },
     { name: "Stock levels", page: "inventory_stock_balances" },
     { name: "Adjust stock", page: "inventory_stock_adjustments" },
+    { name: "Purchases report", page: "reports_purchases_by_item" },
   ];
 
   const settings: NavChild[] = [

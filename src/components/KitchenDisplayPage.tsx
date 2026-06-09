@@ -8,6 +8,7 @@ import { applyHospitalityBranchFilter } from "../lib/hospitalityBranchScope";
 import { PageNotes } from "./common/PageNotes";
 import { getNextOrderStatus, formatKitchenBarAdvanceLabel } from "../lib/hotelPosOrderStatus";
 import { loadHotelConfig } from "../lib/hotelConfig";
+import { syncHotelPosOrderJournal } from "../lib/journal";
 
 interface KitchenItem {
   quantity: number;
@@ -147,6 +148,10 @@ export function KitchenDisplayPage({ hidePricing: _hidePricing = false }: Kitche
         .eq("id", orderId);
 
       if (error) throw error;
+      if (newStatus.toLowerCase() === "served") {
+        const journal = await syncHotelPosOrderJournal(orderId, user?.id ?? null, orgId);
+        if (!journal.ok) throw new Error(`Order served, but GL sync failed: ${journal.error}`);
+      }
       await fetchOrders();
     } catch (err) {
       console.error("Update status error:", err);

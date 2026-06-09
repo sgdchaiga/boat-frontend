@@ -98,6 +98,7 @@ type PaymentMethodSimple = "cash" | "bank" | "mobile";
 type SimpleExpenseLine = {
   key: string;
   item: string;
+  quantity: string;
   amount: string;
   payment_method: PaymentMethodSimple;
   /** Simple group only — GL is resolved at save from category + item text */
@@ -309,6 +310,7 @@ function emptySimpleLine(): SimpleExpenseLine {
   return {
     key: randomUuid(),
     item: "",
+    quantity: "1",
     amount: "",
     payment_method: "cash",
     category: readLastSimpleCategory(),
@@ -387,6 +389,7 @@ type LineDraft = {
   source_cash_gl_account_id: string;
   /** Net amount (ex VAT) */
   amount: string;
+  quantity: string;
   /** When true, VAT is computed from net × VAT % at top of form */
   vat_enabled: boolean;
   vat_gl_account_id: string;
@@ -400,6 +403,7 @@ function emptyLine(): LineDraft {
     expense_gl_account_id: "",
     source_cash_gl_account_id: "",
     amount: "",
+    quantity: "1",
     vat_enabled: true,
     vat_gl_account_id: "",
     comment: "",
@@ -899,6 +903,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           vat_gl_account_id: simpleIncludeVat ? vatGlResolved : null,
           bank_charges_gl_account_id: null,
           comment: r.item.trim() || null,
+          quantity: Math.max(0, parseNum(r.quantity)) || 1,
         });
         vendorIdsPerJournalRow.push(simpleVendorId);
       }
@@ -925,6 +930,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           vat_gl_account_id: r.vat_gl_account_id || null,
           bank_charges_gl_account_id: null,
           comment: r.comment.trim() || null,
+          quantity: Math.max(0, parseNum(r.quantity)) || 1,
         });
         vendorIdsPerJournalRow.push(r.vendor_id.trim() || null);
       }
@@ -968,6 +974,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           vat_gl_account_id: jr.vat_gl_account_id || null,
           bank_charges_gl_account_id: null,
           comment: jr.comment || null,
+          quantity: jr.quantity ?? 1,
           sort_order: idx,
           vendor_id: vendorIdsPerJournalRow[idx] ?? null,
         }));
@@ -1181,7 +1188,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       const { data: lineRows, error: lineErr } = await supabase
         .from("expense_lines")
         .select(
-          "vendor_id, expense_gl_account_id, source_cash_gl_account_id, amount, vat_amount, vat_gl_account_id, comment, sort_order"
+          "vendor_id, expense_gl_account_id, source_cash_gl_account_id, amount, vat_amount, vat_gl_account_id, comment, quantity, sort_order"
         )
         .eq("expense_id", expenseId)
         .order("sort_order", { ascending: true });
@@ -1207,6 +1214,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
         expense_gl_account_id: string;
         source_cash_gl_account_id: string;
         amount: number;
+        quantity: number | null;
         vat_amount: number;
         vat_gl_account_id: string | null;
         comment: string | null;
@@ -1216,6 +1224,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           expense_gl_account_id: string;
           source_cash_gl_account_id: string;
           amount: number;
+          quantity: number | null;
           vat_amount: number;
           vat_gl_account_id: string | null;
           comment: string | null;
@@ -1228,6 +1237,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           expense_gl_account_id: l.expense_gl_account_id,
           source_cash_gl_account_id: l.source_cash_gl_account_id,
           amount: net > 0 ? String(net) : "",
+          quantity: String(Number(l.quantity ?? 1) || 1),
           vat_enabled: vat > 0,
           vat_gl_account_id: l.vat_gl_account_id ?? "",
           comment: l.comment ?? "",
@@ -1242,11 +1252,19 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
         if ((lineRows || []).length > 0) {
           let anyVat = false;
           setSimpleLines(
-            (lineRows || []).map((lr) => {
+            (lineRows || []).map((lr: {
+              expense_gl_account_id: string;
+              source_cash_gl_account_id: string;
+              amount: number;
+              quantity: number | null;
+              vat_amount: number;
+              comment: string | null;
+            }) => {
               const l = lr as {
                 expense_gl_account_id: string;
                 source_cash_gl_account_id: string;
                 amount: number;
+                quantity: number | null;
                 vat_amount: number;
                 comment: string | null;
               };
@@ -1256,6 +1274,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
               return {
                 key: randomUuid(),
                 item: (l.comment || "").trim(),
+                quantity: String(Number(l.quantity ?? 1) || 1),
                 amount: net > 0 ? String(net) : "",
                 payment_method: inferPaymentMethodFromGlId(l.source_cash_gl_account_id, cashSourceOptions),
                 category: inferCategoryFromExpenseGl(l.expense_gl_account_id, expenseGlOptions),
@@ -1685,8 +1704,21 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                 placeholder="e.g. Fuel for generator, staff salaries"
                               />
                             </div>
-                            <div>
-                              <label className="block text-xs font-medium text-slate-600 mb-1">Amount</label>
+                            <div className="flex flex-wrap gap-3">
+                              <div>
+                                <label className="block text-xs font-medium text-slate-600 mb-1">Quantity purchased</label>
+                                <input
+                                  type="number"
+                                  step="0.001"
+                                  min="0.001"
+                                  value={row.quantity}
+                                  onChange={(e) => updateSimpleLine(row.key, { quantity: e.target.value })}
+                                  onMouseDown={(e) => e.stopPropagation()}
+                                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-right tabular-nums max-w-[10rem]"
+                                />
+                              </div>
+                              <div>
+                              <label className="block text-xs font-medium text-slate-600 mb-1">Total amount spent</label>
                               <input
                                 type="number"
                                 step="0.01"
@@ -1697,6 +1729,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-right tabular-nums max-w-xs"
                                 placeholder="0"
                               />
+                              </div>
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Type of expense</label>
@@ -1895,16 +1928,18 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                     ) : null}
 
                     <div className="border border-slate-200 rounded-lg overflow-x-auto overflow-y-visible">
-                      <table className="min-w-[1280px] w-full text-xs sm:text-sm [&_td]:overflow-visible [&_td]:relative">
+                      <table className="min-w-[1580px] w-full text-xs sm:text-sm [&_td]:overflow-visible [&_td]:relative">
                         <thead className="bg-slate-50 text-slate-700">
                           <tr>
                             <th className="text-left p-2 font-semibold min-w-[200px]">Vendor</th>
+                            <th className="text-left p-2 font-semibold min-w-[220px]">Narration / item purchased</th>
+                            <th className="text-right p-2 font-semibold w-24">Quantity</th>
                             <th className="text-left p-2 font-semibold min-w-[160px]">Source of funds</th>
                             <th className="text-left p-2 font-semibold min-w-[160px]">Expense GL</th>
                             <th className="text-center p-2 font-semibold w-14" title="Apply VAT for this line">
                               VAT
                             </th>
-                            <th className="text-right p-2 font-semibold w-28">Net (ex VAT)</th>
+                            <th className="text-right p-2 font-semibold w-28">Total net (ex VAT)</th>
                             <th className="text-right p-2 font-semibold w-24">VAT amt</th>
                             <th className="text-right p-2 font-semibold w-24">Total</th>
                             <th className="text-left p-2 font-semibold min-w-[160px]">VAT GL</th>
@@ -1926,6 +1961,28 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                       emptyOption={{ label: "No vendor" }}
                                       inputAriaLabel="Vendor for this line"
                                       className="min-w-[200px]"
+                                    />
+                                  </td>
+                                  <td className="p-2 align-top">
+                                    <input
+                                      type="text"
+                                      value={row.comment}
+                                      onChange={(e) => updateLine(row.key, { comment: e.target.value })}
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm"
+                                      placeholder="e.g. Liquid soap, generator fuel"
+                                      aria-label="Narration or item purchased"
+                                    />
+                                  </td>
+                                  <td className="p-2 align-top">
+                                    <input
+                                      type="number"
+                                      step="0.001"
+                                      min="0.001"
+                                      value={row.quantity}
+                                      onChange={(e) => updateLine(row.key, { quantity: e.target.value })}
+                                      onMouseDown={(e) => e.stopPropagation()}
+                                      className="w-full rounded border border-slate-300 px-2 py-1.5 text-sm text-right"
                                     />
                                   </td>
                                   <td className="p-2 align-top">

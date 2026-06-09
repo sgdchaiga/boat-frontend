@@ -149,6 +149,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   });
 
   const [search, setSearch] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("all");
   const [sortKey, setSortKey] = useState<ItemsSortKey>("name");
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
   const [serviceConsumables, setServiceConsumables] = useState<ServiceConsumableDraft[]>([]);
@@ -455,7 +456,12 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     void loadProductsAndBalances();
   }
 
-  const filteredProducts = products.filter((p) => (p.name || "").toLowerCase().includes(search.toLowerCase()));
+  const filteredProducts = products.filter((product) => {
+    if (!(product.name || "").toLowerCase().includes(search.toLowerCase())) return false;
+    if (departmentFilter === "unassigned") return !product.department_id;
+    if (departmentFilter !== "all" && product.department_id !== departmentFilter) return false;
+    return true;
+  });
 
   const sortedProducts = useMemo(() => {
     const rows = [...filteredProducts];
@@ -610,10 +616,24 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
           onChange={(e) => setSearch(e.target.value)}
           aria-label="Search items"
         />
+        <select
+          value={departmentFilter}
+          onChange={(e) => setDepartmentFilter(e.target.value)}
+          className="min-w-[220px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+          aria-label="Filter items by department"
+        >
+          <option value="all">All departments</option>
+          <option value="unassigned">Unassigned department</option>
+          {departments.map((department) => (
+            <option key={department.id} value={department.id}>
+              {department.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-        <table className="w-full text-sm min-w-[640px]">
+        <table className="w-full text-sm min-w-[760px]">
           <thead className="bg-slate-50">
             <tr>
               <th className="text-left p-3">
@@ -633,6 +653,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   ) : null}
                 </button>
               </th>
+              <th className="text-left p-3 whitespace-nowrap">Department</th>
               <th className="text-right p-3 whitespace-nowrap">Stock</th>
               <th className="text-right p-3 whitespace-nowrap">Buy price</th>
               <th className="text-right p-3 whitespace-nowrap">Sell price</th>
@@ -675,6 +696,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   <td className="p-3 font-medium max-w-[14rem] truncate" title={product.name}>
                     {product.name}
                   </td>
+                  <td className="p-3 text-slate-600">{getDepartmentName(product.department_id ?? null)}</td>
                   <td className="p-3 text-right tabular-nums">
                     {track ? (
                       <span className={isLow ? "text-amber-900 font-medium" : ""}>
@@ -733,7 +755,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
           </tbody>
         </table>
         {sortedProducts.length === 0 && (
-          <p className="p-8 text-center text-slate-500">No items match your search.</p>
+          <p className="p-8 text-center text-slate-500">No items match the selected search and department filters.</p>
         )}
       </div>
 

@@ -4,7 +4,7 @@
  */
 
 import { supabase } from "./supabase";
-import { filterByOrganizationId } from "./supabaseOrgFilter";
+import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "./supabaseOrgFilter";
 import { resolveJournalAccountSettings } from "./journalAccountSettings";
 import {
   fetchFixedAssetCategoryGlMap,
@@ -12,8 +12,10 @@ import {
   type FixedAssetCategoryGlRow,
 } from "./fixedAssetCategoryGlSettings";
 import type { PaymentMethodCode } from "./paymentMethod";
+import { isPosCashReceipt } from "./paymentClassification";
 import { businessDayRangeForDateString, businessTodayISO, toBusinessDateString } from "./timezone";
 import { normalizeGlAccountRows } from "./glAccountNormalize";
+import { effectiveStockMovementInOut } from "./stockMovementEffective";
 
 export type JournalReferenceType =
   | "room_charge"
@@ -852,6 +854,238 @@ export async function createJournalForPayment(
   });
 }
 
+export interface MisclassifiedPosPaymentJournalRepairResult {
+  checked: number;
+  removed: number;
+  errors: string[];
+}
+
+export interface DuplicateExpenseJournalRepairResult {
+  matched: number;
+  removed: number;
+  amount: number;
+  errors: string[];
+}
+
+export interface MissingKitchenExpenseJournalRepairResult {
+  checked: number;
+  repaired: number;
+  kitchenAmount: number;
+  errors: string[];
+}
+
+/** Recreate missing Spend Money journals whose line items include the Kitchen purchases GL. */
+export async function repairMissingKitchenExpenseJournals(options: {
+  fromDate: string;
+  toDate: string;
+}): Promise<MissingKitchenExpenseJournalRepairResult> {
+  const result: MissingKitchenExpenseJournalRepairResult = { checked: 0, repaired: 0, kitchenAmount: 0, errors: [] };
+  const organizationId = await resolveOrganizationId();
+  if (!organizationId) throw new Error("Sign in under an organization before rewriting Kitchen expense journals.");
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) throw new Error("Sign in before rewriting Kitchen expense journals.");
+
+  const { data: glRows, error: glError } = await filterByOrganizationId(
+    supabase.from("gl_accounts").select("id,account_code,account_name"),
+    organizationId,
+    false
+  );
+  if (glError) throw glError;
+  const kitchenGlIds = ((glRows || []) as Array<{ id: string; account_code: string; account_name: string }>)
+    .filter((account) => {
+      const code = String(account.account_code || "").trim();
+      const name = String(account.account_name || "").toLowerCase();
+      return code === "5002" || /\bkitchen\b.*\b(purchases?|cogs|cost)/i.test(name);
+    })
+    .map((account) => account.id);
+  if (kitchenGlIds.length === 0) throw new Error("Kitchen purchases GL account 5002 was not found.");
+
+  const { data: expenses, error: expensesError } = await filterByOrganizationId(
+    supabase
+      .from("expenses")
+      .select("id,expense_date")
+      .gte("expense_date", options.fromDate)
+      .lte("expense_date", options.toDate),
+    organizationId,
+    false
+  );
+  if (expensesError) throw expensesError;
+  const expenseRows = (expenses || []) as Array<{ id: string; expense_date: string | null }>;
+  if (expenseRows.length === 0) return result;
+
+  const expenseIds = expenseRows.map((expense) => expense.id);
+  const [{ data: allLines, error: linesError }, { data: activeJournals, error: journalsError }] = await Promise.all([
+    supabase
+      .from("expense_lines")
+      .select(
+        "expense_id,expense_gl_account_id,source_cash_gl_account_id,amount,bank_charges,vat_amount,vat_gl_account_id,bank_charges_gl_account_id,comment,quantity,sort_order"
+      )
+      .in("expense_id", expenseIds)
+      .order("sort_order", { ascending: true }),
+    filterByOrganizationId(
+      supabase
+        .from("journal_entries")
+        .select("reference_id")
+        .eq("reference_type", "expense")
+        .eq("is_deleted", false)
+        .in("reference_id", expenseIds),
+      organizationId,
+      false
+    ),
+  ]);
+  if (linesError) throw linesError;
+  if (journalsError) throw journalsError;
+
+  const linesByExpense = new Map<string, ExpenseJournalLineInput[]>();
+  const kitchenAmountByExpense = new Map<string, number>();
+  for (const line of (allLines || []) as Array<ExpenseJournalLineInput & { expense_id: string; sort_order: number }>) {
+    const rows = linesByExpense.get(line.expense_id) || [];
+    rows.push(line);
+    linesByExpense.set(line.expense_id, rows);
+    if (kitchenGlIds.includes(line.expense_gl_account_id)) {
+      kitchenAmountByExpense.set(
+        line.expense_id,
+        roundMoney((kitchenAmountByExpense.get(line.expense_id) || 0) + Number(line.amount || 0))
+      );
+    }
+  }
+  const activeIds = new Set(
+    ((activeJournals || []) as Array<{ reference_id: string | null }>)
+      .map((journal) => journal.reference_id)
+      .filter((id): id is string => !!id)
+  );
+  const candidates = expenseRows.filter(
+    (expense) => kitchenAmountByExpense.has(expense.id) && !activeIds.has(expense.id)
+  );
+  result.checked = candidates.length;
+
+  for (const expense of candidates) {
+    const lines = linesByExpense.get(expense.id) || [];
+    const posted = await createJournalForExpenseWithLines(
+      expense.id,
+      expense.expense_date || businessTodayISO(),
+      lines,
+      user.id
+    );
+    if (posted.ok) {
+      result.repaired += 1;
+      result.kitchenAmount = roundMoney(result.kitchenAmount + (kitchenAmountByExpense.get(expense.id) || 0));
+    } else {
+      result.errors.push(`Expense ${expense.id}: ${posted.error}`);
+    }
+  }
+  return result;
+}
+
+/** Retire expense journals that duplicate a vendor-payment Cash credit on the same date and amount. */
+export async function repairDuplicateExpenseJournals(options: {
+  fromDate: string;
+  toDate: string;
+}): Promise<DuplicateExpenseJournalRepairResult> {
+  const result: DuplicateExpenseJournalRepairResult = { matched: 0, removed: 0, amount: 0, errors: [] };
+  const accounts = await getDefaultGlAccounts();
+  if (!accounts.cash) throw new Error("Cash GL account is not configured.");
+
+  const { data, error } = await supabase
+    .from("journal_entries")
+    .select("id,entry_date,reference_type,journal_entry_lines(gl_account_id,debit,credit)")
+    .in("reference_type", ["expense", "vendor_payment"])
+    .eq("is_deleted", false)
+    .gte("entry_date", options.fromDate)
+    .lte("entry_date", options.toDate);
+  if (error) throw error;
+
+  const cashCredits = (entry: any) =>
+    ((entry.journal_entry_lines || []) as Array<{ gl_account_id: string; credit: number }>).reduce(
+      (sum, line) => sum + (line.gl_account_id === accounts.cash ? Number(line.credit || 0) : 0),
+      0
+    );
+  const vendorKeys = new Set(
+    ((data || []) as any[])
+      .filter((entry) => entry.reference_type === "vendor_payment")
+      .map((entry) => `${entry.entry_date}|${cashCredits(entry).toFixed(2)}`)
+  );
+  const duplicates = ((data || []) as any[]).filter(
+    (entry) =>
+      entry.reference_type === "expense" &&
+      cashCredits(entry) > 0 &&
+      vendorKeys.has(`${entry.entry_date}|${cashCredits(entry).toFixed(2)}`)
+  );
+
+  result.matched = duplicates.length;
+  result.amount = duplicates.reduce((sum, entry) => sum + cashCredits(entry), 0);
+  if (duplicates.length === 0) return result;
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { data: removed, error: removeError } = await supabase.rpc("bulk_soft_delete_journal_entries", {
+    p_entry_ids: duplicates.map((entry) => entry.id),
+    p_user_id: user?.id ?? null,
+  });
+  if (removeError) throw removeError;
+  result.removed = Number(removed || 0);
+  if (result.removed !== result.matched) {
+    result.errors.push("Some matched journals were not retired. Check the accounting period lock.");
+  }
+  return result;
+}
+
+/**
+ * Retire payment journals accidentally posted for immediate POS receipts.
+ * POS receipts are already accounted for by their `pos` journal, so a second
+ * `payment` journal incorrectly debits cash and credits receivables again.
+ */
+export async function repairMisclassifiedPosPaymentJournals(options?: {
+  fromDate?: string | null;
+  toDate?: string | null;
+  onProgress?: (processed: number, total: number) => void;
+}): Promise<MisclassifiedPosPaymentJournalRepairResult> {
+  const result: MisclassifiedPosPaymentJournalRepairResult = { checked: 0, removed: 0, errors: [] };
+  let query = supabase
+    .from("payments")
+    .select(
+      "id,payment_status,transaction_id,stay_id,property_customer_id,retail_customer_id,invoice_allocations,payment_source,paid_at"
+    )
+    .eq("payment_status", "completed")
+    .order("paid_at", { ascending: true });
+  if (options?.fromDate) query = query.gte("paid_at", `${options.fromDate}T00:00:00`);
+  if (options?.toDate) query = query.lte("paid_at", `${options.toDate}T23:59:59.999`);
+  const { data, error } = await query;
+  if (error) throw error;
+
+  const posPayments = ((data || []) as Parameters<typeof isPosCashReceipt>[0][]).filter(isPosCashReceipt);
+  result.checked = posPayments.length;
+  if (posPayments.length === 0) return result;
+
+  const { data: activeJournals, error: journalError } = await supabase
+    .from("journal_entries")
+    .select("reference_id")
+    .eq("reference_type", "payment")
+    .eq("is_deleted", false)
+    .in(
+      "reference_id",
+      posPayments.map((payment) => payment.id)
+    );
+  if (journalError) throw journalError;
+  const activePaymentIds = new Set(
+    ((activeJournals || []) as Array<{ reference_id: string | null }>)
+      .map((journal) => journal.reference_id)
+      .filter((id): id is string => !!id)
+  );
+  const paymentsToRepair = posPayments.filter((payment) => activePaymentIds.has(payment.id));
+
+  for (let index = 0; index < paymentsToRepair.length; index += 1) {
+    const payment = paymentsToRepair[index];
+    const retired = await deleteJournalEntryByReference("payment", payment.id);
+    if (retired.ok) result.removed += 1;
+    else result.errors.push(`Payment ${payment.id}: ${retired.error}`);
+    options?.onProgress?.(index + 1, paymentsToRepair.length);
+  }
+  return result;
+}
+
 /** Posted when school uses accrual basis and an invoice is issued (not draft/cancelled). */
 export async function createJournalForSchoolInvoiceAccrual(
   invoiceId: string,
@@ -1085,17 +1319,31 @@ function resolvePosRevenueGlForBucket(
 async function loadPosDepartmentGlMap(organizationId: string | null | undefined) {
   if (!organizationId) return new Map<string, { sales: string | null; purchases: string | null; stock: string | null }>();
   try {
-    const { data, error } = await (supabase as any)
-      .from("journal_gl_department_settings")
-      .select("department_id,sales_gl_account_id,purchases_gl_account_id,stock_gl_account_id")
-      .eq("organization_id", organizationId);
+    const [{ data, error }, { data: glRows, error: glError }] = await Promise.all([
+      (supabase as any)
+        .from("journal_gl_department_settings")
+        .select("department_id,sales_gl_account_id,purchases_gl_account_id,stock_gl_account_id")
+        .eq("organization_id", organizationId),
+      supabase.from("gl_accounts").select("id,account_code,is_active"),
+    ]);
     if (error) throw error;
+    if (glError) throw glError;
+    const glList = (glRows || []) as Array<{ id: string; account_code: string; is_active: boolean | null }>;
+    const codeById = new Map(glList.map((account) => [account.id, account.account_code]));
+    const activeByCode = new Map(
+      glList.filter((account) => account.is_active !== false).map((account) => [account.account_code, account.id])
+    );
+    const activeAccountId = (configuredId: string | null | undefined) => {
+      if (!configuredId) return null;
+      const code = codeById.get(configuredId);
+      return (code ? activeByCode.get(code) : null) ?? configuredId;
+    };
     const map = new Map<string, { sales: string | null; purchases: string | null; stock: string | null }>();
     ((data || []) as any[]).forEach((row) => {
       map.set(String(row.department_id), {
-        sales: row.sales_gl_account_id ?? null,
-        purchases: row.purchases_gl_account_id ?? null,
-        stock: row.stock_gl_account_id ?? null,
+        sales: activeAccountId(row.sales_gl_account_id),
+        purchases: activeAccountId(row.purchases_gl_account_id),
+        stock: activeAccountId(row.stock_gl_account_id),
       });
     });
     return map;
@@ -1631,6 +1879,181 @@ export interface PosJournalRepairResult {
   errors: string[];
 }
 
+export interface InventoryLedgerReconciliationResult {
+  journalId: string | null;
+  barTarget: number;
+  barBefore: number;
+  barAdjustment: number;
+  kitchenTarget: number;
+  kitchenBefore: number;
+  kitchenAdjustment: number;
+}
+
+/** Align Bar and Kitchen inventory GL balances to the Stock Summary weighted-average valuation. */
+export async function reconcileInventoryLedgersToStockSummary(
+  requestedOrganizationId?: string | null
+): Promise<InventoryLedgerReconciliationResult> {
+  const organizationId = requestedOrganizationId ?? (await resolveOrganizationId());
+  if (!organizationId) throw new Error("Sign in under an organization before reconciling inventory ledgers.");
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) throw new Error("Sign in before reconciling inventory ledgers.");
+
+  const configuredAccounts = await getDefaultGlAccounts();
+  const { data: activeGlRows, error: activeGlError } = await filterByOrganizationId(
+    supabase.from("gl_accounts").select("id,account_code,is_active").eq("is_active", true),
+    organizationId,
+    false
+  );
+  if (activeGlError) throw activeGlError;
+  const activeByCode = new Map(
+    ((activeGlRows || []) as Array<{ id: string; account_code: string }>).map((account) => [account.account_code, account.id])
+  );
+  const accounts = {
+    posInvBar: activeByCode.get("1051") ?? configuredAccounts.posInvBar,
+    posCogsBar: activeByCode.get("5001") ?? configuredAccounts.posCogsBar,
+    posInvKitchen: activeByCode.get("1061") ?? configuredAccounts.posInvKitchen,
+    posCogsKitchen: activeByCode.get("5002") ?? configuredAccounts.posCogsKitchen,
+  };
+  if (!accounts.posInvBar || !accounts.posCogsBar || !accounts.posInvKitchen || !accounts.posCogsKitchen) {
+    throw new Error("Configure Bar and Kitchen inventory and COGS accounts before reconciling inventory ledgers.");
+  }
+
+  const [productsRes, movementsRes, departmentsRes, linesRes] = await Promise.all([
+    filterByOrganizationId(
+      supabase.from("products").select("id,department_id,cost_price,track_inventory"),
+      organizationId,
+      false
+    ),
+    filterByOrganizationId(
+      supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out,unit_cost"),
+      organizationId,
+      false
+    ),
+    filterByOrganizationId(supabase.from("departments").select("id,name"), organizationId, false),
+    filterJournalLinesByOrganizationId(
+      supabase
+        .from("journal_entry_lines")
+        .select("gl_account_id,debit,credit,journal_entries!inner(is_posted,is_deleted)")
+        .in("gl_account_id", [accounts.posInvBar, accounts.posInvKitchen])
+        .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false),
+      organizationId,
+      false
+    ),
+  ]);
+  if (productsRes.error) throw productsRes.error;
+  if (movementsRes.error) throw movementsRes.error;
+  if (departmentsRes.error) throw departmentsRes.error;
+  if (linesRes.error) throw linesRes.error;
+
+  const departmentNameById = new Map(
+    ((departmentsRes.data || []) as Array<{ id: string; name: string }>).map((department) => [
+      department.id,
+      department.name.trim().toLowerCase(),
+    ])
+  );
+  const products = ((productsRes.data || []) as Array<{
+    id: string;
+    department_id: string | null;
+    cost_price: number | null;
+    track_inventory: boolean | null;
+  }>).filter((product) => (product.track_inventory ?? true) !== false);
+  const productById = new Map(products.map((product) => [product.id, product]));
+  const summaryByProduct = new Map<
+    string,
+    { qtyIn: number; qtyOut: number; weightedCost: number; weightedQty: number }
+  >(products.map((product) => [product.id, { qtyIn: 0, qtyOut: 0, weightedCost: 0, weightedQty: 0 }]));
+
+  ((movementsRes.data || []) as Array<{
+    product_id: string;
+    quantity_in: number | null;
+    quantity_out: number | null;
+    unit_cost: number | null;
+  }>).forEach((movement) => {
+    const product = productById.get(movement.product_id);
+    const summary = summaryByProduct.get(movement.product_id);
+    if (!product || !summary) return;
+    const { inQty, outQty } = effectiveStockMovementInOut(movement);
+    const unitCost = Number(movement.unit_cost ?? product.cost_price ?? 0) || 0;
+    summary.qtyIn += inQty;
+    summary.qtyOut += outQty;
+    if (inQty > 0 && unitCost > 0) {
+      summary.weightedCost += inQty * unitCost;
+      summary.weightedQty += inQty;
+    }
+  });
+
+  let barTarget = 0;
+  let kitchenTarget = 0;
+  products.forEach((product) => {
+    const summary = summaryByProduct.get(product.id);
+    if (!summary) return;
+    const unitCost =
+      summary.weightedQty > 0 ? summary.weightedCost / summary.weightedQty : Number(product.cost_price || 0);
+    const stockValue = (summary.qtyIn - summary.qtyOut) * unitCost;
+    const department = product.department_id ? departmentNameById.get(product.department_id) : null;
+    if (department === "bar") barTarget += stockValue;
+    if (department === "kitchen") kitchenTarget += stockValue;
+  });
+  barTarget = roundMoney(barTarget);
+  kitchenTarget = roundMoney(kitchenTarget);
+
+  let barBefore = 0;
+  let kitchenBefore = 0;
+  ((linesRes.data || []) as Array<{ gl_account_id: string; debit: number; credit: number }>).forEach((line) => {
+    const impact = Number(line.debit || 0) - Number(line.credit || 0);
+    if (line.gl_account_id === accounts.posInvBar) barBefore += impact;
+    if (line.gl_account_id === accounts.posInvKitchen) kitchenBefore += impact;
+  });
+  barBefore = roundMoney(barBefore);
+  kitchenBefore = roundMoney(kitchenBefore);
+  const barAdjustment = roundMoney(barTarget - barBefore);
+  const kitchenAdjustment = roundMoney(kitchenTarget - kitchenBefore);
+
+  const lines: JournalLine[] = [];
+  const addAdjustment = (amount: number, inventoryId: string, cogsId: string, label: string) => {
+    if (Math.abs(amount) <= 0.01) return;
+    lines.push({
+      gl_account_id: inventoryId,
+      debit: amount > 0 ? amount : 0,
+      credit: amount < 0 ? -amount : 0,
+      line_description: `${label} stock summary reconciliation`,
+    });
+    lines.push({
+      gl_account_id: cogsId,
+      debit: amount < 0 ? -amount : 0,
+      credit: amount > 0 ? amount : 0,
+      line_description: `${label} inventory valuation adjustment`,
+    });
+  };
+  addAdjustment(barAdjustment, accounts.posInvBar, accounts.posCogsBar, "Bar");
+  addAdjustment(kitchenAdjustment, accounts.posInvKitchen, accounts.posCogsKitchen, "Kitchen");
+
+  if (lines.length === 0) {
+    return { journalId: null, barTarget, barBefore, barAdjustment, kitchenTarget, kitchenBefore, kitchenAdjustment };
+  }
+  const posted = await createJournalEntry({
+    entry_date: businessTodayISO(),
+    description: "Inventory ledger reconciliation to Stock Summary weighted average",
+    reference_type: "manual",
+    lines,
+    created_by: user.id,
+    organizationId,
+  });
+  if (!posted.ok) throw new Error(posted.error);
+  return {
+    journalId: posted.journalId,
+    barTarget,
+    barBefore,
+    barAdjustment,
+    kitchenTarget,
+    kitchenBefore,
+    kitchenAdjustment,
+  };
+}
+
 /** Re-sync every historical Hotel POS order for the signed-in organization. */
 export async function repairHotelPosOrderJournals(options?: {
   onProgress?: (processed: number, total: number) => void;
@@ -1996,6 +2419,7 @@ export type ExpenseJournalLineInput = {
   vat_gl_account_id?: string | null;
   bank_charges_gl_account_id?: string | null;
   comment?: string | null;
+  quantity?: number;
 };
 
 /**
@@ -2155,6 +2579,7 @@ async function loadJournalReferenceIdsByType(): Promise<Record<string, Set<strin
         .from("journal_entries")
         .select("reference_type, reference_id")
         .not("reference_id", "is", null)
+        .eq("is_deleted", false)
         .range(from, from + pageSize - 1),
       orgId,
       false
@@ -2246,8 +2671,18 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Payments
-  const { data: payments } = await supabase.from("payments").select("id, amount, paid_at, processed_by");
-  const paymentsList = payments || [];
+  const { data: payments } = await supabase
+    .from("payments")
+    .select(
+      "id,amount,paid_at,processed_by,payment_status,transaction_id,stay_id,property_customer_id,retail_customer_id,invoice_allocations,payment_source"
+    );
+  const paymentsList = ((payments || []) as Array<
+    Parameters<typeof isPosCashReceipt>[0] & {
+      amount: number;
+      paid_at: string;
+      processed_by: string | null;
+    }
+  >).filter((payment) => !isPosCashReceipt(payment));
   reportProgress("payment", "Backfilling payments", 0, paymentsList.length);
   let paymentsProcessed = 0;
   for (const p of paymentsList) {

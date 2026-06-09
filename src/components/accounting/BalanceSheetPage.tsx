@@ -76,6 +76,7 @@ export function BalanceSheetPage() {
       )
       .lte("journal_entries.entry_date", toDate)
       .eq("journal_entries.is_posted", true)
+      .eq("journal_entries.is_deleted", false)
       .in("gl_accounts.account_type", ["asset", "liability", "equity", "income", "expense"]);
     if (basis === "cash") {
       linesQuery.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
@@ -282,6 +283,7 @@ export function BalanceSheetPage() {
         .eq("gl_account_id", account.account_id)
         .lte("journal_entries.entry_date", asOfDate)
         .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false)
         .order("entry_date", { ascending: true, referencedTable: "journal_entries" });
       if (basis === "cash") {
         query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);

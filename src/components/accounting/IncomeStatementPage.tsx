@@ -171,7 +171,7 @@ export function IncomeStatementPage() {
 
   useEffect(() => {
     fetchData();
-  }, [dateRange, debouncedCustomFrom, debouncedCustomTo, compareRange, basis, user?.business_type]);
+  }, [dateRange, debouncedCustomFrom, debouncedCustomTo, compareRange, basis, user?.business_type, showPosFigures]);
 
   useEffect(() => {
     if (dateRange !== "custom") {
@@ -238,7 +238,15 @@ export function IncomeStatementPage() {
 
     const fetchTotalsForRange = async (fromDate: string, toDateInclusive: string, businessType: BusinessType | null | undefined) => {
       const mode = getIncomeStatementMode(businessType);
-      const cacheKey = [orgId || "platform", superAdmin ? "super" : "tenant", fromDate, toDateInclusive, mode, basis].join("|");
+      const cacheKey = [
+        orgId || "platform",
+        superAdmin ? "super" : "tenant",
+        fromDate,
+        toDateInclusive,
+        mode,
+        basis,
+        showPosFigures ? "with-pos" : "ledger-only",
+      ].join("|");
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
@@ -250,22 +258,17 @@ export function IncomeStatementPage() {
         .gte("journal_entries.entry_date", fromDate)
         .lte("journal_entries.entry_date", toDateInclusive)
         .eq("journal_entries.is_posted", true)
-        .eq("journal_entries.is_deleted", false)
-        .in("gl_accounts.account_type", ["income", "expense"]);
+        .eq("journal_entries.is_deleted", false);
       if (basis === "cash") {
         linesQuery.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
       }
 
+      // Tenant RLS already scopes legacy journal lines. Some older POS journal headers
+      // have no organization_id, so an explicit header filter would hide valid sales.
+      const scopedLinesQuery = superAdmin ? filterJournalLinesByOrganizationId(linesQuery, orgId, true) : linesQuery;
       const [linesRes, accRes] = await Promise.all([
-        filterJournalLinesByOrganizationId(linesQuery, orgId, superAdmin),
-        filterByOrganizationId(
-          supabase
-            .from("gl_accounts")
-            .select("*")
-            .order("account_code"),
-          orgId,
-          superAdmin
-        ),
+        scopedLinesQuery,
+        supabase.from("gl_accounts").select("*").order("account_code"),
       ]);
 
       if (linesRes.error) throw new Error(linesRes.error.message);
@@ -302,8 +305,7 @@ export function IncomeStatementPage() {
         });
         const posReferenceIds = Array.from(paidByOrder.keys());
         if (posReferenceIds.length > 0) {
-          const posLinesRes = await filterJournalLinesByOrganizationId(
-            supabase
+          const posLinesQuery = supabase
               .from("journal_entry_lines")
               .select(
                 "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
@@ -311,11 +313,10 @@ export function IncomeStatementPage() {
               .eq("journal_entries.reference_type", "pos")
               .eq("journal_entries.is_posted", true)
               .eq("journal_entries.is_deleted", false)
-              .in("journal_entries.reference_id", posReferenceIds)
-              .in("gl_accounts.account_type", ["income", "expense"]),
-            orgId,
-            superAdmin
-          );
+              .in("journal_entries.reference_id", posReferenceIds);
+          const posLinesRes = superAdmin
+            ? await filterJournalLinesByOrganizationId(posLinesQuery, orgId, true)
+            : await posLinesQuery;
           if (posLinesRes.error) throw new Error(posLinesRes.error.message);
           const posLines = (posLinesRes.data || []) as typeof effectiveLines;
           const salesByOrder = new Map<string, number>();
@@ -347,27 +348,44 @@ export function IncomeStatementPage() {
         account_type: string;
         category?: string | null;
       };
+      const classifyAccountType = (account: {
+        account_code?: string | null;
+        account_name?: string | null;
+        account_type?: string | null;
+        category?: string | null;
+      }): "income" | "expense" | null => {
+        const type = String(account.account_type || "").toLowerCase();
+        const code = String(account.account_code || "").trim();
+        const label = `${account.account_name || ""} ${account.category || ""}`.toLowerCase();
+        if (type === "income" || type === "revenue" || /^4/.test(code) || /\b(revenue|sales|income)\b/.test(label)) return "income";
+        if (type === "expense" || /^([5-9])/.test(code) || /\b(expense|purchase|cogs|cost)\b/.test(label)) return "expense";
+        return null;
+      };
       const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
-        .filter((row) => row.is_active && (row.account_type === "income" || row.account_type === "expense"))
+        .filter((row) => row.is_active && classifyAccountType(row) !== null)
         .map((row) => ({
           id: row.id,
           account_code: row.account_code,
           account_name: row.account_name,
-          account_type: row.account_type,
+          account_type: classifyAccountType(row)!,
           category: row.category,
         }));
       const accMap: Record<string, AccRow> = Object.fromEntries(accounts.map((a) => [a.id, a]));
+      const activeAccountByCode = new Map(accounts.map((account) => [account.account_code, account]));
       const byAccount: Record<string, number> = {};
       effectiveLines.forEach((l: {
         debit: number;
         credit: number;
         gl_accounts: AccRow | null;
       }) => {
-        const acc = l.gl_accounts;
-        if (!acc) return;
+        const source = l.gl_accounts;
+        if (!source) return;
+        const classified = classifyAccountType(source);
+        if (!classified) return;
+        const acc = activeAccountByCode.get(source.account_code) ?? { ...source, account_type: classified };
         accMap[acc.id] = acc;
         if (!byAccount[acc.id]) byAccount[acc.id] = 0;
-        if (acc.account_type === "income") byAccount[acc.id] += (Number(l.credit) || 0) - (Number(l.debit) || 0);
+        if (classified === "income") byAccount[acc.id] += (Number(l.credit) || 0) - (Number(l.debit) || 0);
         else byAccount[acc.id] += (Number(l.debit) || 0) - (Number(l.credit) || 0);
       });
       accounts.forEach((acc) => {
@@ -404,7 +422,7 @@ export function IncomeStatementPage() {
         gl_accounts: { account_type: string } | null;
         journal_entries?: { entry_date: string } | null;
       }) => {
-        const accType = l.gl_accounts?.account_type;
+        const accType = l.gl_accounts ? classifyAccountType(l.gl_accounts) : null;
         const entryDate = l.journal_entries?.entry_date || "";
         if (!entryDate || (accType !== "income" && accType !== "expense")) return;
         const period = entryDate.slice(0, 7);
@@ -425,7 +443,7 @@ export function IncomeStatementPage() {
       let barReconciliation: BarSalesReconciliation | null = null;
       let operationalRevenueRows: AccountTotal[] = [];
       let operationalRevenueDetails: OperationalRevenueDetail[] = [];
-      if (businessType === "hotel" || businessType === "mixed") {
+      if (showPosFigures && (businessType === "hotel" || businessType === "mixed")) {
         const operationalRevenue = await fetchHotelOperationalRevenue(
           fromDate,
           toDateInclusive,
@@ -986,7 +1004,7 @@ export function IncomeStatementPage() {
           >
             <Info className="h-4 w-4" />
           </button>
-          {operationalRevenueRows.length > 0 && (
+          {(user?.business_type === "hotel" || user?.business_type === "mixed") && (
             <button
               type="button"
               onClick={() => setShowPosFigures((visible) => !visible)}
