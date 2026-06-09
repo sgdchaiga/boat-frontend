@@ -918,14 +918,27 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             <Hotel className="w-6 h-6 text-brand-400" />
             <span className="font-semibold text-white">{APP_SHORT_NAME}</span>
           </div>
-          <button
-            type="button"
-            onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition touch-manipulation"
-            aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
-          >
-            {sidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
-          </button>
+          <div className="flex items-center gap-1">
+            {canGoBack && (
+              <button
+                type="button"
+                onClick={onBack}
+                className="min-h-[44px] inline-flex items-center gap-1.5 rounded-lg px-3 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white touch-manipulation"
+                title="Return to previous page"
+              >
+                <ArrowLeft className="h-4 w-4" />
+                Back
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(!sidebarOpen)}
+              className="min-h-[44px] min-w-[44px] inline-flex items-center justify-center rounded-lg text-slate-300 hover:bg-slate-800 hover:text-white transition touch-manipulation"
+              aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+            >
+              {sidebarOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -952,6 +965,20 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
               </div>
             </div>
           </div>
+
+          {canGoBack && (
+            <div className="shrink-0 border-b border-slate-800 p-2">
+              <button
+                type="button"
+                onClick={onBack}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-sm font-medium text-slate-300 transition hover:bg-slate-800 hover:text-white"
+                title="Return to previous page"
+              >
+                <ArrowLeft className="h-4 w-4 shrink-0" />
+                Back
+              </button>
+            </div>
+          )}
 
           <nav className="flex-1 min-h-0 p-2 pt-1 overflow-y-auto">
             <ul className="space-y-0.5">
@@ -1334,18 +1361,6 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
       <div className="lg:pl-64 min-w-0 max-w-full overflow-x-hidden">
         <main className="pt-14 lg:pt-0 min-w-0 max-w-full overflow-x-auto">
-          <div className="px-4 lg:px-8 pt-3">
-            <button
-              type="button"
-              onClick={onBack}
-              disabled={!canGoBack}
-              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-              title={canGoBack ? "Return to previous page" : "No previous page"}
-            >
-              <ArrowLeft className="h-4 w-4" />
-              Back
-            </button>
-          </div>
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">
