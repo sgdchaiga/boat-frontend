@@ -3,7 +3,7 @@ import { randomUuid } from "../../../lib/randomUuid";
 import type { PaymentMethodCode } from "../../../lib/paymentMethod";
 import { toast } from "../../ui/use-toast";
 
-type PaymentLine = { id: string; method: PaymentMethodCode; amount: number; status: "pending" | "completed" };
+type PaymentLine = { id: string; method: PaymentMethodCode; amount: number; status: "pending" | "completed"; glAccountId?: string | null };
 type PosPaymentStatus = "pending" | "partial" | "completed" | "overpaid";
 
 const isPendingMethod = (method: PaymentMethodCode) => method === "mtn_mobile_money" || method === "airtel_money";
@@ -52,14 +52,24 @@ export function usePayments(total: number) {
     setPaymentLines((prev) => prev.filter((p) => p.id !== id));
   };
 
-  const updatePaymentLine = (id: string, patch: Partial<{ method: PaymentMethodCode; amount: number }>) => {
+  const updatePaymentLine = (id: string, patch: Partial<{ method: PaymentMethodCode; amount: number; glAccountId: string | null }>) => {
     setPaymentLines((prev) =>
       prev.map((line) => {
         if (line.id !== id) return line;
         const nextMethod = patch.method ?? line.method;
         const nextAmount = patch.amount ?? line.amount;
         const nextStatus: "pending" | "completed" = isPendingMethod(nextMethod) ? "pending" : "completed";
-        return { ...line, method: nextMethod, amount: Math.max(0, Math.round(nextAmount * 100) / 100), status: nextStatus };
+        return {
+          ...line,
+          ...patch,
+          method: nextMethod,
+          amount: Math.max(0, Math.round(nextAmount * 100) / 100),
+          status: nextStatus,
+          glAccountId:
+            nextMethod === "bank_transfer" || nextMethod === "wallet"
+              ? patch.glAccountId ?? line.glAccountId ?? null
+              : null,
+        };
       })
     );
   };

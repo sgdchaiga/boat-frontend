@@ -432,7 +432,26 @@ export async function fetchJournalGlSettings(organizationId: string): Promise<Jo
   const { data, error } = res;
   if (error || !data) return null;
 
-  return mapJournalGlRowToSettings(data as Parameters<typeof mapJournalGlRowToSettings>[0]);
+  const settings = mapJournalGlRowToSettings(data as Parameters<typeof mapJournalGlRowToSettings>[0]);
+
+  // Compatibility fallbacks above may load an older column set because another
+  // optional feature column is missing. Read manufacturing independently so
+  // those selections are not lost merely because, for example, Wallet is absent.
+  const { data: manufacturingData, error: manufacturingError } = await supabase
+    .from("journal_gl_settings")
+    .select("manufacturing_finished_goods_gl_account_id,manufacturing_wip_gl_account_id")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!manufacturingError && manufacturingData) {
+    const row = manufacturingData as {
+      manufacturing_finished_goods_gl_account_id?: string | null;
+      manufacturing_wip_gl_account_id?: string | null;
+    };
+    settings.manufacturing_finished_goods_id = row.manufacturing_finished_goods_gl_account_id ?? null;
+    settings.manufacturing_wip_id = row.manufacturing_wip_gl_account_id ?? null;
+  }
+
+  return settings;
 }
 
 export async function upsertJournalGlSettings(organizationId: string, settings: JournalAccountSettings): Promise<void> {
@@ -575,6 +594,30 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
   }
 
   if (error) throw error;
+
+  // Save manufacturing mappings independently. The compatibility retries above
+  // intentionally omit unsupported optional columns, but must not silently omit
+  // manufacturing mappings when some unrelated optional column is unavailable.
+  const { error: manufacturingError } = await supabase
+    .from("journal_gl_settings")
+    .update({
+      manufacturing_finished_goods_gl_account_id: settings.manufacturing_finished_goods_id,
+      manufacturing_wip_gl_account_id: settings.manufacturing_wip_id,
+      updated_at: updatedAt,
+    })
+    .eq("organization_id", organizationId);
+  if (manufacturingError) {
+    if (
+      settings.manufacturing_finished_goods_id ||
+      settings.manufacturing_wip_id ||
+      !isLikelyMissingSchoolManufacturingJournalCols(manufacturingError)
+    ) {
+      throw manufacturingError;
+    }
+    console.warn(
+      "[journal_gl_settings] Manufacturing mappings are unavailable. Apply migration 20260502104500_school_accounting_basis_manufacturing_journal.sql."
+    );
+  }
 }
 
 /** DB row if present, otherwise localStorage defaults. */

@@ -1,9 +1,10 @@
 import { randomUuid } from "./randomUuid";
 
 export interface OfflineRetailPayment {
-  method: "cash" | "card" | "bank_transfer" | "mtn_mobile_money" | "airtel_money";
+  method: "cash" | "card" | "bank_transfer" | "mtn_mobile_money" | "airtel_money" | "wallet";
   amount: number;
   status: "pending" | "completed";
+  glAccountId?: string | null;
   reference?: string | null;
   gatewayTransactionId?: string | number | null;
 }
@@ -22,6 +23,7 @@ export interface OfflineRetailLine {
 export interface OfflineRetailSale {
   id: string;
   createdAt: string;
+  saleAt?: string;
   organizationId: string | null;
   processedBy: string | null;
   customerId: string | null;

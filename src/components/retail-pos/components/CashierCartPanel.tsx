@@ -28,6 +28,8 @@ interface CashierCartPanelProps<TProduct extends ProductLike> {
   hasMoreProducts?: boolean;
   catalogLoadingMore?: boolean;
   onLoadMoreProducts?: () => void;
+  discountEnabled?: boolean;
+  setLineUnitPrice?: (productId: string, price: number) => void;
 }
 
 export function CashierCartPanel<TProduct extends ProductLike>({
@@ -46,6 +48,8 @@ export function CashierCartPanel<TProduct extends ProductLike>({
   hasMoreProducts = false,
   catalogLoadingMore = false,
   onLoadMoreProducts,
+  discountEnabled = false,
+  setLineUnitPrice,
 }: CashierCartPanelProps<TProduct>) {
   const showSearchResults = productSearch.trim().length > 0;
   const searchResultRows = filteredManualProducts.slice(0, 8);
@@ -145,6 +149,24 @@ export function CashierCartPanel<TProduct extends ProductLike>({
                 <p className="text-sm font-semibold text-slate-900 truncate">
                   {item.product.name} x{item.quantity}
                 </p>
+                {discountEnabled && setLineUnitPrice ? (
+                  <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
+                    Discounted unit price
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      defaultValue={getUnitPrice(item.product, item.quantity)}
+                      onBlur={(event) =>
+                        setLineUnitPrice(
+                          item.product.id,
+                          Math.min(Number(event.target.value), getUnitPrice(item.product, item.quantity))
+                        )
+                      }
+                      className="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-slate-800"
+                    />
+                  </label>
+                ) : null}
               </div>
               <span className="text-sm font-bold text-slate-900">{item.lineTotal.toFixed(0)}</span>
               <div className="flex items-center gap-1">

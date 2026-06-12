@@ -49,6 +49,7 @@ export function AdminHotelConfigPage() {
   const [billLogoUrl, setBillLogoUrl] = useState("");
   const [purchasesRequirePoApproval, setPurchasesRequirePoApproval] = useState(true);
   const [purchasesRequireBillApproval, setPurchasesRequireBillApproval] = useState(true);
+  const [treasurySpendMoneyApprovalEnabled, setTreasurySpendMoneyApprovalEnabled] = useState(true);
   const [workflowSaving, setWorkflowSaving] = useState(false);
   const [kitchenSelectOverride, setKitchenSelectOverride] = useState<string | null>(null);
   const [barSelectOverride, setBarSelectOverride] = useState<string | null>(null);
@@ -75,6 +76,13 @@ export function AdminHotelConfigPage() {
           .select("id,name,slug,address,logo_url,purchases_require_po_approval,purchases_require_bill_approval")
           .eq("id", organizationId)
           .maybeSingle();
+        const { data: treasuryWorkflow } = await supabase
+          .from("organization_permissions")
+          .select("allowed")
+          .eq("organization_id", organizationId)
+          .eq("role_key", "__org__")
+          .eq("permission_key", "treasury_spend_money_approval_enabled")
+          .maybeSingle();
         if (cancelled) return;
         if (error) {
           console.error(error);
@@ -91,6 +99,7 @@ export function AdminHotelConfigPage() {
           setBillLogoUrl((row?.logo_url ?? "").trim());
           setPurchasesRequirePoApproval((data as { purchases_require_po_approval?: boolean | null }).purchases_require_po_approval !== false);
           setPurchasesRequireBillApproval((data as { purchases_require_bill_approval?: boolean | null }).purchases_require_bill_approval !== false);
+          setTreasurySpendMoneyApprovalEnabled(treasuryWorkflow?.allowed !== false);
           setConfig(mergeHotelConfigWithOrg(base, row));
         }
       } catch (e) {
@@ -251,6 +260,21 @@ export function AdminHotelConfigPage() {
         p_require_bill_approval: purchasesRequireBillApproval,
       });
       if (error) throw error;
+      const { error: treasuryWorkflowError } = await supabase.from("organization_permissions").upsert({
+        organization_id: organizationId,
+        role_key: "__org__",
+        permission_key: "treasury_spend_money_approval_enabled",
+        allowed: treasurySpendMoneyApprovalEnabled,
+      }, { onConflict: "organization_id,role_key,permission_key" });
+      if (treasuryWorkflowError) throw treasuryWorkflowError;
+      if (!treasurySpendMoneyApprovalEnabled) {
+        const { error: queueError } = await supabase.from("treasury_requests").update({
+          status: "approved",
+          approved_by: user?.id ?? null,
+          approved_at: new Date().toISOString(),
+        }).eq("organization_id", organizationId).eq("source_type", "expense").eq("status", "pending_approval");
+        if (queueError) throw queueError;
+      }
       await refreshUserFlags();
       alert("Purchase workflow settings saved.");
     } catch (e) {
@@ -678,6 +702,20 @@ export function AdminHotelConfigPage() {
               Require purchase order approval before converting to GRN/bill
               <span className="block text-xs text-slate-500 mt-0.5">
                 When off, staff can convert a pending PO directly to a GRN/bill (PO is marked approved when converted).
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-slate-800 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={treasurySpendMoneyApprovalEnabled}
+              onChange={(e) => setTreasurySpendMoneyApprovalEnabled(e.target.checked)}
+            />
+            <span>
+              Require Treasury approval for Spend Money entries
+              <span className="block text-xs text-slate-500 mt-0.5">
+                When off, Spend Money entries skip the Treasury approval queue and go directly to approved fund disbursements.
               </span>
             </span>
           </label>

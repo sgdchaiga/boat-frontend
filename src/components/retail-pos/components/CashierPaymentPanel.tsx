@@ -15,6 +15,14 @@ interface PaymentLineLike {
   method: PaymentMethodCode;
   amount: number;
   status: "pending" | "completed";
+  glAccountId?: string | null;
+}
+
+interface ReceiptAccountLike {
+  id: string;
+  account_code: string;
+  account_name: string;
+  kind: "bank" | "wallet";
 }
 
 type PaymentFeedbackStatus = "idle" | "waiting" | "success" | "failed";
@@ -38,11 +46,12 @@ interface CashierPaymentPanelProps {
   canUseAdvancedPayments: boolean;
   clearPayments: () => void;
   addQuickPayment: (method: PaymentMethodCode) => void;
+  receiptAccounts: ReceiptAccountLike[];
   paymentAmountDraft: string;
   setPaymentAmountDraft: (value: string) => void;
   addPaymentLine: () => void;
   paymentLines: PaymentLineLike[];
-  updatePaymentLine: (id: string, patch: Partial<{ method: PaymentMethodCode; amount: number }>) => void;
+  updatePaymentLine: (id: string, patch: Partial<{ method: PaymentMethodCode; amount: number; glAccountId: string | null }>) => void;
   removePaymentLine: (id: string) => void;
   amountPaid: number;
   amountDue: number;
@@ -88,6 +97,7 @@ export function CashierPaymentPanel({
   canUseAdvancedPayments,
   clearPayments,
   addQuickPayment,
+  receiptAccounts,
   paymentAmountDraft,
   setPaymentAmountDraft,
   addPaymentLine,
@@ -210,7 +220,34 @@ export function CashierPaymentPanel({
         <button type="button" onClick={() => addQuickPayment("card")} className="rounded-lg border border-purple-300 bg-purple-50 text-purple-800 py-2.5 font-bold">
           CARD
         </button>
+        <button type="button" onClick={() => addQuickPayment("bank_transfer")} className="rounded-lg border border-blue-300 bg-blue-50 text-blue-800 py-2.5 font-bold">
+          BANK
+        </button>
+        <button type="button" onClick={() => addQuickPayment("wallet")} className="rounded-lg border border-teal-300 bg-teal-50 text-teal-800 py-2.5 font-bold">
+          WALLET
+        </button>
       </div>
+      {paymentLines.map((line) =>
+        line.method === "bank_transfer" || line.method === "wallet" ? (
+          <label key={`${line.id}-account`} className="mb-2 block text-xs font-medium text-slate-700">
+            {line.method === "bank_transfer" ? "Bank account" : "Wallet account"}
+            <select
+              value={line.glAccountId || ""}
+              onChange={(event) => updatePaymentLine(line.id, { glAccountId: event.target.value || null })}
+              className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="">Select {line.method === "bank_transfer" ? "bank" : "wallet"} account</option>
+              {receiptAccounts
+                .filter((account) => account.kind === (line.method === "bank_transfer" ? "bank" : "wallet"))
+                .map((account) => (
+                  <option key={account.id} value={account.id}>
+                    {account.account_code} {account.account_name}
+                  </option>
+                ))}
+            </select>
+          </label>
+        ) : null
+      )}
       {paymentMode === "simple" && (
         <button
           type="button"

@@ -180,13 +180,6 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   if (allowBudget) {
     settings.push({ name: "Budgeting", page: "accounting_budgeting" });
   }
-  if (allowManufacturing) {
-    settings.push(
-      { name: "Manufacturing", page: "manufacturing" },
-      { name: "Recipes / BOM", page: "manufacturing_bom" },
-      { name: "Production orders", page: "manufacturing_work_orders" }
-    );
-  }
 
   const frontDesk: NavItem | null = isHotelOrMixed
     ? {
@@ -242,6 +235,20 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   }
   core.push(
     { name: "Stock", icon: Package, children: stock },
+    ...(allowManufacturing
+      ? [{
+          name: "Manufacturing",
+          icon: Package,
+          children: [
+            { name: "Overview", page: "manufacturing" },
+            { name: "Recipes / BOM", page: "manufacturing_bom" },
+            { name: "Production orders", page: "manufacturing_work_orders" },
+            { name: "Production entries", page: "manufacturing_production_entries" },
+            { name: "Costing", page: "manufacturing_costing" },
+            { name: "Price lists", page: "manufacturing_price_lists" },
+          ],
+        } as NavItem]
+      : []),
     /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */
     { name: "Reports", icon: TrendingUp, page: getSimpleOrgDefaultReportRoute(businessType) },
     { name: "Settings", icon: Settings, children: settings }

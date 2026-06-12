@@ -139,6 +139,7 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
         output_unit: outputUnit,
         status: "Draft",
         materials,
+        materials_count: materials.length,
       };
 
       if (orgId) payload.organization_id = orgId;

@@ -1,7 +1,6 @@
 import { supabase } from "../../../lib/supabase";
 import { sumPosCogsByDept, createJournalForPosOrder, getDefaultGlAccounts } from "../../../lib/journal";
 import { resolveJournalAccountSettings } from "../../../lib/journalAccountSettings";
-import { businessTodayISO } from "../../../lib/timezone";
 import { insertPaymentWithMethodCompat } from "../../../lib/paymentMethod";
 import type { OfflineRetailLine, OfflineRetailPayment } from "../../../lib/retailOfflineQueue";
 import { desktopApi } from "../../../lib/desktopApi";
@@ -49,6 +48,7 @@ interface ProcessSaleOnlineArgs {
   } | null;
   /** Clinic dispensing workspace (`clinic_pos` route), not shop-floor retail POS. */
   clinicPos?: boolean;
+  saleAt: string;
 }
 
 export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
@@ -76,6 +76,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     onAtomicFallbackCount,
     clinicDispensing,
     clinicPos = false,
+    saleAt,
   } = args;
 
   const paymentSource = clinicPos || clinicDispensing?.clinicPatientId ? "pos_clinic" : "pos_retail";
@@ -105,6 +106,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       payment_status: paymentStatus,
       sale_type: saleType,
       credit_due_date: creditDueDate || null,
+      sale_at: saleAt,
       vat_enabled: posVatEnabled,
       vat_rate: posVatRate,
       created_by: userId,
@@ -166,25 +168,53 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     deptNameById
   );
   const acc = await getDefaultGlAccounts();
-  const receiptGl =
-    tenders[0]?.method === "cash"
+  const receiptGlForTender = (tender: OfflineRetailPayment) =>
+    tender.glAccountId ||
+    (tender.method === "cash"
       ? acc.cash
-      : tenders[0]?.method === "bank_transfer" || tenders[0]?.method === "card"
+      : tender.method === "bank_transfer" || tender.method === "card"
         ? acc.posBank ?? acc.cash
-        : tenders[0]?.method === "airtel_money"
+        : tender.method === "airtel_money"
           ? acc.posAirtelMoney ?? acc.posMtnMobileMoney ?? acc.cash
-          : acc.posMtnMobileMoney ?? acc.cash;
+          : acc.posMtnMobileMoney ?? acc.cash);
+  let journalReceiptRemaining = total;
+  const receiptLines = tenders
+    .filter((tender) => tender.status === "completed" && tender.amount > 0)
+    .map((tender) => {
+      const amount = Math.max(0, Math.min(tender.amount, journalReceiptRemaining));
+      journalReceiptRemaining = Math.max(0, journalReceiptRemaining - amount);
+      return {
+        glAccountId: receiptGlForTender(tender),
+        amount,
+        description: `Retail sale receipt - ${tender.method.replace(/_/g, " ")}`,
+      };
+    })
+    .filter((line) => line.amount > 0);
   const journalLines: Array<{ gl_account_id: string; debit: number; credit: number; line_description: string }> = [];
-  if (!receiptGl || !acc.revenue) {
+  if (receiptLines.some((line) => !line.glAccountId) || !acc.revenue) {
     throw new Error(
       "POS sale cannot be posted because the receipt or sales revenue GL account is missing. Configure Admin > Journal account settings."
     );
   }
   {
     journalLines.push(
-      { gl_account_id: receiptGl, debit: total, credit: 0, line_description: "Retail sale receipt" },
+      ...receiptLines.map((line) => ({
+        gl_account_id: line.glAccountId!,
+        debit: line.amount,
+        credit: 0,
+        line_description: line.description,
+      })),
       { gl_account_id: acc.revenue, debit: 0, credit: total, line_description: "Retail sales" }
     );
+    if (amountDue > 0.001) {
+      if (!acc.receivable) throw new Error("POS receivable GL account is missing.");
+      journalLines.push({
+        gl_account_id: acc.receivable,
+        debit: amountDue,
+        credit: 0,
+        line_description: "Retail sale outstanding balance",
+      });
+    }
     if ((cogsByDept.bar ?? 0) > 0 && acc.posCogsBar && acc.posInvBar) {
       journalLines.push(
         { gl_account_id: acc.posCogsBar, debit: Number(cogsByDept.bar), credit: 0, line_description: "Bar COGS" },
@@ -215,7 +245,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     department_id: line.departmentId,
     track_inventory: line.trackInventory,
   }));
-  const paymentPayload = tenders.map((t) => ({ method: t.method, amount: t.amount, status: t.status, reference: t.reference ?? null }));
+  const paymentPayload = tenders.map((t) => ({ method: t.method, amount: t.amount, status: t.status, reference: t.reference ?? null, gl_account_id: t.glAccountId ?? null }));
   const bumpCustomerCreditExposure = async () => {
     if (!saleCustomer.id || amountDue <= 0) return;
     const { data: cRow } = await supabase
@@ -245,7 +275,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       p_cashier_session_id: activeSessionId,
       p_lines: linePayload,
       p_payments: paymentPayload,
-      p_journal_entry_date: businessTodayISO(),
+      p_journal_entry_date: saleAt.slice(0, 10),
       p_journal_description: lines.map((i) => `${i.quantity}x ${i.name}`).join(", ") || "Retail POS sale",
       p_journal_lines: journalLines,
       p_clinic_patient_id: clinicDispensing?.clinicPatientId ?? null,
@@ -254,8 +284,13 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     if (!atomicErr) {
       await supabase
         .from("retail_sales")
-        .update({ sale_type: saleType, credit_due_date: creditDueDate || null })
+        .update({ sale_type: saleType, credit_due_date: creditDueDate || null, sale_at: saleAt })
         .eq("id", saleId);
+      await Promise.all([
+        supabase.from("payments").update({ paid_at: saleAt }).eq("transaction_id", saleId),
+        supabase.from("retail_sale_payments").update({ paid_at: saleAt }).eq("sale_id", saleId),
+        supabase.from("product_stock_movements").update({ movement_date: saleAt }).eq("source_type", "sale").eq("source_id", saleId),
+      ]);
       onAtomicRpcStatus("available");
       await bumpCustomerCreditExposure();
       runClearingHook();
@@ -287,6 +322,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     cashierSessionId: activeSessionId,
     clinicPatientId: clinicDispensing?.clinicPatientId ?? null,
     clinicDiagnosisSnapshot: clinicDispensing?.clinicDiagnosisSnapshot ?? null,
+    saleAt,
   });
   if (persistedNewSale) {
     runClearingHook();
@@ -314,7 +350,9 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
           cashier_session_id: activeSessionId,
           mobile_money_tx_ref: tender.reference ?? null,
           gateway_transaction_id: tender.gatewayTransactionId ?? null,
+          receipt_gl_account_id: tender.glAccountId ?? null,
         },
+        paid_at: saleAt,
       },
       tender.method
     );
@@ -343,7 +381,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         quantity_in: 0,
         quantity_out: i.quantity,
         unit_cost: i.costPrice,
-        note: "Retail POS sale",
+      note: "Retail POS sale",
+      movement_date: saleAt,
       })),
     ...consumableMoves,
   ];
@@ -356,8 +395,14 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
   const js = await resolveJournalAccountSettings(organizationId ?? undefined);
   const vatRate = js.default_vat_percent;
   const useVatJournal = posVatEnabled && vatRate != null && Number.isFinite(vatRate) && vatRate > 0;
-  const jr = await createJournalForPosOrder(saleId, total, description || "Retail POS sale", businessTodayISO(), staffRow?.id ?? null, {
+  const jr = await createJournalForPosOrder(saleId, total, description || "Retail POS sale", saleAt, staffRow?.id ?? null, {
     paymentMethod: tenders[0]?.method ?? "cash",
+    amountPaid,
+    receiptLines: receiptLines.map((line) => ({
+      glAccountId: line.glAccountId!,
+      amount: line.amount,
+      description: line.description,
+    })),
     cogsByDept,
     vatRatePercent: useVatJournal ? vatRate : undefined,
     organizationId: organizationId ?? null,

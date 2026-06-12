@@ -60,6 +60,7 @@ interface Product {
   barcode?: string | null;
   sku?: string | null;
   code?: string | null;
+  manufacturing_item_type?: string | null;
 }
 
 interface CartItem {
@@ -159,11 +160,22 @@ export function RetailPOSPage({
   const [atomicRpcStatus, setAtomicRpcStatus] = useState<"checking" | "available" | "unavailable">("checking");
   const [atomicFallbackCount, setAtomicFallbackCount] = useState(0);
   const [creditDueDate, setCreditDueDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [saleDate, setSaleDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [paymentFeedbackStatus, setPaymentFeedbackStatus] = useState<PaymentFeedbackStatus>("idle");
   const [paymentFeedbackMessage, setPaymentFeedbackMessage] = useState("");
+  const [receiptAccounts, setReceiptAccounts] = useState<Array<{
+    id: string;
+    account_code: string;
+    account_name: string;
+    kind: "bank" | "wallet";
+  }>>([]);
   const [retryPendingTenders, setRetryPendingTenders] = useState<Array<{ method: PaymentMethodCode; amount: number }>>([]);
   const [activePanelTab, setActivePanelTab] = useState<"payment" | "customer" | "notes">("payment");
   const [advancedModeEnabled, setAdvancedModeEnabled] = useState(true);
+  const [discountEnabled, setDiscountEnabled] = useState(false);
+  const [savingDiscountSetting, setSavingDiscountSetting] = useState(false);
+  const [useManufacturingPriceList, setUseManufacturingPriceList] = useState(true);
+  const [savingPricingSource, setSavingPricingSource] = useState(false);
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const useDesktopLocalMode = localAuthEnabled && desktopApi.isAvailable();
   const scanInputRef = useRef<HTMLInputElement | null>(null);
@@ -198,7 +210,11 @@ export function RetailPOSPage({
   const products = useMemo(
     () =>
       user?.business_type === "manufacturing"
-        ? catalogProducts.filter((product) => !!product.department_id && manufacturingSalesDepartmentIds.has(product.department_id))
+        ? catalogProducts.filter(
+            (product) =>
+              product.manufacturing_item_type === "finished_product" ||
+              (!!product.department_id && manufacturingSalesDepartmentIds.has(product.department_id))
+          )
         : catalogProducts,
     [catalogProducts, manufacturingSalesDepartmentIds, user?.business_type]
   );
@@ -206,7 +222,9 @@ export function RetailPOSPage({
     () =>
       user?.business_type === "manufacturing"
         ? catalogFilteredManualProducts.filter(
-            (product) => !!product.department_id && manufacturingSalesDepartmentIds.has(product.department_id)
+            (product) =>
+              product.manufacturing_item_type === "finished_product" ||
+              (!!product.department_id && manufacturingSalesDepartmentIds.has(product.department_id))
           )
         : catalogFilteredManualProducts,
     [catalogFilteredManualProducts, manufacturingSalesDepartmentIds, user?.business_type]
@@ -316,6 +334,95 @@ export function RetailPOSPage({
     };
     void loadAdvancedModeFlag();
   }, [orgId]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    void supabase
+      .from("organization_permissions")
+      .select("allowed")
+      .eq("organization_id", orgId)
+      .eq("role_key", "__org__")
+      .eq("permission_key", "retail_pos_discount_enabled")
+      .maybeSingle()
+      .then(({ data }) => setDiscountEnabled(data?.allowed === true));
+  }, [orgId]);
+
+  useEffect(() => {
+    if (!orgId || user?.business_type !== "manufacturing") {
+      setUseManufacturingPriceList(false);
+      return;
+    }
+    setUseManufacturingPriceList(true);
+    void supabase
+      .from("organization_permissions")
+      .select("allowed")
+      .eq("organization_id", orgId)
+      .eq("role_key", "__org__")
+      .eq("permission_key", "retail_pos_use_price_list")
+      .maybeSingle()
+      .then(({ data }) => setUseManufacturingPriceList(data?.allowed !== false));
+  }, [orgId, user?.business_type]);
+
+  const toggleDiscountSetting = async () => {
+    if (!orgId) return;
+    const role = String(user?.role || "").toLowerCase();
+    if (!user?.isSuperAdmin && !["admin", "manager", "supervisor"].includes(role)) {
+      alert("Only a manager can change the POS discount setting.");
+      return;
+    }
+    setSavingDiscountSetting(true);
+    const next = !discountEnabled;
+    const { data, error } = await supabase
+      .from("organization_permissions")
+      .select("id")
+      .eq("organization_id", orgId)
+      .eq("role_key", "__org__")
+      .eq("permission_key", "retail_pos_discount_enabled")
+      .maybeSingle();
+    const saveError = error
+      ? error
+      : data?.id
+        ? (await supabase.from("organization_permissions").update({ allowed: next, updated_at: new Date().toISOString() }).eq("id", data.id)).error
+        : (await supabase.from("organization_permissions").insert({
+            organization_id: orgId,
+            role_key: "__org__",
+            permission_key: "retail_pos_discount_enabled",
+            allowed: next,
+          })).error;
+    if (saveError) alert(`Could not update POS discounts: ${saveError.message}`);
+    else setDiscountEnabled(next);
+    setSavingDiscountSetting(false);
+  };
+
+  const setPricingSource = async (usePriceList: boolean) => {
+    if (!orgId || usePriceList === useManufacturingPriceList) return;
+    const role = String(user?.role || "").toLowerCase();
+    if (!user?.isSuperAdmin && !["admin", "manager", "supervisor"].includes(role)) {
+      alert("Only a manager can change the POS pricing source.");
+      return;
+    }
+    setSavingPricingSource(true);
+    const { data, error } = await supabase
+      .from("organization_permissions")
+      .select("id")
+      .eq("organization_id", orgId)
+      .eq("role_key", "__org__")
+      .eq("permission_key", "retail_pos_use_price_list")
+      .maybeSingle();
+    const saveError = error
+      ? error
+      : data?.id
+        ? (await supabase.from("organization_permissions").update({ allowed: usePriceList, updated_at: new Date().toISOString() }).eq("id", data.id)).error
+        : (await supabase.from("organization_permissions").insert({
+            organization_id: orgId,
+            role_key: "__org__",
+            permission_key: "retail_pos_use_price_list",
+            allowed: usePriceList,
+          })).error;
+    if (saveError) alert(`Could not update POS pricing source: ${saveError.message}`);
+    else setUseManufacturingPriceList(usePriceList);
+    setSavingPricingSource(false);
+  };
 
   useEffect(() => {
     const loadReceiptOrgHeader = async () => {
@@ -605,21 +712,23 @@ export function RetailPOSPage({
   }, [products, useDesktopLocalMode]);
 
   const getUnitPrice = (product: Product, quantity = 1) => {
-    const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId);
-    const retailTypeId = manufacturingCustomerTypes.find(
-      (type) => type.name.trim().toLowerCase() === "retail"
-    )?.id;
-    const customerTypeId = selectedCustomer?.manufacturing_customer_type_id || retailTypeId;
-    if (customerTypeId) {
-      const tier = manufacturingPrices
-        .filter(
-          (row) =>
-            row.product_id === product.id &&
-            row.customer_type_id === customerTypeId &&
-            Number(row.min_qty) <= quantity
-        )
-        .sort((a, b) => Number(b.min_qty) - Number(a.min_qty))[0];
-      if (tier) return Number(tier.price);
+    if (user?.business_type === "manufacturing" && useManufacturingPriceList) {
+      const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId);
+      const retailTypeId = manufacturingCustomerTypes.find(
+        (type) => type.name.trim().toLowerCase() === "retail"
+      )?.id;
+      const customerTypeId = selectedCustomer?.manufacturing_customer_type_id || retailTypeId;
+      if (customerTypeId) {
+        const tier = manufacturingPrices
+          .filter(
+            (row) =>
+              row.product_id === product.id &&
+              row.customer_type_id === customerTypeId &&
+              Number(row.min_qty) <= quantity
+          )
+          .sort((a, b) => Number(b.min_qty) - Number(a.min_qty))[0];
+        if (tier) return Number(tier.price);
+      }
     }
     return getProductPrice(product, { quantity });
   };
@@ -656,7 +765,7 @@ export function RetailPOSPage({
       }
       return changed ? next : previous;
     });
-  }, [selectedCustomerId, customers, manufacturingPrices, manufacturingCustomerTypes, setCartByProductId]);
+  }, [selectedCustomerId, customers, manufacturingPrices, manufacturingCustomerTypes, useManufacturingPriceList, user?.business_type, setCartByProductId]);
   const addToCart = (product: Product) => {
     addToCartBase(product);
     setQuickPickStats((prev) => {
@@ -732,6 +841,38 @@ export function RetailPOSPage({
     updatePaymentLine,
     resetPayments,
   } = usePayments(total);
+
+  useEffect(() => {
+    if (!orgId || useDesktopLocalMode) {
+      setReceiptAccounts([]);
+      return;
+    }
+    void supabase
+      .from("gl_accounts")
+      .select("id,account_code,account_name,account_type")
+      .eq("organization_id", orgId)
+      .eq("account_type", "asset")
+      .order("account_code")
+      .then(({ data }: { data: unknown[] | null }) => {
+        const rows = (data || []) as Array<{ id: string; account_code: string; account_name: string }>;
+        const next: Array<{
+          id: string;
+          account_code: string;
+          account_name: string;
+          kind: "bank" | "wallet";
+        }> = [];
+        for (const account of rows) {
+          const label = `${account.account_code} ${account.account_name}`.toLowerCase();
+          if (/(wallet|mobile money|momo|airtel|mtn)/.test(label)) {
+            next.push({ ...account, kind: "wallet" });
+          } else if (!/(inventory|stock|receivable|prepaid|fixed asset|property|equipment|wip|work in progress)/.test(label)) {
+            // Bank names often omit the word "bank" (for example, just the institution name).
+            next.push({ ...account, kind: "bank" });
+          }
+        }
+        setReceiptAccounts(next);
+      });
+  }, [orgId, useDesktopLocalMode]);
   const saleType: "cash" | "credit" | "mixed" =
     amountPaid <= 0 ? "credit" : amountPaid < total ? "mixed" : "cash";
   const canUseAdvancedPayments =
@@ -903,7 +1044,7 @@ export function RetailPOSPage({
   const resetCheckoutUI = (saleId: string) => {
     setReceipt({
       saleId,
-      paidAt: new Date().toISOString(),
+      paidAt: `${saleDate}T12:00:00`,
       paymentMethod: paymentLines[0]?.method ?? "cash",
       total,
       lines: cart.map((i) => ({
@@ -919,6 +1060,7 @@ export function RetailPOSPage({
     resetPayments();
     setScanCode("");
     setCreditDueDate(new Date().toISOString().slice(0, 10));
+    setSaleDate(new Date().toISOString().slice(0, 10));
   };
 
   const resolveCheckoutPhone = (shouldUseStkPush: boolean) => {
@@ -944,6 +1086,24 @@ export function RetailPOSPage({
 
   const prepareCheckout = () => {
     if (!validateCheckout({ readOnly, hasActiveSession: Boolean(activeSession), cartCount: cart.length, paymentLineCount: paymentLines.length })) return null;
+    const missingReceiptAccount = paymentLines.find(
+      (payment) => (payment.method === "bank_transfer" || payment.method === "wallet") && !payment.glAccountId
+    );
+    if (missingReceiptAccount) {
+      toast({
+        title: "Select receipt account",
+        description: `Choose the ${missingReceiptAccount.method === "bank_transfer" ? "bank" : "wallet"} account receiving this payment.`,
+      });
+      return null;
+    }
+    if (!saleDate) {
+      toast({ title: "Transaction date required", description: "Select the POS transaction date." });
+      return null;
+    }
+    if (saleDate > new Date().toISOString().slice(0, 10)) {
+      toast({ title: "Invalid transaction date", description: "POS transactions cannot be dated in the future." });
+      return null;
+    }
     const shouldUseStkPush = hasMobileTender && stkPushEnabled;
     const checkoutPhone = resolveCheckoutPhone(shouldUseStkPush);
     if (shouldUseStkPush && !checkoutPhone) return null;
@@ -953,10 +1113,11 @@ export function RetailPOSPage({
     return {
       saleId: randomUuid(),
       lines: buildOfflineLines(),
-      tenders: paymentLines.map((p) => ({ id: p.id, method: p.method, amount: p.amount, status: p.status }) as CheckoutTender),
+      tenders: paymentLines.map((p) => ({ id: p.id, method: p.method, amount: p.amount, status: p.status, glAccountId: p.glAccountId }) as CheckoutTender),
       saleCustomer: { id: selectedCustomerId || null, name: customerNameDraft.trim() || null, phone: customerPhoneDraft.trim() || null } as SaleCustomerContext,
       shouldUseStkPush,
       checkoutPhone: checkoutPhone || "",
+      saleAt: `${saleDate}T12:00:00`,
     };
   };
 
@@ -1018,6 +1179,7 @@ export function RetailPOSPage({
       onAtomicFallbackCount: setAtomicFallbackCount,
       clinicPos: leftPanelMode === "clinic_workspace",
       clinicDispensing: clinicDispensingForCheckout,
+      saleAt: ctx.saleAt,
     };
     if (ctx.shouldUseStkPush) {
       await Promise.race([processSaleOnline(payload), new Promise((_, reject) => window.setTimeout(() => reject(new Error("payment_timeout")), 60_000))]);
@@ -1041,6 +1203,7 @@ export function RetailPOSPage({
       lines: ctx.lines,
       vatEnabled: posVatEnabled,
       vatRate: posVatRate,
+      saleAt: ctx.saleAt,
     });
     refreshOfflineQueueCount();
     toast({ title: L.offlineDispensingQueuedTitle, description: L.offlineDispensingQueuedBody });
@@ -1142,6 +1305,7 @@ export function RetailPOSPage({
           onAtomicFallbackCount: setAtomicFallbackCount,
           clinicPos: leftPanelMode === "clinic_workspace",
           clinicDispensing: clinicDispensingForCheckout,
+          saleAt: row.saleAt || row.createdAt,
         });
         removeOfflineRetailSale(row.id);
       }
@@ -1393,6 +1557,16 @@ export function RetailPOSPage({
           >
             Manager Mode
           </button>
+          <label className="flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700">
+            Transaction date
+            <input
+              type="date"
+              value={saleDate}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(event) => setSaleDate(event.target.value)}
+              className="rounded border border-slate-200 px-2 py-1 text-sm font-normal"
+            />
+          </label>
         </div>
         <div className="grid grid-cols-3 gap-1">
           <button
@@ -1474,6 +1648,8 @@ export function RetailPOSPage({
             hasMoreProducts={hasMoreProducts}
             catalogLoadingMore={catalogLoadingMore}
             onLoadMoreProducts={() => void loadMoreProducts()}
+            discountEnabled={discountEnabled}
+            setLineUnitPrice={setLineUnitPrice}
           />
         )}
         <div className={leftPanelMode === "clinic_workspace" ? "min-h-0 h-full min-w-0" : "lg:col-span-3 min-h-0 h-full min-w-0"}>
@@ -1496,6 +1672,7 @@ export function RetailPOSPage({
           canUseAdvancedPayments={canUseAdvancedPayments}
           clearPayments={resetPayments}
           addQuickPayment={addQuickPayment}
+          receiptAccounts={receiptAccounts}
           paymentAmountDraft={paymentAmountDraft}
           setPaymentAmountDraft={setPaymentAmountDraft}
           addPaymentLine={addPaymentLine}
@@ -1578,6 +1755,58 @@ export function RetailPOSPage({
             <p className="text-sm text-slate-500">VAT breakdown shows when cart has items and VAT is enabled.</p>
           )}
         </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-4">
+          <h2 className="text-lg font-bold text-slate-900 mb-3">Discounts</h2>
+          <label className="flex items-center gap-2 text-sm text-slate-800 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={discountEnabled}
+              onChange={() => void toggleDiscountSetting()}
+              disabled={savingDiscountSetting}
+              className="h-4 w-4 rounded border-slate-300"
+            />
+            <span>Allow cashiers to enter discounted unit prices</span>
+          </label>
+          <p className="mt-2 text-xs text-slate-500">This organization-wide setting can only be changed by a manager.</p>
+        </div>
+
+        {user?.business_type === "manufacturing" && (
+          <div className="bg-white rounded-xl border border-slate-200 p-4">
+            <h2 className="text-lg font-bold text-slate-900 mb-3">Pricing Source</h2>
+            <div className="space-y-2 text-sm text-slate-800">
+              <label className="flex items-start gap-2 cursor-pointer select-none">
+                <input
+                  type="radio"
+                  name="retail-pos-pricing-source"
+                  checked={useManufacturingPriceList}
+                  onChange={() => void setPricingSource(true)}
+                  disabled={savingPricingSource}
+                  className="mt-0.5 h-4 w-4 border-slate-300"
+                />
+                <span>
+                  <span className="block font-medium">Use customer price lists</span>
+                  <span className="block text-xs text-slate-500">Uses the matching customer and quantity tier, then falls back to the item price.</span>
+                </span>
+              </label>
+              <label className="flex items-start gap-2 cursor-pointer select-none">
+                <input
+                  type="radio"
+                  name="retail-pos-pricing-source"
+                  checked={!useManufacturingPriceList}
+                  onChange={() => void setPricingSource(false)}
+                  disabled={savingPricingSource}
+                  className="mt-0.5 h-4 w-4 border-slate-300"
+                />
+                <span>
+                  <span className="block font-medium">Use item sales prices</span>
+                  <span className="block text-xs text-slate-500">Ignores manufacturing customer price lists in POS.</span>
+                </span>
+              </label>
+            </div>
+            <p className="mt-2 text-xs text-slate-500">This organization-wide setting can only be changed by a manager.</p>
+          </div>
+        )}
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
           <h2 className="text-lg font-bold text-slate-900 mb-3">Sessions & Insights</h2>

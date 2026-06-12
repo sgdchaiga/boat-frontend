@@ -22,6 +22,7 @@ interface ProductCatalogItem {
   barcode?: string | null;
   sku?: string | null;
   code?: string | null;
+  manufacturing_item_type?: string | null;
 }
 
 export function useProductCatalog<TProduct extends ProductCatalogItem>(useDesktopLocalMode: boolean, orgId?: string) {
@@ -75,6 +76,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
                 barcode: row.barcode == null ? null : String(row.barcode),
                 sku: row.sku == null ? null : String(row.sku),
                 code: row.code == null ? null : String(row.code),
+                manufacturing_item_type: row.manufacturing_item_type == null ? null : String(row.manufacturing_item_type),
               } as TProduct;
             })
             .filter((row): row is TProduct => Boolean(row));
@@ -124,7 +126,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
         }
         const rich = await supabase
           .from("products")
-          .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code")
+          .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code,manufacturing_item_type")
           .eq("active", true)
           .order("name")
           .range(0, ONLINE_INITIAL_FETCH - 1);
@@ -187,7 +189,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
     try {
       const { data, error } = await supabase
         .from("products")
-        .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code")
+        .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code,manufacturing_item_type")
         .eq("active", true)
         .order("name")
         .range(productOffset, productOffset + ONLINE_LOAD_MORE_CHUNK - 1);
@@ -228,7 +230,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
       try {
         const rich = await supabase
           .from("products")
-          .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code")
+          .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code,manufacturing_item_type")
           .eq("active", true)
           .or(`name.ilike.%${q}%,barcode.ilike.%${q}%,sku.ilike.%${q}%,code.ilike.%${q}%`)
           .order("name")

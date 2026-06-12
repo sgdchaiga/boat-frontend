@@ -12,6 +12,7 @@ import {
 } from "../lib/paymentMethod";
 import { PageNotes } from "./common/PageNotes";
 import { getPosLabels } from "../lib/posExperience";
+import { syncRetailPosOrderAfterEdit } from "../lib/retailPosOrderSync";
 
 type SaleLine = {
   id: string;
@@ -315,6 +316,8 @@ export function RetailPosOrdersPage() {
         const { error: insErr } = await supabase.from("retail_sale_lines").insert(nextLines);
         if (insErr) throw insErr;
       }
+      const sync = await syncRetailPosOrderAfterEdit(editingOrderId, saleAt, user?.id ?? null, orgId);
+      if (!sync.ok) throw new Error(`Order saved, but accounting synchronization failed: ${sync.error}`);
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderLines([]);

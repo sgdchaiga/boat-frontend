@@ -324,15 +324,17 @@ export async function createJournalEntry(params: CreateJournalEntryParams): Prom
 /** Retires journals for a source transaction before reposting it. */
 export async function deleteJournalEntryByReference(
   referenceType: JournalReferenceType,
-  referenceId: string
+  referenceId: string,
+  requestedOrganizationId?: string | null
 ): Promise<{ ok: true } | { ok: false; error: string }> {
-  const orgId = await resolveOrganizationId();
+  const orgId = requestedOrganizationId ?? (await resolveOrganizationId());
   const { data: existing, error: existingError } = await filterByOrganizationId(
     supabase
       .from("journal_entries")
       .select("id")
       .eq("reference_type", referenceType)
       .eq("reference_id", referenceId)
+      .eq("is_posted", true)
       .eq("is_deleted", false),
     orgId,
     false
@@ -373,6 +375,67 @@ export async function deleteJournalEntryByReference(
   );
   if (error) return { ok: false, error: error.message };
   return { ok: true };
+}
+
+/** Creates auditable reversal journals for every active journal posted against a source transaction. */
+export async function reverseJournalEntriesByReference(
+  referenceType: JournalReferenceType,
+  referenceId: string,
+  createdBy: string | null,
+  reason: string
+): Promise<{ ok: true; reversed: number } | { ok: false; error: string }> {
+  const orgId = await resolveOrganizationId();
+  const { data: entries, error: entryError } = await filterByOrganizationId(
+    supabase
+      .from("journal_entries")
+      .select("id,entry_date,description")
+      .eq("reference_type", referenceType)
+      .eq("reference_id", referenceId)
+      .eq("is_deleted", false),
+    orgId,
+    false
+  );
+  if (entryError) return { ok: false, error: entryError.message };
+
+  let reversed = 0;
+  for (const entry of (entries || []) as Array<{ id: string; entry_date: string; description: string }>) {
+    const reversalQuery = filterByOrganizationId(
+      supabase
+        .from("journal_entries")
+        .select("id")
+        .eq("reference_type", "manual")
+        .eq("reference_id", entry.id)
+        .eq("is_deleted", false),
+      orgId,
+      false
+    );
+    const { data: existingReversal, error: reversalCheckError } = await reversalQuery.maybeSingle();
+    if (reversalCheckError) return { ok: false, error: reversalCheckError.message };
+    if (existingReversal) continue;
+
+    const { data: lines, error: lineError } = await supabase
+      .from("journal_entry_lines")
+      .select("gl_account_id,debit,credit,line_description")
+      .eq("journal_entry_id", entry.id);
+    if (lineError) return { ok: false, error: lineError.message };
+    const result = await createJournalEntry({
+      entry_date: businessTodayISO(),
+      description: `Reversal: ${entry.description} (${reason})`,
+      reference_type: "manual",
+      reference_id: entry.id,
+      created_by: createdBy,
+      organizationId: orgId,
+      lines: ((lines || []) as JournalLine[]).map((line) => ({
+        gl_account_id: line.gl_account_id,
+        debit: Number(line.credit || 0),
+        credit: Number(line.debit || 0),
+        line_description: `Reversal: ${line.line_description || entry.description}`,
+      })),
+    });
+    if (!result.ok) return result;
+    reversed += 1;
+  }
+  return { ok: true, reversed };
 }
 
 async function resolveFixedAssetGlSlots(categoryId: string | null): Promise<{
@@ -751,8 +814,11 @@ export type RoomJournalSyncResult =
   | { ok: false; error: string };
 
 /** Rebuild a room-charge journal from its billing source row. */
-export async function syncRoomChargeJournal(billingId: string): Promise<RoomJournalSyncResult> {
-  const organizationId = await resolveOrganizationId();
+export async function syncRoomChargeJournal(
+  billingId: string,
+  requestedOrganizationId?: string | null
+): Promise<RoomJournalSyncResult> {
+  const organizationId = requestedOrganizationId ?? (await resolveOrganizationId());
   if (!organizationId) return { ok: false, error: "Sign in under an organization before syncing room journals." };
   const {
     data: { user },
@@ -770,7 +836,7 @@ export async function syncRoomChargeJournal(billingId: string): Promise<RoomJour
   );
   if (error) return { ok: false, error: error.message };
 
-  const remove = await deleteJournalEntryByReference("room_charge", billingId);
+  const remove = await deleteJournalEntryByReference("room_charge", billingId, organizationId);
   if (!remove.ok) return remove;
   const row = data as {
     id: string;
@@ -799,9 +865,10 @@ export interface RoomJournalRepairResult {
 
 /** Rebuild every room-charge journal from billing so GL room revenue matches room billing. */
 export async function repairRoomChargeJournals(options?: {
+  organizationId?: string | null;
   onProgress?: (processed: number, total: number) => void;
 }): Promise<RoomJournalRepairResult> {
-  const organizationId = await resolveOrganizationId();
+  const organizationId = options?.organizationId ?? (await resolveOrganizationId());
   if (!organizationId) throw new Error("Sign in under an organization before repairing room journals.");
 
   const { data, error } = await filterByOrganizationId(
@@ -819,7 +886,7 @@ export async function repairRoomChargeJournals(options?: {
   const result: RoomJournalRepairResult = { repaired: 0, errors: [] };
   options?.onProgress?.(0, rows.length);
   for (let index = 0; index < rows.length; index++) {
-    const sync = await syncRoomChargeJournal(rows[index].id);
+    const sync = await syncRoomChargeJournal(rows[index].id, organizationId);
     if (sync.ok && sync.journalId) result.repaired += 1;
     else if (!sync.ok) result.errors.push(`Billing ${rows[index].id}: ${sync.error}`);
     options?.onProgress?.(index + 1, rows.length);
@@ -985,16 +1052,22 @@ export async function repairDuplicateExpenseJournals(options: {
   toDate: string;
 }): Promise<DuplicateExpenseJournalRepairResult> {
   const result: DuplicateExpenseJournalRepairResult = { matched: 0, removed: 0, amount: 0, errors: [] };
+  const organizationId = await resolveOrganizationId();
+  if (!organizationId) throw new Error("Sign in under an organization before repairing duplicate expense journals.");
   const accounts = await getDefaultGlAccounts();
   if (!accounts.cash) throw new Error("Cash GL account is not configured.");
 
-  const { data, error } = await supabase
-    .from("journal_entries")
-    .select("id,entry_date,reference_type,journal_entry_lines(gl_account_id,debit,credit)")
-    .in("reference_type", ["expense", "vendor_payment"])
-    .eq("is_deleted", false)
-    .gte("entry_date", options.fromDate)
-    .lte("entry_date", options.toDate);
+  const { data, error } = await filterByOrganizationId(
+    supabase
+      .from("journal_entries")
+      .select("id,entry_date,reference_type,journal_entry_lines(gl_account_id,debit,credit)")
+      .in("reference_type", ["expense", "vendor_payment"])
+      .eq("is_deleted", false)
+      .gte("entry_date", options.fromDate)
+      .lte("entry_date", options.toDate),
+    organizationId,
+    false
+  );
   if (error) throw error;
 
   const cashCredits = (entry: any) =>
@@ -1215,7 +1288,8 @@ export async function createJournalForManufacturingCostingEntry(
 ): Promise<JournalPostResult> {
   const amt = Math.round(totalCost * 100) / 100;
   if (amt <= 0) return { ok: false, error: "Manufacturing journal skipped: total cost is zero." };
-  await deleteJournalEntryByReference("manufacturing_costing", entryId);
+  const removed = await deleteJournalEntryByReference("manufacturing_costing", entryId);
+  if (!removed.ok) return removed;
   const s = await resolveJournalAccountSettings(organizationId);
   const fg = s.manufacturing_finished_goods_id;
   const wip = s.manufacturing_wip_id;
@@ -1377,6 +1451,8 @@ export async function createJournalForPosOrder(
   createdBy: string | null,
   options?: {
     paymentMethod?: PosPaymentMethod;
+    /** Split receipt debits, for example when a sale is paid into different bank or wallet GL accounts. */
+    receiptLines?: Array<{ glAccountId: string; amount: number; description?: string }>;
     /** Completed payments received against this order. The unpaid balance posts to receivables. */
     amountPaid?: number;
     cogsByDept?: PosCogsByDept;
@@ -1398,6 +1474,9 @@ export async function createJournalForPosOrder(
     ? o.receiptGlAccountId
     : resolvePosReceiptGlAccountId(acc, options?.paymentMethod);
   const amountPaid = Math.min(roundMoney(Math.max(0, Number(options?.amountPaid ?? total))), roundMoney(total));
+  const receiptLines = (options?.receiptLines || [])
+    .map((line) => ({ ...line, amount: roundMoney(line.amount) }))
+    .filter((line) => line.glAccountId && line.amount > 0.001);
   const receivableAmount = roundMoney(total - amountPaid);
   const revenueId = o?.revenueGlAccountId?.trim() ? o.revenueGlAccountId : acc.revenue;
   const salesByDept = options?.salesByDept;
@@ -1410,7 +1489,7 @@ export async function createJournalForPosOrder(
   const useRevenueSplit =
     !o?.revenueGlAccountId?.trim() && ((!!salesByDepartment.length && totalSalesByDepartment > 0.001) || (!!salesByDept && totalSales > 0.001));
 
-  if (amountPaid > 0.001 && !receiptGl) {
+  if (amountPaid > 0.001 && receiptLines.length === 0 && !receiptGl) {
     return {
       ok: false,
       error:
@@ -1468,7 +1547,16 @@ export async function createJournalForPosOrder(
   }
 
   const lines: JournalLine[] = [];
-  if (amountPaid > 0.001 && receiptGl) {
+  if (receiptLines.length > 0) {
+    for (const line of receiptLines) {
+      lines.push({
+        gl_account_id: line.glAccountId,
+        debit: line.amount,
+        credit: 0,
+        line_description: line.description || `${description} - received`,
+      });
+    }
+  } else if (amountPaid > 0.001 && receiptGl) {
     lines.push({ gl_account_id: receiptGl, debit: amountPaid, credit: 0, line_description: `${description} - received` });
   }
   if (receivableAmount > 0.001 && acc.receivable) {
@@ -2056,13 +2144,14 @@ export async function reconcileInventoryLedgersToStockSummary(
 
 /** Re-sync every historical Hotel POS order for the signed-in organization. */
 export async function repairHotelPosOrderJournals(options?: {
+  organizationId?: string | null;
   onProgress?: (processed: number, total: number) => void;
   journalOrOrder?: string | null;
   departmentId?: string | null;
   fromDate?: string | null;
   toDate?: string | null;
 }): Promise<PosJournalRepairResult> {
-  const organizationId = await resolveOrganizationId();
+  const organizationId = options?.organizationId ?? (await resolveOrganizationId());
   if (!organizationId) throw new Error("Sign in under an organization before repairing POS journals.");
   const {
     data: { user },
@@ -2242,6 +2331,8 @@ export type VendorPaymentJournalAllocation = {
   payableAmount: number;
   /** Remainder posted to unearned income (liability) */
   unearnedExcessAmount: number;
+  /** Cash, bank, wallet, or other asset account funding the payment. */
+  sourceFundsGlAccountId?: string | null;
 };
 
 export async function createJournalForVendorPayment(
@@ -2253,7 +2344,8 @@ export async function createJournalForVendorPayment(
 ): Promise<JournalPostResult> {
   const acc = await getDefaultGlAccounts();
   const date = toBusinessDateString(paymentDate);
-  if (!acc.cash) {
+  const sourceFundsGlAccountId = allocation?.sourceFundsGlAccountId || acc.cash;
+  if (!sourceFundsGlAccountId) {
     return {
       ok: false,
       error: "Missing GL account for cash. Configure Accounting → Journal account settings.",
@@ -2274,7 +2366,7 @@ export async function createJournalForVendorPayment(
       reference_id: paymentId,
       lines: [
         { gl_account_id: acc.payable, debit: amount, credit: 0, line_description: "Payable" },
-        { gl_account_id: acc.cash, debit: 0, credit: amount, line_description: "Cash" },
+        { gl_account_id: sourceFundsGlAccountId, debit: 0, credit: amount, line_description: "Source of funds" },
       ],
       created_by: createdBy,
     });
@@ -2319,7 +2411,7 @@ export async function createJournalForVendorPayment(
       line_description: "Unearned income (vendor excess)",
     });
   }
-  lines.push({ gl_account_id: acc.cash, debit: 0, credit: amount, line_description: "Cash" });
+  lines.push({ gl_account_id: sourceFundsGlAccountId, debit: 0, credit: amount, line_description: "Source of funds" });
 
   if (lines.length < 2) {
     return { ok: false, error: "Invalid payment allocation." };
@@ -2544,6 +2636,7 @@ export interface BackfillResult {
   vendor_payment: number;
   vendor_credit: number;
   expense: number;
+  manufacturing_costing: number;
   errors: string[];
 }
 
@@ -2557,6 +2650,7 @@ export interface BackfillProgress {
     | "vendor_credit"
     | "expense"
     | "pos"
+    | "manufacturing_costing"
     | "done";
   phaseLabel: string;
   processed: number;
@@ -2568,8 +2662,8 @@ export interface BackfillProgress {
  * Create journal entries for all existing transactions that don't already have one.
  * Call this once to backfill the journal_entries table from billing, payments, POS, bills, vendor_payments, expenses.
  */
-async function loadJournalReferenceIdsByType(): Promise<Record<string, Set<string>>> {
-  const orgId = await resolveOrganizationId();
+async function loadJournalReferenceIdsByType(requestedOrganizationId?: string | null): Promise<Record<string, Set<string>>> {
+  const orgId = requestedOrganizationId ?? (await resolveOrganizationId());
   const refIds: Record<string, Set<string>> = {};
   const pageSize = 1000;
   let from = 0;
@@ -2602,9 +2696,13 @@ async function loadJournalReferenceIdsByType(): Promise<Record<string, Set<strin
 
 export async function backfillJournalEntries(options?: {
   dryRun?: boolean;
+  businessType?: string | null;
+  repairExisting?: boolean;
+  organizationId?: string | null;
   onProgress?: (progress: BackfillProgress) => void;
 }): Promise<BackfillResult> {
   const dryRun = !!options?.dryRun;
+  const isManufacturing = String(options?.businessType || "").toLowerCase() === "manufacturing";
   const reportProgress = (phase: BackfillProgress["phase"], phaseLabel: string, processed: number, total: number) => {
     const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 100;
     options?.onProgress?.({ phase, phaseLabel, processed, total, percent });
@@ -2617,6 +2715,7 @@ export async function backfillJournalEntries(options?: {
     vendor_payment: 0,
     vendor_credit: 0,
     expense: 0,
+    manufacturing_costing: 0,
     errors: [],
   };
 
@@ -2632,9 +2731,14 @@ export async function backfillJournalEntries(options?: {
     );
     return result;
   }
+  const organizationId = options?.organizationId ?? (await resolveOrganizationId());
+  if (!organizationId) {
+    result.errors.push("Sign in under an organization before repairing organization journals.");
+    return result;
+  }
 
   reportProgress("loading-existing", "Loading existing journal references", 0, 1);
-  const refIds = await loadJournalReferenceIdsByType();
+  const refIds = await loadJournalReferenceIdsByType(organizationId);
   reportProgress("loading-existing", "Loaded existing references", 1, 1);
 
   const has = (type: string, id: string) => refIds[type]?.has(id) ?? false;
@@ -2644,7 +2748,14 @@ export async function backfillJournalEntries(options?: {
   };
 
   // Room charges (billing)
-  const { data: billings } = await supabase.from("billing").select("id, amount, description, charged_at, created_by");
+  const { data: billings, error: billingsError } = isManufacturing
+    ? { data: [], error: null }
+    : await filterByOrganizationId(
+        supabase.from("billing").select("id, amount, description, charged_at, created_by"),
+        organizationId,
+        false
+      );
+  if (billingsError) result.errors.push(`Room billing could not be loaded: ${billingsError.message}`);
   const billingsList = billings || [];
   reportProgress("room_charge", "Backfilling room charges", 0, billingsList.length);
   let billingsProcessed = 0;
@@ -2658,7 +2769,9 @@ export async function backfillJournalEntries(options?: {
           Number(row.amount),
           row.description || "Room charge",
           row.charged_at || new Date().toISOString(),
-          backfillCreatedBy
+          backfillCreatedBy,
+          undefined,
+          organizationId
         );
     if (jr.ok) {
       add("room_charge", row.id);
@@ -2671,11 +2784,15 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Payments
-  const { data: payments } = await supabase
-    .from("payments")
-    .select(
-      "id,amount,paid_at,processed_by,payment_status,transaction_id,stay_id,property_customer_id,retail_customer_id,invoice_allocations,payment_source"
-    );
+  const { data: payments } = await filterByOrganizationId(
+    supabase
+      .from("payments")
+      .select(
+        "id,amount,paid_at,processed_by,payment_status,transaction_id,stay_id,property_customer_id,retail_customer_id,invoice_allocations,payment_source"
+      ),
+    organizationId,
+    false
+  );
   const paymentsList = ((payments || []) as Array<
     Parameters<typeof isPosCashReceipt>[0] & {
       amount: number;
@@ -2707,7 +2824,11 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Bills
-  const { data: bills } = await supabase.from("bills").select("id, amount, description, bill_date, status");
+  const { data: bills } = await filterByOrganizationId(
+    supabase.from("bills").select("id, amount, description, bill_date, status"),
+    organizationId,
+    false
+  );
   const billsList = bills || [];
   reportProgress("bill", "Backfilling bills", 0, billsList.length);
   let billsProcessed = 0;
@@ -2740,7 +2861,11 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Vendor payments
-  const { data: vendorPayments } = await supabase.from("vendor_payments").select("id, amount, payment_date");
+  const { data: vendorPayments } = await filterByOrganizationId(
+    supabase.from("vendor_payments").select("id, amount, payment_date"),
+    organizationId,
+    false
+  );
   const vendorPaymentsList = vendorPayments || [];
   reportProgress("vendor_payment", "Backfilling vendor payments", 0, vendorPaymentsList.length);
   let vendorPaymentsProcessed = 0;
@@ -2766,7 +2891,11 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Vendor credits
-  const { data: vendorCredits } = await supabase.from("vendor_credits").select("id, amount, reason, credit_date");
+  const { data: vendorCredits } = await filterByOrganizationId(
+    supabase.from("vendor_credits").select("id, amount, reason, credit_date"),
+    organizationId,
+    false
+  );
   const vendorCreditsList = vendorCredits || [];
   reportProgress("vendor_credit", "Backfilling vendor credits", 0, vendorCreditsList.length);
   let vendorCreditsProcessed = 0;
@@ -2793,7 +2922,11 @@ export async function backfillJournalEntries(options?: {
   }
 
   // Expenses — use line-item GL accounts when expense_lines exist (same as Expenses page); else legacy single-line post.
-  const { data: expenses } = await supabase.from("expenses").select("id, amount, description, expense_date");
+  const { data: expenses } = await filterByOrganizationId(
+    supabase.from("expenses").select("id, amount, description, expense_date"),
+    organizationId,
+    false
+  );
   const expenseList = (expenses || []) as {
     id: string;
     amount: number;
@@ -2892,7 +3025,14 @@ export async function backfillJournalEntries(options?: {
   }
 
   // POS (kitchen_orders): get orders with items and product prices to compute total
-  const { data: orders } = await supabase.from("kitchen_orders").select("id, created_at");
+  const { data: orders, error: ordersError } = isManufacturing
+    ? { data: [], error: null }
+    : await filterByOrganizationId(
+        supabase.from("kitchen_orders").select("id, created_at"),
+        organizationId,
+        false
+      );
+  if (ordersError) result.errors.push(`Hotel POS orders could not be loaded: ${ordersError.message}`);
   const orderIds = (orders || []).map((o: { id: string }) => o.id);
   if (orderIds.length > 0) {
     reportProgress("pos", "Backfilling POS orders", 0, (orders || []).length);
@@ -2934,6 +3074,65 @@ export async function backfillJournalEntries(options?: {
       posProcessed += 1;
       reportProgress("pos", "Backfilling POS orders", posProcessed, (orders || []).length);
     }
+  }
+
+  // Manufacturing costing entries
+  const { data: costingEntries, error: costingError } = await filterByOrganizationId(
+    supabase
+      .from("manufacturing_costing_entries")
+      .select("id,product_name,period,material_cost,labor_cost,overhead_cost"),
+    organizationId,
+    false
+  );
+  if (costingError) {
+    result.errors.push(`Manufacturing costing entries could not be loaded: ${costingError.message}`);
+  }
+  const costingList = (costingEntries || []) as Array<{
+    id: string;
+    product_name: string | null;
+    period: string;
+    material_cost: number | null;
+    labor_cost: number | null;
+    overhead_cost: number | null;
+  }>;
+  if (isManufacturing && !costingError && costingList.length === 0) {
+    result.errors.push(
+      "No manufacturing costing entries were found for this organization. Record production with a BOM or add costing entries before running journal backfill."
+    );
+  }
+  reportProgress("manufacturing_costing", "Backfilling manufacturing costing", 0, costingList.length);
+  let costingProcessed = 0;
+  for (const row of costingList) {
+    if (options?.repairExisting || !has("manufacturing_costing", row.id)) {
+      const totalCost =
+        Number(row.material_cost || 0) + Number(row.labor_cost || 0) + Number(row.overhead_cost || 0);
+      if (totalCost > 0) {
+        const jr = dryRun
+          ? ({ ok: true, journalId: `dryrun-${row.id}` } as const)
+          : await createJournalForManufacturingCostingEntry(
+              row.id,
+              totalCost,
+              row.product_name || "Product",
+              row.period,
+              `${row.period}-01`,
+              backfillCreatedBy,
+              organizationId
+            );
+        if (jr.ok) {
+          add("manufacturing_costing", row.id);
+          result.manufacturing_costing++;
+        } else {
+          result.errors.push(`Manufacturing costing ${row.id}: ${jr.error}`);
+        }
+      }
+    }
+    costingProcessed += 1;
+    reportProgress(
+      "manufacturing_costing",
+      "Backfilling manufacturing costing",
+      costingProcessed,
+      costingList.length
+    );
   }
 
   reportProgress("done", dryRun ? "Dry run complete" : "Backfill complete", 1, 1);

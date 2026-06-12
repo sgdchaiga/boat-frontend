@@ -2,7 +2,6 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import {
-  createJournalForExpenseWithLines,
   deleteJournalEntryByReference,
   type ExpenseJournalLineInput,
 } from "../../lib/journal";
@@ -14,6 +13,7 @@ import { buildStoragePath, uploadSourceDocument, type SourceDocumentRef } from "
 import { loadJournalAccountSettings, resolveJournalAccountSettings } from "../../lib/journalAccountSettings";
 import { randomUuid } from "../../lib/randomUuid";
 import { loadHotelConfig } from "../../lib/hotelConfig";
+import { queueExpenseForTreasury } from "../../lib/treasuryWorkflow";
 
 const SIMPLE_EXPENSE_MODE_KEY = "boat.expenses.simple_mode";
 
@@ -388,6 +388,8 @@ interface Expense {
   /** First line’s payment source, for simple list (Cash / Bank / Mobile money) */
   paid_using_label?: string;
   source_documents?: unknown;
+  status?: "active" | "cancelled";
+  cancellation_reason?: string | null;
 }
 
 type LineDraft = {
@@ -634,12 +636,12 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       };
 
       let expRes = await buildExpenseQuery(
-        "id, vendor_id, amount, description, expense_date, source_documents"
+        "id, vendor_id, amount, description, expense_date, source_documents, status, cancellation_reason"
       ).range(fromIdx, toIdx);
 
       if (expRes.error && isMissingSourceDocumentsColumnError(expRes.error)) {
         setExpenseAttachmentsSupported(false);
-        expRes = await buildExpenseQuery("id, vendor_id, amount, description, expense_date").range(fromIdx, toIdx);
+        expRes = await buildExpenseQuery("id, vendor_id, amount, description, expense_date, status, cancellation_reason").range(fromIdx, toIdx);
       } else if (!expRes.error) {
         setExpenseAttachmentsSupported(true);
       }
@@ -658,6 +660,8 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
         description: string | null;
         expense_date: string | null;
         source_documents?: unknown;
+        status?: "active" | "cancelled";
+        cancellation_reason?: string | null;
       }>;
 
       const ids = raw.map((e) => e.id);
@@ -989,8 +993,6 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
         }));
 
       let expenseId: string;
-      let savedDate: string;
-
       if (editingExpenseId) {
         expenseId = editingExpenseId;
         const delJ = await deleteJournalEntryByReference("expense", expenseId);
@@ -1009,9 +1011,6 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           })
           .eq("id", expenseId);
         if (updErr) throw updErr;
-
-        const { data: expRow } = await supabase.from("expenses").select("expense_date").eq("id", expenseId).single();
-        savedDate = (expRow as { expense_date: string | null } | null)?.expense_date ?? expDate;
 
         const { error: lineErr } = await supabase.from("expense_lines").insert(lineInsertsFor(expenseId));
         if (lineErr) throw lineErr;
@@ -1034,8 +1033,6 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           );
         }
         expenseId = inserted.id;
-        savedDate = inserted.expense_date ?? expDate;
-
         const { error: lineErr } = await supabase.from("expense_lines").insert(lineInsertsFor(expenseId));
         if (lineErr) {
           await supabase.from("expenses").delete().eq("id", expenseId);
@@ -1043,15 +1040,14 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
         }
       }
 
-      const jr = await createJournalForExpenseWithLines(
-        expenseId,
-        savedDate,
-        journalRows,
-        user?.id ?? null
-      );
-      if (!jr.ok) {
-        alert(`Expense saved but journal was not posted: ${jr.error}`);
-      }
+      await queueExpenseForTreasury({
+        organizationId: user?.organization_id,
+        sourceId: expenseId,
+        amount: totalRounded,
+        purpose: summary,
+        requestedBy: user?.id ?? null,
+        vendorId: simpleExpenseMode ? simpleVendorId : null,
+      });
 
       const uploadNewAttachments = async (): Promise<SourceDocumentRef[]> => {
         const next: SourceDocumentRef[] = [];
@@ -1523,14 +1519,14 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
             </thead>
             <tbody>
               {expenses.map((e) => (
-                <tr key={e.id} className="border-t">
+                <tr key={e.id} className={`border-t ${e.status === "cancelled" ? "bg-rose-50/70 text-slate-500" : ""}`}>
                   <td className="p-3 whitespace-nowrap">
                     {e.expense_date ? new Date(e.expense_date).toLocaleDateString() : "—"}
                   </td>
                   {simpleExpenseMode ? (
                     <>
                       <td className="p-3 max-w-md truncate" title={displayWhatColumn(e.description ?? null)}>
-                        {displayWhatColumn(e.description ?? null)}
+                        {displayWhatColumn(e.description ?? null)} {e.status === "cancelled" && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700" title={e.cancellation_reason || "Cancelled"}>Cancelled</span>}
                       </td>
                       <td className="p-3">{e.paid_using_label ?? "—"}</td>
                       <td className="p-3 text-right font-medium tabular-nums">
@@ -1554,8 +1550,9 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                     <button
                       type="button"
                       onClick={() => void openEditModal(e.id)}
+                      disabled={e.status === "cancelled"}
                       className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      title="Edit expense"
+                      title={e.status === "cancelled" ? e.cancellation_reason || "Cancelled expenses cannot be edited" : "Edit expense"}
                     >
                       <Pencil className="w-3.5 h-3.5" />
                       Edit

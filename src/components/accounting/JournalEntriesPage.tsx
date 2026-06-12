@@ -4,8 +4,6 @@ import {
   getReferenceTypeLabel,
   backfillJournalEntries,
   repairHotelPosOrderJournals,
-  repairDuplicateExpenseJournals,
-  repairMissingKitchenExpenseJournals,
   reconcileInventoryLedgersToStockSummary,
   repairRoomChargeJournals,
   type BackfillProgress,
@@ -115,6 +113,7 @@ export function JournalEntriesPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
+  const isHotelOrganization = user?.business_type === "hotel" || user?.business_type === "mixed";
 
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
@@ -144,8 +143,6 @@ export function JournalEntriesPage() {
   const [posRepairFrom, setPosRepairFrom] = useState("");
   const [posRepairTo, setPosRepairTo] = useState("");
   const [repairingRooms, setRepairingRooms] = useState(false);
-  const [repairingDuplicateExpenses, setRepairingDuplicateExpenses] = useState(false);
-  const [repairingKitchenExpenses, setRepairingKitchenExpenses] = useState(false);
   const [reconcilingInventory, setReconcilingInventory] = useState(false);
   const [inventoryReconciliationMessage, setInventoryReconciliationMessage] = useState<string | null>(null);
   const [roomRepairProgress, setRoomRepairProgress] = useState({ processed: 0, total: 0 });
@@ -263,18 +260,18 @@ export function JournalEntriesPage() {
       .from("gl_accounts")
       .select("*")
       .order("account_code");
-    const scopedEntriesQuery = superAdmin || !orgId ? entriesQuery : entriesQuery.eq("organization_id", orgId);
-    const scopedAccountsQuery = superAdmin || !orgId ? accountsQuery : accountsQuery.eq("organization_id", orgId);
+    const scopedEntriesQuery = orgId ? entriesQuery.eq("organization_id", orgId) : entriesQuery;
+    const scopedAccountsQuery = orgId ? accountsQuery.eq("organization_id", orgId) : accountsQuery;
     const departmentsQuery = filterByOrganizationId(
       supabase.from("departments").select("id, name").order("name"),
       orgId,
-      superAdmin
+      false
     );
     const [entRes, accRes, depRes, prefOrder] = await Promise.all([
       scopedEntriesQuery,
       scopedAccountsQuery,
       departmentsQuery,
-      fetchExpenseGlAccountPreferenceOrder(orgId, superAdmin),
+      fetchExpenseGlAccountPreferenceOrder(orgId, false),
     ]);
     const fetchedEntries = (entRes.data || []) as JournalEntry[];
     setEntries(fetchedEntries);
@@ -578,6 +575,9 @@ export function JournalEntriesPage() {
     try {
       const result = await backfillJournalEntries({
         dryRun: dryRunBackfill,
+        businessType: user?.business_type,
+        repairExisting: user?.business_type === "manufacturing",
+        organizationId: orgId,
         onProgress: setBackfillProgress,
       });
       setBackfillResult(result);
@@ -593,6 +593,7 @@ export function JournalEntriesPage() {
         vendor_payment: 0,
         vendor_credit: 0,
         expense: 0,
+        manufacturing_costing: 0,
         errors: [e instanceof Error ? e.message : String(e)],
       });
     } finally {
@@ -611,38 +612,18 @@ export function JournalEntriesPage() {
       posRepairDepartmentId ? `department ${departments.find((department) => department.id === posRepairDepartmentId)?.name || posRepairDepartmentId}` : "",
       posRepairFrom || posRepairTo ? `dates ${posRepairFrom || "earliest"} to ${posRepairTo || "latest"}` : "",
     ].filter(Boolean);
-    if (!confirm(`Rebuild Hotel POS journals for ${scopes.length ? scopes.join(", ") : "all past orders"} and recalculate COGS from sale-time stock movement costs?`)) return;
+    if (!confirm(`Rebuild POS journals for the logged-in organization for ${scopes.length ? scopes.join(", ") : "all past orders"} and recalculate COGS from sale-time stock movement costs?`)) return;
     setRepairingPos(true);
     setPosRepairResult(null);
     setPosRepairProgress({ processed: 0, total: 0 });
     try {
       const result = await repairHotelPosOrderJournals({
+        organizationId: orgId,
         onProgress: (processed, total) => setPosRepairProgress({ processed, total }),
         journalOrOrder: posRepairJournal,
         departmentId: posRepairDepartmentId,
         fromDate: posRepairFrom,
         toDate: posRepairTo,
-      });
-      setPosRepairResult(result);
-      await fetchData();
-    } catch (e) {
-      setPosRepairResult({ repaired: 0, removed: 0, errors: [e instanceof Error ? e.message : String(e)] });
-    } finally {
-      setRepairingPos(false);
-    }
-  };
-
-  const handleRepairJunePosJournals = async () => {
-    if (repairingPos) return;
-    if (!confirm("Rebuild Hotel POS journals from June 1 through June 8, 2026 using the active department GL mappings?")) return;
-    setRepairingPos(true);
-    setPosRepairResult(null);
-    setPosRepairProgress({ processed: 0, total: 0 });
-    try {
-      const result = await repairHotelPosOrderJournals({
-        onProgress: (processed, total) => setPosRepairProgress({ processed, total }),
-        fromDate: "2026-06-01",
-        toDate: "2026-06-08",
       });
       setPosRepairResult(result);
       await fetchData();
@@ -661,6 +642,7 @@ export function JournalEntriesPage() {
     setRoomRepairProgress({ processed: 0, total: 0 });
     try {
       const result = await repairRoomChargeJournals({
+        organizationId: orgId,
         onProgress: (processed, total) => setRoomRepairProgress({ processed, total }),
       });
       setRoomRepairResult(result);
@@ -669,41 +651,6 @@ export function JournalEntriesPage() {
       setRoomRepairResult({ repaired: 0, errors: [e instanceof Error ? e.message : String(e)] });
     } finally {
       setRepairingRooms(false);
-    }
-  };
-
-  const handleRepairDuplicateExpenses = async () => {
-    if (repairingDuplicateExpenses) return;
-    if (!confirm("Retire May 2026 expense journals that exactly duplicate vendor-payment Cash credits?")) return;
-    setRepairingDuplicateExpenses(true);
-    try {
-      const result = await repairDuplicateExpenseJournals({ fromDate: "2026-05-01", toDate: "2026-05-31" });
-      alert(
-        `Matched ${result.matched} duplicate expense journal(s) totaling ${result.amount.toFixed(2)}; retired ${result.removed}.`
-      );
-      await fetchData();
-    } catch (e) {
-      alert(`Duplicate expense repair failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setRepairingDuplicateExpenses(false);
-    }
-  };
-
-  const handleRepairMissingKitchenExpenses = async () => {
-    if (repairingKitchenExpenses) return;
-    if (!confirm("Rewrite missing May 2026 Spend Money journals that contain Kitchen Purchase lines? Existing active expense journals will not be duplicated.")) return;
-    setRepairingKitchenExpenses(true);
-    try {
-      const result = await repairMissingKitchenExpenseJournals({ fromDate: "2026-05-01", toDate: "2026-05-31" });
-      alert(
-        `Rewrote ${result.repaired} of ${result.checked} missing Kitchen Spend Money journal(s), totaling ${result.kitchenAmount.toFixed(2)} in Kitchen purchases.` +
-          (result.errors.length ? ` Errors: ${result.errors.join("; ")}` : "")
-      );
-      await fetchData();
-    } catch (e) {
-      alert(`Kitchen expense journal rewrite failed: ${e instanceof Error ? e.message : String(e)}`);
-    } finally {
-      setRepairingKitchenExpenses(false);
     }
   };
 
@@ -740,7 +687,7 @@ export function JournalEntriesPage() {
         filterByOrganizationId(
           supabase.from("kitchen_orders").select("*, kitchen_order_items(quantity,product_id,notes)").eq("id", referenceId).maybeSingle(),
           orgId,
-          superAdmin
+          false
         ),
         filterByOrganizationId(
           supabase
@@ -749,7 +696,7 @@ export function JournalEntriesPage() {
             .eq("id", referenceId)
             .maybeSingle(),
           orgId,
-          superAdmin
+          false
         ),
         filterByOrganizationId(
           supabase
@@ -757,7 +704,7 @@ export function JournalEntriesPage() {
             .select("id,amount,payment_method,payment_status,paid_at,payment_source,transaction_id")
             .ilike("transaction_id", `${referenceId}%`),
           orgId,
-          superAdmin
+          false
         ),
         filterByOrganizationId(
           supabase
@@ -766,7 +713,7 @@ export function JournalEntriesPage() {
             .eq("source_type", "sale")
             .eq("source_id", referenceId),
           orgId,
-          superAdmin
+          false
         ),
       ]);
       const hotelOrder = hotelOrderRes.data as Record<string, unknown> | null;
@@ -806,7 +753,11 @@ export function JournalEntriesPage() {
     };
     const table = tableByRef[entry.reference_type];
     if (!table) return;
-    const { data } = await supabase.from(table).select("*").eq("id", entry.reference_id).maybeSingle();
+    const { data } = await filterByOrganizationId(
+      supabase.from(table).select("*").eq("id", entry.reference_id).maybeSingle(),
+      orgId,
+      false
+    );
     setDrillSourceData((data as Record<string, unknown> | null) ?? null);
   };
 
@@ -959,77 +910,51 @@ export function JournalEntriesPage() {
             onClick={handleBackfill}
             disabled={backfilling || repairingPos || repairingRooms}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Create journal entries for all existing transactions that don't have one yet"
+            title="Create missing journals for transactions belonging to the logged-in organization"
           >
             <RefreshCw className={`w-4 h-4 ${backfilling ? "animate-spin" : ""}`} />
-            {backfilling ? "Running…" : dryRunBackfill ? "Dry run backfill" : "Backfill past transactions"}
+            {backfilling ? "Running…" : dryRunBackfill ? "Dry run organization backfill" : "Backfill organization journals"}
           </button>
-          <button
-            type="button"
-            onClick={handleRepairPastPosJournals}
-            disabled={repairingPos || backfilling || repairingRooms}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Rebuild Hotel POS journals and recalculate COGS from sale-time stock movement costs"
-          >
-            <RefreshCw className={`w-4 h-4 ${repairingPos ? "animate-spin" : ""}`} />
-            {repairingPos ? "Recalculating POS COGS..." : "Repair POS journals / recalculate COGS"}
-          </button>
-          <button
-            type="button"
-            onClick={handleRepairRoomChargeJournals}
-            disabled={repairingRooms || repairingPos || backfilling}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Rebuild room-charge journals from billing using the current room revenue account"
-          >
-            <RefreshCw className={`w-4 h-4 ${repairingRooms ? "animate-spin" : ""}`} />
-            {repairingRooms ? "Repairing room journals..." : "Repair room journals"}
-          </button>
-          <button
-            type="button"
-            onClick={handleRepairJunePosJournals}
-            disabled={repairingPos || backfilling || repairingRooms}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Rebuild June 1-8 Hotel POS journals using active department GL mappings"
-          >
-            <RefreshCw className={`w-4 h-4 ${repairingPos ? "animate-spin" : ""}`} />
-            {repairingPos ? "Repairing June POS journals..." : "Repair June 1-8 POS journals"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleRepairDuplicateExpenses()}
-            disabled={repairingDuplicateExpenses || runningBulkAction !== null}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-red-300 bg-red-50 text-red-900 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Retire May expense journals that duplicate vendor-payment Cash credits"
-          >
-            <Trash2 className="w-4 h-4" />
-            {repairingDuplicateExpenses ? "Repairing duplicate expenses..." : "Repair May duplicate expenses"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleRepairMissingKitchenExpenses()}
-            disabled={repairingKitchenExpenses || runningBulkAction !== null}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Rewrite missing May Spend Money journals containing Kitchen Purchase lines"
-          >
-            <RefreshCw className={`w-4 h-4 ${repairingKitchenExpenses ? "animate-spin" : ""}`} />
-            {repairingKitchenExpenses ? "Rewriting Kitchen expenses..." : "Rewrite May Kitchen Spend Money journals"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleReconcileInventory()}
-            disabled={reconcilingInventory}
-            className="px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-            title="Post a balanced adjustment so Bar and Kitchen inventory ledgers match Stock Summary weighted-average values"
-          >
-            {reconcilingInventory ? "Reconciling inventory..." : "Reconcile inventory ledgers"}
-          </button>
+          {isHotelOrganization ? (
+            <>
+              <button
+                type="button"
+                onClick={handleRepairPastPosJournals}
+                disabled={repairingPos || backfilling || repairingRooms}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Rebuild POS journals for the logged-in organization and recalculate COGS"
+              >
+                <RefreshCw className={`w-4 h-4 ${repairingPos ? "animate-spin" : ""}`} />
+                {repairingPos ? "Recalculating POS COGS..." : "Repair organization POS journals"}
+              </button>
+              <button
+                type="button"
+                onClick={handleRepairRoomChargeJournals}
+                disabled={repairingRooms || repairingPos || backfilling}
+                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-blue-300 bg-blue-50 text-blue-900 hover:bg-blue-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Rebuild room-charge journals from billing using the current room revenue account"
+              >
+                <RefreshCw className={`w-4 h-4 ${repairingRooms ? "animate-spin" : ""}`} />
+                {repairingRooms ? "Repairing room journals..." : "Repair organization room journals"}
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleReconcileInventory()}
+                disabled={reconcilingInventory}
+                className="px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                title="Post a balanced adjustment so Bar and Kitchen inventory ledgers match Stock Summary weighted-average values"
+              >
+                {reconcilingInventory ? "Reconciling inventory..." : "Reconcile organization inventory ledgers"}
+              </button>
+            </>
+          ) : null}
           {inventoryReconciliationMessage ? (
             <p className="text-sm text-slate-700">{inventoryReconciliationMessage}</p>
           ) : null}
         </div>
       </div>
 
-      <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+      {isHotelOrganization ? <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
         <p className="mb-2 text-sm font-medium text-amber-950">POS journal repair scope</p>
         <div className="flex flex-wrap gap-2">
           <input
@@ -1067,8 +992,8 @@ export function JournalEntriesPage() {
             Clear scope
           </button>
         </div>
-        <p className="mt-2 text-xs text-amber-800">Filters are combined. Leave every field blank to repair all Hotel POS journals.</p>
-      </div>
+        <p className="mt-2 text-xs text-amber-800">Filters are combined. Leave every field blank to repair all POS journals for the logged-in organization.</p>
+      </div> : null}
 
       {repairingPos && (
         <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -1133,6 +1058,7 @@ export function JournalEntriesPage() {
             {backfillResult.vendor_payment > 0 && <li>Vendor payments: {backfillResult.vendor_payment}</li>}
             {backfillResult.vendor_credit > 0 && <li>Vendor credits: {backfillResult.vendor_credit}</li>}
             {backfillResult.expense > 0 && <li>Expenses: {backfillResult.expense}</li>}
+            {backfillResult.manufacturing_costing > 0 && <li>Manufacturing costing: {backfillResult.manufacturing_costing}</li>}
           </ul>
           {backfillResult.errors.length > 0 && (
             <div className="mt-2 text-amber-700">
@@ -1147,7 +1073,7 @@ export function JournalEntriesPage() {
               </ul>
             </div>
           )}
-          {[backfillResult.room_charge, backfillResult.payment, backfillResult.pos, backfillResult.bill, backfillResult.vendor_payment, backfillResult.vendor_credit, backfillResult.expense].every((n) => n === 0) && backfillResult.errors.length === 0 && (
+          {[backfillResult.room_charge, backfillResult.payment, backfillResult.pos, backfillResult.bill, backfillResult.vendor_payment, backfillResult.vendor_credit, backfillResult.expense, backfillResult.manufacturing_costing].every((n) => n === 0) && backfillResult.errors.length === 0 && (
             <p className="text-slate-500">No new journal entries needed; all transactions already have entries.</p>
           )}
         </div>

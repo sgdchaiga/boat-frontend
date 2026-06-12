@@ -31,6 +31,7 @@ export interface PersistRetailSaleLedgerArgs {
   cashierSessionId: string | null;
   clinicPatientId?: string | null;
   clinicDiagnosisSnapshot?: string | null;
+  saleAt: string;
 }
 
 export interface CollectMobileMoneyPaymentsArgs {
@@ -129,6 +130,7 @@ export async function persistRetailSaleLedger({
   cashierSessionId,
   clinicPatientId,
   clinicDiagnosisSnapshot,
+  saleAt,
 }: PersistRetailSaleLedgerArgs): Promise<boolean> {
   if (!organizationId) return false;
   const { data: existingSale, error: existingErr } = await supabase
@@ -142,7 +144,7 @@ export async function persistRetailSaleLedger({
   const payload = {
     id: saleId,
     organization_id: organizationId,
-    sale_at: new Date().toISOString(),
+    sale_at: saleAt,
     idempotency_key: saleId,
     customer_id: saleCustomer.id,
     customer_name: saleCustomer.name,
@@ -185,6 +187,8 @@ export async function persistRetailSaleLedger({
     amount: p.amount,
     payment_status: p.status,
     reference: p.reference ?? null,
+    receipt_gl_account_id: p.glAccountId ?? null,
+    paid_at: saleAt,
   }));
   if (payRows.length > 0) {
     await supabase.from("retail_sale_payments").insert(payRows);

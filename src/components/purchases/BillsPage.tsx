@@ -18,6 +18,7 @@ import { postStockInFromPurchaseOrderForBill } from "../../lib/poGrnStock";
 import { deleteJournalEntryByReference } from "../../lib/journal";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
+import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
 
 interface Bill {
   id: string;
@@ -195,6 +196,18 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         if (!jr.ok) {
           alert(`Bill approved but journal was not posted: ${jr.error}`);
         }
+      }
+
+      if (billAmt > 0) {
+        await queueApprovedBillForTreasury({
+          organizationId: user?.organization_id,
+          sourceId: bill.id,
+          amount: billAmt,
+          purpose: bill.description || "Approved supplier bill",
+          requestedBy: user?.id ?? null,
+          vendorId: bill.vendor_id,
+          payeeName: bill.vendors?.name,
+        });
       }
 
       if (bill.purchase_order_id) {
