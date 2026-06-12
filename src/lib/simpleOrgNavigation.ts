@@ -68,7 +68,11 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     { name: "Sales by item", page: "reports_sales_by_item" },
     { name: "Stock summary", page: "reports_stock_summary" },
     ...(businessType === "manufacturing"
-      ? [{ name: "Daily production", page: "reports_manufacturing_daily_production" as const }]
+      ? [
+          { name: "Daily production", page: "reports_manufacturing_daily_production" as const },
+          { name: "Debtors report", page: "retail_credit_invoices" as const, state: { invoiceTab: "credit" } },
+          { name: "Cash flow statement", page: "accounting_cashflow" as const },
+        ]
       : []),
     { name: "Income statement", page: "accounting_income" },
     { name: "Balance sheet", page: "accounting_balance" },
@@ -246,6 +250,8 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
             { name: "Production entries", page: "manufacturing_production_entries" },
             { name: "Costing", page: "manufacturing_costing" },
             { name: "Price lists", page: "manufacturing_price_lists" },
+            { name: "Debtors report", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
+            { name: "Cash flow statement", page: "accounting_cashflow" },
           ],
         } as NavItem]
       : []),
