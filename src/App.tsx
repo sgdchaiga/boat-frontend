@@ -79,6 +79,7 @@ import { ManufacturingBomPage } from './components/manufacturing/ManufacturingBo
 import { ManufacturingWorkOrdersPage } from './components/manufacturing/ManufacturingWorkOrdersPage';
 import { ManufacturingProductionEntriesPage } from './components/manufacturing/ManufacturingProductionEntriesPage';
 import { ManufacturingCostingPage } from './components/manufacturing/ManufacturingCostingPage';
+import { ManufacturingPriceListsPage } from './components/manufacturing/ManufacturingPriceListsPage';
 import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage';
 import { PlatformOrganizationsPage } from './components/platform/PlatformOrganizationsPage';
 import { PlatformBusinessAdminsPage } from './components/platform/PlatformBusinessAdminsPage';
@@ -135,6 +136,7 @@ import { PayrollRunPage } from './components/payroll/PayrollRunPage';
 import { PayrollPayslipPage } from './components/payroll/PayrollPayslipPage';
 import { PayrollAuditPage } from './components/payroll/PayrollAuditPage';
 import { WalletPage } from './components/wallet/WalletPage';
+import { TreasuryPage } from './components/treasury/TreasuryPage';
 import { SchoolDashboard } from './components/school/SchoolDashboard';
 import { SchoolClassesPage } from './components/school/SchoolClassesPage';
 import { SchoolStreamsPage } from './components/school/SchoolStreamsPage';
@@ -650,6 +652,7 @@ function AppContent() {
           enableWallet: user?.enable_wallet !== false,
           enablePayroll: user?.enable_payroll !== false,
           enableBudget: user?.enable_budget !== false,
+          enableTreasury: user?.enable_treasury !== false,
           enableAgent: user?.business_type !== "retail" && user?.business_type !== "clinic" && user?.enable_agent !== false,
           enableHotelAssessment:
             (user?.business_type === "hotel" || user?.business_type === "mixed") &&
@@ -1189,6 +1192,8 @@ function AppContent() {
         return <ManufacturingProductionEntriesPage readOnly={access.readOnly} />;
       case 'manufacturing_costing':
         return <ManufacturingCostingPage readOnly={access.readOnly} />;
+      case 'manufacturing_price_lists':
+        return <ManufacturingPriceListsPage readOnly={access.readOnly} />;
       case PAYROLL_PAGE.hub:
         return <PayrollHubPage onNavigate={navigate} />;
       case PAYROLL_PAGE.staff:
@@ -1213,6 +1218,8 @@ function AppContent() {
         );
       case 'wallet':
         return <WalletPage readOnly={access.readOnly} />;
+      case 'treasury':
+        return <TreasuryPage readOnly={access.readOnly} />;
       case 'staff':
         return <StaffPage readOnly={access.readOnly} />;
       case 'admin':

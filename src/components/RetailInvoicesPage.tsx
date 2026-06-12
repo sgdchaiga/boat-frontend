@@ -50,7 +50,12 @@ function isMissingRetailInvoicesSchemaError(message: string | undefined | null):
 
 /** When true, invoice counterparty picker uses `hotel_customers`. */
 function invoiceUsesPropertyCustomersTable(businessType: BusinessType | null | undefined): boolean {
-  if (businessType === "retail" || businessType === "restaurant" || businessType === "clinic") return false;
+  if (
+    businessType === "retail" ||
+    businessType === "restaurant" ||
+    businessType === "clinic" ||
+    businessType === "manufacturing"
+  ) return false;
   return true;
 }
 
@@ -178,6 +183,7 @@ type LineDraft = {
 };
 
 type ProductOption = { id: string; name: string; sales_price: number | null };
+type ManufacturingPriceRow = { product_id: string; customer_type_id: string; min_qty: number; price: number };
 
 function parseSaleId(transactionId: string | null) {
   if (!transactionId) return null;
@@ -247,6 +253,7 @@ export function RetailInvoicesPage({
 
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [customers, setCustomers] = useState<RetailCustomerRow[]>([]);
+  const [manufacturingPrices, setManufacturingPrices] = useState<ManufacturingPriceRow[]>([]);
   const [propertyCustomersList, setPropertyCustomersList] = useState<GuestRow[]>([]);
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [selectedPropertyCustomerId, setSelectedPropertyCustomerId] = useState("");
@@ -289,7 +296,7 @@ export function RetailInvoicesPage({
     }
     const { data, error } = await sb
       .from("retail_customers")
-      .select("id, organization_id, name, email, phone, address, notes, created_at, updated_at")
+      .select("id, organization_id, name, email, phone, address, notes, manufacturing_customer_type_id, created_at, updated_at")
       .eq("organization_id", orgId)
       .order("name");
     if (!error && data) setCustomers(data as RetailCustomerRow[]);
@@ -493,6 +500,18 @@ export function RetailInvoicesPage({
   }, [loadProducts]);
 
   useEffect(() => {
+    if (businessType !== "manufacturing" || !orgId) {
+      setManufacturingPrices([]);
+      return;
+    }
+    void sb
+      .from("manufacturing_price_list")
+      .select("product_id,customer_type_id,min_qty,price")
+      .eq("organization_id", orgId)
+      .then(({ data }: { data?: ManufacturingPriceRow[] }) => setManufacturingPrices(data || []));
+  }, [businessType, orgId]);
+
+  useEffect(() => {
     if (invoiceGuestMode) void loadPropertyCustomers();
     else void loadCustomers();
   }, [invoiceGuestMode, loadPropertyCustomers, loadCustomers]);
@@ -643,6 +662,14 @@ export function RetailInvoicesPage({
     return { subtotal, taxAmount, total };
   }, [lines, taxRate]);
 
+  const resolveManufacturingPrice = (productId: string, quantity: number, customerTypeId?: string | null) => {
+    if (!customerTypeId) return null;
+    const tier = manufacturingPrices
+      .filter((row) => row.product_id === productId && row.customer_type_id === customerTypeId && Number(row.min_qty) <= quantity)
+      .sort((a, b) => Number(b.min_qty) - Number(a.min_qty))[0];
+    return tier ? Number(tier.price) : null;
+  };
+
   const applyProduct = (tempId: string, productId: string) => {
     const p = products.find((x) => x.id === productId);
     setLines((prev) =>
@@ -652,7 +679,13 @@ export function RetailInvoicesPage({
               ...ln,
               product_id: productId,
               description: p?.name || ln.description,
-              unit_price: p != null && p.sales_price != null ? String(p.sales_price) : ln.unit_price,
+              unit_price: String(
+                resolveManufacturingPrice(
+                  productId,
+                  Number(ln.quantity) || 1,
+                  customers.find((customer) => customer.id === selectedCustomerId)?.manufacturing_customer_type_id
+                ) ?? p?.sales_price ?? Number(ln.unit_price)
+              ),
             }
           : ln
       )
@@ -1756,7 +1789,20 @@ export function RetailInvoicesPage({
                               value={ln.quantity}
                               onChange={(e) =>
                                 setLines((prev) =>
-                                  prev.map((x) => (x.tempId === ln.tempId ? { ...x, quantity: e.target.value } : x))
+                                  prev.map((x) => {
+                                    if (x.tempId !== ln.tempId) return x;
+                                    const nextQuantity = e.target.value;
+                                    const tierPrice = resolveManufacturingPrice(
+                                      x.product_id,
+                                      Number(nextQuantity) || 1,
+                                      customers.find((customer) => customer.id === selectedCustomerId)?.manufacturing_customer_type_id
+                                    );
+                                    return {
+                                      ...x,
+                                      quantity: nextQuantity,
+                                      ...(tierPrice != null ? { unit_price: String(tierPrice) } : {}),
+                                    };
+                                  })
                                 )
                               }
                               disabled={readOnly}

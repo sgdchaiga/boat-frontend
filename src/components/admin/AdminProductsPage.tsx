@@ -55,7 +55,7 @@ export function AdminProductsPage() {
 
   const fetchData = async () => {
     setLoading(true);
-    const [deptRes, prodRes] = await Promise.all([
+    const [deptRes, richProdRes] = await Promise.all([
       filterByOrganizationId(supabase.from("departments").select("id, name, pos_catalog_mode").order("name"), orgId, superAdmin),
       filterByOrganizationId(
         supabase
@@ -66,8 +66,18 @@ export function AdminProductsPage() {
         superAdmin
       ),
     ]);
+    const prodRes = richProdRes.error
+      ? await filterByOrganizationId(
+          supabase
+            .from("products")
+            .select("id, name, sales_price, cost_price, department_id, active")
+            .order("name"),
+          orgId,
+          superAdmin
+        )
+      : richProdRes;
     if (deptRes.data) setDepartments(deptRes.data as Department[]);
-    const prods = (prodRes.data || []) as Product[];
+    const prods = (prodRes.data || []).map((product) => ({ ...product, barcode: "barcode" in product ? product.barcode : null })) as Product[];
     const deptMap = Object.fromEntries(
       (deptRes.data || []).map((d: Department) => [d.id, d.name])
     );

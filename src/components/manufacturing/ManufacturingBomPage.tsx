@@ -7,6 +7,8 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 type Product = {
   id: string;
   name: string;
+  unit_of_measure?: string | null;
+  manufacturing_item_type?: string | null;
 };
 
 type MaterialRow = {
@@ -58,7 +60,7 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
     try {
       // Load products
       const productQuery = filterByOrganizationId(
-        supabase.from("products").select("id,name"),
+        supabase.from("products").select("id,name,unit_of_measure,manufacturing_item_type"),
         orgId,
         superAdmin
       );
@@ -95,6 +97,11 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
   };
 
   // 🔹 Add new material row
+  const finishedProducts = products.filter((p) => p.manufacturing_item_type === "finished_product");
+  const materialProducts = products.filter(
+    (p) => p.manufacturing_item_type === "raw_material" || p.manufacturing_item_type === "consumable"
+  );
+
   const addMaterial = () => {
     setMaterials([...materials, { item_id: "", item_name: "", qty: 1, unit: "unit" }]);
   };
@@ -181,9 +188,9 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
           className="border p-2 rounded w-full mb-4"
         >
           <option value="">-- Select Product --</option>
-          {products.map((p) => (
+          {(finishedProducts.length > 0 ? finishedProducts : products).map((p) => (
             <option key={p.id} value={p.id}>
-              {p.name}
+              {p.name} ({p.unit_of_measure || "unit"})
             </option>
           ))}
         </select>
@@ -209,12 +216,21 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
         {materials.map((m, i) => (
           <div key={i} className="flex gap-2 mb-2">
 
-            <input
-              placeholder="Material name"
-              value={m.item_name}
-              onChange={(e) => updateMaterial(i, "item_name", e.target.value)}
+            <select
+              value={m.item_id}
+              onChange={(e) => {
+                const p = products.find((row) => row.id === e.target.value);
+                updateMaterial(i, "item_id", e.target.value);
+                updateMaterial(i, "item_name", p?.name || "");
+                updateMaterial(i, "unit", p?.unit_of_measure || "unit");
+              }}
               className="border p-2 rounded w-1/3"
-            />
+            >
+              <option value="">Select raw material / consumable</option>
+              {(materialProducts.length > 0 ? materialProducts : products).map((p) => (
+                <option key={p.id} value={p.id}>{p.name} ({p.unit_of_measure || "unit"})</option>
+              ))}
+            </select>
 
             <input
               type="number"

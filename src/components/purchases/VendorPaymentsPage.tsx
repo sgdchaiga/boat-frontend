@@ -75,7 +75,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
   const [allocationInputs, setAllocationInputs] = useState<Record<string, string>>({});
   const [amount, setAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
-  const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "bank_transfer">("bank_transfer");
+  const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "bank_transfer" | "wallet">("bank_transfer");
   const [reference, setReference] = useState("");
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
@@ -781,6 +781,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
                   <option value="cash">Cash</option>
                   <option value="card">Card</option>
                   <option value="bank_transfer">Bank Transfer</option>
+                  <option value="wallet">Wallet</option>
                 </select>
               </div>
               <div>

@@ -433,6 +433,16 @@ export interface Database {
           created_at?: string
         }
       }
+      manufacturing_customer_types: {
+        Row: { id: string; organization_id: string; name: string; created_at: string }
+        Insert: { id?: string; organization_id: string; name: string; created_at?: string }
+        Update: { id?: string; organization_id?: string; name?: string; created_at?: string }
+      }
+      manufacturing_price_list: {
+        Row: { id: string; organization_id: string; product_id: string; customer_type_id: string; min_qty: number; price: number; created_at: string; updated_at: string }
+        Insert: { id?: string; organization_id: string; product_id: string; customer_type_id: string; min_qty?: number; price: number; created_at?: string; updated_at?: string }
+        Update: { id?: string; organization_id?: string; product_id?: string; customer_type_id?: string; min_qty?: number; price?: number; created_at?: string; updated_at?: string }
+      }
       journal_gl_settings: {
         Row: {
           organization_id: string
@@ -581,6 +591,7 @@ export interface Database {
           phone: string | null
           address: string | null
           notes: string | null
+          manufacturing_customer_type_id?: string | null
           created_at: string
           updated_at: string
         }
@@ -592,6 +603,7 @@ export interface Database {
           phone?: string | null
           address?: string | null
           notes?: string | null
+          manufacturing_customer_type_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -603,6 +615,7 @@ export interface Database {
           phone?: string | null
           address?: string | null
           notes?: string | null
+          manufacturing_customer_type_id?: string | null
           created_at?: string
           updated_at?: string
         }
@@ -673,6 +686,8 @@ export interface Database {
           track_inventory?: boolean | null
           active?: boolean | null
           reorder_level?: number | null
+          unit_of_measure?: string
+          manufacturing_item_type?: string | null
         }
         Insert: {
           id?: string
@@ -689,6 +704,8 @@ export interface Database {
           track_inventory?: boolean | null
           active?: boolean | null
           reorder_level?: number | null
+          unit_of_measure?: string
+          manufacturing_item_type?: string | null
         }
         Update: {
           id?: string
@@ -705,6 +722,8 @@ export interface Database {
           track_inventory?: boolean | null
           active?: boolean | null
           reorder_level?: number | null
+          unit_of_measure?: string
+          manufacturing_item_type?: string | null
         }
       }
       retail_invoice_lines: {

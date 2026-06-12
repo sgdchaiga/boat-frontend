@@ -27,6 +27,14 @@ type GlAccountOption = {
 };
 
 type ItemKind = "product" | "service";
+type ManufacturingItemType = "" | "raw_material" | "finished_product" | "consumable" | "other";
+
+const MANUFACTURING_ITEM_TYPE_LABELS: Record<Exclude<ManufacturingItemType, "">, string> = {
+  raw_material: "Raw material",
+  finished_product: "Finished product",
+  consumable: "Consumable",
+  other: "Other",
+};
 
 type ServiceConsumableDraft = {
   key: string;
@@ -135,6 +143,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
   const [formData, setFormData] = useState({
     name: "",
+    unit_of_measure: "unit",
+    manufacturing_item_type: "" as ManufacturingItemType,
     cost_price: 0,
     sales_price: 0,
     reorder_level: "" as string,
@@ -150,6 +160,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
   const [search, setSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("all");
+  const [manufacturingTypeFilter, setManufacturingTypeFilter] = useState("all");
   const [sortKey, setSortKey] = useState<ItemsSortKey>("name");
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
   const [serviceConsumables, setServiceConsumables] = useState<ServiceConsumableDraft[]>([]);
@@ -280,6 +291,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     setShowAdvanced(false);
     setFormData({
       name: "",
+      unit_of_measure: "unit",
+      manufacturing_item_type: "" as ManufacturingItemType,
       cost_price: readStoredPrice(LAST_BUY_PRICE_KEY),
       sales_price: readStoredPrice(LAST_SELL_PRICE_KEY),
       reorder_level: "",
@@ -308,6 +321,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     setShowAdvanced(false);
     setFormData({
       name: product.name ?? "",
+      unit_of_measure: product.unit_of_measure || "unit",
+      manufacturing_item_type: (product.manufacturing_item_type || "") as ManufacturingItemType,
       cost_price: Number(product.cost_price ?? 0),
       sales_price: Number(product.sales_price ?? 0),
       reorder_level: rl != null && rl !== undefined ? String(rl) : "",
@@ -377,6 +392,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
     const payload = {
       name: formData.name.trim(),
+      unit_of_measure: formData.unit_of_measure.trim() || "unit",
+      manufacturing_item_type: formData.manufacturing_item_type || null,
       cost_price: formData.cost_price,
       sales_price: formData.sales_price,
       reorder_level: reorderParsed,
@@ -460,6 +477,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     if (!(product.name || "").toLowerCase().includes(search.toLowerCase())) return false;
     if (departmentFilter === "unassigned") return !product.department_id;
     if (departmentFilter !== "all" && product.department_id !== departmentFilter) return false;
+    if (manufacturingTypeFilter !== "all" && product.manufacturing_item_type !== manufacturingTypeFilter) return false;
     return true;
   });
 
@@ -630,10 +648,23 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
             </option>
           ))}
         </select>
+        {user?.business_type === "manufacturing" && (
+          <select
+            value={manufacturingTypeFilter}
+            onChange={(e) => setManufacturingTypeFilter(e.target.value)}
+            className="min-w-[220px] rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+            aria-label="Filter items by manufacturing type"
+          >
+            <option value="all">All manufacturing types</option>
+            {Object.entries(MANUFACTURING_ITEM_TYPE_LABELS).map(([value, label]) => (
+              <option key={value} value={value}>{label}</option>
+            ))}
+          </select>
+        )}
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-        <table className="w-full text-sm min-w-[760px]">
+        <table className="w-full text-sm min-w-[980px]">
           <thead className="bg-slate-50">
             <tr>
               <th className="text-left p-3">
@@ -654,6 +685,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                 </button>
               </th>
               <th className="text-left p-3 whitespace-nowrap">Department</th>
+              <th className="text-left p-3 whitespace-nowrap">Type</th>
+              <th className="text-left p-3 whitespace-nowrap">UOM</th>
               <th className="text-right p-3 whitespace-nowrap">Stock</th>
               <th className="text-right p-3 whitespace-nowrap">Buy price</th>
               <th className="text-right p-3 whitespace-nowrap">Sell price</th>
@@ -697,6 +730,12 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                     {product.name}
                   </td>
                   <td className="p-3 text-slate-600">{getDepartmentName(product.department_id ?? null)}</td>
+                  <td className="p-3 text-slate-600">
+                    {product.manufacturing_item_type
+                      ? MANUFACTURING_ITEM_TYPE_LABELS[product.manufacturing_item_type as Exclude<ManufacturingItemType, "">] || product.manufacturing_item_type
+                      : "—"}
+                  </td>
+                  <td className="p-3 text-slate-600">{product.unit_of_measure || "unit"}</td>
                   <td className="p-3 text-right tabular-nums">
                     {track ? (
                       <span className={isLow ? "text-amber-900 font-medium" : ""}>
@@ -823,6 +862,32 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                   placeholder="e.g. Coca Cola 500ml"
                 />
+                <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <label className="text-sm">
+                    <span className="block font-medium text-slate-700 mb-1">Unit of measure</span>
+                    <input
+                      className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                      value={formData.unit_of_measure}
+                      onChange={(e) => setFormData({ ...formData, unit_of_measure: e.target.value })}
+                      placeholder="unit, kg, litre, metre..."
+                    />
+                  </label>
+                  {user?.business_type === "manufacturing" && (
+                    <label className="text-sm">
+                      <span className="block font-medium text-slate-700 mb-1">Manufacturing type</span>
+                      <select
+                        className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"
+                        value={formData.manufacturing_item_type}
+                        onChange={(e) => setFormData({ ...formData, manufacturing_item_type: e.target.value as ManufacturingItemType })}
+                      >
+                        <option value="">Not classified</option>
+                        {Object.entries(MANUFACTURING_ITEM_TYPE_LABELS).map(([value, label]) => (
+                          <option key={value} value={value}>{label}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </div>
               </div>
 
               <div>

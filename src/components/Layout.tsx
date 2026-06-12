@@ -29,6 +29,7 @@ import {
   AlertTriangle,
   Link2,
   ArrowLeft,
+  Landmark,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -247,6 +248,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const enableFixedAssets = user?.enable_fixed_assets === true;
   const enablePayroll = user?.enable_payroll !== false;
   const enableBudget = user?.enable_budget !== false;
+  const enableTreasury = user?.enable_treasury !== false;
   const retailOnly = businessType === "retail";
   const clinicTenant = businessType === "clinic";
   const retailLikeTenant = retailOnly || clinicTenant;
@@ -269,7 +271,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     () =>
       buildSimpleOrgNavigation({
         businessType,
-        dashboardPage: clinicTenant ? "clinic_dashboard" : retailOnly ? "retail_dashboard" : "dashboard",
+        dashboardPage:
+          businessType === "manufacturing"
+            ? "manufacturing"
+            : clinicTenant
+              ? "clinic_dashboard"
+              : retailOnly
+                ? "retail_dashboard"
+                : "dashboard",
         allowWallet,
         allowPayroll,
         allowCommunications,
@@ -291,6 +300,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const saccoNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: SACCOPRO_PAGE.dashboard },
+      { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
@@ -458,6 +468,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const schoolNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: GraduationCap, page: SCHOOL_PAGE.dashboard },
+      { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
@@ -634,6 +645,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const vslaNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: LayoutDashboard, page: VSLA_PAGE.dashboard },
+      { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
       {
@@ -821,6 +833,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         enableWallet: allowWallet,
         enablePayroll: allowPayroll,
         enableBudget: allowBudget,
+        enableTreasury,
         enableAgent: allowAgent,
         enableHotelAssessment: allowHotelAssessment,
         enableManufacturing: allowManufacturing,
@@ -843,6 +856,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.enable_inventory,
       user?.enable_purchases,
       user?.enable_fixed_assets,
+      user?.enable_treasury,
       user?.school_enable_reports,
       user?.school_enable_fixed_deposit,
       user?.school_enable_accounting,
@@ -854,6 +868,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       allowWallet,
       allowPayroll,
       allowBudget,
+      enableTreasury,
       allowAgent,
       allowHotelAssessment,
       allowManufacturing,
@@ -871,6 +886,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enableWallet: allowWallet,
       enablePayroll: allowPayroll,
       enableBudget: allowBudget,
+      enableTreasury,
       enableAgent: allowAgent,
       enableHotelAssessment: allowHotelAssessment,
       enableManufacturing: allowManufacturing,

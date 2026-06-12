@@ -12,6 +12,7 @@ interface RetailCustomerRow {
   phone: string | null;
   credit_limit?: number | null;
   current_credit_balance?: number | null;
+  manufacturing_customer_type_id?: string | null;
 }
 
 interface UseCustomerProfileActionsArgs {
@@ -101,7 +102,7 @@ export function useCustomerProfileActions({
           .from("retail_customers")
           .update({ name, phone })
           .eq("id", selectedCustomerId)
-          .select("id,name,phone,credit_limit,current_credit_balance")
+          .select("id,name,phone,credit_limit,current_credit_balance,manufacturing_customer_type_id")
           .single();
         if (error) throw error;
         const updated = data as RetailCustomerRow;
@@ -112,7 +113,7 @@ export function useCustomerProfileActions({
         const { data, error } = await supabase
           .from("retail_customers")
           .insert({ name, phone, organization_id: orgId, current_credit_balance: 0 })
-          .select("id,name,phone,credit_limit,current_credit_balance")
+          .select("id,name,phone,credit_limit,current_credit_balance,manufacturing_customer_type_id")
           .single();
         if (error) throw error;
         const created = data as RetailCustomerRow;

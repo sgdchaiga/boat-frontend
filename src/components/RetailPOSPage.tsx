@@ -93,6 +93,19 @@ interface RetailCustomerRow {
   phone: string | null;
   credit_limit?: number | null;
   current_credit_balance?: number | null;
+  manufacturing_customer_type_id?: string | null;
+}
+
+interface ManufacturingPriceRow {
+  product_id: string;
+  customer_type_id: string;
+  min_qty: number;
+  price: number;
+}
+
+interface ManufacturingCustomerTypeRow {
+  id: string;
+  name: string;
 }
 
 type PosPaymentStatus = "pending" | "partial" | "completed" | "overpaid";
@@ -133,6 +146,8 @@ export function RetailPOSPage({
   const [quickPickStats, setQuickPickStats] = useState<Record<string, number>>({});
   const [recentQuickPickIds, setRecentQuickPickIds] = useState<string[]>([]);
   const [customers, setCustomers] = useState<RetailCustomerRow[]>([]);
+  const [manufacturingPrices, setManufacturingPrices] = useState<ManufacturingPriceRow[]>([]);
+  const [manufacturingCustomerTypes, setManufacturingCustomerTypes] = useState<ManufacturingCustomerTypeRow[]>([]);
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
@@ -160,15 +175,42 @@ export function RetailPOSPage({
   const [prescriptionSearchQuery, setPrescriptionSearchQuery] = useState("");
 
   const {
-    products,
+    products: catalogProducts,
     loading,
     catalogLoadingMore,
     productSearch,
     setProductSearch,
-    filteredManualProducts,
+    filteredManualProducts: catalogFilteredManualProducts,
     hasMoreProducts,
     loadMoreProducts,
   } = useProductCatalog<Product>(useDesktopLocalMode, orgId);
+  const manufacturingSalesDepartmentIds = useMemo(
+    () =>
+      user?.business_type === "manufacturing"
+        ? new Set(
+            departments
+              .filter((department) => department.name.trim().toLowerCase() === "sales")
+              .map((department) => department.id)
+          )
+        : new Set<string>(),
+    [departments, user?.business_type]
+  );
+  const products = useMemo(
+    () =>
+      user?.business_type === "manufacturing"
+        ? catalogProducts.filter((product) => !!product.department_id && manufacturingSalesDepartmentIds.has(product.department_id))
+        : catalogProducts,
+    [catalogProducts, manufacturingSalesDepartmentIds, user?.business_type]
+  );
+  const filteredManualProducts = useMemo(
+    () =>
+      user?.business_type === "manufacturing"
+        ? catalogFilteredManualProducts.filter(
+            (product) => !!product.department_id && manufacturingSalesDepartmentIds.has(product.department_id)
+          )
+        : catalogFilteredManualProducts,
+    [catalogFilteredManualProducts, manufacturingSalesDepartmentIds, user?.business_type]
+  );
 
   useEffect(() => {
     try {
@@ -319,18 +361,27 @@ export function RetailPOSPage({
   useEffect(() => {
     const loadDepartments = async () => {
       if (useDesktopLocalMode) {
-        setDepartments([]);
+        const local = await desktopApi.localSelect({
+          table: "departments",
+          orderBy: { column: "name", ascending: true },
+          limit: 500,
+        });
+        setDepartments(
+          (local.rows || [])
+            .map((row) => ({ id: String(row.id || ""), name: String(row.name || "") }))
+            .filter((row) => row.id && row.name)
+        );
         return;
       }
-      const { data } = await filterByOrganizationId(
-        supabase.from("departments").select("id,name").order("name"),
-        orgId,
-        superAdmin
-      );
+      const departmentQuery = supabase.from("departments").select("id,name").order("name");
+      const { data } =
+        user?.business_type === "manufacturing"
+          ? await departmentQuery
+          : await filterByOrganizationId(departmentQuery, orgId, superAdmin);
       setDepartments((data || []) as Array<{ id: string; name: string }>);
     };
     loadDepartments();
-  }, [orgId, superAdmin, useDesktopLocalMode]);
+  }, [orgId, superAdmin, useDesktopLocalMode, user?.business_type]);
 
   useEffect(() => {
     const loadActiveSession = async () => {
@@ -370,12 +421,16 @@ export function RetailPOSPage({
           phone: ((row as { phone?: string | null }).phone ?? null) as string | null,
           credit_limit: Number((row as { credit_limit?: number | null }).credit_limit ?? 0),
           current_credit_balance: Number((row as { current_credit_balance?: number | null }).current_credit_balance ?? 0),
+          manufacturing_customer_type_id: null,
         })) as RetailCustomerRow[];
         setCustomers(mapped.filter((r) => r.id && r.name));
         return;
       }
       const { data } = await filterByOrganizationId(
-        supabase.from("retail_customers").select("id,name,phone,credit_limit,current_credit_balance").order("name"),
+        supabase
+          .from("retail_customers")
+          .select("id,name,phone,credit_limit,current_credit_balance,manufacturing_customer_type_id")
+          .order("name"),
         orgId,
         superAdmin
       );
@@ -383,6 +438,34 @@ export function RetailPOSPage({
     };
     void loadCustomers();
   }, [orgId, superAdmin, useDesktopLocalMode]);
+
+  useEffect(() => {
+    if (user?.business_type !== "manufacturing" || !orgId || useDesktopLocalMode) {
+      setManufacturingPrices([]);
+      setManufacturingCustomerTypes([]);
+      return;
+    }
+    void Promise.all([
+      supabase
+        .from("manufacturing_price_list")
+        .select("product_id,customer_type_id,min_qty,price")
+        .eq("organization_id", orgId),
+      supabase
+        .from("manufacturing_customer_types")
+        .select("id,name")
+        .eq("organization_id", orgId),
+    ]).then(([priceResult, typeResult]) => {
+      if (priceResult.error || typeResult.error) {
+        console.error("Manufacturing POS price-list load failed:", priceResult.error || typeResult.error);
+        toast({
+          title: "Price list unavailable",
+          description: (priceResult.error || typeResult.error)?.message || "Could not load manufacturing prices.",
+        });
+      }
+      setManufacturingPrices((priceResult.data || []) as ManufacturingPriceRow[]);
+      setManufacturingCustomerTypes((typeResult.data || []) as ManufacturingCustomerTypeRow[]);
+    });
+  }, [orgId, user?.business_type, useDesktopLocalMode]);
 
   useEffect(() => {
     if (leftPanelMode !== "clinic_workspace" || !orgId || useDesktopLocalMode) {
@@ -521,7 +604,25 @@ export function RetailPOSPage({
     void loadInsights();
   }, [products, useDesktopLocalMode]);
 
-  const getUnitPrice = (product: Product, quantity = 1) => getProductPrice(product, { quantity });
+  const getUnitPrice = (product: Product, quantity = 1) => {
+    const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId);
+    const retailTypeId = manufacturingCustomerTypes.find(
+      (type) => type.name.trim().toLowerCase() === "retail"
+    )?.id;
+    const customerTypeId = selectedCustomer?.manufacturing_customer_type_id || retailTypeId;
+    if (customerTypeId) {
+      const tier = manufacturingPrices
+        .filter(
+          (row) =>
+            row.product_id === product.id &&
+            row.customer_type_id === customerTypeId &&
+            Number(row.min_qty) <= quantity
+        )
+        .sort((a, b) => Number(b.min_qty) - Number(a.min_qty))[0];
+      if (tier) return Number(tier.price);
+    }
+    return getProductPrice(product, { quantity });
+  };
   const {
     cartByProductId,
     setCartByProductId,
@@ -539,6 +640,23 @@ export function RetailPOSPage({
     qtyPadAppend,
     qtyPadBackspace,
   } = useCart<Product>(getUnitPrice);
+
+  useEffect(() => {
+    setCartByProductId((previous) => {
+      let changed = false;
+      const next = { ...previous };
+      for (const [productId, item] of Object.entries(previous)) {
+        if (item.unitPriceOverride != null) continue;
+        const unitPrice = getUnitPrice(item.product, item.quantity);
+        const lineTotal = unitPrice * item.quantity;
+        if (lineTotal !== item.lineTotal) {
+          next[productId] = { ...item, lineTotal };
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [selectedCustomerId, customers, manufacturingPrices, manufacturingCustomerTypes, setCartByProductId]);
   const addToCart = (product: Product) => {
     addToCartBase(product);
     setQuickPickStats((prev) => {

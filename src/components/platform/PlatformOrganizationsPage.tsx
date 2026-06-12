@@ -20,6 +20,7 @@ type Org = {
   enable_wallet?: boolean | null;
   enable_payroll?: boolean | null;
   enable_budget?: boolean | null;
+  enable_treasury?: boolean | null;
   enable_agent?: boolean | null;
   enable_hotel_assessment?: boolean | null;
   enable_manufacturing?: boolean | null;
@@ -184,6 +185,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableWallet, setEditEnableWallet] = useState(true);
   const [editEnablePayroll, setEditEnablePayroll] = useState(true);
   const [editEnableBudget, setEditEnableBudget] = useState(true);
+  const [editEnableTreasury, setEditEnableTreasury] = useState(true);
   const [editEnableAgent, setEditEnableAgent] = useState(true);
   const [editEnableReports, setEditEnableReports] = useState(true);
   const [editEnableAccounting, setEditEnableAccounting] = useState(true);
@@ -243,6 +245,7 @@ export function PlatformOrganizationsPage() {
     key:
       | "enable_payroll"
       | "enable_budget"
+      | "enable_treasury"
       | "enable_agent"
       | "enable_hotel_assessment"
       | "enable_manufacturing",
@@ -597,6 +600,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableWallet(org.enable_wallet !== false);
     setEditEnablePayroll(org.enable_payroll !== false);
     setEditEnableBudget(org.enable_budget !== false);
+    setEditEnableTreasury(org.enable_treasury !== false);
     setEditEnableAgent(org.enable_agent !== false);
     setEditEnableReports(org.enable_reports !== false);
     setEditEnableAccounting(org.enable_accounting !== false);
@@ -638,6 +642,7 @@ export function PlatformOrganizationsPage() {
         enable_wallet: editEnableWallet,
         enable_payroll: editEnablePayroll,
         enable_budget: editEnableBudget,
+        enable_treasury: editEnableTreasury,
         enable_agent: editEnableAgent,
         enable_hotel_assessment: editEnableHotelAssessment,
         enable_manufacturing: editEnableManufacturing,
@@ -802,6 +807,7 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">Business type</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Staff</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Treasury</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Budget</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Agent Hub</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Assessment</th>
@@ -816,7 +822,7 @@ export function PlatformOrganizationsPage() {
             <tbody>
               {filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={13} className="p-8 text-center text-slate-600 text-sm">
+                  <td colSpan={14} className="p-8 text-center text-slate-600 text-sm">
                     {orgSearch.trim()
                       ? "No organizations match your search."
                       : "No organizations yet."}
@@ -847,6 +853,26 @@ export function PlatformOrganizationsPage() {
                           className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
                         >
                           {org.enable_payroll === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_treasury === false
+                              ? "bg-red-100 text-red-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_treasury === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => toggleOrgModule(org.id, "enable_treasury", !(org.enable_treasury !== false))}
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_treasury === false ? "Turn On" : "Turn Off"}
                         </button>
                       </div>
                     </td>
@@ -1264,6 +1290,14 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnableBudget(e.target.checked)}
                 />
                 Enable Budget module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableTreasury}
+                  onChange={(e) => setEditEnableTreasury(e.target.checked)}
+                />
+                Enable Treasury module
               </label>
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input

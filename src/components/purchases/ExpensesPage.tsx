@@ -93,7 +93,7 @@ function buildGlCodeToSimpleCategoryMap(): Map<string, SimpleCategory> {
 
 const SIMPLE_GL_CODE_TO_CATEGORY = buildGlCodeToSimpleCategoryMap();
 
-type PaymentMethodSimple = "cash" | "bank" | "mobile";
+type PaymentMethodSimple = "cash" | "bank" | "mobile" | "wallet";
 
 type SimpleExpenseLine = {
   key: string;
@@ -121,9 +121,11 @@ const GL_NAME_MOBILE =
 const GL_NAME_BANK =
   /bank\b|banking|current acc|checking|overdraft|savings\b|nostro|vostro|clearing|stanbic|absa|equity bank|dfc|crdb|centenary|diamond trust|exim|kcb\b|barclays|standard chartered/i;
 const GL_NAME_CASH = /cash\b|petty cash|till|imprest|cash drawer|cash on hand|float\b|safe\b/i;
+const GL_NAME_WALLET = /\bwallet\b|customer wallet|digital wallet/i;
 
 function inferPaymentLabelFromGlName(name: string): string {
   const n = (name || "").toLowerCase();
+  if (GL_NAME_WALLET.test(n)) return "Wallet";
   if (GL_NAME_MOBILE.test(n)) return "Mobile money";
   if (GL_NAME_BANK.test(n)) return "Bank";
   if (GL_NAME_CASH.test(n)) return "Cash";
@@ -140,6 +142,10 @@ function mapPaymentMethodToGlId(
     const m = list.find((a) => GL_NAME_MOBILE.test(txt(a)));
     if (m) return m.id;
   }
+  if (method === "wallet") {
+    const m = list.find((a) => GL_NAME_WALLET.test(txt(a)));
+    if (m) return m.id;
+  }
   if (method === "bank") {
     const m = list.find((a) => GL_NAME_BANK.test(txt(a)));
     if (m) return m.id;
@@ -153,6 +159,8 @@ function mapPaymentMethodToGlId(
       ? list.find((a) => GL_NAME_BANK.test(txt(a)))
       : method === "mobile"
         ? list.find((a) => GL_NAME_MOBILE.test(txt(a)) || /\bmobile\b|\bmoney\b/i.test(txt(a)))
+        : method === "wallet"
+          ? list.find((a) => GL_NAME_WALLET.test(txt(a)))
         : list.find((a) => GL_NAME_CASH.test(txt(a)) || /\bcash\b/i.test(txt(a)));
   return (fallback ?? list[0])?.id ?? null;
 }
@@ -281,6 +289,7 @@ function inferPaymentMethodFromGlId(glId: string, cashOptions: GlAccount[]): Pay
   const row = cashOptions.find((a) => a.id === glId);
   const name = row ? `${row.account_name} ${row.account_code}` : "";
   const n = name.toLowerCase();
+  if (GL_NAME_WALLET.test(n)) return "wallet";
   if (GL_NAME_MOBILE.test(n)) return "mobile";
   if (GL_NAME_BANK.test(n)) return "bank";
   return "cash";
@@ -1766,6 +1775,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                 <option value="cash">Cash</option>
                                 <option value="bank">Bank</option>
                                 <option value="mobile">Mobile money</option>
+                                <option value="wallet">Wallet</option>
                               </select>
                             </div>
                             <div className="flex flex-wrap items-center justify-between gap-2 text-sm">

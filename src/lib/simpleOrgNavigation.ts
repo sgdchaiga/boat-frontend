@@ -10,6 +10,7 @@ import {
   BedDouble,
   Receipt,
   Stethoscope,
+  Landmark,
 } from "lucide-react";
 import type { BusinessType } from "@/contexts/AuthContext";
 import { PAYROLL_PAGE } from "@/lib/payrollPages";
@@ -151,6 +152,9 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
           { name: "Orders", page: "retail_pos_orders" },
           { name: "Customers", page: "retail_customers" },
           { name: "Invoices", page: "retail_credit_invoices" },
+          ...(businessType === "manufacturing"
+            ? [{ name: "Price lists", page: "manufacturing_price_lists" as const }]
+            : []),
         ];
 
   const stock: NavChild[] = [
@@ -228,6 +232,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     ...clinicNav,
     ...(frontDesk ? [frontDesk] : []),
     ...(posOrders ? [posOrders] : []),
+    { name: "Treasury", icon: Landmark, page: "treasury" },
     { name: "Money In", icon: Banknote, children: moneyIn },
     { name: "Money Out", icon: CreditCard, children: moneyOut },
   ];
@@ -235,7 +240,6 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   if (!useHotelStyleOps) {
     core.push({ name: "Sales", icon: ShoppingCart, children: retailSales });
   }
-
   core.push(
     { name: "Stock", icon: Package, children: stock },
     /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */

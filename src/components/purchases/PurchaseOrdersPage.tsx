@@ -960,7 +960,7 @@ const approvedAt = new Date().toISOString();
       {showModal && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div
-            className="bg-white rounded-xl shadow-xl w-full max-w-lg max-h-[min(90vh,calc(100dvh-1rem))] my-4 sm:my-8 p-6 flex flex-col min-h-0"
+            className="bg-white rounded-xl shadow-xl w-full max-w-5xl max-h-[min(94vh,calc(100dvh-1rem))] my-2 sm:my-4 p-6 flex flex-col min-h-0"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
@@ -1039,7 +1039,7 @@ const approvedAt = new Date().toISOString();
                     <option key={p.id} value={p.name} />
                   ))}
                 </datalist>
-                <div className="space-y-3 max-h-[min(50vh,24rem)] overflow-y-auto overscroll-contain pr-1">
+                <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 max-h-[min(62vh,38rem)] overflow-y-auto overscroll-contain pr-1">
                   {lineItems.map((item, idx) => (
                     <div key={idx} className="border-2 border-slate-100 rounded-xl p-4 bg-slate-50/80 space-y-3">
                       <div>

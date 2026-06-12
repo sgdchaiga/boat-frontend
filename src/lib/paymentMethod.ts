@@ -6,7 +6,8 @@ export type PaymentMethodCode =
   | "card"
   | "bank_transfer"
   | "mtn_mobile_money"
-  | "airtel_money";
+  | "airtel_money"
+  | "wallet";
 
 export const PAYMENT_METHOD_SELECT_OPTIONS: { value: PaymentMethodCode; label: string }[] = [
   { value: "cash", label: "Cash" },
@@ -14,6 +15,7 @@ export const PAYMENT_METHOD_SELECT_OPTIONS: { value: PaymentMethodCode; label: s
   { value: "bank_transfer", label: "Bank transfer" },
   { value: "mtn_mobile_money", label: "MTN Mobile Money" },
   { value: "airtel_money", label: "Airtel Money" },
+  { value: "wallet", label: "Wallet" },
 ];
 
 const METHOD_VALUES = new Set<string>(PAYMENT_METHOD_SELECT_OPTIONS.map((o) => o.value));

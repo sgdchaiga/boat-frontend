@@ -18,6 +18,7 @@ export type RetailCustomerRow = {
   phone: string | null;
   address: string | null;
   notes: string | null;
+  manufacturing_customer_type_id?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -46,6 +47,8 @@ export function RetailCustomersPage({
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
   const [notes, setNotes] = useState("");
+  const [customerTypeId, setCustomerTypeId] = useState("");
+  const [customerTypes, setCustomerTypes] = useState<Array<{ id: string; name: string }>>([]);
   const highlightOpenedRef = useRef<string | null>(null);
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const useDesktopLocalMode = localAuthEnabled && desktopApi.isAvailable();
@@ -84,6 +87,19 @@ export function RetailCustomersPage({
     void load();
   }, [load]);
 
+  useEffect(() => {
+    if (user?.business_type !== "manufacturing" || !orgId || useDesktopLocalMode) {
+      setCustomerTypes([]);
+      return;
+    }
+    void sb
+      .from("manufacturing_customer_types")
+      .select("id,name")
+      .eq("organization_id", orgId)
+      .order("name")
+      .then(({ data }: { data?: Array<{ id: string; name: string }> }) => setCustomerTypes(data || []));
+  }, [orgId, user?.business_type, useDesktopLocalMode]);
+
   const openNew = () => {
     setEditing(null);
     setName("");
@@ -91,6 +107,7 @@ export function RetailCustomersPage({
     setPhone("");
     setAddress("");
     setNotes("");
+    setCustomerTypeId("");
     setShowModal(true);
   };
 
@@ -101,6 +118,7 @@ export function RetailCustomersPage({
     setPhone(r.phone || "");
     setAddress(r.address || "");
     setNotes(r.notes || "");
+    setCustomerTypeId(r.manufacturing_customer_type_id || "");
     setShowModal(true);
   }, []);
 
@@ -132,6 +150,9 @@ export function RetailCustomersPage({
         phone: phone.trim() || null,
         address: address.trim() || null,
         notes: notes.trim() || null,
+        ...(user?.business_type === "manufacturing"
+          ? { manufacturing_customer_type_id: customerTypeId || null }
+          : {}),
       };
       if (useDesktopLocalMode) {
         if (editing) {
@@ -221,13 +242,14 @@ export function RetailCustomersPage({
                 <th className="text-left p-3">Email</th>
                 <th className="text-left p-3">Phone</th>
                 <th className="text-left p-3">Address</th>
+                {user?.business_type === "manufacturing" ? <th className="text-left p-3">Customer type</th> : null}
                 <th className="text-left p-3 w-48">Actions</th>
               </tr>
             </thead>
             <tbody>
               {rows.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="p-8 text-center text-slate-500">
+                  <td colSpan={user?.business_type === "manufacturing" ? 6 : 5} className="p-8 text-center text-slate-500">
                     No customers yet. Add one to pick them in invoices.
                   </td>
                 </tr>
@@ -238,6 +260,11 @@ export function RetailCustomersPage({
                     <td className="p-3">{r.email || "—"}</td>
                     <td className="p-3">{r.phone || "—"}</td>
                     <td className="p-3 max-w-xs truncate">{r.address || "—"}</td>
+                    {user?.business_type === "manufacturing" ? (
+                      <td className="p-3">
+                        {customerTypes.find((type) => type.id === r.manufacturing_customer_type_id)?.name || "Retail"}
+                      </td>
+                    ) : null}
                     <td className="p-3">
                       <div className="flex flex-wrap gap-1">
                         <button
@@ -326,6 +353,22 @@ export function RetailCustomersPage({
                   disabled={readOnly}
                 />
               </label>
+              {user?.business_type === "manufacturing" ? (
+                <label className="block text-sm">
+                  <span className="text-slate-600">Customer type</span>
+                  <select
+                    className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                    value={customerTypeId}
+                    onChange={(e) => setCustomerTypeId(e.target.value)}
+                    disabled={readOnly}
+                  >
+                    <option value="">Retail / standard price</option>
+                    {customerTypes.map((type) => (
+                      <option key={type.id} value={type.id}>{type.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
             </div>
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" className="app-btn-secondary" onClick={() => !saving && setShowModal(false)}>

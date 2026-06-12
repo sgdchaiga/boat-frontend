@@ -28,6 +28,12 @@ const salesCards = [
     page: "retail_pos_orders",
     icon: ClipboardList,
   },
+  {
+    title: "Price lists",
+    desc: "Set customer-type and quantity-based prices for retail, dealers, and distributors.",
+    page: "manufacturing_price_lists",
+    icon: FileText,
+  },
 ] as const;
 
 const starterCards = [

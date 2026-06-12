@@ -16,6 +16,7 @@ import {
   TrendingUp,
   BarChart3,
   Monitor,
+  Landmark,
 } from "lucide-react";
 import { HOTEL_PAGE } from "@/lib/hotelPages";
 import {
@@ -93,6 +94,7 @@ export const ROLE_PAGE_ALLOW: Record<Exclude<NavRoleExperience, "full">, Set<str
     "cash_receipts",
     "transactions",
     "retail_credit_invoices",
+    "treasury",
   ]),
   manager: new Set([
     "dashboard",
@@ -213,6 +215,7 @@ function accountantNav(): RoleNavLeaf[] {
     { name: "Cash flow", icon: Banknote, page: "accounting_cashflow" },
     { name: "Stock valuation", icon: Package, page: "inventory_stock_balances" },
     { name: "Chart of accounts", icon: BookOpen, page: "gl_accounts" },
+    { name: "Treasury", icon: Landmark, page: "treasury" },
   ];
 }
 
@@ -249,7 +252,11 @@ export function buildRoleNavigation(
       return managerNav();
     case "storekeeper":
       return [
-        { name: "Dashboard", icon: LayoutDashboard, page: "dashboard" },
+        {
+          name: "Dashboard",
+          icon: LayoutDashboard,
+          page: businessType === "manufacturing" ? "manufacturing" : "dashboard",
+        },
         { name: "Items", icon: Package, page: "Products" },
         { name: "Stock levels", icon: Package, page: "inventory_stock_balances" },
         { name: "Buy stock", icon: ClipboardList, page: "purchases_orders" },

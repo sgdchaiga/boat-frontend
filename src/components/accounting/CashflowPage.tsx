@@ -37,6 +37,49 @@ type CashMovement = {
 
 type StatementMethod = "direct" | "indirect";
 
+const JOURNAL_ENTRY_ID_CHUNK_SIZE = 100;
+
+function chunkEntryIds(entryIds: string[]): string[][] {
+  const chunks: string[][] = [];
+  for (let index = 0; index < entryIds.length; index += JOURNAL_ENTRY_ID_CHUNK_SIZE) {
+    chunks.push(entryIds.slice(index, index + JOURNAL_ENTRY_ID_CHUNK_SIZE));
+  }
+  return chunks;
+}
+
+async function fetchCashAccountLines(entryIds: string[], cashAccountId: string) {
+  const results = await Promise.all(
+    chunkEntryIds(entryIds).map((ids) =>
+      supabase
+        .from("journal_entry_lines")
+        .select("journal_entry_id, debit, credit")
+        .eq("gl_account_id", cashAccountId)
+        .in("journal_entry_id", ids)
+    )
+  );
+  const failed = results.find((result) => result.error);
+  if (failed?.error) throw new Error(failed.error.message);
+  return results.flatMap((result) => result.data || []) as Array<{
+    journal_entry_id: string;
+    debit: number;
+    credit: number;
+  }>;
+}
+
+async function fetchStatementLines(entryIds: string[]) {
+  const results = await Promise.all(
+    chunkEntryIds(entryIds).map((ids) =>
+      supabase
+        .from("journal_entry_lines")
+        .select("gl_account_id, debit, credit, journal_entry_id")
+        .in("journal_entry_id", ids)
+    )
+  );
+  const failed = results.find((result) => result.error);
+  if (failed?.error) throw new Error(failed.error.message);
+  return results.flatMap((result) => result.data || []) as (JournalLineRow & { journal_entry_id: string })[];
+}
+
 export function CashflowPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
@@ -107,20 +150,17 @@ export function CashflowPage() {
 
     let opening = 0;
     if (entryIdsBefore.length > 0) {
-      const { data: linesBefore, error: eOpen } = await supabase
-        .from("journal_entry_lines")
-        .select("debit, credit")
-        .eq("gl_account_id", cashAccountId)
-        .in("journal_entry_id", entryIdsBefore);
-      if (eOpen) {
-        setQueryError(eOpen.message);
+      try {
+        const linesBefore = await fetchCashAccountLines(entryIdsBefore, cashAccountId);
+        linesBefore.forEach((l) => {
+          opening += Number(l.debit) || 0;
+          opening -= Number(l.credit) || 0;
+        });
+      } catch (error) {
+        setQueryError(error instanceof Error ? error.message : "Could not load opening cash balance.");
         setLoading(false);
         return;
       }
-      (linesBefore || []).forEach((l: { debit: number; credit: number }) => {
-        opening += Number(l.debit) || 0;
-        opening -= Number(l.credit) || 0;
-      });
     }
 
     const { data: entriesData, error: eEnt } = await filterByOrganizationId(
@@ -150,14 +190,11 @@ export function CashflowPage() {
       return;
     }
 
-    const { data: linesData, error: eLines } = await supabase
-      .from("journal_entry_lines")
-      .select("journal_entry_id, debit, credit")
-      .eq("gl_account_id", cashAccountId)
-      .in("journal_entry_id", entryIds);
-
-    if (eLines) {
-      setQueryError(eLines.message);
+    let linesData: Awaited<ReturnType<typeof fetchCashAccountLines>>;
+    try {
+      linesData = await fetchCashAccountLines(entryIds, cashAccountId);
+    } catch (error) {
+      setQueryError(error instanceof Error ? error.message : "Could not load cash account movements.");
       setLoading(false);
       return;
     }
@@ -293,12 +330,7 @@ export function CashflowPage() {
 
     const fetchLinesForEntries = async (entryIds: string[]) => {
       if (entryIds.length === 0) return [] as JournalLineRow[];
-      const { data, error } = await supabase
-        .from("journal_entry_lines")
-        .select("gl_account_id, debit, credit, journal_entry_id")
-        .in("journal_entry_id", entryIds);
-      if (error) throw new Error(error.message);
-      return (data || []) as (JournalLineRow & { journal_entry_id: string })[];
+      return fetchStatementLines(entryIds);
     };
 
     const fetchEntryIds = async (cond: { lt?: string; lte?: string; gte?: string }) => {

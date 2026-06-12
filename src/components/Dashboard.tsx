@@ -18,7 +18,7 @@ import {
   Package,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { businessTodayISO, computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
+import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { applyHospitalityBranchFilter } from "../lib/hospitalityBranchScope";
@@ -60,6 +60,32 @@ interface DashboardProps {
 }
 
 type RevenueRange = "today" | "this_week" | "this_month";
+
+type RoomRow = {
+  status: string | null;
+};
+
+type StayRow = {
+  actual_check_in: string | null;
+  actual_check_out: string | null;
+};
+
+type ReservationRow = {
+  status: string | null;
+  check_in_date: string | null;
+  check_out_date: string | null;
+  created_at: string | null;
+};
+
+type CustomerRow = {
+  id: string;
+  created_at: string | null;
+};
+
+type HousekeepingRow = {
+  status: string | null;
+  created_at: string | null;
+};
 
 function priorRevenueRangeKey(range: RevenueRange): DateRangeKey {
   if (range === "today") return "yesterday";
@@ -232,11 +258,11 @@ export function Dashboard({ onNavigate }: DashboardProps) {
       if (kitchenCountResult.error) throw new Error(kitchenCountResult.error.message);
       if (paymentsResult.error) throw new Error(paymentsResult.error.message);
 
-      const rooms = roomsResult.data || [];
-      const stays = staysResult.data || [];
-      const reservations = reservationsResult.data || [];
-      const customers = customersResult.data || [];
-      const housekeeping = housekeepingResult.data || [];
+      const rooms = (roomsResult.data || []) as RoomRow[];
+      const stays = (staysResult.data || []) as StayRow[];
+      const reservations = (reservationsResult.data || []) as ReservationRow[];
+      const customers = (customersResult.data || []) as CustomerRow[];
+      const housekeeping = (housekeepingResult.data || []) as HousekeepingRow[];
       const payments = (paymentsResult.data || []) as DashboardPayment[];
 
       const kitchenIds = await fetchKitchenOrderIdsForPayments(payments, orgId, superAdmin);
@@ -282,11 +308,7 @@ export function Dashboard({ onNavigate }: DashboardProps) {
         0,
         totalRooms - occupiedRooms - maintenanceRooms - cleaningRooms
       );
-      type StayRow = {
-        actual_check_in: string | null;
-        actual_check_out: string | null;
-      };
-      const periodStays = (stays as StayRow[]).filter((s) => {
+      const periodStays = stays.filter((s) => {
         const checkIn = s.actual_check_in ? new Date(s.actual_check_in).getTime() : NaN;
         const checkOut = s.actual_check_out ? new Date(s.actual_check_out).getTime() : Number.POSITIVE_INFINITY;
         if (!Number.isFinite(checkIn)) return false;

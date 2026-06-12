@@ -140,7 +140,7 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
 
         const fallback = await supabase
           .from("products")
-          .select("id,name,sales_price,cost_price,track_inventory")
+          .select("id,name,sales_price,cost_price,track_inventory,department_id")
           .eq("active", true)
           .order("name")
           .range(0, ONLINE_INITIAL_FETCH - 1);
@@ -191,8 +191,19 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
         .eq("active", true)
         .order("name")
         .range(productOffset, productOffset + ONLINE_LOAD_MORE_CHUNK - 1);
-      if (error) throw error;
-      const rows = (data || []) as TProduct[];
+      let rows: TProduct[];
+      if (error) {
+        const fallback = await supabase
+          .from("products")
+          .select("id,name,sales_price,cost_price,track_inventory,department_id")
+          .eq("active", true)
+          .order("name")
+          .range(productOffset, productOffset + ONLINE_LOAD_MORE_CHUNK - 1);
+        if (fallback.error) throw fallback.error;
+        rows = (fallback.data || []).map((p) => ({ ...p, barcode: null, sku: null, code: null })) as TProduct[];
+      } else {
+        rows = (data || []) as TProduct[];
+      }
       if (rows.length === 0) {
         setHasMoreProducts(false);
         return;
@@ -215,14 +226,27 @@ export function useProductCatalog<TProduct extends ProductCatalogItem>(useDeskto
     }
     const timer = window.setTimeout(async () => {
       try {
-        const { data } = await supabase
+        const rich = await supabase
           .from("products")
           .select("id,name,sales_price,cost_price,track_inventory,department_id,barcode,sku,code")
           .eq("active", true)
           .or(`name.ilike.%${q}%,barcode.ilike.%${q}%,sku.ilike.%${q}%,code.ilike.%${q}%`)
           .order("name")
           .limit(REMOTE_SEARCH_LIMIT);
-        setRemoteSearchProducts((data || []) as TProduct[]);
+        if (!rich.error) {
+          setRemoteSearchProducts((rich.data || []) as TProduct[]);
+          return;
+        }
+        const fallback = await supabase
+          .from("products")
+          .select("id,name,sales_price,cost_price,track_inventory,department_id")
+          .eq("active", true)
+          .ilike("name", `%${q}%`)
+          .order("name")
+          .limit(REMOTE_SEARCH_LIMIT);
+        setRemoteSearchProducts(
+          (fallback.data || []).map((p) => ({ ...p, barcode: null, sku: null, code: null })) as TProduct[]
+        );
       } catch {
         setRemoteSearchProducts(null);
       }

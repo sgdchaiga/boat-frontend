@@ -31,6 +31,7 @@ export type ModuleId =
   | "payroll"
   | "budget"
   | "wallet"
+  | "treasury"
   | "communications"
   | "agent"
   | "hotel_assessment";
@@ -89,6 +90,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   payroll: "both",
   budget: "both",
   wallet: "both",
+  treasury: "both",
   communications: "both",
   agent: "both",
   hotel_assessment: "hotel",
@@ -123,6 +125,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   payroll: true,
   budget: true,
   wallet: true,
+  treasury: true,
   communications: false,
   agent: false,
   hotel_assessment: false,
@@ -181,6 +184,8 @@ export function getModuleAccess(input: {
   enablePayroll?: boolean;
   /** Platform: Budget module toggle. */
   enableBudget?: boolean;
+  /** Platform: Treasury module toggle. */
+  enableTreasury?: boolean;
   /** Platform: Agent hub toggle. */
   enableAgent?: boolean;
   /** Platform: Hotel assessment & onboarding. */
@@ -207,6 +212,7 @@ export function getModuleAccess(input: {
     enableWallet,
     enablePayroll,
     enableBudget,
+    enableTreasury,
     enableAgent,
     enableHotelAssessment,
     enableManufacturing,
@@ -332,6 +338,14 @@ export function getModuleAccess(input: {
       visible: false,
       readOnly: true,
       blockedReason: "Budget is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "treasury" && enableTreasury !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Treasury is not enabled for this organization. Ask a platform admin to turn it on.",
     };
   }
 
@@ -464,7 +478,11 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
         page === "retail_credit_invoices");
     if (hotelRestaurantCounterRetail) return true;
     const manufacturingCounterPos =
-      businessType === "manufacturing" && (page === "retail_pos" || page === "retail_pos_orders");
+      businessType === "manufacturing" &&
+      (page === "retail_pos" ||
+        page === "retail_pos_orders" ||
+        page === "retail_customers" ||
+        page === "retail_credit_invoices");
     if (!manufacturingCounterPos) return false;
   }
 
@@ -521,6 +539,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "manufacturing_work_orders",
     "manufacturing_production_entries",
     "manufacturing_costing",
+    "manufacturing_price_lists",
   ].includes(page)) return "manufacturing";
   if (["purchases_vendors", "purchases_expenses", "purchases_orders", "purchases_bills", "purchases_payments", "purchases_credits"].includes(page)) return "purchases";
   if ([
@@ -564,6 +583,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "fixed_assets") return "fixed_assets";
   if (page.startsWith("payroll_")) return "payroll";
   if (page === "wallet") return "wallet";
+  if (page === "treasury") return "treasury";
   if (["staff"].includes(page)) return "staff";
   if (["admin"].includes(page)) return "admin";
   /** Explicit SACCO routes (also covered by SACCOPRO_PAGE; kept for URL/bookmark stability). */
