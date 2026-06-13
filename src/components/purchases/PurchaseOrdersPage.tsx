@@ -597,6 +597,18 @@ if (isLocalDesktopMode && desktopApi.isAvailable()) {
         (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() ||
         DEFAULT_LOCAL_ORG_ID;
 
+      const existingBill = await desktopApi.localSelect({
+        table: "bills",
+        filters: [{ column: "purchase_order_id", operator: "eq", value: order.id }],
+        limit: 1,
+      });
+      const existingBillId = String((existingBill.rows?.[0] as Record<string, unknown> | undefined)?.id || "");
+      if (existingBillId) {
+        setBillsByPoId((prev) => ({ ...prev, [order.id]: existingBillId }));
+        alert("This purchase order has already been sent to GRN/Bills.");
+        return;
+      }
+
       const billId = randomUuid();
 
       await desktopApi.localUpsert({
@@ -605,7 +617,7 @@ if (isLocalDesktopMode && desktopApi.isAvailable()) {
           {
             id: billId,
             vendor_id: order.vendor_id,
-            bill_date: businessTodayISO(),
+            bill_date: order.order_date || businessTodayISO(),
             amount: Number(order.total_amount || 0),
             description: "From Purchase Order",
             purchase_order_id: order.id,
@@ -647,10 +659,24 @@ const approvedAt = new Date().toISOString();
       const approvedBy = staffRow?.id ? String(staffRow.id) : null;
       const autoFinalizeBill = !requireBillApproval;
       const amt = Number(order.total_amount || 0);
+      const billDate = order.order_date || businessTodayISO();
+
+      const existingBillQuery = filterByOrganizationId(
+        supabase.from("bills").select("id").eq("purchase_order_id", order.id).limit(1),
+        orgId,
+        superAdmin
+      );
+      const { data: existingBill, error: existingBillError } = await existingBillQuery.maybeSingle();
+      if (existingBillError) throw existingBillError;
+      if (existingBill?.id) {
+        setBillsByPoId((prev) => ({ ...prev, [order.id]: existingBill.id }));
+        alert("This purchase order has already been sent to GRN/Bills.");
+        return;
+      }
 
       const insertPayload: Record<string, unknown> = {
         vendor_id: order.vendor_id,
-        bill_date: businessTodayISO(),
+        bill_date: billDate,
         amount: amt,
         description: `From Purchase Order`,
         purchase_order_id: order.id,
@@ -689,7 +715,7 @@ const approvedAt = new Date().toISOString();
           newBill.id,
           amt,
           "From Purchase Order",
-          newBill.bill_date || businessTodayISO(),
+          newBill.bill_date || billDate,
           user?.id ?? null
         );
         if (!jr.ok) {

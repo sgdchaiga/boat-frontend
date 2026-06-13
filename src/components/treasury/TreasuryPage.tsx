@@ -21,7 +21,7 @@ type TreasuryRequest = {
   payment_method: string | null;
   payment_reference: string | null;
 };
-type Collection = { amount: number; payment_source: string | null; paid_at: string; payment_method: string | null };
+type Collection = { amount: number; payment_source: string | null; paid_at: string; payment_method: string | null; transaction_id: string | null };
 type TreasuryTab = "overview" | "cash-control" | "approvals" | "disbursements" | "budgets" | "wallets" | "collections" | "history";
 type PaymentMethod = "cash" | "bank_transfer" | "mobile_money" | "wallet" | "card";
 type FundingAccount = { id: string; account_code: string; account_name: string; account_type: string; category: string | null };
@@ -36,6 +36,14 @@ const statusLabel: Record<Status, string> = {
   rejected: "Rejected",
   disbursed: "Disbursed",
 };
+
+function localDatePart(value: string): string {
+  const date = new Date(value);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 function StatusBadge({ status }: { status: Status }) {
   const tone =
@@ -83,13 +91,15 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
   const [walletSummary, setWalletSummary] = useState<WalletSummary>({ count: 0, balance: 0, active: 0 });
   const [showComments, setShowComments] = useState(false);
   const [spendMoneyApprovalEnabled, setSpendMoneyApprovalEnabled] = useState(true);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   const fetchData = useCallback(async () => {
     if (!user?.organization_id) return;
     setLoading(true);
     const [requestRes, collectionRes, accountRes, budgetRes, walletRes, walletBalanceRes, workflowRes] = await Promise.all([
       supabase.from("treasury_requests").select("*").eq("organization_id", user.organization_id).order("requested_at", { ascending: false }),
-      supabase.from("payments").select("amount,payment_source,paid_at,payment_method").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).order("paid_at", { ascending: false }).limit(100),
+      supabase.from("payments").select("amount,payment_source,paid_at,payment_method,transaction_id").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).order("paid_at", { ascending: false }).limit(100),
       supabase.from("gl_accounts").select("id,account_code,account_name,account_type,category").eq("organization_id", user.organization_id).order("account_code"),
       supabase.from("budgets").select("id,name,period_label,is_active,budget_lines(amount)").eq("organization_id", user.organization_id).eq("is_active", true),
       supabase.from("wallets").select("id,status").eq("organization_id", user.organization_id),
@@ -100,7 +110,25 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     if (collectionRes.error) console.error("Unable to load Treasury collections:", collectionRes.error);
     if (accountRes.error) console.error("Unable to load Treasury funding accounts:", accountRes.error);
     setRequests((requestRes.data || []) as TreasuryRequest[]);
-    setCollections((collectionRes.data || []) as Collection[]);
+    const loadedCollections = (collectionRes.data || []) as Collection[];
+    const retailSaleIds = [...new Set(
+      loadedCollections
+        .filter((row) => row.payment_source === "pos_retail" && row.transaction_id)
+        .map((row) => row.transaction_id!)
+    )];
+    const { data: activeRetailSales, error: activeRetailSalesError } = retailSaleIds.length
+      ? await supabase
+          .from("retail_sales")
+          .select("id,sale_status")
+          .eq("organization_id", user.organization_id)
+          .in("id", retailSaleIds)
+          .not("sale_status", "in", '("void","refunded")')
+      : { data: [], error: null };
+    if (activeRetailSalesError) console.error("Unable to validate Treasury retail POS collections:", activeRetailSalesError);
+    const activeRetailSaleIds = new Set((activeRetailSales || []).map((sale) => sale.id));
+    setCollections(loadedCollections.filter(
+      (row) => row.payment_source !== "pos_retail" || (!!row.transaction_id && activeRetailSaleIds.has(row.transaction_id))
+    ));
     setSpendMoneyApprovalEnabled(workflowRes.data?.allowed !== false);
     const nextFundingAccounts = ((accountRes.data || []) as FundingAccount[]).filter((account) => {
       if (String(account.category || "").toLowerCase() === "cash") return true;
@@ -154,19 +182,34 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     if (!spendMoneyApprovalEnabled && activeTab === "approvals") setActiveTab("overview");
   }, [activeTab, spendMoneyApprovalEnabled]);
 
+  const filteredCollections = useMemo(
+    () => collections.filter((collection) => {
+      const date = localDatePart(collection.paid_at);
+      return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
+    }),
+    [collections, dateFrom, dateTo]
+  );
+  const filteredRequests = useMemo(
+    () => requests.filter((request) => {
+      const date = localDatePart(request.requested_at);
+      return (!dateFrom || date >= dateFrom) && (!dateTo || date <= dateTo);
+    }),
+    [requests, dateFrom, dateTo]
+  );
+
   const totals = useMemo(() => {
-    const pending = requests.filter((r) => r.status === "pending_approval").reduce((s, r) => s + Number(r.amount), 0);
-    const ready = requests.filter((r) => r.status === "approved").reduce((s, r) => s + Number(r.amount), 0);
-    const pos = collections.filter((r) => r.payment_source?.startsWith("pos_")).reduce((s, r) => s + Number(r.amount), 0);
-    const billing = collections.filter((r) => r.payment_source === "debtor").reduce((s, r) => s + Number(r.amount), 0);
-    const disbursed = requests.filter((r) => r.status === "disbursed").reduce((s, r) => s + Number(r.amount), 0);
+    const pending = filteredRequests.filter((r) => r.status === "pending_approval").reduce((s, r) => s + Number(r.amount), 0);
+    const ready = filteredRequests.filter((r) => r.status === "approved").reduce((s, r) => s + Number(r.amount), 0);
+    const pos = filteredCollections.filter((r) => r.payment_source?.startsWith("pos_")).reduce((s, r) => s + Number(r.amount), 0);
+    const billing = filteredCollections.filter((r) => r.payment_source === "debtor").reduce((s, r) => s + Number(r.amount), 0);
+    const disbursed = filteredRequests.filter((r) => r.status === "disbursed").reduce((s, r) => s + Number(r.amount), 0);
     const inflows = pos + billing;
     return { pending, ready, pos, billing, disbursed, inflows, projectedAvailable: inflows - ready };
-  }, [requests, collections]);
+  }, [filteredRequests, filteredCollections]);
 
   const visibleRequests = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return requests.filter((request) => {
+    return filteredRequests.filter((request) => {
       if (sourceFilter !== "all" && request.source_type !== sourceFilter) return false;
       if (activeTab === "approvals" && request.status !== "pending_approval") return false;
       if (activeTab === "disbursements" && request.status !== "approved") return false;
@@ -175,10 +218,10 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
       return [request.payee_name, request.purpose, request.source_type, request.status]
         .some((value) => String(value || "").toLowerCase().includes(q));
     });
-  }, [activeTab, requests, search, sourceFilter]);
+  }, [activeTab, filteredRequests, search, sourceFilter]);
 
-  const spendMoneyRequests = requests.filter((request) => request.source_type === "expense");
-  const buyStockRequests = requests.filter((request) => request.source_type === "bill");
+  const spendMoneyRequests = filteredRequests.filter((request) => request.source_type === "expense");
+  const buyStockRequests = filteredRequests.filter((request) => request.source_type === "bill");
   const cashUnderManagement = cashAccounts.reduce((sum, account) => sum + account.balance, 0);
   const pettyCashBalance = cashAccounts.filter((account) => /petty|imprest/i.test(account.account_name)).reduce((sum, account) => sum + account.balance, 0);
   const lowFloatAccounts = cashAccounts.filter((account) => account.kind === "Float" && account.balance <= 0);
@@ -328,6 +371,16 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
         ))}
       </div>
 
+      <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+        <div className="mr-auto">
+          <p className="text-sm font-bold text-slate-900">Date filter</p>
+          <p data-treasury-comment className="text-xs text-slate-500">Filters Treasury requests, forecasts, and incoming collections. Cash balances remain current.</p>
+        </div>
+        <label className="text-xs font-semibold text-slate-600">From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal text-slate-800" /></label>
+        <label className="text-xs font-semibold text-slate-600">To<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal text-slate-800" /></label>
+        <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); }} disabled={!dateFrom && !dateTo} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Clear dates</button>
+      </div>
+
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <MetricCard label="Cash inflows captured" value={money.format(totals.inflows)} hint="POS and billing collections" icon={WalletCards} />
         {spendMoneyApprovalEnabled && <MetricCard label="Pending approvals" value={money.format(totals.pending)} hint="Spend Money requests awaiting review" icon={ShieldCheck} />}
@@ -347,7 +400,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
               <h3 className="mt-4 font-bold text-slate-900">Buy Stock supplier payments</h3><p data-treasury-comment className="mt-1 text-sm text-slate-500">Approved Buy Stock bills arrive ready for supplier fund disbursement.</p>
             </button>
             <button type="button" onClick={() => setActiveTab("collections")} className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-white p-5 text-left shadow-sm hover:border-emerald-300">
-              <div className="flex items-center justify-between"><span className="rounded-xl bg-emerald-100 p-3 text-emerald-700"><Landmark className="h-5 w-5" /></span><span className="text-2xl font-bold text-slate-900">{collections.length}</span></div>
+              <div className="flex items-center justify-between"><span className="rounded-xl bg-emerald-100 p-3 text-emerald-700"><Landmark className="h-5 w-5" /></span><span className="text-2xl font-bold text-slate-900">{filteredCollections.length}</span></div>
               <h3 className="mt-4 font-bold text-slate-900">Incoming collections</h3><p data-treasury-comment className="mt-1 text-sm text-slate-500">Monitor completed POS and billing receipts available to Treasury.</p>
             </button>
           </div>
@@ -456,7 +509,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Source</th><th className="px-5 py-3">Method</th><th className="px-5 py-3 text-right">Amount</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
-              {collections.length === 0 ? <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No completed POS or Billing collections found.</td></tr> : collections.slice(0, 20).map((collection, index) => (
+              {filteredCollections.length === 0 ? <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No completed POS or Billing collections found for the selected dates.</td></tr> : filteredCollections.slice(0, 20).map((collection, index) => (
                 <tr key={`${collection.paid_at}-${index}`}>
                   <td className="px-5 py-4 text-slate-600">{new Date(collection.paid_at).toLocaleString()}</td>
                   <td className="px-5 py-4 font-semibold text-slate-800">{collection.payment_source === "debtor" ? "Billing" : collection.payment_source?.startsWith("pos_") ? "POS" : collection.payment_source || "Collection"}</td>

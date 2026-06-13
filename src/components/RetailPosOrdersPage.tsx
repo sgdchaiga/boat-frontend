@@ -13,6 +13,7 @@ import {
 import { PageNotes } from "./common/PageNotes";
 import { getPosLabels } from "../lib/posExperience";
 import { syncRetailPosOrderAfterEdit } from "../lib/retailPosOrderSync";
+import { reverseJournalEntriesByReference } from "../lib/journal";
 
 type SaleLine = {
   id: string;
@@ -372,6 +373,15 @@ export function RetailPosOrdersPage() {
         superAdmin
       );
       if (payErr) throw payErr;
+
+      const journalReversal = await reverseJournalEntriesByReference(
+        "pos",
+        order.id,
+        user?.id ?? null,
+        `Retail POS order ${order.id.slice(0, 8)} cancelled`
+      );
+      if (!journalReversal.ok) throw new Error(journalReversal.error);
+
       for (const p of payRows || []) {
         const docs =
           p.source_documents && typeof p.source_documents === "object"

@@ -51,6 +51,7 @@ export type PageAccessDef = {
     | "POS"
     | "Customers"
     | "Cash"
+    | "Treasury"
     | "Purchases"
     | "Inventory"
     | "Reports"
@@ -91,7 +92,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "cash_receipts", label: "Cash receipts", group: "Cash" },
   { page: "transactions", label: "Transactions", group: "Cash" },
   { page: "wallet", label: "Wallet", group: "Cash" },
-  { page: "treasury", label: "Treasury", group: "Cash" },
+  { page: "treasury", label: "Treasury page", group: "Treasury" },
   { page: "purchases_vendors", label: "Vendors", group: "Purchases" },
   { page: "purchases_orders", label: "Purchase orders", group: "Purchases" },
   { page: "purchases_bills", label: "GRN / bills", group: "Purchases" },
