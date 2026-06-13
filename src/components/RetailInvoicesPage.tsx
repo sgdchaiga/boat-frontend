@@ -37,14 +37,11 @@ const sb = supabase as any;
 function isMissingRetailInvoicesSchemaError(message: string | undefined | null): boolean {
   const m = (message || "").toLowerCase();
   return (
-    m.includes("retail_invoices") ||
-    m.includes("retail_invoice_lines") ||
-    m.includes("retail_customers") ||
-    m.includes("clinic_patient_id") ||
-    m.includes("guest_id") ||
     m.includes("schema cache") ||
     m.includes("pgrst205") ||
-    m.includes("could not find the table")
+    m.includes("could not find the table") ||
+    m.includes("relation \"public.retail_invoice") ||
+    m.includes("relation \"retail_invoice")
   );
 }
 
@@ -794,7 +791,7 @@ export function RetailInvoicesPage({
       const msg = [pe.message, pe.details, pe.hint].filter(Boolean).join(" — ") || (e instanceof Error ? e.message : String(e));
       if (isMissingRetailInvoicesSchemaError(msg)) {
         setNeedsMigration(true);
-        alert("The invoices tables are missing on the server. Run the SQL migration in Supabase (see the notice on this page), then try again.");
+        alert("The invoice database schema is missing or outdated. Run the pending SQL migrations in Supabase (see the notice on this page), then try again.");
       } else {
         console.error("Save invoice error:", e);
         alert(msg || "Failed to save invoice.");
@@ -1186,8 +1183,8 @@ export function RetailInvoicesPage({
         <div className="app-alert-warning space-y-3">
           <p className="font-semibold text-amber-950">Database migration required</p>
           <p className="text-sm">
-            Supabase cannot find <code className="rounded bg-amber-100/80 px-1 text-xs">public.retail_invoices</code> — the
-            migration has not been applied to this project (or the API schema cache has not refreshed yet).
+            Supabase cannot find part of the invoice schema. One or more invoice migrations have not been applied to
+            this project, or the API schema cache has not refreshed yet.
           </p>
           <ol className="list-decimal list-inside text-sm space-y-1 text-amber-950/90">
             <li>
@@ -1198,8 +1195,11 @@ export function RetailInvoicesPage({
               <code className="rounded bg-amber-100/80 px-1 text-xs break-all">
                 supabase/manual/apply_retail_invoices_complete.sql
               </code>{" "}
-              in your BOAT repo (creates invoices, lines, retail customers, guest link, RLS, and reloads the API schema).
-              Alternatively run the three migrations in order:{" "}
+              in your BOAT repo to create the base invoice schema. Then run later pending invoice migrations, including{" "}
+              <code className="rounded bg-amber-100/80 px-1 text-xs">20260422193000_retail_invoice_line_vat_applies.sql</code>{" "}
+              and{" "}
+              <code className="rounded bg-amber-100/80 px-1 text-xs">20260625180000_retail_invoices_clinic_patient.sql</code>.
+              For a new installation, run the base migrations in order:{" "}
               <code className="rounded bg-amber-100/80 px-1 text-xs">20260326000000_retail_invoices.sql</code>,{" "}
               <code className="rounded bg-amber-100/80 px-1 text-xs">20260327000000_retail_customers.sql</code>,{" "}
               <code className="rounded bg-amber-100/80 px-1 text-xs">20260329000000_retail_invoices_guest_id.sql</code>,{" "}

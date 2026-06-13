@@ -798,7 +798,12 @@ export function RetailPOSPage({
   const quickPickProducts = useMemo(() => {
     if (topSelling.length > 0) {
       const map = new Map(products.map((p) => [p.id, p]));
-      return topSelling.map((row) => map.get(row.id)).filter((p): p is Product => Boolean(p)).slice(0, 10);
+      const top = topSelling.map((row) => map.get(row.id)).filter((p): p is Product => Boolean(p));
+      const topIds = new Set(top.map((product) => product.id));
+      const remaining = products
+        .filter((product) => !topIds.has(product.id))
+        .sort((a, b) => (quickPickStats[b.id] || 0) - (quickPickStats[a.id] || 0) || a.name.localeCompare(b.name));
+      return [...top, ...remaining].slice(0, 10);
     }
     const scored = products
       .map((p) => ({ product: p, score: quickPickStats[p.id] || 0 }))
