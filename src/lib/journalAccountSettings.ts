@@ -36,7 +36,9 @@ export type JournalAccountRole =
   | "wallet_liability"
   | "wallet_clearing"
   | "manufacturing_finished_goods"
-  | "manufacturing_wip";
+  | "manufacturing_wip"
+  | "manufacturing_consumables_expense"
+  | "manufacturing_scrap_inventory";
 
 export interface JournalAccountSettings {
   revenue_id: string | null;
@@ -89,6 +91,10 @@ export interface JournalAccountSettings {
   manufacturing_finished_goods_id: string | null;
   /** Manufacturing costing — credit / WIP clearing. */
   manufacturing_wip_id: string | null;
+  /** Manufacturing production — BOM items classified as consumables. */
+  manufacturing_consumables_expense_id: string | null;
+  /** Manufacturing production — scrap metal inventory value. */
+  manufacturing_scrap_inventory_id: string | null;
 }
 
 const DEFAULT_SETTINGS: JournalAccountSettings = {
@@ -127,6 +133,8 @@ const DEFAULT_SETTINGS: JournalAccountSettings = {
   school_accounting_basis: "accrual",
   manufacturing_finished_goods_id: null,
   manufacturing_wip_id: null,
+  manufacturing_consumables_expense_id: null,
+  manufacturing_scrap_inventory_id: null,
 };
 
 export function loadJournalAccountSettings(): JournalAccountSettings {
@@ -236,7 +244,7 @@ const JOURNAL_GL_SELECT_WITH_TELLER = `${JOURNAL_GL_SELECT_FULL}, teller_allow_p
 
 const JOURNAL_GL_SELECT_WITH_WALLET = `${JOURNAL_GL_SELECT_WITH_TELLER}, wallet_liability_gl_account_id, wallet_clearing_gl_account_id`;
 
-const JOURNAL_GL_SELECT_WITH_WALLET_SCHOOL_MFG = `${JOURNAL_GL_SELECT_WITH_WALLET}, school_accounting_basis, manufacturing_finished_goods_gl_account_id, manufacturing_wip_gl_account_id`;
+const JOURNAL_GL_SELECT_WITH_WALLET_SCHOOL_MFG = `${JOURNAL_GL_SELECT_WITH_WALLET}, school_accounting_basis, manufacturing_finished_goods_gl_account_id, manufacturing_wip_gl_account_id, manufacturing_consumables_expense_gl_account_id, manufacturing_scrap_inventory_gl_account_id`;
 
 function mapJournalGlRowToSettings(d: {
   revenue_gl_account_id: string | null;
@@ -274,6 +282,8 @@ function mapJournalGlRowToSettings(d: {
   school_accounting_basis?: string | null;
   manufacturing_finished_goods_gl_account_id?: string | null;
   manufacturing_wip_gl_account_id?: string | null;
+  manufacturing_consumables_expense_gl_account_id?: string | null;
+  manufacturing_scrap_inventory_gl_account_id?: string | null;
 }): JournalAccountSettings {
   const dv = d.default_vat_percent;
   const defaultVatPct =
@@ -318,6 +328,8 @@ function mapJournalGlRowToSettings(d: {
       typeof d.school_accounting_basis === "string" && d.school_accounting_basis.toLowerCase() === "cash" ? "cash" : "accrual",
     manufacturing_finished_goods_id: d.manufacturing_finished_goods_gl_account_id ?? null,
     manufacturing_wip_id: d.manufacturing_wip_gl_account_id ?? null,
+    manufacturing_consumables_expense_id: d.manufacturing_consumables_expense_gl_account_id ?? null,
+    manufacturing_scrap_inventory_id: d.manufacturing_scrap_inventory_gl_account_id ?? null,
   };
 }
 
@@ -334,7 +346,25 @@ function isLikelyMissingSchoolManufacturingJournalCols(err: {
     c === "PGRST204" ||
     m.includes("school_accounting_basis") ||
     m.includes("manufacturing_finished_goods_gl_account_id") ||
-    m.includes("manufacturing_wip_gl_account_id")
+    m.includes("manufacturing_wip_gl_account_id") ||
+    m.includes("manufacturing_consumables_expense_gl_account_id") ||
+    m.includes("manufacturing_scrap_inventory_gl_account_id")
+  );
+}
+
+function isLikelyMissingManufacturingProductionAccountCols(err: {
+  message?: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+} | null): boolean {
+  if (!err) return false;
+  const m = postgrestErrorText(err);
+  const c = String(err.code || "");
+  return (
+    c === "PGRST204" ||
+    m.includes("manufacturing_consumables_expense_gl_account_id") ||
+    m.includes("manufacturing_scrap_inventory_gl_account_id")
   );
 }
 
@@ -451,6 +481,24 @@ export async function fetchJournalGlSettings(organizationId: string): Promise<Jo
     settings.manufacturing_wip_id = row.manufacturing_wip_gl_account_id ?? null;
   }
 
+  const { data: productionAccountData, error: productionAccountError } = await supabase
+    .from("journal_gl_settings")
+    .select("manufacturing_consumables_expense_gl_account_id,manufacturing_scrap_inventory_gl_account_id")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!productionAccountError && productionAccountData) {
+    const row = productionAccountData as {
+      manufacturing_consumables_expense_gl_account_id?: string | null;
+      manufacturing_scrap_inventory_gl_account_id?: string | null;
+    };
+    settings.manufacturing_consumables_expense_id = row.manufacturing_consumables_expense_gl_account_id ?? null;
+    settings.manufacturing_scrap_inventory_id = row.manufacturing_scrap_inventory_gl_account_id ?? null;
+  } else if (isLikelyMissingManufacturingProductionAccountCols(productionAccountError)) {
+    const local = loadJournalAccountSettings();
+    settings.manufacturing_consumables_expense_id = local.manufacturing_consumables_expense_id;
+    settings.manufacturing_scrap_inventory_id = local.manufacturing_scrap_inventory_id;
+  }
+
   return settings;
 }
 
@@ -513,14 +561,29 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
     wallet_clearing_gl_account_id: settings.wallet_clearing_id,
   };
 
-  const payloadWithSchoolMfg = {
+  const payloadWithSchoolMfgCore = {
     ...payloadWithWallet,
     school_accounting_basis: settings.school_accounting_basis === "cash" ? "cash" : "accrual",
     manufacturing_finished_goods_gl_account_id: settings.manufacturing_finished_goods_id,
     manufacturing_wip_gl_account_id: settings.manufacturing_wip_id,
   };
 
+  const payloadWithSchoolMfg = {
+    ...payloadWithSchoolMfgCore,
+    manufacturing_consumables_expense_gl_account_id: settings.manufacturing_consumables_expense_id,
+    manufacturing_scrap_inventory_gl_account_id: settings.manufacturing_scrap_inventory_id,
+  };
+
   let { error } = await supabase.from("journal_gl_settings").upsert(payloadWithSchoolMfg, { onConflict: "organization_id" });
+
+  if (error && isLikelyMissingManufacturingProductionAccountCols(error)) {
+    ({ error } = await supabase.from("journal_gl_settings").upsert(payloadWithSchoolMfgCore, { onConflict: "organization_id" }));
+    if (!error) {
+      console.warn(
+        "[journal_gl_settings] Saved without production consumables / scrap inventory mappings. Apply migration 20260701200000_manufacturing_production_account_settings.sql."
+      );
+    }
+  }
 
   if (error && isLikelyMissingSchoolManufacturingJournalCols(error)) {
     ({ error } = await supabase.from("journal_gl_settings").upsert(payloadWithWallet, { onConflict: "organization_id" }));
@@ -595,7 +658,7 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
 
   if (error) throw error;
 
-  // Save manufacturing mappings independently. The compatibility retries above
+  // Save core manufacturing mappings independently. The compatibility retries above
   // intentionally omit unsupported optional columns, but must not silently omit
   // manufacturing mappings when some unrelated optional column is unavailable.
   const { error: manufacturingError } = await supabase
@@ -616,6 +679,23 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
     }
     console.warn(
       "[journal_gl_settings] Manufacturing mappings are unavailable. Apply migration 20260502104500_school_accounting_basis_manufacturing_journal.sql."
+    );
+  }
+
+  const { error: productionAccountError } = await supabase
+    .from("journal_gl_settings")
+    .update({
+      manufacturing_consumables_expense_gl_account_id: settings.manufacturing_consumables_expense_id,
+      manufacturing_scrap_inventory_gl_account_id: settings.manufacturing_scrap_inventory_id,
+      updated_at: updatedAt,
+    })
+    .eq("organization_id", organizationId);
+  if (productionAccountError && !isLikelyMissingManufacturingProductionAccountCols(productionAccountError)) {
+    throw productionAccountError;
+  }
+  if (productionAccountError) {
+    console.warn(
+      "[journal_gl_settings] Production consumables / scrap inventory mappings are stored locally until migration 20260701200000_manufacturing_production_account_settings.sql is applied."
     );
   }
 }
@@ -675,6 +755,16 @@ export const JOURNAL_ACCOUNT_ROLES: { id: JournalAccountRole; label: string; acc
   {
     id: "manufacturing_wip",
     label: "Manufacturing — WIP / production clearing (credit when capitalizing costing)",
+    accountType: "asset",
+  },
+  {
+    id: "manufacturing_consumables_expense",
+    label: "Manufacturing — consumables expense (from production entries)",
+    accountType: "expense",
+  },
+  {
+    id: "manufacturing_scrap_inventory",
+    label: "Manufacturing — scrap metal inventory (from production entries)",
     accountType: "asset",
   },
 ];
@@ -793,6 +883,8 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
       "pos_inventory_kitchen",
       "manufacturing_finished_goods",
       "manufacturing_wip",
+      "manufacturing_consumables_expense",
+      "manufacturing_scrap_inventory",
     ]);
     const mfgRows = JOURNAL_ACCOUNT_ROLES.filter((r) => mfgSet.has(r.id)).map((r) => {
       const group =
@@ -800,7 +892,9 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
         r.id === "pos_cogs_kitchen" ||
         r.id === "pos_inventory_kitchen" ||
         r.id === "manufacturing_finished_goods" ||
-        r.id === "manufacturing_wip"
+        r.id === "manufacturing_wip" ||
+        r.id === "manufacturing_consumables_expense" ||
+        r.id === "manufacturing_scrap_inventory"
           ? "Manufacturing / inventory"
           : "Core accounting";
       const label =

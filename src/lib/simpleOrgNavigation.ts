@@ -167,7 +167,6 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Suppliers", page: "purchases_vendors" },
     { name: "Stock levels", page: "inventory_stock_balances" },
     { name: "Adjust stock", page: "inventory_stock_adjustments" },
-    { name: "Purchases report", page: "reports_purchases_by_item" },
   ];
 
   const settings: NavChild[] = [
@@ -249,9 +248,6 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
             { name: "Production orders", page: "manufacturing_work_orders" },
             { name: "Production entries", page: "manufacturing_production_entries" },
             { name: "Costing", page: "manufacturing_costing" },
-            { name: "Price lists", page: "manufacturing_price_lists" },
-            { name: "Debtors report", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
-            { name: "Cash flow statement", page: "accounting_cashflow" },
           ],
         } as NavItem]
       : []),

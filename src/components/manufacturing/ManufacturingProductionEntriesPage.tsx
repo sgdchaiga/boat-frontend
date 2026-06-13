@@ -35,6 +35,38 @@ function nextProductionSerial(previous: unknown): string {
   return `${prefix}${String(Number(digits) + 1).padStart(digits.length, "0")}`;
 }
 
+async function productionCostAllocation(entryId: string): Promise<{ consumablesCost: number; scrapCost: number }> {
+  const { data: movements } = await supabase
+    .from("product_stock_movements")
+    .select("product_id,source_type,quantity_in,quantity_out,unit_cost")
+    .eq("source_id", entryId)
+    .in("source_type", ["manufacturing_consumption", "manufacturing_scrap"]);
+  const rows = (movements || []) as Array<Record<string, unknown>>;
+  const consumedProductIds = [...new Set(
+    rows
+      .filter((row) => row.source_type === "manufacturing_consumption")
+      .map((row) => String(row.product_id || ""))
+      .filter(Boolean)
+  )];
+  const { data: consumedProducts } = consumedProductIds.length
+    ? await supabase.from("products").select("id,manufacturing_item_type").in("id", consumedProductIds)
+    : { data: [] };
+  const consumableIds = new Set(
+    ((consumedProducts || []) as Array<{ id: string; manufacturing_item_type?: string | null }>)
+      .filter((product) => product.manufacturing_item_type === "consumable")
+      .map((product) => product.id)
+  );
+  const amount = (quantity: unknown, unitCost: unknown) => Number(quantity || 0) * Number(unitCost || 0);
+  return {
+    consumablesCost: rows
+      .filter((row) => row.source_type === "manufacturing_consumption" && consumableIds.has(String(row.product_id)))
+      .reduce((sum, row) => sum + amount(row.quantity_out, row.unit_cost), 0),
+    scrapCost: rows
+      .filter((row) => row.source_type === "manufacturing_scrap")
+      .reduce((sum, row) => sum + amount(row.quantity_in, row.unit_cost), 0),
+  };
+}
+
 export function ManufacturingProductionEntriesPage({ readOnly = false }: { readOnly?: boolean }) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
@@ -153,6 +185,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
       if (orgId && costing) {
         const totalCost = Number(costing.material_cost || 0) + Number(costing.labor_cost || 0) + Number(costing.overhead_cost || 0);
         if (totalCost > 0) {
+          const costAllocation = await productionCostAllocation(inserted.id);
           const journal = await createJournalForManufacturingCostingEntry(
             costing.id,
             totalCost,
@@ -160,7 +193,8 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
             costing.period,
             inserted.production_date || productionDate,
             user?.id ?? null,
-            orgId
+            orgId,
+            costAllocation
           );
           if (!journal.ok) setError(`Production saved, but costing journal was not posted: ${journal.error}`);
         }
@@ -202,7 +236,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
           <label className="text-xs text-slate-600">Production order (optional)<select value={workOrderId} onChange={(e) => setWorkOrderId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">No production order</option>{workOrders.map((order) => <option key={order.id} value={order.id}>{order.product_name}</option>)}</select></label>
           <label className="text-xs text-slate-600">Employee in charge<select value={postedByStaffId} onChange={(e) => setPostedByStaffId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{staffList.map((staff) => <option key={staff.id} value={staff.id}>{staff.full_name}</option>)}</select></label>
           <label className="text-xs text-slate-600">Produced quantity<input type="number" min="0.001" step="0.001" value={producedQty} onChange={(e) => setProducedQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
-          <label className="text-xs text-slate-600">Scrap metal quantity<input type="number" min="0" step="0.001" value={scrapQty} onChange={(e) => setScrapQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Automatically increases the Scrap Metal inventory item.</span></label>
+          <label className="text-xs text-slate-600">Scrap metal quantity<input type="number" min="0" step="0.001" value={scrapQty} onChange={(e) => setScrapQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Automatically increases the Scrap Metal inventory item. Its cost price determines the inventory value transferred from production.</span></label>
           <label className="text-xs text-slate-600">Search<input value={search} onChange={(e) => setSearch(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
         </div>
       </div>

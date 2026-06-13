@@ -591,8 +591,6 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
               { name: 'Work Orders', page: 'manufacturing_work_orders' },
               { name: 'Production Entries', page: 'manufacturing_production_entries' },
               { name: 'Costing', page: 'manufacturing_costing' },
-              { name: 'Debtors Report', page: 'retail_credit_invoices', state: { invoiceTab: 'credit' } },
-              { name: 'Cash Flow', page: 'accounting_cashflow' },
             ],
           } as NavItem,
         ]

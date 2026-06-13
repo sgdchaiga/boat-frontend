@@ -1,4 +1,4 @@
-import { Factory, ArrowRight, ShoppingCart, ClipboardList, FileText, Banknote, Users } from "lucide-react";
+import { Factory, ArrowRight, ShoppingCart, ClipboardList, FileText } from "lucide-react";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 
 type Props = {
@@ -12,19 +12,6 @@ const reportCards = [
     desc: "Date, product, quantity produced, and employee in charge for the selected period.",
     page: "reports_manufacturing_daily_production",
     icon: FileText,
-  },
-  {
-    title: "Debtors report",
-    desc: "Review credit invoices, customer balances, due dates, and outstanding collections.",
-    page: "retail_credit_invoices",
-    state: { invoiceTab: "credit" },
-    icon: Users,
-  },
-  {
-    title: "Cash flow statement",
-    desc: "Review operating, investing, and financing cash movements for the organization.",
-    page: "accounting_cashflow",
-    icon: Banknote,
   },
 ] as const;
 
@@ -40,12 +27,6 @@ const salesCards = [
     desc: "Review, edit payments, or reverse recorded counter sales.",
     page: "retail_pos_orders",
     icon: ClipboardList,
-  },
-  {
-    title: "Price lists",
-    desc: "Set customer-type and quantity-based prices for retail, dealers, and distributors.",
-    page: "manufacturing_price_lists",
-    icon: FileText,
   },
 ] as const;
 

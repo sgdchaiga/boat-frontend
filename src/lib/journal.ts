@@ -1284,7 +1284,8 @@ export async function createJournalForManufacturingCostingEntry(
   period: string,
   entryDate: string,
   createdBy: string | null,
-  organizationId: string
+  organizationId: string,
+  productionCosts?: { consumablesCost?: number; scrapCost?: number }
 ): Promise<JournalPostResult> {
   const amt = Math.round(totalCost * 100) / 100;
   if (amt <= 0) return { ok: false, error: "Manufacturing journal skipped: total cost is zero." };
@@ -1293,6 +1294,12 @@ export async function createJournalForManufacturingCostingEntry(
   const s = await resolveJournalAccountSettings(organizationId);
   const fg = s.manufacturing_finished_goods_id;
   const wip = s.manufacturing_wip_id;
+  const consumablesCost = Math.min(amt, Math.max(0, Math.round(Number(productionCosts?.consumablesCost || 0) * 100) / 100));
+  const scrapCost = Math.min(
+    amt - consumablesCost,
+    Math.max(0, Math.round(Number(productionCosts?.scrapCost || 0) * 100) / 100)
+  );
+  const finishedGoodsCost = Math.max(0, Math.round((amt - consumablesCost - scrapCost) * 100) / 100);
   if (!fg || !wip) {
     return {
       ok: false,
@@ -1300,17 +1307,53 @@ export async function createJournalForManufacturingCostingEntry(
         "Set Manufacturing — finished goods and WIP / production clearing GL accounts under Admin → Journal account settings.",
     };
   }
+  if (consumablesCost > 0 && !s.manufacturing_consumables_expense_id) {
+    return {
+      ok: false,
+      error: "Set the Manufacturing — consumables expense GL account under Admin → Journal account settings.",
+    };
+  }
+  if (scrapCost > 0 && !s.manufacturing_scrap_inventory_id) {
+    return {
+      ok: false,
+      error: "Set the Manufacturing — scrap metal inventory GL account under Admin → Journal account settings.",
+    };
+  }
   const date = toBusinessDateString(entryDate);
   const label = (productName || "Product").trim() || "Product";
+  const lines = [
+    ...(finishedGoodsCost > 0
+      ? [{ gl_account_id: fg, debit: finishedGoodsCost, credit: 0, line_description: `${label} — finished goods` }]
+      : []),
+    ...(consumablesCost > 0
+      ? [{
+          gl_account_id: s.manufacturing_consumables_expense_id!,
+          debit: consumablesCost,
+          credit: 0,
+          line_description: `${label} — production consumables`,
+        }]
+      : []),
+    ...(scrapCost > 0
+      ? [{
+          gl_account_id: s.manufacturing_scrap_inventory_id!,
+          debit: scrapCost,
+          credit: 0,
+          line_description: `${label} — scrap metal inventory`,
+        }]
+      : []),
+    {
+      gl_account_id: wip,
+      debit: 0,
+      credit: amt,
+      line_description: `${label} — WIP / production clearing`,
+    },
+  ];
   return createJournalEntry({
     entry_date: date,
     description: `Manufacturing costing: ${label} (${period})`,
     reference_type: "manufacturing_costing",
     reference_id: entryId,
-    lines: [
-      { gl_account_id: fg, debit: amt, credit: 0, line_description: `${label} — finished goods` },
-      { gl_account_id: wip, debit: 0, credit: amt, line_description: `${label} — WIP / production clearing` },
-    ],
+    lines,
     created_by: createdBy,
     organizationId,
   });
