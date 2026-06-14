@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { CreditCard, Plus, X } from "lucide-react";
+import { CreditCard, Pencil, Plus, Undo2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
-import { createJournalForVendorPayment, type VendorPaymentJournalAllocation } from "../../lib/journal";
+import { createJournalForVendorPayment, deleteJournalEntryByReference, reverseJournalEntriesByReference, type VendorPaymentJournalAllocation } from "../../lib/journal";
 import { isBillApproved, parseBillAllocationsJson, syncBillStatusInDb } from "../../lib/billStatus";
 import { buildStoragePath, uploadSourceDocument, type SourceDocumentRef } from "../../lib/sourceDocuments";
 import { useAuth } from "../../contexts/AuthContext";
@@ -20,11 +20,15 @@ interface VendorPayment {
   payment_method?: string | null;
   reference?: string | null;
   created_at?: string;
+  status?: "active" | "reversed" | null;
+  reversed_at?: string | null;
+  reversal_reason?: string | null;
   vendors?: { name: string } | null;
 }
 
 /** Lines applied to bills for this payment (legacy single bill or JSON allocations). */
 function getVendorPaymentAllocationLines(p: VendorPayment): { bill_id: string; amount: number }[] {
+  if (p.status === "reversed") return [];
   const alloc = parseBillAllocationsJson(p.bill_allocations);
   if (alloc.length > 0) return alloc;
   if (p.bill_id) return [{ bill_id: p.bill_id, amount: Number(p.amount) || 0 }];
@@ -44,6 +48,7 @@ type OutstandingBill = {
 interface VendorPaymentsPageProps {
   payBillId?: string;
   payVendorId?: string;
+  highlightVendorPaymentId?: string;
   readOnly?: boolean;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
 }
@@ -63,9 +68,16 @@ function formatSupabaseError(e: unknown): string {
   }
 }
 
-export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, onNavigate }: VendorPaymentsPageProps = {}) {
+export function VendorPaymentsPage({
+  payBillId,
+  payVendorId,
+  highlightVendorPaymentId,
+  readOnly = false,
+  onNavigate,
+}: VendorPaymentsPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
+  const isAdmin = user?.role === "admin" || user?.isSuperAdmin === true;
   const [payments, setPayments] = useState<VendorPayment[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,6 +91,8 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
   const [reference, setReference] = useState("");
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
+  const [editingPayment, setEditingPayment] = useState<VendorPayment | null>(null);
+  const [reversingId, setReversingId] = useState<string | null>(null);
   const vendorPaymentInFlightRef = useRef(false);
   const [outstandingBills, setOutstandingBills] = useState<OutstandingBill[]>([]);
   const [loadingBills, setLoadingBills] = useState(false);
@@ -89,7 +103,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
     Record<string, { description: string | null; bill_date: string | null }>
   >({});
 
-  const loadOutstandingBills = useCallback(async (venId: string) => {
+  const loadOutstandingBills = useCallback(async (venId: string, excludePaymentId?: string | null) => {
     if (!venId) {
       setOutstandingBills([]);
       return;
@@ -114,12 +128,16 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
       }>;
       const ids = rows.map((r) => r.id);
       const paidByBill = new Map<string, number>();
-      let vpRes = await supabase
+      let vpQuery = supabase
         .from("vendor_payments")
         .select("bill_id, amount, bill_allocations")
         .eq("vendor_id", venId);
+      if (excludePaymentId) vpQuery = vpQuery.neq("id", excludePaymentId);
+      let vpRes = await vpQuery;
       if (vpRes.error && String(vpRes.error.message || "").toLowerCase().includes("bill_allocations")) {
-        vpRes = (await supabase.from("vendor_payments").select("bill_id, amount").eq("vendor_id", venId)) as typeof vpRes;
+        let fallbackQuery = supabase.from("vendor_payments").select("bill_id, amount").eq("vendor_id", venId);
+        if (excludePaymentId) fallbackQuery = fallbackQuery.neq("id", excludePaymentId);
+        vpRes = (await fallbackQuery) as typeof vpRes;
       } else if (vpRes.error) throw vpRes.error;
 
       for (const p of vpRes.data || []) {
@@ -136,9 +154,10 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
       }
 
       if (ids.length > 0) {
-        const alRes = await supabase.from("vendor_payment_bill_allocations").select("bill_id, amount").in("bill_id", ids);
+        const alRes = await supabase.from("vendor_payment_bill_allocations").select("vendor_payment_id,bill_id, amount").in("bill_id", ids);
         if (!alRes.error) {
           for (const p of alRes.data || []) {
+            if (excludePaymentId && (p as { vendor_payment_id?: string }).vendor_payment_id === excludePaymentId) continue;
             const bid = (p as { bill_id: string }).bill_id;
             paidByBill.set(bid, (paidByBill.get(bid) || 0) + Number((p as { amount?: number }).amount || 0));
           }
@@ -184,8 +203,8 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
       if (!showModal) setOutstandingBills([]);
       return;
     }
-    void loadOutstandingBills(vendorId);
-  }, [showModal, vendorId, loadOutstandingBills]);
+    void loadOutstandingBills(vendorId, editingPayment?.id);
+  }, [showModal, vendorId, editingPayment?.id, loadOutstandingBills]);
 
   useEffect(() => {
     if (!payBillId || !payVendorId || hasOpenedForPayBillRef.current) return;
@@ -197,6 +216,12 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
       setShowModal(true);
     })();
   }, [payBillId, payVendorId, loadOutstandingBills]);
+
+  useEffect(() => {
+    if (!highlightVendorPaymentId || loading) return;
+    const payment = payments.find((row) => row.id === highlightVendorPaymentId);
+    if (payment) setDetailPayment(payment);
+  }, [highlightVendorPaymentId, loading, payments]);
 
   useEffect(() => {
     if (!detailPayment) {
@@ -280,6 +305,77 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
     setAllocationInputs(cleared);
   };
 
+  const resetForm = () => {
+    setShowModal(false);
+    setEditingPayment(null);
+    setVendorId("");
+    setAllocationInputs({});
+    setAmount("");
+    setPaymentDate(new Date().toISOString().slice(0, 10));
+    setPaymentMethod("bank_transfer");
+    setReference("");
+    setAttachmentFiles([]);
+    setOutstandingBills([]);
+  };
+
+  const loadPaymentAllocationLines = async (payment: VendorPayment): Promise<{ bill_id: string; amount: number }[]> => {
+    const byBill = new Map<string, number>();
+    if (payment.bill_id) byBill.set(payment.bill_id, Number(payment.amount || 0));
+    parseBillAllocationsJson(payment.bill_allocations).forEach((line) => byBill.set(line.bill_id, Math.max(byBill.get(line.bill_id) || 0, line.amount)));
+    const { data } = await supabase
+      .from("vendor_payment_bill_allocations")
+      .select("bill_id,amount")
+      .eq("vendor_payment_id", payment.id);
+    (data || []).forEach((line: { bill_id: string; amount: number }) =>
+      byBill.set(line.bill_id, Math.max(byBill.get(line.bill_id) || 0, Number(line.amount || 0)))
+    );
+    return [...byBill.entries()].map(([bill_id, lineAmount]) => ({ bill_id, amount: lineAmount }));
+  };
+
+  const openEdit = async (payment: VendorPayment) => {
+    if (!isAdmin || readOnly || payment.status === "reversed" || !payment.vendor_id) return;
+    const lines = await loadPaymentAllocationLines(payment);
+    setEditingPayment(payment);
+    setVendorId(payment.vendor_id);
+    setAmount(String(payment.amount || ""));
+    setPaymentDate(payment.payment_date || new Date().toISOString().slice(0, 10));
+    setPaymentMethod((payment.payment_method as "cash" | "card" | "bank_transfer" | "wallet") || "bank_transfer");
+    setReference(payment.reference || "");
+    setAllocationInputs(Object.fromEntries(lines.map((line) => [line.bill_id, line.amount.toFixed(2)])));
+    await loadOutstandingBills(payment.vendor_id, payment.id);
+    setShowModal(true);
+  };
+
+  const handleReverse = async (payment: VendorPayment) => {
+    if (!isAdmin || readOnly || payment.status === "reversed") return;
+    const reason = window.prompt("Reason for reversing this supplier payment:");
+    if (!reason?.trim()) return;
+    if (!window.confirm("Reverse this payment? Its bill allocations and cash/payable journal will be reversed.")) return;
+    setReversingId(payment.id);
+    try {
+      const oldLines = await loadPaymentAllocationLines(payment);
+      const journal = await reverseJournalEntriesByReference("vendor_payment", payment.id, user?.id ?? null, reason.trim());
+      if (!journal.ok) throw new Error(journal.error);
+      await supabase.from("vendor_payment_bill_allocations").delete().eq("vendor_payment_id", payment.id);
+      const { error } = await supabase.from("vendor_payments").update({
+        status: "reversed",
+        reversed_at: new Date().toISOString(),
+        reversed_by: user?.id ?? null,
+        reversal_reason: reason.trim(),
+        bill_id: null,
+        bill_allocations: [],
+      }).eq("id", payment.id);
+      if (error) throw error;
+      await Promise.all([...new Set(oldLines.map((line) => line.bill_id))].map((id) => syncBillStatusInDb(id)));
+      setDetailPayment(null);
+      await fetchData();
+    } catch (e) {
+      alert("Failed to reverse payment: " + formatSupabaseError(e));
+    } finally {
+      setReversingId(null);
+    }
+  };
+
   const handleAdd = async () => {
     if (readOnly) return;
     if (!vendorId) {
@@ -336,7 +432,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
     setSaving(true);
     try {
       const payDate = paymentDate || new Date().toISOString().slice(0, 10);
-      const insertPayload: Record<string, unknown> = {
+      const savePayload: Record<string, unknown> = {
         vendor_id: vendorId,
         bill_id: useLegacySingleBill ? lines[0].billId : null,
         amount: amt,
@@ -345,10 +441,16 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
         reference: reference.trim() || null,
       };
       if (needsAllocationRows) {
-        insertPayload.bill_allocations = lines.map((l) => ({ bill_id: l.billId, amount: l.amt }));
+        savePayload.bill_allocations = lines.map((l) => ({ bill_id: l.billId, amount: l.amt }));
+      } else {
+        savePayload.bill_allocations = [];
       }
 
-      const { data: inserted, error } = await supabase.from("vendor_payments").insert(insertPayload).select("id, payment_date").single();
+      const oldLines = editingPayment ? await loadPaymentAllocationLines(editingPayment) : [];
+      const saveQuery = editingPayment
+        ? supabase.from("vendor_payments").update(savePayload).eq("id", editingPayment.id)
+        : supabase.from("vendor_payments").insert(savePayload);
+      const { data: inserted, error } = await saveQuery.select("id, payment_date").single();
       if (error) {
         const msg = formatSupabaseError(error);
         if (msg.toLowerCase().includes("bill_allocations")) {
@@ -360,20 +462,23 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
       }
       const paymentId = (inserted as { id: string }).id;
 
+      if (editingPayment) {
+        await supabase.from("vendor_payment_bill_allocations").delete().eq("vendor_payment_id", paymentId);
+        const retired = await deleteJournalEntryByReference("vendor_payment", paymentId, orgId);
+        if (!retired.ok) throw new Error(`Payment was updated, but its old journal could not be retired: ${retired.error}`);
+      }
       const jr = await createJournalForVendorPayment(
         paymentId,
         amt,
         (inserted as { payment_date: string }).payment_date ?? payDate,
-        null,
+        user?.id ?? null,
         allocation
       );
       if (!jr.ok) {
         alert(`Payment saved but journal was not posted: ${jr.error}`);
       }
 
-      const billIdsToSync = useLegacySingleBill
-        ? [lines[0].billId]
-        : [...new Set(lines.map((l) => l.billId))];
+      const billIdsToSync = [...new Set([...oldLines.map((line) => line.bill_id), ...lines.map((line) => line.billId)])];
       await Promise.all(billIdsToSync.map((id) => syncBillStatusInDb(id)));
 
       if (attachmentFiles.length > 0 && orgId) {
@@ -388,14 +493,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
         }
       }
 
-      setShowModal(false);
-      setVendorId("");
-      setAllocationInputs({});
-      setAmount("");
-      setPaymentDate(new Date().toISOString().slice(0, 10));
-      setReference("");
-      setAttachmentFiles([]);
-      setOutstandingBills([]);
+      resetForm();
       fetchData();
     } catch (e) {
       console.error("Error recording payment:", e);
@@ -447,11 +545,15 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
                 <th className="text-left p-3">Reference</th>
                 <th className="text-right p-3">Amount</th>
                 <th className="text-left p-3 w-28">Documents</th>
+                <th className="text-right p-3">Actions</th>
               </tr>
             </thead>
             <tbody>
               {payments.map((p) => (
-                <tr key={p.id} className="border-t">
+                <tr
+                  key={p.id}
+                  className={`border-t ${p.status === "reversed" ? "bg-rose-50/60 text-slate-500" : ""} ${highlightVendorPaymentId === p.id ? "bg-amber-50 ring-2 ring-inset ring-amber-300/80" : ""}`}
+                >
                   <td className="p-3">{p.payment_date ? new Date(p.payment_date).toLocaleDateString() : "—"}</td>
                   <td className="p-3">
                     {p.vendor_id && onNavigate ? (
@@ -467,7 +569,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
                     )}
                   </td>
                   <td className="p-3 capitalize">{(p.payment_method || "—").replace("_", " ")}</td>
-                  <td className="p-3">{p.reference || "—"}</td>
+                  <td className="p-3">{p.reference || "—"}{p.status === "reversed" && <p className="text-xs font-semibold text-rose-700">Reversed</p>}</td>
                   <td className="p-3 text-right">
                     <button
                       type="button"
@@ -487,6 +589,18 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
                       readOnly={readOnly}
                       onUpdated={fetchData}
                     />
+                  </td>
+                  <td className="p-3 text-right">
+                    {isAdmin && !readOnly && p.status !== "reversed" && (
+                      <span className="inline-flex gap-1">
+                        <button type="button" onClick={() => void openEdit(p)} className="rounded p-1.5 text-slate-600 hover:bg-slate-100" title="Edit payment">
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button type="button" onClick={() => void handleReverse(p)} disabled={reversingId === p.id} className="rounded p-1.5 text-rose-700 hover:bg-rose-50 disabled:opacity-50" title="Reverse payment">
+                          <Undo2 className="h-4 w-4" />
+                        </button>
+                      </span>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -527,6 +641,16 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
               <dd className="text-slate-900">{detailPayment.reference || "—"}</dd>
               <dt className="text-slate-500">Total</dt>
               <dd className="font-semibold tabular-nums text-slate-900">{Number(detailPayment.amount || 0).toFixed(2)}</dd>
+              <dt className="text-slate-500">Status</dt>
+              <dd className={detailPayment.status === "reversed" ? "font-semibold text-rose-700" : "font-semibold text-emerald-700"}>
+                {detailPayment.status === "reversed" ? "Reversed" : "Active"}
+              </dd>
+              {detailPayment.status === "reversed" && detailPayment.reversal_reason && (
+                <>
+                  <dt className="text-slate-500">Reversal reason</dt>
+                  <dd className="text-rose-700">{detailPayment.reversal_reason}</dd>
+                </>
+              )}
             </dl>
             <div className="border-t border-slate-200 pt-4">
               <h3 className="text-sm font-semibold text-slate-800 mb-2">Applied to bills (line items)</h3>
@@ -595,7 +719,17 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
                 );
               })()}
             </div>
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end gap-2">
+              {isAdmin && !readOnly && detailPayment.status !== "reversed" && (
+                <>
+                  <button type="button" className="app-btn-secondary" onClick={() => { const payment = detailPayment; setDetailPayment(null); void openEdit(payment); }}>
+                    <Pencil className="h-4 w-4" /> Edit
+                  </button>
+                  <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50" onClick={() => void handleReverse(detailPayment)}>
+                    <Undo2 className="h-4 w-4" /> Reverse
+                  </button>
+                </>
+              )}
               <button type="button" className="app-btn-secondary" onClick={() => setDetailPayment(null)}>
                 Close
               </button>
@@ -619,7 +753,7 @@ export function VendorPaymentsPage({ payBillId, payVendorId, readOnly = false, o
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-xl font-bold">Record Payment</h2>
+              <h2 className="text-xl font-bold">{editingPayment ? "Edit Payment" : "Record Payment"}</h2>
               <button
                 type="button"
                 onClick={() => {

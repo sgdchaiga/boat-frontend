@@ -157,7 +157,9 @@ export function AdminJournalAccountsPage() {
         .from("fixed_asset_category_gl_settings")
         .select("*")
         .eq("organization_id", orgId);
-      const byCat = new Map((glRows || []).map((r) => [(r as FixedAssetCategoryGlRow).category_id, r as FixedAssetCategoryGlRow]));
+      const byCat = new Map<string, FixedAssetCategoryGlRow>(
+        (glRows || []).map((r) => [(r as FixedAssetCategoryGlRow).category_id, r as FixedAssetCategoryGlRow])
+      );
       const next: Record<string, CategoryGlDraft> = {};
       for (const c of list) {
         const r = byCat.get(c.id);

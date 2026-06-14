@@ -53,6 +53,7 @@ export type BusinessType =
   | "sacco"
   | "school"
   | "manufacturing"
+  | "accounting_practice"
   | "vsla"
   | "other";
 export type SubscriptionStatus = "trial" | "active" | "past_due" | "cancelled" | "expired" | "none";
@@ -79,6 +80,7 @@ interface AuthUser {
   /** Has a staff row (hotel property workspace) */
   isHotelStaff?: boolean;
   organization_id?: string | null;
+  organization_name?: string | null;
   /** When set, hospitality POS/orders/payments are limited to this branch (see hospitality_branches). */
   hospitality_branch_id?: string | null;
   business_type?: BusinessType | null;
@@ -98,6 +100,7 @@ interface AuthUser {
   enable_budget?: boolean;
   /** Platform: Treasury module toggle. */
   enable_treasury?: boolean;
+  enable_reconciliation?: boolean;
   /** Platform: Agent Hub module toggle. */
   enable_agent?: boolean;
   /** Platform: Assessment & onboarding module (prospect hotels). */
@@ -230,6 +233,7 @@ type TenantProfile = {
   enable_payroll: boolean;
   enable_budget: boolean;
   enable_treasury: boolean;
+  enable_reconciliation: boolean;
   enable_agent: boolean;
   enable_hotel_assessment: boolean;
   enable_manufacturing: boolean;
@@ -314,6 +318,7 @@ function localTenantDefaults(): TenantProfile {
     enable_payroll: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_PAYROLL, true),
     enable_budget: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BUDGET, true),
     enable_treasury: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_TREASURY, true),
+    enable_reconciliation: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_RECONCILIATION, true),
     enable_agent: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_AGENT, true),
     enable_hotel_assessment: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_HOTEL_ASSESSMENT, true),
     enable_manufacturing: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_MANUFACTURING, true),
@@ -473,6 +478,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     enable_payroll: true,
     enable_budget: true,
     enable_treasury: true,
+    enable_reconciliation: true,
     enable_agent: true,
     enable_hotel_assessment: true,
     enable_manufacturing: true,
@@ -515,7 +521,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, desktop_device_limit, enable_fixed_assets, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_agent, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, desktop_device_limit, enable_fixed_assets, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -547,6 +553,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_payroll?: boolean | null;
       enable_budget?: boolean | null;
       enable_treasury?: boolean | null;
+      enable_reconciliation?: boolean | null;
       enable_agent?: boolean | null;
       enable_hotel_assessment?: boolean | null;
       enable_manufacturing?: boolean | null;
@@ -589,6 +596,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_payroll: org?.enable_payroll !== false,
       enable_budget: org?.enable_budget !== false,
       enable_treasury: org?.enable_treasury !== false,
+      enable_reconciliation: org?.enable_reconciliation !== false,
       enable_agent: org?.enable_agent !== false,
       enable_hotel_assessment: org?.enable_hotel_assessment !== false,
       enable_manufacturing: org?.enable_manufacturing !== false,
@@ -815,6 +823,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           enable_payroll: true,
           enable_budget: true,
           enable_treasury: true,
+          enable_reconciliation: true,
           enable_agent: true,
           enable_hotel_assessment: true,
           enable_manufacturing: true,

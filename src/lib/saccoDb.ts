@@ -206,6 +206,31 @@ function mapFdFromRow(row: {
   };
 }
 
+export async function insertFixedDepositRow(
+  organizationId: string,
+  deposit: Omit<FixedDeposit, "id">
+): Promise<FixedDeposit> {
+  const { data, error } = await sb
+    .from("sacco_fixed_deposits")
+    .insert({
+      organization_id: organizationId,
+      sacco_member_id: deposit.memberId,
+      member_name: deposit.memberName,
+      amount: deposit.amount,
+      interest_rate: deposit.interestRate,
+      term_months: deposit.term,
+      start_date: deposit.startDate,
+      maturity_date: deposit.maturityDate,
+      interest_earned: deposit.interestEarned,
+      auto_renew: deposit.autoRenew,
+      status: deposit.status,
+    })
+    .select("*")
+    .single();
+  if (error) throw error;
+  return mapFdFromRow(data);
+}
+
 function mapCbFromRow(row: {
   id: string;
   entry_date: string;

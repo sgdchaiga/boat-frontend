@@ -74,6 +74,7 @@ export const ROLE_PAGE_ALLOW: Record<Exclude<NavRoleExperience, "full">, Set<str
     "gl_accounts",
     "accounting_journal",
     "accounting_gl",
+    "accounting_bank_reconciliation",
     "accounting_trial",
     "accounting_income",
     "accounting_balance",
@@ -126,6 +127,7 @@ export const ROLE_PAGE_ALLOW: Record<Exclude<NavRoleExperience, "full">, Set<str
     "purchases_orders",
     "purchases_bills",
     "purchases_payments",
+    "purchases_cash_out_reconciliation",
     "purchases_credits",
     "purchases_expenses",
     "cash_receipts",
@@ -209,6 +211,7 @@ function accountantNav(): RoleNavLeaf[] {
   return [
     { name: "Journals", icon: FileText, page: "accounting_journal" },
     { name: "Ledger", icon: BookOpen, page: "accounting_gl" },
+    { name: "Cash & float reconciliation", icon: Landmark, page: "accounting_bank_reconciliation" },
     { name: "Trial balance", icon: Scale, page: "accounting_trial" },
     { name: "Financial reports", icon: TrendingUp, page: "reports" },
     { name: "Income statement", icon: BarChart3, page: "accounting_income" },

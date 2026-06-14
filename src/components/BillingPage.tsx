@@ -374,6 +374,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
         failed?: number;
         last_error?: string | null;
         error?: string;
+        reason?: string;
       } | null;
       if (row?.ok === false) {
         setNightAuditBanner(row.error || "Night audit failed.");

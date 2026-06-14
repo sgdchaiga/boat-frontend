@@ -170,7 +170,7 @@ export function JournalEntriesPage() {
       const acc = byId.get(id);
       if (!acc) return;
       if (ordered.some((x) => x.id === id)) return;
-      ordered.push(acc);
+      ordered.push(acc as GLAccount);
     };
     favoriteAccountIds.forEach(push);
     recentAccountIds.forEach(push);

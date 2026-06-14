@@ -1025,7 +1025,8 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
 
         {(desk === "receive" || desk === "give") && (
           <div className="flex flex-wrap gap-3 sm:gap-4 pt-1">
-            {(desk === "receive"
+            {([
+              ...(desk === "receive"
               ? [
                   ["deposit", "Deposit", PiggyBank] as const,
                   ["loan_payment", "Loan repayment", HandCoins] as const,
@@ -1035,14 +1036,15 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
               : [
                   ["withdraw", "Withdraw", BanknoteIcon] as const,
                   ["cheque", "Cheque (paid)", Building2] as const,
-                ]
+                ]),
+            ] as Array<readonly [string, string, typeof PiggyBank]>
             ).map(([id, label, Icon]) => (
               <button
                 key={id}
                 type="button"
                 onClick={() => {
                   setMainTab("transactions");
-                  setTaskAction(id);
+                  setTaskAction(id as TellerTaskAction);
                   setFieldMsg({});
                   setSelectedSavingsAccountId("");
                   if (id === "cheque") setChequeFlow(desk === "give" ? "paid" : "received");
@@ -1840,8 +1842,9 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                           <td className="p-2 text-xs">{t.status}</td>
                           {canEditTransactions ? (
                             <td className="p-2">
-                              {(t.status === "pending_approval" || t.status === "draft" || (t.status === "posted" && canCorrectPostedTellerTxnType(String(t.txn_type)))) &&
-                              t.status !== "reversed" ? (
+                              {(t.status === "pending_approval" ||
+                              t.status === "draft" ||
+                              (t.status === "posted" && canCorrectPostedTellerTxnType(String(t.txn_type)))) ? (
                                 <button
                                   type="button"
                                   disabled={saving}

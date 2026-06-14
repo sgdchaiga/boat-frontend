@@ -2,6 +2,12 @@ import { supabase } from "./supabase";
 
 /** `approved` = approved GRN/bill, no vendor payment recorded yet (not past due). */
 export type BillWorkflowStatus = "pending_approval" | "approved" | "paid" | "overdue" | "partially_paid";
+export type BillPaymentReconciliation = {
+  paidTotal: number;
+  paidOffDate: string | null;
+  lastPaymentDate: string | null;
+  paymentCount: number;
+};
 
 /** Parse bill_allocations JSON from vendor_payments.bill_allocations. */
 export function parseBillAllocationsJson(json: unknown): { bill_id: string; amount: number }[] {
@@ -16,6 +22,81 @@ export function parseBillAllocationsJson(json: unknown): { bill_id: string; amou
     out.push({ bill_id: r.bill_id, amount: a });
   }
   return out;
+}
+
+/** Reconciles unique payment-to-bill allocations and identifies when each bill first became fully paid. */
+export async function getBillPaymentReconciliationForOrganization(
+  organizationId: string,
+  bills: Array<{ id: string; amount?: number | null }>
+): Promise<Map<string, BillPaymentReconciliation>> {
+  const result = new Map<string, BillPaymentReconciliation>();
+  bills.forEach((bill) => result.set(bill.id, { paidTotal: 0, paidOffDate: null, lastPaymentDate: null, paymentCount: 0 }));
+  if (bills.length === 0) return result;
+
+  const { data: payments, error } = await supabase
+    .from("vendor_payments")
+    .select("id,bill_id,amount,payment_date,created_at,bill_allocations")
+    .eq("organization_id", organizationId);
+  if (error) throw error;
+
+  const paymentRows = (payments || []) as Array<{
+    id: string;
+    bill_id?: string | null;
+    amount?: number | null;
+    payment_date?: string | null;
+    created_at?: string | null;
+    bill_allocations?: unknown;
+  }>;
+  const paymentDates = new Map(paymentRows.map((payment) => [payment.id, payment.payment_date || payment.created_at?.slice(0, 10) || ""]));
+  const allocations = new Map<string, { paymentId: string; billId: string; amount: number; date: string }>();
+  const addAllocation = (paymentId: string, billId: string, amount: number) => {
+    if (!result.has(billId) || !Number.isFinite(amount) || amount <= 0) return;
+    const key = `${paymentId}:${billId}`;
+    const current = allocations.get(key);
+    // Compatibility schemas may contain the same allocation in JSON and the allocation table.
+    if (!current || amount > current.amount) allocations.set(key, { paymentId, billId, amount, date: paymentDates.get(paymentId) || "" });
+  };
+
+  paymentRows.forEach((payment) => {
+    if (payment.bill_id) addAllocation(payment.id, payment.bill_id, Number(payment.amount || 0));
+    parseBillAllocationsJson(payment.bill_allocations).forEach((allocation) => addAllocation(payment.id, allocation.bill_id, allocation.amount));
+  });
+
+  const billIds = bills.map((bill) => bill.id);
+  for (let index = 0; index < billIds.length; index += IN_CHUNK) {
+    const { data: rows, error: allocationError } = await supabase
+      .from("vendor_payment_bill_allocations")
+      .select("vendor_payment_id,bill_id,amount")
+      .in("bill_id", billIds.slice(index, index + IN_CHUNK));
+    if (allocationError) continue;
+    (rows || []).forEach((row: { vendor_payment_id: string; bill_id: string; amount: number }) =>
+      addAllocation(row.vendor_payment_id, row.bill_id, Number(row.amount || 0))
+    );
+  }
+
+  const targetByBill = new Map(bills.map((bill) => [bill.id, Number(bill.amount || 0)]));
+  const grouped = new Map<string, Array<{ amount: number; date: string }>>();
+  allocations.forEach((allocation) => {
+    const rows = grouped.get(allocation.billId) || [];
+    rows.push({ amount: allocation.amount, date: allocation.date });
+    grouped.set(allocation.billId, rows);
+  });
+  grouped.forEach((rows, billId) => {
+    const ordered = [...rows].sort((left, right) => left.date.localeCompare(right.date));
+    let running = 0;
+    let paidOffDate: string | null = null;
+    ordered.forEach((row) => {
+      running += row.amount;
+      if (!paidOffDate && running >= (targetByBill.get(billId) || 0) - 0.001) paidOffDate = row.date || null;
+    });
+    result.set(billId, {
+      paidTotal: running,
+      paidOffDate,
+      lastPaymentDate: ordered[ordered.length - 1]?.date || null,
+      paymentCount: ordered.length,
+    });
+  });
+  return result;
 }
 
 /** Total applied to a bill: legacy bill_id + bill_allocations JSON + optional old allocation table. */
@@ -52,7 +133,7 @@ export async function getTotalPaidForBill(billId: string): Promise<number> {
 
 export function isBillApproved(b: { approved_at?: string | null; status?: string | null }): boolean {
   const s = (b.status || "").toLowerCase();
-  if (s === "rejected" || s === "cancelled") return false;
+  if (s === "rejected" || s === "cancelled" || s === "reversed" || s === "void" || s === "voided") return false;
   if (b.approved_at) return true;
   if (s === "pending_approval" || s === "pending") return false;
   if (s === "approved" || s === "paid" || s === "overdue" || s === "partially_paid") return true;
@@ -94,7 +175,7 @@ export async function syncBillStatusInDb(billId: string): Promise<void> {
     .maybeSingle();
   if (!bill) return;
   const prevStatus = String((bill as { status?: string | null }).status || "").toLowerCase();
-  if (prevStatus === "rejected" || prevStatus === "cancelled") return;
+  if (prevStatus === "rejected" || prevStatus === "cancelled" || prevStatus === "reversed" || prevStatus === "void" || prevStatus === "voided") return;
   const total = await getTotalPaidForBill(billId);
   const approved = isBillApproved(bill as { approved_at?: string | null; status?: string | null });
   const status = computeBillStatus(
@@ -181,7 +262,7 @@ export async function syncBillStatusesForOrganization(organizationId: string): P
     };
     const id = bill.id;
     const prevLower = String(bill.status || "").toLowerCase();
-    if (prevLower === "rejected" || prevLower === "cancelled") continue;
+    if (prevLower === "rejected" || prevLower === "cancelled" || prevLower === "reversed" || prevLower === "void" || prevLower === "voided") continue;
     const direct = directByBill.get(id) || 0;
     let fromJson = 0;
     if (bill.vendor_id) {

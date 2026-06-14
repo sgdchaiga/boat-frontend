@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { MutableRefObject } from "react";
 
 interface ProductLike {
   id: string;
@@ -23,7 +23,7 @@ interface CashierCartPanelProps<TProduct extends ProductLike> {
   filteredManualProducts: TProduct[];
   cart: CartItemLike<TProduct>[];
   updateQty: (productId: string, qty: number) => void;
-  scanInputRef?: RefObject<HTMLInputElement | null>;
+  scanInputRef?: MutableRefObject<HTMLInputElement | null>;
   /** Online Supabase catalog only — more rows past the first page. */
   hasMoreProducts?: boolean;
   catalogLoadingMore?: boolean;
@@ -58,7 +58,9 @@ export function CashierCartPanel<TProduct extends ProductLike>({
     <div className="lg:col-span-9 bg-white rounded-xl border border-slate-200 p-3 h-full min-h-0 overflow-y-auto">
       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">
         <input
-          ref={scanInputRef}
+          ref={(node) => {
+            if (scanInputRef) scanInputRef.current = node;
+          }}
           value={scanCode}
           onChange={(e) => setScanCode(e.target.value)}
           onKeyDown={(e) => {

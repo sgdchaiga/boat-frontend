@@ -1,21 +1,22 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2 } from "lucide-react";
+import { FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 import { loadHotelConfig } from "../../lib/hotelConfig";
 import { useAuth } from "../../contexts/AuthContext";
 import { canApprove } from "../../lib/approvalRights";
-import { createJournalForBill } from "../../lib/journal";
 import { businessTodayISO } from "../../lib/timezone";
 import {
   getTotalPaidForBill,
+  getBillPaymentReconciliationForOrganization,
   isBillApproved,
   parseBillAllocationsJson,
   syncBillStatusInDb,
   syncBillStatusesForOrganization,
+  type BillPaymentReconciliation,
 } from "../../lib/billStatus";
-import { postStockInFromPurchaseOrderForBill } from "../../lib/poGrnStock";
-import { deleteJournalEntryByReference } from "../../lib/journal";
+import { postStockInFromPurchaseOrderForBill, reverseStockInForBill } from "../../lib/poGrnStock";
+import { createJournalForBill, deleteJournalEntryByReference, reverseJournalEntriesByReference } from "../../lib/journal";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
@@ -47,6 +48,7 @@ function formatBillStatusLabel(status: string | null | undefined): string {
   if (s === "pending_approval" || s === "pending") return "Pending approval";
   if (s === "rejected") return "Rejected";
   if (s === "cancelled") return "Cancelled";
+  if (s === "reversed") return "Reversed";
   if (s === "approved") return "Approved";
   if (s === "partially_paid") return "Partially paid";
   if (s === "overdue") return "Overdue";
@@ -58,10 +60,15 @@ function isRejectedBill(b: Bill): boolean {
   return (b.status || "").toLowerCase() === "rejected";
 }
 
+function normalizedBillStatus(b: Bill): string {
+  return (b.status || "").toLowerCase();
+}
+
 export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: BillsPageProps = {}) {
   const { user } = useAuth();
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const canApproveBills = canApprove("bills", user?.role);
+  const isAdmin = user?.role === "admin" || user?.isSuperAdmin === true;
   const [bills, setBills] = useState<Bill[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
@@ -83,6 +90,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [reversingId, setReversingId] = useState<string | null>(null);
+  const [paymentReconciliation, setPaymentReconciliation] = useState<Map<string, BillPaymentReconciliation>>(new Map());
 
   const detailPaidTotal = useMemo(() => {
     if (!detailBill) return 0;
@@ -118,7 +127,13 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         supabase.from("staff").select("id, full_name").order("full_name"),
       ]);
       if (billRes.error) throw billRes.error;
-      setBills((billRes.data || []) as Bill[]);
+      const billRows = (billRes.data || []) as Bill[];
+      setBills(billRows);
+      if (orgId) {
+        setPaymentReconciliation(await getBillPaymentReconciliationForOrganization(orgId, billRows));
+      } else {
+        setPaymentReconciliation(new Map());
+      }
       setVendors(venRes.data || []);
       setStaff((staffRes.data || []) as { id: string; full_name: string }[]);
     } catch (e) {
@@ -128,6 +143,11 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
       setLoading(false);
     }
   }, [user?.organization_id]);
+
+  const paidOffCount = useMemo(
+    () => bills.filter((bill) => paymentReconciliation.get(bill.id)?.paidOffDate).length,
+    [bills, paymentReconciliation]
+  );
 
   useEffect(() => {
     fetchData();
@@ -142,6 +162,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const handleApprove = async (bill: Bill) => {
     if (readOnly) return;
     if (bill.status === "paid") return;
+    if (normalizedBillStatus(bill) === "reversed") return;
     if (isBillApproved(bill)) return;
     setApprovingId(bill.id);
     try {
@@ -246,6 +267,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   };
 
   const ensureCanRejectOrDelete = async (bill: Bill): Promise<string | null> => {
+    if (normalizedBillStatus(bill) === "reversed") {
+      return "Reversed GRN/bills are retained for audit and cannot be rejected or deleted.";
+    }
     if (isBillApproved(bill)) {
       return "Approved GRN/bills cannot be rejected or deleted. Use vendor credits or accounting adjustments if you need to reverse one.";
     }
@@ -320,6 +344,58 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     }
   };
 
+  const handleReverse = async (bill: Bill) => {
+    if (readOnly || !isAdmin || !isBillApproved(bill)) return;
+    const orgId = user?.organization_id;
+    if (!orgId) {
+      alert("Your account is not linked to an organization.");
+      return;
+    }
+    try {
+      const reconciliation = await getBillPaymentReconciliationForOrganization(orgId, [bill]);
+      const paid = reconciliation.get(bill.id)?.paidTotal || 0;
+      if (paid > 0.001) {
+        alert(`This bill has ${paid.toFixed(2)} in allocated supplier payments. Remove or reassign those payments before reversing it.`);
+        return;
+      }
+    } catch (e) {
+      alert("Could not verify supplier payments: " + (e instanceof Error ? e.message : String(e)));
+      return;
+    }
+    if (!confirm("Reverse this approved GRN/bill? This will reverse received stock quantities and the accounts payable journal.")) return;
+
+    setReversingId(bill.id);
+    try {
+      await reverseStockInForBill(bill.id);
+      const journal = await reverseJournalEntriesByReference("bill", bill.id, user?.id ?? null, "GRN/Bill reversed by administrator");
+      if (!journal.ok) {
+        await supabase.from("product_stock_movements").delete().eq("source_type", "bill_reversal").eq("source_id", bill.id);
+        throw new Error(`Could not reverse the payable journal: ${journal.error}`);
+      }
+
+      let { error } = await supabase
+        .from("bills")
+        .update({ status: "reversed", approved_at: null, approved_by: null })
+        .eq("id", bill.id);
+      if (error && (error.message.toLowerCase().includes("approved_at") || error.message.toLowerCase().includes("approved_by"))) {
+        ({ error } = await supabase.from("bills").update({ status: "reversed" }).eq("id", bill.id));
+      }
+      if (error) throw error;
+
+      // A reversed bill must no longer remain in Treasury's supplier-payment queue.
+      await supabase.from("treasury_requests").delete().eq("source_type", "bill").eq("source_id", bill.id).eq("organization_id", orgId);
+      await fetchData();
+      if (detailBill?.id === bill.id) {
+        const { data: updated } = await supabase.from("bills").select("*, vendors(name)").eq("id", bill.id).maybeSingle();
+        if (updated) setDetailBill(updated as Bill);
+      }
+    } catch (e) {
+      alert("Failed to reverse bill: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setReversingId(null);
+    }
+  };
+
   const openEdit = (bill: Bill) => {
     setEditingBill(bill);
     setVendorId(bill.vendor_id || "");
@@ -382,19 +458,25 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         let parentDates = new Map<string, string>();
         if (parentIds.length > 0) {
           const { data: parents } = await supabase.from("vendor_payments").select("id, payment_date").in("id", parentIds);
-          parentDates = new Map((parents || []).map((p) => [p.id, p.payment_date as string]));
+          parentDates = new Map(
+            (parents || []).map((payment: { id: string; payment_date: string | null }) => [
+              payment.id,
+              payment.payment_date || "",
+            ])
+          );
         }
         const fromAllocTable = allocRows.map((a) => ({
-          id: a.id,
+          id: a.vendor_payment_id,
           amount: a.amount,
           payment_date: parentDates.get(a.vendor_payment_id) || "",
           bulk: true,
         }));
 
-        const merged = [...fromDirect, ...fromJsonBulk, ...fromAllocTable].sort(
-          (a, b) =>
-            new Date(b.payment_date || 0).getTime() - new Date(a.payment_date || 0).getTime()
-        );
+        const merged = [
+          ...new Map(
+            [...fromDirect, ...fromJsonBulk, ...fromAllocTable].map((payment) => [payment.id, payment])
+          ).values(),
+        ].sort((a, b) => new Date(b.payment_date || 0).getTime() - new Date(a.payment_date || 0).getTime());
         return { data: merged };
       })(),
       bill.vendor_id
@@ -681,8 +763,45 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         description: description.trim() || null,
       };
       if (editingBill) {
-        const { error } = await supabase.from("bills").update(payload).eq("id", editingBill.id);
+        const approvedEdit = isBillApproved(editingBill);
+        if (approvedEdit && !isAdmin) throw new Error("Only an administrator can edit dates on an approved bill.");
+        if (normalizedBillStatus(editingBill) === "reversed") throw new Error("A reversed bill cannot be edited.");
+        const editPayload = approvedEdit
+          ? { bill_date: billDateVal, due_date: dueDate || billDateVal }
+          : payload;
+        const { error } = await supabase.from("bills").update(editPayload).eq("id", editingBill.id);
         if (error) throw error;
+        if (approvedEdit && billDateVal !== editingBill.bill_date) {
+          const retired = await deleteJournalEntryByReference("bill", editingBill.id, user?.organization_id);
+          if (!retired.ok) {
+            await supabase
+              .from("bills")
+              .update({ bill_date: editingBill.bill_date, due_date: editingBill.due_date })
+              .eq("id", editingBill.id);
+            throw new Error(`The bill date was not changed because its payable journal could not be redated: ${retired.error}`);
+          }
+          const reposted = await createJournalForBill(
+            editingBill.id,
+            Number(editingBill.amount || 0),
+            editingBill.description || null,
+            billDateVal,
+            user?.id ?? null
+          );
+          if (!reposted.ok) {
+            await supabase
+              .from("bills")
+              .update({ bill_date: editingBill.bill_date, due_date: editingBill.due_date })
+              .eq("id", editingBill.id);
+            await createJournalForBill(
+              editingBill.id,
+              Number(editingBill.amount || 0),
+              editingBill.description || null,
+              editingBill.bill_date || businessTodayISO(),
+              user?.id ?? null
+            );
+            throw new Error(`The bill date was restored because its payable journal could not be reposted: ${reposted.error}`);
+          }
+        }
       } else {
         const { error } = await supabase.from("bills").insert({ ...payload, status: "pending_approval" });
         if (error) throw error;
@@ -703,7 +822,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
       {readOnly && (
         <ReadOnlyNotice />
       )}
-      <div className="flex items-center justify-between mb-8">
+      <div className="flex items-center justify-between mb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-3xl font-bold text-slate-900">Receive stock</h1>
@@ -712,6 +831,10 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
             </PageNotes>
           </div>
         </div>
+        <div className="flex flex-wrap items-center gap-2">
+        <button type="button" onClick={() => void fetchData()} className="app-btn-secondary">
+          Reconcile payment dates
+        </button>
         <button
           type="button"
           onClick={() => {
@@ -726,6 +849,12 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         >
           <Plus className="w-5 h-5" /> Add GRN/Bill
         </button>
+        </div>
+      </div>
+      <div className="mb-6 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">Bills reviewed</p><p className="text-xl font-bold text-slate-900">{bills.length}</p></div>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-xs text-emerald-700">Fully paid with identified date</p><p className="text-xl font-bold text-emerald-900">{paidOffCount}</p></div>
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><p className="text-xs text-amber-700">Not fully paid / date unavailable</p><p className="text-xl font-bold text-amber-900">{Math.max(0, bills.length - paidOffCount)}</p></div>
       </div>
 
       {loading ? (
@@ -741,6 +870,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                 <th className="text-left p-3">Due Date</th>
                 <th className="text-left p-3">Status</th>
                 <th className="text-right p-3">Amount</th>
+                <th className="text-right p-3">Paid total</th>
+                <th className="text-left p-3">Paid off date</th>
                 <th className="text-right p-3">Actions</th>
               </tr>
             </thead>
@@ -769,6 +900,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                         className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
                           b.status === "paid"
                             ? "bg-green-100 text-green-800"
+                            : b.status === "reversed"
+                              ? "bg-rose-100 text-rose-800"
                             : b.status === "overdue"
                               ? "bg-red-100 text-red-800"
                               : b.status === "partially_paid"
@@ -793,20 +926,29 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                       {Number(b.amount || 0).toFixed(2)}
                     </button>
                   </td>
+                  <td className="p-3 text-right tabular-nums">{Number(paymentReconciliation.get(b.id)?.paidTotal || 0).toFixed(2)}</td>
+                  <td className="p-3">
+                    {paymentReconciliation.get(b.id)?.paidOffDate
+                      ? new Date(`${paymentReconciliation.get(b.id)?.paidOffDate}T12:00:00`).toLocaleDateString()
+                      : "—"}
+                    {(paymentReconciliation.get(b.id)?.paymentCount || 0) > 1 && (
+                      <p className="text-xs text-slate-500">{paymentReconciliation.get(b.id)?.paymentCount} payments</p>
+                    )}
+                  </td>
                   <td className="p-3 text-right">
                     <span className="inline-flex items-center gap-1 flex-wrap justify-end">
-                      {!isBillApproved(b) && !isRejectedBill(b) && (
+                      {((!isBillApproved(b) && !isRejectedBill(b)) || (isAdmin && !["rejected", "reversed"].includes(normalizedBillStatus(b)))) && (
                         <button
                           type="button"
                           onClick={() => openEdit(b)}
                           disabled={readOnly}
                           className="p-1.5 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100"
-                          title="Edit GRN/Bill"
+                          title={isBillApproved(b) ? "Edit bill dates (admin)" : "Edit GRN/Bill"}
                         >
                           <Pencil className="w-4 h-4" />
                         </button>
                       )}
-                      {!isBillApproved(b) && !isRejectedBill(b) ? (
+                      {!isBillApproved(b) && !isRejectedBill(b) && normalizedBillStatus(b) !== "reversed" ? (
                         <button
                           type="button"
                           onClick={() => canApproveBills && !readOnly && handleApprove(b)}
@@ -822,7 +964,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                           {approvingId === b.id ? "…" : "Approve"}
                         </button>
                       ) : null}
-                      {!isBillApproved(b) && !isRejectedBill(b) && canApproveBills && !readOnly && (
+                      {!isBillApproved(b) && !isRejectedBill(b) && normalizedBillStatus(b) !== "reversed" && canApproveBills && !readOnly && (
                         <button
                           type="button"
                           onClick={() => void handleReject(b)}
@@ -834,7 +976,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                           {rejectingId === b.id ? "…" : "Reject"}
                         </button>
                       )}
-                      {!isBillApproved(b) && canApproveBills && !readOnly && (
+                      {!isBillApproved(b) && normalizedBillStatus(b) !== "reversed" && canApproveBills && !readOnly && (
                         <button
                           type="button"
                           onClick={() => void handleDelete(b)}
@@ -843,6 +985,18 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                           title={isRejectedBill(b) ? "Delete GRN/Bill" : "Delete GRN/Bill"}
                         >
                           <Trash2 className="w-4 h-4" />
+                        </button>
+                      )}
+                      {isAdmin && isBillApproved(b) && !readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => void handleReverse(b)}
+                          disabled={reversingId === b.id}
+                          className="px-2 py-1 rounded border border-rose-300 text-sm font-medium inline-flex items-center gap-1 text-rose-700 bg-white hover:bg-rose-50 disabled:opacity-50"
+                          title="Reverse stock received and accounts payable"
+                        >
+                          <Undo2 className="w-4 h-4" />
+                          {reversingId === b.id ? "…" : "Reverse"}
                         </button>
                       )}
                     </span>
@@ -863,16 +1017,21 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               <button type="button" onClick={() => !saving && closeModal()}><X className="w-5 h-5" /></button>
             </div>
             <div className="space-y-4">
+              {editingBill && isBillApproved(editingBill) && (
+                <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  Approved bill: only the bill date and due date can be changed. Changing the bill date also redates the payable journal.
+                </p>
+              )}
               <div>
                 <label className="block text-sm font-medium mb-1">Vendor *</label>
-                <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} className="w-full border rounded-lg px-3 py-2">
+                <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill))} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100">
                   <option value="">Select vendor</option>
                   {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Amount *</label>
-                <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="0.00" />
+                <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill))} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="0.00" />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">GRN/Bill Date</label>
@@ -884,7 +1043,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Description</label>
-                <input value={description} onChange={(e) => setDescription(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="e.g. Invoice #1234" />
+                <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill))} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="e.g. Invoice #1234" />
               </div>
             </div>
             <div className="flex gap-2 mt-6">
@@ -945,7 +1104,31 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               {isBillApproved(detailBill) && (detailBill.approved_at || detailBill.approved_by) && (
                 <p><span className="font-medium text-slate-500">Approved by:</span> {detailBill.approver?.full_name || staff.find((s) => s.id === detailBill.approved_by)?.full_name || "—"} {detailBill.approved_at ? `on ${new Date(detailBill.approved_at).toLocaleDateString()}` : ""}</p>
               )}
-              {!isBillApproved(detailBill) && detailBill.status !== "paid" && !isRejectedBill(detailBill) && (
+              {isAdmin && !readOnly && !["rejected", "reversed"].includes(normalizedBillStatus(detailBill)) && (
+                <div className="pt-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDetailBill(null);
+                      openEdit(detailBill);
+                    }}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Pencil className="h-4 w-4" /> {isBillApproved(detailBill) ? "Edit dates" : "Edit bill"}
+                  </button>
+                  {isBillApproved(detailBill) && (
+                    <button
+                      type="button"
+                      onClick={() => void handleReverse(detailBill)}
+                      disabled={reversingId === detailBill.id}
+                      className="inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-1.5 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:opacity-50"
+                    >
+                      <Undo2 className="h-4 w-4" /> {reversingId === detailBill.id ? "Reversing..." : "Reverse bill"}
+                    </button>
+                  )}
+                </div>
+              )}
+              {!isBillApproved(detailBill) && detailBill.status !== "paid" && !isRejectedBill(detailBill) && normalizedBillStatus(detailBill) !== "reversed" && (
                 <div className="pt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -974,7 +1157,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                   )}
                 </div>
               )}
-              {!isBillApproved(detailBill) && canApproveBills && !readOnly && (
+              {!isBillApproved(detailBill) && normalizedBillStatus(detailBill) !== "reversed" && canApproveBills && !readOnly && (
                 <div className="pt-2">
                   <button
                     type="button"
@@ -988,6 +1171,11 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                 </div>
               )}
               {detailBill.description && <p><span className="font-medium text-slate-500">Description:</span> {detailBill.description}</p>}
+              <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 sm:grid-cols-3">
+                <p><span className="block text-xs text-slate-500">Paid total</span><strong>{Number(paymentReconciliation.get(detailBill.id)?.paidTotal || 0).toFixed(2)}</strong></p>
+                <p><span className="block text-xs text-slate-500">Paid off date</span><strong>{paymentReconciliation.get(detailBill.id)?.paidOffDate ? new Date(`${paymentReconciliation.get(detailBill.id)?.paidOffDate}T12:00:00`).toLocaleDateString() : "Not fully paid"}</strong></p>
+                <p><span className="block text-xs text-slate-500">Allocated payments</span><strong>{paymentReconciliation.get(detailBill.id)?.paymentCount || 0}</strong></p>
+              </div>
             </div>
             <div className="border-t pt-4 mb-4">
               <h3 className="font-semibold text-slate-700 mb-2">Items on GRN/Bill</h3>
@@ -1044,15 +1232,26 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                   </button>
                 </p>
               )}
-              <p>
-                <button
-                  type="button"
-                  onClick={() => { onNavigate?.("purchases_payments"); setDetailBill(null); }}
-                  className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
-                >
-                  <ExternalLink className="w-4 h-4" /> Payments made ({detailPayments.length})
-                </button>
-              </p>
+              {detailPayments.length > 0 ? (
+                detailPayments.map((payment) => (
+                  <p key={payment.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onNavigate?.("purchases_payments", { highlightVendorPaymentId: payment.id });
+                        setDetailBill(null);
+                      }}
+                      className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 hover:underline"
+                    >
+                      <ExternalLink className="w-4 h-4" /> Payment made:{" "}
+                      {payment.payment_date ? new Date(payment.payment_date).toLocaleDateString() : "—"} ·{" "}
+                      {Number(payment.amount || 0).toFixed(2)}
+                    </button>
+                  </p>
+                ))
+              ) : (
+                <p className="text-slate-500">Payments made (0)</p>
+              )}
               <p>
                 <button
                   type="button"

@@ -78,7 +78,7 @@ export function KitchenMenuPage({ readOnly = false, onNavigate }: KitchenMenuPag
       );
       if (prodRes.error) throw prodRes.error;
 
-      const allProds = (prodRes.data || []) as MenuProduct & { active?: boolean; saleable?: boolean }[];
+      const allProds = (prodRes.data || []) as Array<MenuProduct & { active?: boolean; saleable?: boolean }>;
       const dishes = allProds.filter((p) => p.department_id && dishDeptIds.has(p.department_id));
       setMenuProducts(dishes);
 

@@ -336,7 +336,7 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
         return;
       }
     }
-    const totalsForAudit = linePayload.reduce(
+    const totalsForAudit = linePayload.reduce<{ gross: number; net: number; lines: number }>(
       (acc, row) => {
         const g = Number((row as { gross_pay: number }).gross_pay);
         const n = Number((row as { net_pay: number }).net_pay);

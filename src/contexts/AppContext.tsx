@@ -24,6 +24,7 @@ import type {
 import { memberMeetsLoanDisbursePolicy, loanProductSharesGate } from "@/lib/saccoLoanEligibility";
 import {
   fetchSaccoWorkspaceData,
+  insertFixedDepositRow,
   insertLoanRow,
   replaceLoanProductsForOrg,
   updateLoanRow,
@@ -103,6 +104,7 @@ export type AppContextValue = {
   setLoans: React.Dispatch<React.SetStateAction<Loan[]>>;
   fixedDeposits: FixedDeposit[];
   setFixedDeposits: React.Dispatch<React.SetStateAction<FixedDeposit[]>>;
+  addFixedDeposit: (deposit: Omit<FixedDeposit, "id" | "interestEarned" | "status">) => Promise<void>;
   cashbook: CashbookEntry[];
   setCashbook: React.Dispatch<React.SetStateAction<CashbookEntry[]>>;
   fixedAssets: FixedAsset[];
@@ -241,6 +243,23 @@ export function AppProvider({
   const formatCurrency = useCallback((n: number) => {
     return `UGX ${n.toLocaleString("en-UG", { maximumFractionDigits: 0 })}`;
   }, []);
+
+  const addFixedDeposit = useCallback(
+    async (deposit: Omit<FixedDeposit, "id" | "interestEarned" | "status">) => {
+      const complete = {
+        ...deposit,
+        interestEarned: deposit.amount * (deposit.interestRate / 100) * (deposit.term / 12),
+        status: "active",
+      };
+      if (!organizationId || !persistReadyRef.current) {
+        setFixedDeposits((prev) => [...prev, { id: crypto.randomUUID(), ...complete }]);
+        return;
+      }
+      const inserted = await insertFixedDepositRow(organizationId, complete);
+      setFixedDeposits((prev) => [...prev, inserted]);
+    },
+    [organizationId]
+  );
 
   const setCurrentPage = useCallback(
     (page: string, state?: Record<string, unknown>) => {
@@ -446,6 +465,7 @@ export function AppProvider({
       setLoans,
       fixedDeposits,
       setFixedDeposits,
+      addFixedDeposit,
       cashbook,
       setCashbook,
       fixedAssets,
@@ -468,6 +488,7 @@ export function AppProvider({
       members,
       loans,
       fixedDeposits,
+      addFixedDeposit,
       cashbook,
       fixedAssets,
       loanProductsInner,

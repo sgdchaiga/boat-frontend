@@ -30,6 +30,7 @@ import {
   Link2,
   ArrowLeft,
   Landmark,
+  Briefcase,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -413,6 +414,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                     { name: 'Journal entries', page: 'accounting_journal' },
                     { name: 'Manual journals', page: 'accounting_manual' },
                     { name: 'General ledger', page: 'accounting_gl' },
+                    { name: 'Cash & float reconciliation', page: 'accounting_bank_reconciliation' },
                     ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
                   ],
                 },
@@ -553,6 +555,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
               { name: 'Income Statement', page: 'accounting_income' },
               { name: 'Balance Sheet', page: 'accounting_balance' },
               { name: 'Cash Flow', page: 'accounting_cashflow' },
+              { name: 'Cash & Float Reconciliation', page: 'accounting_bank_reconciliation' },
             ],
           },
         ],
@@ -565,6 +568,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Record Purchases', page: 'purchases_orders' },
           { name: 'GRN/Bills', page: 'purchases_bills' },
           { name: 'Payments Made', page: 'purchases_payments' },
+          { name: 'Cash-out reconciliation', page: 'purchases_cash_out_reconciliation' },
           { name: 'Return to supplier', page: 'purchases_credits' },
           { name: 'Spend money', page: 'purchases_expenses' },
         ],
@@ -603,6 +607,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Journal Entries', page: 'accounting_journal' },
         { name: 'Manual Journals', page: 'accounting_manual' },
         { name: 'General Ledger', page: 'accounting_gl' },
+        { name: 'Cash & Float Reconciliation', page: 'accounting_bank_reconciliation' },
         ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
       ],
     },
@@ -702,8 +707,20 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   );
   const roleNavMenuTitle = getRoleBasedNavMenuTitle(user?.role);
   const useRoleScopedNav = hasRoleScopedNavigation(user?.role, businessType) && roleScopedNav != null;
+  const practiceNavigation: NavItem[] = [
+    { name: 'Clients', icon: UsersRound, page: 'practice_clients' },
+    { name: 'Engagements', icon: Briefcase, page: 'practice_engagements' },
+    { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
+    { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
+    { name: 'Tasks & Deadlines', icon: BookOpen, page: 'practice_tasks' },
+    { name: 'Billing', icon: Receipt, page: 'practice_billing' },
+    { name: 'Staff', icon: UsersRound, page: 'staff' },
+    { name: 'Permissions & settings', icon: Settings, page: 'admin' },
+  ];
 
-  const mainNavigation: NavItem[] = useRoleScopedNav
+  const mainNavigation: NavItem[] = businessType === 'accounting_practice'
+    ? practiceNavigation
+    : useRoleScopedNav
     ? roleScopedNav
     : businessType === 'sacco'
       ? saccoNavigation
@@ -834,6 +851,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         enablePayroll: allowPayroll,
         enableBudget: allowBudget,
         enableTreasury,
+        enableReconciliation: user?.enable_reconciliation !== false,
         enableAgent: allowAgent,
         enableHotelAssessment: allowHotelAssessment,
         enableManufacturing: allowManufacturing,
@@ -857,6 +875,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.enable_purchases,
       user?.enable_fixed_assets,
       user?.enable_treasury,
+      user?.enable_reconciliation,
       user?.school_enable_reports,
       user?.school_enable_fixed_deposit,
       user?.school_enable_accounting,
@@ -869,6 +888,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       allowPayroll,
       allowBudget,
       enableTreasury,
+      user?.enable_reconciliation,
       allowAgent,
       allowHotelAssessment,
       allowManufacturing,
@@ -887,6 +907,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enablePayroll: allowPayroll,
       enableBudget: allowBudget,
       enableTreasury,
+      enableReconciliation: user?.enable_reconciliation !== false,
       enableAgent: allowAgent,
       enableHotelAssessment: allowHotelAssessment,
       enableManufacturing: allowManufacturing,
@@ -1328,9 +1349,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                         ?.business_type;
                       if (bt === "retail") onNavigate("retail_dashboard");
                       else if (bt === "clinic") onNavigate("clinic_dashboard");
-                      else if (bt === "sacco") onNavigate(SACCOPRO_PAGE);
-                      else if (bt === "school") onNavigate(SCHOOL_PAGE);
-                      else if (bt === "vsla") onNavigate(VSLA_PAGE);
+                      else if (bt === "sacco") onNavigate(SACCOPRO_PAGE.dashboard);
+                      else if (bt === "school") onNavigate(SCHOOL_PAGE.dashboard);
+                      else if (bt === "vsla") onNavigate(VSLA_PAGE.dashboard);
                       else if (bt === "manufacturing") onNavigate("manufacturing");
                       else onNavigate("dashboard");
                     })();

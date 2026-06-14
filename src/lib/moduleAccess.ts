@@ -21,6 +21,7 @@ export type ModuleId =
   | "purchases"
   | "reports"
   | "accounting"
+  | "reconciliation"
   | "fixed_assets"
   | "staff"
   | "admin"
@@ -80,6 +81,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   purchases: "both",
   reports: "both",
   accounting: "both",
+  reconciliation: "both",
   fixed_assets: "both",
   staff: "both",
   admin: "both",
@@ -115,6 +117,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   purchases: true,
   reports: true,
   accounting: true,
+  reconciliation: true,
   fixed_assets: true,
   staff: true,
   admin: true,
@@ -166,7 +169,7 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
   /** Lodging-plus-retail tenants use both waiter POS surfaces and retail counter routes. */
   if (businessType === "mixed" && audience === "retail") return true;
   const normalized: ModuleAudience =
-    businessType === "mixed" ? "both" : businessType === "restaurant" ? "retail" : businessType;
+    businessType === "mixed" || businessType === "accounting_practice" ? "both" : businessType === "restaurant" ? "retail" : businessType;
   return audience === "both" || audience === normalized;
 }
 
@@ -194,6 +197,8 @@ export function getModuleAccess(input: {
   enableManufacturing?: boolean;
   enableReports?: boolean;
   enableAccounting?: boolean;
+  /** Platform: unified cash and float reconciliation toggle. */
+  enableReconciliation?: boolean;
   enableInventory?: boolean;
   enablePurchases?: boolean;
   /** School org: superuser toggles for BOAT-linked areas (ignored for non-school). */
@@ -218,6 +223,7 @@ export function getModuleAccess(input: {
     enableManufacturing,
     enableReports,
     enableAccounting,
+    enableReconciliation,
     enableInventory,
     enablePurchases,
     schoolEnableReports,
@@ -282,6 +288,14 @@ export function getModuleAccess(input: {
       visible: false,
       readOnly: true,
       blockedReason: "Accounting is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "reconciliation" && enableReconciliation !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Cash and float reconciliation is not enabled for this organization. Ask a platform admin to turn it on.",
     };
   }
 
@@ -453,9 +467,19 @@ const CLINIC_PAGE_IDS = new Set([
   "clinic_laboratory",
   "clinic_pos",
 ]);
+const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
+  "practice_dashboard",
+  "practice_clients",
+  "practice_engagements",
+  "practice_documents",
+  "practice_reconciliation",
+  "practice_tasks",
+  "practice_billing",
+]);
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
   if (CLINIC_PAGE_IDS.has(page)) {
     return businessType === "clinic";
   }
@@ -465,7 +489,7 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
   const nonRetailLodgingProfiles: BusinessType[] = ["hotel", "school", "sacco", "vsla", "manufacturing"];
   if (nonRetailLodgingProfiles.includes(businessType) && RETAIL_EXCLUSIVE_PAGE_IDS.has(page)) {
     /** Lodging tenants use credit invoices for property customers — same page as retail debtors. */
-    if ((businessType === "hotel" || businessType === "mixed") && page === "retail_credit_invoices") {
+    if (businessType === "hotel" && page === "retail_credit_invoices") {
       return true;
     }
     /** Hotel / restaurant clinic or drug-shop counter: same retail POS surfaces as mixed tenants. */
@@ -519,6 +543,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
   if (SCHOOL_PAGE_VALUES.has(page)) return "school";
   if (["dashboard"].includes(page)) return "dashboard";
+  if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return "accounting";
   if (["retail_dashboard"].includes(page)) return "retail_dashboard";
   if (["retail_credit_invoices"].includes(page)) return "retail_credit_invoices";
   if (["retail_customers", "hotel_customers", "customers"].includes(page)) return "retail_customers";
@@ -541,7 +566,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "manufacturing_costing",
     "manufacturing_price_lists",
   ].includes(page)) return "manufacturing";
-  if (["purchases_vendors", "purchases_expenses", "purchases_orders", "purchases_bills", "purchases_payments", "purchases_credits"].includes(page)) return "purchases";
+  if (["purchases_vendors", "purchases_expenses", "purchases_orders", "purchases_bills", "purchases_payments", "purchases_credits", "purchases_cash_out_reconciliation"].includes(page)) return "purchases";
   if ([
     "reports",
     "reports_daily_sales",
@@ -579,6 +604,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "accounting_balance",
     "accounting_cashflow",
   ].includes(page)) return "accounting";
+  if (page === "accounting_bank_reconciliation") return "reconciliation";
   if (["accounting_budgeting", "reports_budget_variance"].includes(page)) return "budget";
   if (page === "fixed_assets") return "fixed_assets";
   if (page.startsWith("payroll_")) return "payroll";

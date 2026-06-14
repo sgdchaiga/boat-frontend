@@ -21,6 +21,7 @@ type Org = {
   enable_payroll?: boolean | null;
   enable_budget?: boolean | null;
   enable_treasury?: boolean | null;
+  enable_reconciliation?: boolean | null;
   enable_agent?: boolean | null;
   enable_hotel_assessment?: boolean | null;
   enable_manufacturing?: boolean | null;
@@ -186,6 +187,7 @@ export function PlatformOrganizationsPage() {
   const [editEnablePayroll, setEditEnablePayroll] = useState(true);
   const [editEnableBudget, setEditEnableBudget] = useState(true);
   const [editEnableTreasury, setEditEnableTreasury] = useState(true);
+  const [editEnableReconciliation, setEditEnableReconciliation] = useState(true);
   const [editEnableAgent, setEditEnableAgent] = useState(true);
   const [editEnableReports, setEditEnableReports] = useState(true);
   const [editEnableAccounting, setEditEnableAccounting] = useState(true);
@@ -246,6 +248,7 @@ export function PlatformOrganizationsPage() {
       | "enable_payroll"
       | "enable_budget"
       | "enable_treasury"
+      | "enable_reconciliation"
       | "enable_agent"
       | "enable_hotel_assessment"
       | "enable_manufacturing",
@@ -601,6 +604,7 @@ export function PlatformOrganizationsPage() {
     setEditEnablePayroll(org.enable_payroll !== false);
     setEditEnableBudget(org.enable_budget !== false);
     setEditEnableTreasury(org.enable_treasury !== false);
+    setEditEnableReconciliation(org.enable_reconciliation !== false);
     setEditEnableAgent(org.enable_agent !== false);
     setEditEnableReports(org.enable_reports !== false);
     setEditEnableAccounting(org.enable_accounting !== false);
@@ -643,6 +647,7 @@ export function PlatformOrganizationsPage() {
         enable_payroll: editEnablePayroll,
         enable_budget: editEnableBudget,
         enable_treasury: editEnableTreasury,
+        enable_reconciliation: editEnableReconciliation,
         enable_agent: editEnableAgent,
         enable_hotel_assessment: editEnableHotelAssessment,
         enable_manufacturing: editEnableManufacturing,
@@ -1298,6 +1303,14 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnableTreasury(e.target.checked)}
                 />
                 Enable Treasury module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableReconciliation}
+                  onChange={(e) => setEditEnableReconciliation(e.target.checked)}
+                />
+                Enable Cash & Float Reconciliation module
               </label>
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input

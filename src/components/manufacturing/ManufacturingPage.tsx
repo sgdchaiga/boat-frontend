@@ -76,7 +76,9 @@ export function ManufacturingPage({ onNavigate, readOnly = false }: Props) {
               <button
                 key={card.page}
                 type="button"
-                onClick={() => onNavigate?.(card.page, "state" in card ? card.state : undefined)}
+                onClick={() =>
+                  onNavigate?.(card.page, "state" in card ? (card.state as Record<string, unknown>) : undefined)
+                }
                 className="text-left rounded-xl border border-slate-200 bg-white p-5 shadow-sm hover:border-slate-300 hover:bg-slate-50/80 transition flex flex-col gap-2"
               >
                 <div className="flex items-center justify-between gap-2">

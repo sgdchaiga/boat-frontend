@@ -41,7 +41,7 @@ const DEFAULT_TERMS_NEW: Pick<
 
 function cell(row: Record<string, string>, keys: string[]): string {
   for (const k of keys) {
-    const v = asText(row[k]);
+    const v = String(row[k] ?? "").trim();
     if (v) return v;
   }
   return "";

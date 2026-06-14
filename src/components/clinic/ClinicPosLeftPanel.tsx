@@ -1,4 +1,4 @@
-import type { RefObject } from "react";
+import type { MutableRefObject } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ClipboardList, Pill } from "lucide-react";
 import type { PosLabels } from "@/lib/posExperience";
@@ -40,7 +40,7 @@ export interface ClinicPosLeftPanelProps {
   scanCode: string;
   setScanCode: (v: string) => void;
   handleScan: () => void;
-  scanInputRef: RefObject<HTMLInputElement | null>;
+  scanInputRef: MutableRefObject<HTMLInputElement | null>;
   medicineSearch: string;
   setMedicineSearch: (v: string) => void;
   filteredMedicines: ClinicPosMedicine[];
@@ -303,7 +303,9 @@ export function ClinicPosLeftPanel({
         <div className="flex min-h-0 min-w-0 flex-[1.12] flex-col overflow-hidden rounded-md border border-slate-200 bg-slate-50/80 p-1">
           <div className="mt-1 min-h-0 flex-1 space-y-1 overflow-y-auto">
             <input
-              ref={scanInputRef}
+              ref={(node) => {
+                scanInputRef.current = node;
+              }}
               value={scanCode}
               onChange={(e) => setScanCode(e.target.value)}
               onKeyDown={(e) => {

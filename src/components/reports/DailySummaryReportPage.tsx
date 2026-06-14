@@ -493,7 +493,7 @@ export function DailySummaryReportPage() {
     const lines: string[] = [];
     const esc = (x: unknown) => `"${String(x ?? "").replace(/"/g, '""')}"`;
     lines.push(["Daily summary (all modules)", reportDate, "Uganda (EAT)"].map(esc).join(","));
-    lines.push([]);
+    lines.push("");
     lines.push(["— Sales —"].map(esc).join(","));
     lines.push(["Invoices issued (accrual)", "", "", ""].map(esc).join(","));
     lines.push(["Invoice #", "Customer", "Total", "Paid to date", "Unpaid balance"].map(esc).join(","));
@@ -508,14 +508,14 @@ export function DailySummaryReportPage() {
     lines.push(["Hotel billing charges (day)", billingChargesTotal, "", ""].map(esc).join(","));
     lines.push(["Kitchen POS (est. retail price)", kitchenPosTotal, "", ""].map(esc).join(","));
     lines.push(["Retail POS + invoice lines (est. / issued today)", retailPosTotal, "", ""].map(esc).join(","));
-    lines.push([]);
+    lines.push("");
     lines.push(["POS cash receipts", "", ""].map(esc).join(","));
     lines.push(["Paid at", "Amount", "Method", "Transaction"].map(esc).join(","));
     for (const p of posReceipts) {
       lines.push([p.paid_at, p.amount, formatPaymentMethodLabel(p.payment_method), p.transaction_id || ""].map(esc).join(","));
     }
     lines.push(["Subtotal POS", posTotal, "", ""].map(esc).join(","));
-    lines.push([]);
+    lines.push("");
     lines.push(["Debtor & other payments", "", "", ""].map(esc).join(","));
     for (const p of debtorAndOther) {
       const alloc = parseInvoiceAllocationsJson(p.invoice_allocations)
@@ -525,7 +525,7 @@ export function DailySummaryReportPage() {
     }
     lines.push(["Subtotal debtor/other", debtorTotal, "", ""].map(esc).join(","));
 
-    lines.push([]);
+    lines.push("");
     lines.push(["— Purchases —"].map(esc).join(","));
     lines.push(["Bills", "Vendor", "Amount", "Status"].map(esc).join(","));
     for (const b of billsDay) {
@@ -538,7 +538,7 @@ export function DailySummaryReportPage() {
     }
     lines.push(["Subtotal vendor payments", purchaseTotals.payCount, purchaseTotals.paymentAmount, ""].map(esc).join(","));
 
-    lines.push([]);
+    lines.push("");
     lines.push(["— Inventory —"].map(esc).join(","));
     lines.push(["Source type", "Qty in", "Qty out"].map(esc).join(","));
     for (const [k, v] of Object.entries(stockAgg.bySource)) {
@@ -584,7 +584,7 @@ export function DailySummaryReportPage() {
       );
     }
 
-    lines.push([]);
+    lines.push("");
     lines.push(["— Expenses —"].map(esc).join(","));
     lines.push(["Description", "Vendor", "Amount"].map(esc).join(","));
     for (const e of expensesRows) {

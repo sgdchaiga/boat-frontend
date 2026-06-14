@@ -42,7 +42,7 @@ type PaymentRow = {
   transaction_id: string | null;
   payment_method: string;
   amount: number;
-  paid_at?: string | null;
+  paid_at: string;
   payment_status?: string | null;
   invoice_allocations?: unknown;
 };

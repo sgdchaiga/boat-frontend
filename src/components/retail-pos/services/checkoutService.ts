@@ -96,7 +96,7 @@ export async function collectMobileMoneyPayments({
     }
     completedRefs.set(line.id, {
       txRef: (data as MobileCollectionResponse | null)?.tx_ref || txRef,
-      transactionId: (data as MobileCollectionResponse | null)?.transaction_id ?? null,
+      transactionId: Number((data as MobileCollectionResponse | null)?.transaction_id) || null,
     });
   }
   return tenders.map((t) => {

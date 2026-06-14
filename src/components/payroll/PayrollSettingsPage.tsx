@@ -133,8 +133,8 @@ export function PayrollSettingsPage({ readOnly }: Props) {
               </ul>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <Field label="NSSF employee %" value={row.nssf_employee_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employee_rate_pct: n }))} />
-              <Field label="NSSF employer %" value={row.nssf_employer_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employer_rate_pct: n }))} />
+              <Field label="NSSF employee %" value={row.nssf_employee_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employee_rate_pct: n === "" ? undefined : n }))} />
+              <Field label="NSSF employer %" value={row.nssf_employer_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employer_rate_pct: n === "" ? undefined : n }))} />
               <Field
                 label="Working days per month (for absence deduction)"
                 value={row.payroll_working_days_per_month ?? 22}

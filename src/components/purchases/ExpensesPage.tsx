@@ -611,8 +611,11 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           console.error("Expense lines GL filter:", glErr.message);
           throw glErr;
         }
-        glFilteredExpenseIds = [...new Set((glLines || []).map((r: { expense_id: string }) => r.expense_id))];
-        if (glFilteredExpenseIds.length === 0) {
+        const matchingExpenseIds = [
+          ...new Set<string>((glLines || []).map((r: { expense_id: string }) => r.expense_id)),
+        ];
+        glFilteredExpenseIds = matchingExpenseIds;
+        if (matchingExpenseIds.length === 0) {
           setTotalCount(0);
           setExpenses([]);
           setLoading(false);

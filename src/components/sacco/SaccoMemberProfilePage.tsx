@@ -28,7 +28,7 @@ const SaccoMemberProfilePage: React.FC<Props> = ({ memberIdFromNav, navigate }) 
   const { members, loans, cashbook, formatCurrency, refreshSaccoWorkspace, saccoLoading, saccoError } =
     useAppContext();
   const { user } = useAuth();
-  const readOnly = user?.role === "viewer";
+  const readOnly = user?.role !== "admin" && user?.role !== "manager";
 
   const [memberId, setMemberId] = useState(memberIdFromNav ?? "");
 

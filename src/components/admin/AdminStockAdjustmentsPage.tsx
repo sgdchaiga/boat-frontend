@@ -400,6 +400,7 @@ export function AdminStockAdjustmentsPage({
       const movementDateIso = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00.000Z` : new Date().toISOString();
       const payload = validRows.map((r) => {
         const delta = Number(r.qtyDelta);
+        const closingStock = r.currentQty + delta;
         const row: Record<string, unknown> = {
           product_id: r.product_id,
           movement_date: movementDateIso,
@@ -413,7 +414,7 @@ export function AdminStockAdjustmentsPage({
               ? `GL ${glAccounts.find((g) => g.id === glAccountId)?.account_code ?? ""} - ${
                   glAccounts.find((g) => g.id === glAccountId)?.account_name ?? ""
                 } | `
-              : "") + (reason.trim() || "Manual adjustment"),
+              : "") + `${reason.trim() || "Manual adjustment"} [CLOSING_STOCK:${closingStock}]`,
         };
         if (orgId) row.organization_id = orgId;
         return row;

@@ -1,5 +1,5 @@
 /** Minimal toast shim until a full Sonner/Radix stack is added. */
-type ToastInput = { title: string; description?: string };
+type ToastInput = { title: string; description?: string; variant?: "default" | "destructive" };
 
 export function toast({ title, description }: ToastInput) {
   const msg = description ? `${title}\n${description}` : title;

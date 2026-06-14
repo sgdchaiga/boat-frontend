@@ -60,10 +60,13 @@ import { PurchaseOrdersPage } from './components/purchases/PurchaseOrdersPage';
 import { BillsPage } from './components/purchases/BillsPage';
 import { VendorPaymentsPage } from './components/purchases/VendorPaymentsPage';
 import { VendorCreditsPage } from './components/purchases/VendorCreditsPage';
+import { CashOutReconciliationPage } from './components/purchases/CashOutReconciliationPage';
 import { AdminPage, parseAdminTabParam } from './components/admin/AdminPage';
 import { JournalEntriesPage } from './components/accounting/JournalEntriesPage';
 import { ManualJournalsPage } from './components/accounting/ManualJournalsPage';
 import { GeneralLedgerPage } from './components/accounting/GeneralLedgerPage';
+import { BankReconciliationPage } from './components/accounting/BankReconciliationPage';
+import { PracticeWorkspacePage } from './components/accounting-practice/PracticeWorkspacePage';
 import { TrialBalancePage } from './components/accounting/TrialBalancePage';
 import { IncomeStatementPage } from './components/accounting/IncomeStatementPage';
 import { BalanceSheetPage } from './components/accounting/BalanceSheetPage';
@@ -217,6 +220,7 @@ const MANAGED_PAGE_STATE_KEYS = [
   "highlightGuestId",
   "highlightVendorId",
   "highlightPaymentId",
+  "highlightVendorPaymentId",
   "memberId",
   "permissionsStaffId",
   "payrollRunId",
@@ -280,6 +284,8 @@ function getPageStateFromUrl(): Record<string, unknown> {
   if (highlightVendorId) state.highlightVendorId = highlightVendorId;
   const highlightPaymentId = qp.get("highlightPaymentId");
   if (highlightPaymentId) state.highlightPaymentId = highlightPaymentId;
+  const highlightVendorPaymentId = qp.get("highlightVendorPaymentId");
+  if (highlightVendorPaymentId) state.highlightVendorPaymentId = highlightVendorPaymentId;
   const memberId = qp.get("memberId");
   if (memberId) state.memberId = memberId;
   const permissionsStaffId = qp.get("permissionsStaffId");
@@ -448,13 +454,19 @@ function AppContent() {
               ? SACCOPRO_HOME_PAGE
               : user.business_type === "vsla"
                 ? VSLA_HOME_PAGE
-                : "dashboard"
+                : user.business_type === "accounting_practice"
+                  ? "practice_clients"
+                  : "dashboard"
       );
       setPageState({});
       return;
     }
     if (user.business_type === "retail" && currentPage === "dashboard") {
       setCurrentPage("retail_dashboard");
+      return;
+    }
+    if (user.business_type === "accounting_practice" && (currentPage === "dashboard" || currentPage === "retail_dashboard")) {
+      setCurrentPage("practice_clients");
       return;
     }
     if (user.business_type === "clinic" && currentPage === "dashboard") {
@@ -621,6 +633,9 @@ function AppContent() {
     if (user?.business_type === "retail" && currentPage === "dashboard") {
       return <RetailDashboard onNavigate={navigate} />;
     }
+    if (user?.business_type === "accounting_practice" && currentPage === "dashboard") {
+      return <PracticeWorkspacePage section="clients" readOnly={false} />;
+    }
     if (user?.business_type === "clinic" && currentPage === "dashboard") {
       return <ClinicDashboardPage onNavigate={navigate} />;
     }
@@ -653,6 +668,7 @@ function AppContent() {
           enablePayroll: user?.enable_payroll !== false,
           enableBudget: user?.enable_budget !== false,
           enableTreasury: user?.enable_treasury !== false,
+          enableReconciliation: user?.enable_reconciliation !== false,
           enableAgent: user?.business_type !== "retail" && user?.business_type !== "clinic" && user?.enable_agent !== false,
           enableHotelAssessment:
             (user?.business_type === "hotel" || user?.business_type === "mixed") &&
@@ -751,6 +767,19 @@ function AppContent() {
         );
       case 'dashboard':
         return <Dashboard onNavigate={navigate} />;
+      case 'practice_dashboard':
+      case 'practice_clients':
+        return <PracticeWorkspacePage section="clients" readOnly={access.readOnly} />;
+      case 'practice_engagements':
+        return <PracticeWorkspacePage section="engagements" readOnly={access.readOnly} />;
+      case 'practice_documents':
+        return <PracticeWorkspacePage section="documents" readOnly={access.readOnly} />;
+      case 'practice_reconciliation':
+        return <PracticeWorkspacePage section="reconciliation" readOnly={access.readOnly} />;
+      case 'practice_tasks':
+        return <PracticeWorkspacePage section="tasks" readOnly={access.readOnly} />;
+      case 'practice_billing':
+        return <PracticeWorkspacePage section="billing" readOnly={access.readOnly} />;
       case 'retail_dashboard':
         return <RetailDashboard onNavigate={navigate} />;
       case SACCOPRO_PAGE.dashboard:
@@ -1246,18 +1275,23 @@ function AppContent() {
           <VendorPaymentsPage
             payBillId={pageState?.payBillId as string | undefined}
             payVendorId={pageState?.payVendorId as string | undefined}
+            highlightVendorPaymentId={pageState?.highlightVendorPaymentId as string | undefined}
             readOnly={access.readOnly}
             onNavigate={navigate}
           />
         );
       case 'purchases_credits':
         return <VendorCreditsPage readOnly={access.readOnly} />;
+      case 'purchases_cash_out_reconciliation':
+        return <CashOutReconciliationPage onNavigate={navigate} />;
       case 'accounting_journal':
         return <JournalEntriesPage />;
       case 'accounting_manual':
         return <ManualJournalsPage />;
       case 'accounting_gl':
         return <GeneralLedgerPage />;
+      case 'accounting_bank_reconciliation':
+        return <BankReconciliationPage readOnly={access.readOnly} />;
       case 'accounting_trial':
         return <TrialBalancePage />;
       case 'accounting_income':

@@ -72,7 +72,7 @@ export function ManufacturingDailyProductionReportPage() {
       ]);
 
       const staffById = new Map((staffRes.data || []).map((s: { id: string; full_name: string }) => [s.id, s.full_name]));
-      const woById = new Map(
+      const woById = new Map<string, string>(
         (woRes.data || []).map((w: { id: string; product_name: string }) => [w.id, w.product_name])
       );
 
@@ -80,7 +80,8 @@ export function ManufacturingDailyProductionReportPage() {
         list.map((r) => ({
           id: r.id,
           posted_at: r.posted_at,
-          product_name: (r.product_name || (r.work_order_id ? woById.get(r.work_order_id) : null) || "—").trim() || "—",
+          product_name:
+            String(r.product_name || (r.work_order_id ? woById.get(r.work_order_id) : null) || "—").trim() || "—",
           produced_qty: Number(r.produced_qty ?? 0),
           employee_name: (() => {
             const n = r.posted_by_staff_id ? staffById.get(r.posted_by_staff_id) : undefined;

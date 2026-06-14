@@ -140,6 +140,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   const moneyOut: NavChild[] = [
     { name: "Spend money", page: "purchases_expenses" },
     { name: "Pay suppliers", page: "purchases_payments" },
+    { name: "Cash-out reconciliation", page: "purchases_cash_out_reconciliation" },
     /** Misc cash out / non-supplier spend — balanced GL entry (debit expense etc., credit bank/cash), not sales receipts */
     { name: "Other expenditures", page: "accounting_manual" },
   ];
@@ -175,6 +176,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     ...(allowCommunications ? [{ name: "Communications", page: "communications" }] : []),
     { name: "Chart of accounts", page: "gl_accounts" },
     { name: "Journal entries", page: "accounting_journal" },
+    { name: "Cash & float reconciliation", page: "accounting_bank_reconciliation" },
   ];
   if (allowPayroll) {
     settings.push({ name: "Payroll", page: PAYROLL_PAGE.hub });

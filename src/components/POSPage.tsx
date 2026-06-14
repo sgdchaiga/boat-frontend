@@ -533,7 +533,7 @@ export function POSPage({
             const deptId = i.product_id && productMap[i.product_id] ? productMap[i.product_id].department_id : null;
             const deptName = deptId ? deptMap[deptId] || "" : "";
             const deptRow = (departmentsRes.data || []).find((x: { id: string }) => x.id === deptId) as
-              | { name?: string; pos_catalog_mode?: string | null }
+              | { name: string; pos_catalog_mode?: string | null }
               | undefined;
             const n = deptName.toLowerCase();
             if (n.includes("dessert")) return "dessert";

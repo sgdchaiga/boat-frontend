@@ -820,7 +820,7 @@ export async function fetchTellerSavingsAccountPickList(organizationId: string):
       balance: Number(a.balance),
     }));
   }
-  const map = new Map((mems ?? []).map((m: TellerMemberPickRow) => [m.id, m]));
+  const map = new Map<string, TellerMemberPickRow>((mems ?? []).map((m: TellerMemberPickRow) => [m.id, m]));
   return list.map((a) => {
     const m = map.get(a.sacco_member_id);
     return {

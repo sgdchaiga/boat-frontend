@@ -31,12 +31,12 @@ const FixedDeposit: React.FC = () => {
   const totalActive = fixedDeposits.filter(f => f.status === 'active').reduce((s, f) => s + f.amount, 0);
   const totalInterest = fixedDeposits.reduce((s, f) => s + f.interestEarned, 0);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseFloat(form.amount);
     const term = parseInt(form.term);
     if (isNaN(amount) || amount < 10000) return;
-    addFixedDeposit({
+    await addFixedDeposit({
       memberId: form.memberId, memberName: form.memberName, amount,
       interestRate: parseFloat(form.interestRate), term,
       startDate: form.startDate,

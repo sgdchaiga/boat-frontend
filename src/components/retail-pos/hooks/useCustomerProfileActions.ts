@@ -58,12 +58,16 @@ export function useCustomerProfileActions({
       }
       const created = await desktopApi.createRetailCustomer({ name, phone });
       if (created?.id) {
+        const createdWithCredit = created as typeof created & {
+          credit_limit?: number | null;
+          current_credit_balance?: number | null;
+        };
         const nextRow: RetailCustomerRow = {
           id: String(created.id),
           name,
           phone,
-          credit_limit: Number(created.credit_limit ?? 0),
-          current_credit_balance: Number(created.current_credit_balance ?? 0),
+          credit_limit: Number(createdWithCredit.credit_limit ?? 0),
+          current_credit_balance: Number(createdWithCredit.current_credit_balance ?? 0),
         };
         setCustomers((prev) => [nextRow, ...prev]);
         setSelectedCustomerId(nextRow.id);

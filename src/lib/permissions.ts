@@ -56,6 +56,7 @@ export type PageAccessDef = {
     | "Inventory"
     | "Reports"
     | "Accounting"
+    | "Practice"
     | "Payroll"
     | "Admin";
 };
@@ -64,6 +65,13 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "dashboard", label: "Dashboard", group: "Dashboard" },
   { page: "retail_dashboard", label: "Retail dashboard", group: "Dashboard" },
   { page: "clinic_dashboard", label: "Clinic dashboard", group: "Dashboard" },
+  { page: "practice_dashboard", label: "Practice dashboard", group: "Practice" },
+  { page: "practice_clients", label: "Clients", group: "Practice" },
+  { page: "practice_engagements", label: "Engagements", group: "Practice" },
+  { page: "practice_documents", label: "Document Vault", group: "Practice" },
+  { page: "practice_reconciliation", label: "Reconciliation Center", group: "Practice" },
+  { page: "practice_tasks", label: "Tasks & Deadlines", group: "Practice" },
+  { page: "practice_billing", label: "Billing", group: "Practice" },
   { page: "rooms", label: "Rooms", group: "Front desk" },
   { page: "reservations", label: "Reservations", group: "Front desk" },
   { page: "checkin", label: "Check in", group: "Front desk" },
@@ -99,6 +107,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "purchases_payments", label: "Vendor payments", group: "Purchases" },
   { page: "purchases_credits", label: "Return to supplier", group: "Purchases" },
   { page: "purchases_expenses", label: "Spend money / expenses", group: "Purchases" },
+  { page: "purchases_cash_out_reconciliation", label: "Cash-out reconciliation", group: "Purchases" },
   { page: "Products", label: "Items", group: "Inventory" },
   { page: "inventory_barcodes", label: "Barcodes", group: "Inventory" },
   { page: "inventory_stock_adjustments", label: "Stock adjustments", group: "Inventory" },
@@ -126,6 +135,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "accounting_journal", label: "Journal entries", group: "Accounting" },
   { page: "accounting_manual", label: "Manual journals", group: "Accounting" },
   { page: "accounting_gl", label: "General ledger", group: "Accounting" },
+  { page: "accounting_bank_reconciliation", label: "Cash & float reconciliation", group: "Accounting" },
   { page: "accounting_trial", label: "Trial balance", group: "Accounting" },
   { page: "accounting_income", label: "Income statement", group: "Accounting" },
   { page: "accounting_balance", label: "Balance sheet", group: "Accounting" },

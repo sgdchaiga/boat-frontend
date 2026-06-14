@@ -139,10 +139,10 @@ async function enrichPaymentsWithCustomerLabels(
   if (hcRes.error) console.warn("enrich hotel_customers:", formatSupabaseError(hcRes.error));
   if (rcRes.error) console.warn("enrich retail_customers:", formatSupabaseError(rcRes.error));
 
-  const hcMap = new Map(
+  const hcMap = new Map<string, { first_name: string; last_name: string }>(
     (hcRes.data || []).map((r) => [r.id, { first_name: r.first_name, last_name: r.last_name }])
   );
-  const rcMap = new Map((rcRes.data || []).map((r) => [r.id, { name: r.name }]));
+  const rcMap = new Map<string, { name: string }>((rcRes.data || []).map((r) => [r.id, { name: r.name }]));
 
   return rows.map((p) => ({
     ...p,

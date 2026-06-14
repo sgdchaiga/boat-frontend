@@ -94,3 +94,44 @@ export async function postStockInFromPurchaseOrderForBill(
 
   return { unmatchedDescriptions: Array.from(unmatchedDescriptions).sort((a, b) => a.localeCompare(b)) };
 }
+
+/** Creates an auditable stock-out that exactly offsets stock received by a bill. */
+export async function reverseStockInForBill(billId: string): Promise<{ reversedLines: number }> {
+  const { data: existing, error: existingError } = await supabase
+    .from("product_stock_movements")
+    .select("id")
+    .eq("source_type", "bill_reversal")
+    .eq("source_id", billId)
+    .limit(1);
+  if (existingError) throw existingError;
+  if ((existing || []).length > 0) return { reversedLines: 0 };
+
+  const { data: received, error: receivedError } = await supabase
+    .from("product_stock_movements")
+    .select("product_id,quantity_in,unit_cost,location,organization_id")
+    .eq("source_type", "bill")
+    .eq("source_id", billId);
+  if (receivedError) throw receivedError;
+
+  const movementDate = new Date().toISOString();
+  const reversals = (received || [])
+    .map((row: { product_id: string; quantity_in?: number | null; unit_cost?: number | null; location?: string | null; organization_id?: string | null }) => ({
+      product_id: row.product_id,
+      organization_id: row.organization_id ?? null,
+      movement_date: movementDate,
+      source_type: "bill_reversal",
+      source_id: billId,
+      quantity_in: 0,
+      quantity_out: Number(row.quantity_in || 0),
+      unit_cost: row.unit_cost ?? null,
+      location: row.location || "default",
+      note: `GRN/Bill reversed: ${billId}`,
+    }))
+    .filter((row) => row.quantity_out > 0);
+
+  if (reversals.length > 0) {
+    const { error } = await supabase.from("product_stock_movements").insert(reversals);
+    if (error) throw error;
+  }
+  return { reversedLines: reversals.length };
+}

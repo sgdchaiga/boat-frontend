@@ -66,7 +66,7 @@ export function MessagingComposerDialog({
               fallbackToSms: true,
             }
           : {
-              channel: "sms",
+              channel: "sms" as const,
               to: trimmed,
               text: text.trim() || "Message from BOAT",
               organizationId: user?.organization_id ?? undefined,
