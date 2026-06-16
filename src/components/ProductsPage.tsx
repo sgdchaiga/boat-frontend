@@ -11,8 +11,11 @@ import {
 import { supabase } from "../lib/supabase";
 import type { Database } from "../lib/database.types";
 import { useAuth } from "../contexts/AuthContext";
-import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../lib/supabaseOrgFilter";
+import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { ensureActiveOrganization } from "../lib/stockBulkImport";
+import { fetchStockLedgerMovementsForProducts } from "../lib/stockLedger";
+import { effectiveStockMovementInOut } from "../lib/stockMovementEffective";
+import { businessDayRangeForDateString, businessTodayISO } from "../lib/timezone";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 
@@ -217,13 +220,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
   async function loadProductsAndBalances() {
     if (orgId) await ensureActiveOrganization(orgId);
-    const [prodRes, movesRes] = await Promise.all([
-      filterByOrganizationId(supabase.from("products").select("*"), orgId, superAdmin),
-      filterStockMovementsByOrganizationId(
-        supabase.from("product_stock_movements").select("product_id,quantity_in,quantity_out"),
-        orgId
-      ),
-    ]);
+    const prodRes = await filterByOrganizationId(supabase.from("products").select("*"), orgId, superAdmin);
 
     if (prodRes.error) {
       console.error(prodRes.error);
@@ -233,17 +230,20 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       (a.name || "").localeCompare(b.name || "")
     );
     setProducts(list);
+    const moves = await fetchStockLedgerMovementsForProducts(orgId, list.map((p) => p.id));
 
     const bal: Record<string, number> = {};
     list.forEach((p) => {
       bal[p.id] = 0;
     });
 
-    if (!movesRes.error && movesRes.data) {
-      for (const m of movesRes.data as Array<{ product_id: string; quantity_in: number | null; quantity_out: number | null }>) {
-        if (bal[m.product_id] === undefined) continue;
-        bal[m.product_id] += Number(m.quantity_in || 0) - Number(m.quantity_out || 0);
-      }
+    const asAtEnd = businessDayRangeForDateString(businessTodayISO())?.to.getTime() ?? Number.POSITIVE_INFINITY;
+    for (const m of moves) {
+      if (bal[m.product_id] === undefined) continue;
+      const movementMs = new Date(m.movement_date || "").getTime();
+      if (!Number.isFinite(movementMs) || movementMs >= asAtEnd) continue;
+      const { inQty, outQty } = effectiveStockMovementInOut(m);
+      bal[m.product_id] += inQty - outQty;
     }
     setBalanceByProduct(bal);
   }

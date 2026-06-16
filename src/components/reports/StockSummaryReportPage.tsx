@@ -3,7 +3,9 @@ import { useAuth } from "../../contexts/AuthContext";
 import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
-import { businessDayRangeForDateString } from "../../lib/timezone";
+import { ensureActiveOrganization } from "../../lib/stockBulkImport";
+import { fetchStockLedgerMovementsForProducts } from "../../lib/stockLedger";
+import { businessDayRangeForDateString, businessTodayISO } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
 
 type ValuationMethod = "product_cost" | "last_purchase" | "weighted_average";
@@ -72,7 +74,7 @@ const defaultColumns: ColumnKey[] = [
 const formatNumber = (n: number) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
 function todayDateString() {
-  return new Date().toISOString().slice(0, 10);
+  return businessTodayISO();
 }
 
 function movementDate(raw: string | null): Date {
@@ -124,17 +126,13 @@ export function StockSummaryReportPage() {
       const effectiveAsAtDate = asAtDate || todayDateString();
       const asAtRange = businessDayRangeForDateString(effectiveAsAtDate);
       const asAtEnd = asAtRange?.to ?? new Date(`${effectiveAsAtDate}T23:59:59`);
+      if (orgId) {
+        await ensureActiveOrganization(orgId);
+      }
 
-      const [productsRes, movementsRes, departmentsRes] = await Promise.all([
+      const [productsRes, departmentsRes] = await Promise.all([
         filterByOrganizationId(
           supabase.from("products").select("id, name, department_id, cost_price, sales_price, track_inventory").order("name"),
-          orgId,
-          superAdmin
-        ),
-        filterByOrganizationId(
-          supabase
-            .from("product_stock_movements")
-            .select("product_id, movement_date, quantity_in, quantity_out, unit_cost, source_type, note"),
           orgId,
           superAdmin
         ),
@@ -142,11 +140,11 @@ export function StockSummaryReportPage() {
       ]);
 
       if (productsRes.error) throw productsRes.error;
-      if (movementsRes.error) throw movementsRes.error;
       if (departmentsRes.error) throw departmentsRes.error;
 
-      const products = ((productsRes.data || []) as ProductRow[]).filter((p) => (p.track_inventory ?? true) !== false);
-      const movements = ((movementsRes.data || []) as MovementRow[])
+      const products = (productsRes.data || []) as ProductRow[];
+      const ledgerMovements = await fetchStockLedgerMovementsForProducts(orgId, products.map((p) => p.id));
+      const movements = (ledgerMovements as MovementRow[])
         .filter((m) => {
           const dt = movementDate(m.movement_date);
           return Number.isFinite(dt.getTime()) && dt < asAtEnd;

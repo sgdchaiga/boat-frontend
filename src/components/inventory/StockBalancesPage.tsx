@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
-import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { ensureActiveOrganization } from "../../lib/stockBulkImport";
+import { fetchStockLedgerMovementsForProducts } from "../../lib/stockLedger";
 import { PageNotes } from "../common/PageNotes";
 import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
 import { businessDayRangeForDateString, businessTodayISO } from "../../lib/timezone";
@@ -41,12 +43,7 @@ export function StockBalancesPage() {
     setError(null);
     try {
       if (orgId) {
-        const { error: orgErr } = await supabase.rpc("set_active_organization", {
-          p_organization_id: orgId,
-        });
-        if (orgErr) {
-          throw new Error(orgErr.message || "Could not set active organization.");
-        }
+        await ensureActiveOrganization(orgId);
       }
 
       const productsRes = await filterByOrganizationId(
@@ -54,33 +51,12 @@ export function StockBalancesPage() {
         orgId,
         superAdmin
       );
-      const moves: Array<{
-        product_id: string;
-        quantity_in: number | null;
-        quantity_out: number | null;
-        movement_date: string | null;
-        source_type: string | null;
-        note: string | null;
-      }> = [];
-      const pageSize = 1000;
-      for (let from = 0; ; from += pageSize) {
-        const movesRes = await filterStockMovementsByOrganizationId(
-          supabase
-            .from("product_stock_movements")
-            .select("product_id,quantity_in,quantity_out,movement_date,source_type,note")
-            .order("movement_date", { ascending: true })
-            .range(from, from + pageSize - 1),
-          orgId
-        );
-        if (movesRes.error) throw movesRes.error;
-        const page = (movesRes.data || []) as typeof moves;
-        moves.push(...page);
-        if (page.length < pageSize) break;
-      }
-
       if (productsRes.error) throw productsRes.error;
 
       const products = (productsRes.data || []) as Product[];
+      const productIds = products.map((p) => p.id);
+      const moves = await fetchStockLedgerMovementsForProducts(orgId, productIds);
+
       const asAtEnd = businessDayRangeForDateString(asAtDate)?.to.getTime() ?? Number.POSITIVE_INFINITY;
 
       const map: Record<string, BalanceRow> = {};

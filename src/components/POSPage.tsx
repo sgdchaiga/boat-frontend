@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Minus, X, ShoppingCart, Loader2, RefreshCw, Wifi, WifiOff, TabletSmartphone, Hand, Pencil, Printer } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { businessTodayISO, computeRangeInTimezone } from "../lib/timezone";
+import { businessDayRangeForDateString, businessTodayISO, computeRangeInTimezone } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import {
   createJournalForPosOrder,
@@ -35,6 +35,9 @@ import {
 } from "../lib/hotelPosOrderStatus";
 import { loadHotelConfig, type HotelConfig } from "../lib/hotelConfig";
 import { applyHospitalityBranchFilter, getStaffHospitalityBranchId } from "../lib/hospitalityBranchScope";
+import { effectiveStockMovementInOut } from "../lib/stockMovementEffective";
+import { ensureActiveOrganization } from "../lib/stockBulkImport";
+import { fetchStockLedgerMovementsForProducts } from "../lib/stockLedger";
 
 type Department = Database["public"]["Tables"]["departments"]["Row"];
 type PropertyCustomer = Database["public"]["Tables"]["hotel_customers"]["Row"];
@@ -1315,19 +1318,22 @@ export function POSPage({
     return { net, vat, gross };
   }, [payableTotal, posVatEnabled, posVatRate]);
 
-  const validateStockBeforeSubmit = async () => {
+  const validateStockBeforeSubmit = async (asAtDate: string) => {
     const consumption = buildStockConsumptionLines();
     if (consumption.length === 0) return;
+    if (orgId) {
+      await ensureActiveOrganization(orgId);
+    }
     const productIds = consumption.map((i) => i.product_id);
-    const { data, error } = await supabase
-      .from("product_stock_movements")
-      .select("product_id, quantity_in, quantity_out")
-      .in("product_id", productIds);
-    if (error) throw new Error(error.message || "Failed to validate stock.");
+    const data = await fetchStockLedgerMovementsForProducts(orgId, productIds);
+    const asAtEnd = businessDayRangeForDateString(asAtDate)?.to.getTime() ?? Number.POSITIVE_INFINITY;
     const bal: Record<string, number> = {};
     (data || []).forEach((m: any) => {
       const pid = m.product_id as string;
-      bal[pid] = (bal[pid] || 0) + Number(m.quantity_in || 0) - Number(m.quantity_out || 0);
+      const movementMs = new Date(m.movement_date || "").getTime();
+      if (!Number.isFinite(movementMs) || movementMs >= asAtEnd) return;
+      const { inQty, outQty } = effectiveStockMovementInOut(m);
+      bal[pid] = (bal[pid] || 0) + inQty - outQty;
     });
     const shortages = consumption.filter((i) => (bal[i.product_id] || 0) < i.quantity_out);
     if (shortages.length > 0) {
@@ -1544,7 +1550,8 @@ export function POSPage({
     submitLockRef.current = true;
     setSending(true);
     try {
-      await validateStockBeforeSubmit();
+      const entryDate = transactionDateOverride || queueDate || businessTodayISO();
+      await validateStockBeforeSubmit(entryDate);
       if (action !== "bill_to_room" && !needExplicitSession && !tableSessionOpen) {
         await openTableSessionDb(orderTablePreview);
       }
@@ -1565,7 +1572,6 @@ export function POSPage({
             })();
 
       const branchId = getStaffHospitalityBranchId(user);
-      const entryDate = transactionDateOverride || queueDate || businessTodayISO();
       const transactionTimestamp = `${entryDate}T12:00:00`;
       const basePayload: {
         room_id: string | null;
@@ -1615,6 +1621,7 @@ export function POSPage({
           unit_cost: i.unit_cost,
           note: i.note,
           movement_date: transactionTimestamp,
+          organization_id: orgId ?? null,
         }));
         const { error: stockMoveError } = await supabase.from("product_stock_movements").insert(stockMoves);
         if (stockMoveError) throw new Error(stockMoveError.message || "Failed to record stock movements.");

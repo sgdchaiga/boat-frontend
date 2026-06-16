@@ -3,6 +3,8 @@ import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, businessDayRangeForDateString, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { fetchStockLedgerMovementsForProducts } from "../../lib/stockLedger";
+import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
 import { PageNotes } from "../common/PageNotes";
 
 interface Row {
@@ -83,20 +85,15 @@ export function StockMovementReportPage() {
     setLoading(true);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
 
-    const [{ data: moves }, { data: products }] = await Promise.all([
-      filterByOrganizationId(
-        supabase
-          .from("product_stock_movements")
-          .select("product_id, movement_date, quantity_in, quantity_out, unit_cost, location, source_type, source_id, note"),
-        orgId,
-        superAdmin
-      ),
-      filterByOrganizationId(
-        supabase.from("products").select("id, name, department_id, cost_price, sales_price"),
-        orgId,
-        superAdmin
-      ),
-    ]);
+    const { data: products } = await filterByOrganizationId(
+      supabase.from("products").select("id, name, department_id, cost_price, sales_price"),
+      orgId,
+      superAdmin
+    );
+    const moves = await fetchStockLedgerMovementsForProducts(
+      orgId,
+      ((products || []) as Array<{ id: string }>).map((p) => p.id)
+    );
 
     const byKey = new Map<
       string,
@@ -126,48 +123,6 @@ export function StockMovementReportPage() {
     >();
 
     const allMoves = ((moves || []) as any[]).slice();
-
-    const effectiveInOut = (m: any): { inQty: number; outQty: number } => {
-      const st = String(m.source_type || "").toLowerCase();
-      const note = String(m.note || "").toLowerCase();
-      const qiRaw = Number(m.quantity_in) || 0;
-      const qoRaw = Number(m.quantity_out) || 0;
-
-      // Business rules:
-      // OUT = sold qty + transfer out + negative adjustments
-      // IN  = purchases + transfer in + positive adjustments
-
-      // Purchases/GRN/Vendor bills are always stock-in.
-      if (["bill", "grn", "purchase", "vendor_bill", "vendor_payment"].includes(st) || note.includes("grn") || note.includes("purchase")) {
-        const qty = Math.max(Math.abs(qiRaw), Math.abs(qoRaw));
-        return { inQty: qty, outQty: 0 };
-      }
-
-      // Sales are always stock-out.
-      if (st === "sale") {
-        const qty = Math.max(Math.abs(qoRaw), Math.abs(qiRaw));
-        return { inQty: 0, outQty: qty };
-      }
-
-      // Transfers can be either in or out per row, rely on recorded direction.
-      if (st === "transfer") {
-        return { inQty: Math.max(0, qiRaw), outQty: Math.max(0, qoRaw) };
-      }
-
-      // Adjustments: positive adjustment increases stock, negative decreases stock.
-      if (st === "adjustment") {
-        if (qiRaw > 0 && qoRaw <= 0) return { inQty: qiRaw, outQty: 0 };
-        if (qoRaw > 0 && qiRaw <= 0) return { inQty: 0, outQty: qoRaw };
-        if (qiRaw > 0 && qoRaw > 0) {
-          // Keep net effect if both columns were populated accidentally.
-          if (qiRaw >= qoRaw) return { inQty: qiRaw - qoRaw, outQty: 0 };
-          return { inQty: 0, outQty: qoRaw - qiRaw };
-        }
-      }
-
-      // Default fallback: trust stored movement direction.
-      return { inQty: Math.max(0, qiRaw), outQty: Math.max(0, qoRaw) };
-    };
 
     const isPurchaseMovement = (m: any): boolean => {
       const st = String(m.source_type || "").toLowerCase();
@@ -202,7 +157,7 @@ export function StockMovementReportPage() {
       const pid = m.product_id as string;
       const loc = (m.location as string) || "default";
       const key = `${pid}::${loc}`;
-      const { inQty: qiEff } = effectiveInOut(m);
+      const { inQty: qiEff } = effectiveStockMovementInOut(m);
       let uc = m.unit_cost != null ? Number(m.unit_cost) || 0 : 0;
 
       if (qiEff > 0) {
@@ -265,7 +220,7 @@ export function StockMovementReportPage() {
         // Exclude future/out-of-range rows from current report slice entirely.
         return;
       }
-      const { inQty: qiEff, outQty: qoEff } = effectiveInOut(m);
+      const { inQty: qiEff, outQty: qoEff } = effectiveStockMovementInOut(m);
       const qtyNet = qiEff - qoEff;
 
       if (mvDate < from) {

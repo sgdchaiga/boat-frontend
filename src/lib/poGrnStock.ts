@@ -8,6 +8,13 @@ export async function postStockInFromPurchaseOrderForBill(
   billId: string,
   purchaseOrderId: string
 ): Promise<{ unmatchedDescriptions: string[] }> {
+  const { data: purchaseOrder } = await supabase
+    .from("purchase_orders")
+    .select("organization_id")
+    .eq("id", purchaseOrderId)
+    .maybeSingle();
+  const organizationId = (purchaseOrder as { organization_id?: string | null } | null)?.organization_id ?? null;
+
   let poItems: Array<{
     product_id?: string | null;
     description?: string | null;
@@ -65,6 +72,7 @@ export async function postStockInFromPurchaseOrderForBill(
       if (qty <= 0) return null;
       return {
         product_id: productId,
+        organization_id: organizationId,
         movement_date: movementDate,
         source_type: "bill",
         source_id: billId,
@@ -77,6 +85,7 @@ export async function postStockInFromPurchaseOrderForBill(
     })
     .filter(Boolean) as Array<{
     product_id: string;
+    organization_id: string | null;
     movement_date: string;
     source_type: string;
     source_id: string;

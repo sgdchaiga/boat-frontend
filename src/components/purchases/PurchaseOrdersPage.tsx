@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useId, useRef } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { Plus, X, CheckCircle, FileText, Trash2, Eye, Minus, Package } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
@@ -119,7 +119,6 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase() === "lan";
 
   const currency = useMemo(() => loadHotelConfig(user?.organization_id ?? null).currency || "UGX", [user?.organization_id]);
-  const datalistId = useId();
 
   const [simpleMode, setSimpleMode] = useState(readSimpleModeDefault);
   const [orders, setOrders] = useState<PurchaseOrder[]>([]);
@@ -323,6 +322,17 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     return products.find((p) => p.name.trim().toLowerCase() === t) ?? null;
   };
 
+  const resolveLineProduct = (line: LineItem) => {
+    const byId = line.product_id ? products.find((p) => p.id === line.product_id) : null;
+    return byId ?? findProductByName(line.description || "");
+  };
+
+  const invalidPurchaseItemNames = (items: LineItem[]) =>
+    items
+      .filter((i) => ((i.description || "").trim() || i.product_id) && Number(i.quantity || 0) > 0)
+      .filter((i) => !resolveLineProduct(i))
+      .map((i) => (i.description || "").trim() || "Unnamed line");
+
   const addLineItem = () => {
     setLineItems([...lineItems, { product_id: "", description: "", cost_price: 0, quantity: 1 }]);
   };
@@ -335,25 +345,12 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const updateLineItem = (idx: number, field: keyof LineItem, value: string | number) => {
     const next = [...lineItems];
     (next[idx] as unknown as Record<string, string | number>)[field] = value;
-    if (field === "product_id" && value && value !== "__custom__") {
+    if (field === "product_id" && value) {
       const prod = products.find((p) => p.id === value);
       if (prod) {
         next[idx].description = prod.name;
         if (prod.cost_price != null) next[idx].cost_price = Number(prod.cost_price);
       }
-    }
-    setLineItems(next);
-  };
-
-  const onItemNameInput = (idx: number, raw: string) => {
-    const next = [...lineItems];
-    next[idx].description = raw;
-    const matched = findProductByName(raw);
-    if (matched) {
-      next[idx].product_id = matched.id;
-      if (matched.cost_price != null) next[idx].cost_price = Number(matched.cost_price);
-    } else {
-      next[idx].product_id = "";
     }
     setLineItems(next);
   };
@@ -392,8 +389,33 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       description: String(row.description || ""),
       cost_price: Number(row.cost_price ?? 0),
       quantity: Number(row.quantity ?? 1),
-      product_id: "",
+      product_id: String(row.product_id || ""),
     })) as PurchaseOrderItem[];
+  };
+
+  const loadPurchaseLinesForValidation = async (order: PurchaseOrder): Promise<LineItem[]> => {
+    if (order.purchase_order_items && order.purchase_order_items.length > 0) return order.purchase_order_items;
+    if (isLocalDesktopMode && desktopApi.isAvailable()) return loadDesktopLineItems(order.id);
+    const { data, error } = await supabase
+      .from("purchase_order_items")
+      .select("product_id,description,cost_price,quantity")
+      .eq("purchase_order_id", order.id);
+    if (error) throw error;
+    return (data || []) as LineItem[];
+  };
+
+  const assertPurchaseLinesUseExistingItems = async (order: PurchaseOrder) => {
+    const lines = await loadPurchaseLinesForValidation(order);
+    const missing = invalidPurchaseItemNames(lines);
+    if (missing.length > 0 || lines.length === 0) {
+      throw new Error(
+        missing.length > 0
+          ? `Cannot receive this purchase into stock. These lines are not linked to existing Items:\n- ${missing.join(
+              "\n- "
+            )}\n\nEdit the purchase and select items from the Items list.`
+          : "Cannot receive this purchase into stock because it has no item lines."
+      );
+    }
   };
 
   const openEdit = async (order: PurchaseOrder) => {
@@ -428,15 +450,24 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       (i) => ((i.description || "").trim() || i.product_id) && Number(i.quantity || 0) > 0
     );
     const withNames = validItems.map((i) => {
-      const prod = products.find((p) => p.id === i.product_id);
-      const byName = findProductByName(i.description || "");
+      const prod = resolveLineProduct(i);
       return {
         ...i,
-        description: (i.description || "").trim() || (prod ? prod.name : "") || (byName ? byName.name : "") || "Item",
+        product_id: prod?.id || "",
+        description: prod?.name || (i.description || "").trim() || "Item",
       };
     });
     if (withNames.length === 0) {
       alert(simpleMode ? "Add at least one item you bought." : "Add at least one line item.");
+      return;
+    }
+    const missingItems = invalidPurchaseItemNames(validItems);
+    if (missingItems.length > 0) {
+      alert(
+        `Use items from the Items list only. These purchase lines do not match an existing item:\n- ${missingItems.join(
+          "\n- "
+        )}\n\nAdd the item first under Items, then select it here.`
+      );
       return;
     }
     const total = withNames.reduce((s, i) => s + lineTotal(i), 0);
@@ -494,6 +525,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
         const itemRows = withNames.map((i) => ({
           id: randomUuid(),
           purchase_order_id: targetPoId,
+          product_id: i.product_id,
           description: i.description,
           cost_price: i.cost_price,
           quantity: i.quantity,
@@ -522,6 +554,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
         await supabase.from("purchase_order_items").delete().eq("purchase_order_id", editingOrder.id);
         const itemRows = withNames.map((i) => ({
           purchase_order_id: editingOrder.id,
+          product_id: i.product_id,
           description: i.description,
           cost_price: i.cost_price,
           quantity: i.quantity,
@@ -545,6 +578,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
         if (poErr || !poData) throw poErr || new Error("Failed to create purchase");
         const newItemRows = withNames.map((i) => ({
           purchase_order_id: poData.id,
+          product_id: i.product_id,
           description: i.description,
           cost_price: i.cost_price,
           quantity: i.quantity,
@@ -591,6 +625,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     if (readOnly) return;
     if (!canConvertToBill(order)) return;
     try {
+      await assertPurchaseLinesUseExistingItems(order);
 if (isLocalDesktopMode && desktopApi.isAvailable()) {
  const effectiveOrg =
         orgId ||
@@ -1060,24 +1095,24 @@ const approvedAt = new Date().toISOString();
 
               <section className="flex flex-col min-h-0">
                 <span className="text-sm font-medium text-slate-700 mb-2">Items</span>
-                <datalist id={datalistId}>
-                  {products.map((p) => (
-                    <option key={p.id} value={p.name} />
-                  ))}
-                </datalist>
                 <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 max-h-[min(62vh,38rem)] overflow-y-auto overscroll-contain pr-1">
                   {lineItems.map((item, idx) => (
                     <div key={idx} className="border-2 border-slate-100 rounded-xl p-4 bg-slate-50/80 space-y-3">
                       <div>
                         <label className="block text-xs font-medium text-slate-600 mb-1">Item name</label>
-                        <input
-                          list={datalistId}
-                          value={item.description}
-                          onChange={(e) => onItemNameInput(idx, e.target.value)}
-                          placeholder="What did you buy?"
+                        <select
+                          value={item.product_id || resolveLineProduct(item)?.id || ""}
+                          onChange={(e) => updateLineItem(idx, "product_id", e.target.value)}
                           className="w-full border rounded-lg px-3 py-2 text-base"
-                        />
-                        <p className="text-xs text-slate-500 mt-1">Matches your product list when the name is the same.</p>
+                        >
+                          <option value="">Select an item</option>
+                          {products.map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name}
+                            </option>
+                          ))}
+                        </select>
+                        <p className="text-xs text-slate-500 mt-1">Only items already created in the Items list can be purchased into stock.</p>
                       </div>
                       <div className="grid grid-cols-2 gap-3">
                         <div>

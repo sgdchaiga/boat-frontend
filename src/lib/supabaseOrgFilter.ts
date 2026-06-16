@@ -43,6 +43,26 @@ export function filterStockMovementsByOrganizationId<T>(
   return (query as T & { eq: (column: string, value: string) => T }).eq("organization_id", organizationId);
 }
 
+/**
+ * Stock movements created before tenant stamping may have `organization_id` NULL.
+ * If the movement points at a product owned by the active organization, count it
+ * with that organization so stock balances do not lose legacy GRN/import rows.
+ */
+export function filterStockMovementsForProductIdsByOrganizationId<T>(
+  query: T,
+  organizationId: string | null | undefined,
+  productIds: string[]
+): T {
+  const ids = productIds.filter(Boolean);
+  let q = query as T & {
+    in: (column: string, values: string[]) => T;
+    or: (filters: string) => T;
+  };
+  if (ids.length > 0) q = q.in("product_id", ids) as typeof q;
+  if (!organizationId) return q;
+  return q.or(`organization_id.eq.${organizationId},organization_id.is.null`);
+}
+
 export function filterJournalLinesByOrganizationId<T>(
   query: T,
   organizationId: string | null | undefined,
