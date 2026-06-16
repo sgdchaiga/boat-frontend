@@ -615,6 +615,51 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     }
   };
 
+  const handleCancelPurchase = async (order: PurchaseOrder) => {
+    if (readOnly) return;
+    if (billsByPoId[order.id]) {
+      alert("This purchase has already been received into GRN/Bills. Open the GRN/Bill to reverse or cancel it there.");
+      return;
+    }
+    if (
+      !confirm(
+        `Cancel / delete this buy stock entry?\n\nSupplier: ${order.vendors?.name || "—"}\nTotal: ${formatMoney(
+          Number(order.total_amount || 0),
+          currency
+        )}\n\nThis removes the purchase lines too.`
+      )
+    ) {
+      return;
+    }
+
+    try {
+      if (isLocalDesktopMode && desktopApi.isAvailable()) {
+        await desktopApi.localDelete({
+          table: "purchase_order_items",
+          filters: [{ column: "purchase_order_id", operator: "eq", value: order.id }],
+        });
+        await desktopApi.localDelete({
+          table: "purchase_orders",
+          filters: [{ column: "id", operator: "eq", value: order.id }],
+        });
+      } else {
+        await supabase.from("purchase_order_items").delete().eq("purchase_order_id", order.id);
+        const { error } = await supabase.from("purchase_orders").delete().eq("id", order.id);
+        if (error) throw error;
+      }
+
+      if (viewOrder?.id === order.id) setViewOrder(null);
+      if (editingOrder?.id === order.id) {
+        setShowModal(false);
+        resetForm();
+      }
+      await fetchData();
+    } catch (e) {
+      console.error("Error cancelling purchase:", e);
+      alert("Failed to cancel purchase: " + formatSaveError(e));
+    }
+  };
+
   const canConvertToBill = (order: PurchaseOrder) => {
     if (billsByPoId[order.id]) return false;
     if (requirePoApproval) return order.status === "approved";
@@ -904,6 +949,16 @@ const approvedAt = new Date().toISOString();
                       className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 border-brand-600 text-brand-700 bg-white font-semibold text-sm hover:bg-brand-50 disabled:opacity-50"
                     >
                       Edit
+                    </button>
+                  )}
+                  {!billsByPoId[o.id] && (
+                    <button
+                      type="button"
+                      onClick={() => void handleCancelPurchase(o)}
+                      disabled={readOnly}
+                      className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 border-red-200 bg-white text-red-700 font-semibold text-sm hover:bg-red-50 disabled:opacity-50"
+                    >
+                      <Trash2 className="w-4 h-4" /> Cancel
                     </button>
                   )}
                   {requirePoApproval && canApprovePO && o.status === "pending" && (
