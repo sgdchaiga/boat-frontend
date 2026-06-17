@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState, useCallback } from "react";
+import React, { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
 import type { AuthChangeEvent, Session } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { desktopApi } from "@/lib/desktopApi";
@@ -190,6 +190,35 @@ const LOCAL_SUPERADMIN_EMAILS = (import.meta.env.VITE_LOCAL_SUPERADMIN_EMAILS ||
   .split(",")
   .map((v) => v.trim().toLowerCase())
   .filter(Boolean);
+
+function passwordResetRedirectUrl(): string {
+  if (typeof window === "undefined") return "";
+  const url = new URL(window.location.href);
+  url.searchParams.set("auth_action", "password_reset");
+  return url.toString();
+}
+
+function isPasswordResetRedirect(): boolean {
+  if (typeof window === "undefined") return false;
+  const search = new URLSearchParams(window.location.search);
+  const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
+  return (
+    search.get("auth_action") === "password_reset" ||
+    search.get("type") === "recovery" ||
+    hash.get("type") === "recovery"
+  );
+}
+
+function clearPasswordResetUrl(): void {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.delete("auth_action");
+  url.searchParams.delete("code");
+  url.searchParams.delete("type");
+  url.searchParams.delete("token_hash");
+  url.hash = "";
+  window.history.replaceState(window.history.state, document.title, url.toString());
+}
 
 function parseLocalBusinessType(value: string): BusinessType {
   const allowed: BusinessType[] = [
@@ -671,6 +700,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [pendingPasswordReset, setPendingPasswordReset] = useState(false);
+  const passwordResetModeRef = useRef(false);
   const [accessSession, setAccessSession] = useState<LocalAccessSession | null>(null);
   const [terminalLocked, setTerminalLocked] = useState(false);
   const [pinChangeRequired, setPinChangeRequired] = useState(false);
@@ -1005,9 +1035,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       };
     }
     let mounted = true;
+    const handlingPasswordReset = isPasswordResetRedirect();
+    passwordResetModeRef.current = handlingPasswordReset;
     supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
       if (!mounted) return;
       const sessionUser = data.session?.user;
+      if (handlingPasswordReset) {
+        setPendingPasswordReset(true);
+        setUser(null);
+        setLoading(false);
+        return;
+      }
       if (sessionUser) {
         applySessionUser(sessionUser).finally(() => mounted && setLoading(false));
       } else {
@@ -1018,6 +1056,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const { data: listener } = supabase.auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
       const sessionUser = session?.user;
       if (event === "PASSWORD_RECOVERY") {
+        passwordResetModeRef.current = true;
+        setPendingPasswordReset(true);
+        setUser(null);
+        return;
+      }
+      if (passwordResetModeRef.current && sessionUser) {
         setPendingPasswordReset(true);
         setUser(null);
         return;
@@ -1265,9 +1309,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const resetPasswordForEmail = async (email: string) => {
     if (IS_LOCAL_AUTH_MODE) {
       void email;
-      return { error: new Error("Password reset email is unavailable in desktop local mode.") };
+      return {
+        error: new Error(
+          "Password reset email is not available in desktop local mode. Ask an administrator to set a temporary password, then change it after signing in."
+        ),
+      };
     }
-    const redirectTo = `${window.location.origin}${window.location.pathname || "/"}`;
+    const redirectTo = passwordResetRedirectUrl();
     const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo });
     return { error: error as Error | null };
   };
@@ -1282,7 +1330,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     }
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     if (error) return { error: error as Error };
+    passwordResetModeRef.current = false;
     setPendingPasswordReset(false);
+    clearPasswordResetUrl();
     const { data } = await supabase.auth.getSession();
     if (data.session?.user) {
       await applySessionUser(data.session.user);

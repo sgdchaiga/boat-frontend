@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { Eye, EyeOff, Loader2, AlertCircle, UserCircle, Landmark, KeyRound, Mail } from "lucide-react";
+import { Eye, EyeOff, Loader2, AlertCircle, UserCircle, Landmark, KeyRound, Mail, CheckCircle2 } from "lucide-react";
 
 import { APP_NAME, APP_SHORT_NAME } from "@/constants/branding";
 import { useAuth, type UserRole } from "@/contexts/AuthContext";
@@ -108,11 +108,19 @@ export const LoginPage: React.FC = () => {
   const handleForgotPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    const email = form.email.trim().toLowerCase();
+    if (!email) {
+      setError("Enter your email so we can send the reset link.");
+      return;
+    }
     setLoading(true);
-    const { error: err } = await resetPasswordForEmail(form.email);
+    const { error: err } = await resetPasswordForEmail(email);
     setLoading(false);
     if (err) setError(err.message);
-    else setForgotSuccess(true);
+    else {
+      setForm((p) => ({ ...p, email }));
+      setForgotSuccess(true);
+    }
   };
 
   const handleSetNewPassword = async (e: React.FormEvent) => {
@@ -240,17 +248,32 @@ export const LoginPage: React.FC = () => {
 
         {showSetPasswordForm ? (
           <form onSubmit={handleSetNewPassword} className="p-6 space-y-4">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800">
+              Your reset link was verified. Choose a new password to continue into BOAT.
+            </div>
             <div>
               <label className="text-xs font-medium text-slate-700">New password</label>
-              <input
-                type={showPassword ? "text" : "password"}
-                required
-                minLength={6}
-                value={newPassword}
-                onChange={(e) => setNewPasswordValue(e.target.value)}
-                className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
-                placeholder="At least 6 characters"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  required
+                  minLength={6}
+                  value={newPassword}
+                  onChange={(e) => setNewPasswordValue(e.target.value)}
+                  className="w-full mt-1 px-3 py-2 pr-10 border rounded-lg text-sm"
+                  placeholder="At least 6 characters"
+                  autoComplete="new-password"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((p) => !p)}
+                  className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-600"
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
+              <p className="mt-1 text-xs text-slate-500">Use at least 6 characters. A longer phrase is easier to remember and harder to guess.</p>
             </div>
             <div>
               <label className="text-xs font-medium text-slate-700">Confirm new password</label>
@@ -261,6 +284,7 @@ export const LoginPage: React.FC = () => {
                 onChange={(e) => setNewPasswordConfirmValue(e.target.value)}
                 className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
                 placeholder="Re-enter password"
+                autoComplete="new-password"
               />
             </div>
             <button
@@ -275,8 +299,11 @@ export const LoginPage: React.FC = () => {
           <form onSubmit={handleForgotPassword} className="p-6 space-y-4">
             {forgotSuccess ? (
               <>
-                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800">
-                  Check your email for a link to reset your password. You can close this and use the link from your inbox.
+                <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800 flex gap-2">
+                  <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                  <p>
+                    If an account exists for {form.email}, a reset link is on the way. Keep this BOAT window open, then use the link from your inbox.
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -297,7 +324,11 @@ export const LoginPage: React.FC = () => {
                     onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
                     className="w-full mt-1 px-3 py-2 border rounded-lg text-sm"
                     placeholder="Enter your email"
+                    autoComplete="email"
                   />
+                  <p className="mt-1 text-xs text-slate-500">
+                    We will send a secure link if this email is registered for BOAT.
+                  </p>
                 </div>
                 <button
                   type="submit"
