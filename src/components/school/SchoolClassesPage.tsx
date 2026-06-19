@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
 type Row = {
   id: string;
@@ -31,6 +32,18 @@ export function SchoolClassesPage({ readOnly }: Props) {
       setLoading(false);
       return;
     }
+    if (canUseSchoolApi()) {
+      try {
+        const data = await listSchoolRows<Row>("classes", orgId);
+        setRows(data);
+        setErr(null);
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to load classes.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     const { data, error } = await supabase
       .from("classes")
       .select("*")
@@ -53,10 +66,23 @@ export function SchoolClassesPage({ readOnly }: Props) {
       return;
     }
     setErr(null);
-    const { error } = await supabase.from("classes").insert({
+    const payload = {
       name: form.name.trim(),
       code: form.code.trim() || null,
       sort_order: Number(form.sort_order) || 0,
+    };
+    if (canUseSchoolApi()) {
+      try {
+        await createSchoolRow<Row>("classes", user?.organization_id || "", payload);
+        setForm({ name: "", code: "", sort_order: "0" });
+        load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to save class.");
+      }
+      return;
+    }
+    const { error } = await supabase.from("classes").insert({
+      ...payload,
     });
     if (error) setErr(error.message);
     else {
@@ -87,14 +113,25 @@ export function SchoolClassesPage({ readOnly }: Props) {
       return;
     }
     setErr(null);
+    const payload = {
+      name: editDraft.name.trim(),
+      code: editDraft.code.trim() || null,
+      sort_order: Number(editDraft.sort_order) || 0,
+      is_active: editDraft.is_active,
+    };
+    if (canUseSchoolApi()) {
+      try {
+        await updateSchoolRow<Row>("classes", user?.organization_id || "", editingId, payload);
+        cancelEdit();
+        load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to update class.");
+      }
+      return;
+    }
     const { error } = await supabase
       .from("classes")
-      .update({
-        name: editDraft.name.trim(),
-        code: editDraft.code.trim() || null,
-        sort_order: Number(editDraft.sort_order) || 0,
-        is_active: editDraft.is_active,
-      })
+      .update(payload)
       .eq("id", editingId);
     if (error) setErr(error.message);
     else {

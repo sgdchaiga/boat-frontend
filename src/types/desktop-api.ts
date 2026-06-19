@@ -41,8 +41,44 @@ export type LocalCustomerCreateInput = {
   address?: string | null;
 };
 
+export type BoatDesktopSettings = {
+  apiBaseUrl: string;
+  deploymentMode: "lan" | "server" | "wan";
+  businessType: string;
+};
+
+export type BoatApiHealth = {
+  ok: boolean;
+  status: number;
+  baseUrl: string;
+  service: string | null;
+  time: string | null;
+  message: string | null;
+};
+
+export type BoatBootstrapAdmin = {
+  email: string;
+  password: string;
+  full_name: string;
+  role?: string;
+  phone?: string;
+  staff_code?: string;
+  pin?: string;
+};
+
 export type BoatDesktopApi = {
-  health: () => Promise<{ ok: boolean; sqlitePath: string }>;
+  health: () => Promise<{ ok: boolean; dataMode?: "sqlite"; sqlitePath: string }>;
+  settings: {
+    get: () => Promise<BoatDesktopSettings>;
+    update: (payload: Partial<BoatDesktopSettings>) => Promise<BoatDesktopSettings>;
+  };
+  api: {
+    health: (payload?: { baseUrl?: string }) => Promise<BoatApiHealth>;
+  };
+  bootstrapAdmin?: {
+    peek: () => Promise<BoatBootstrapAdmin | null>;
+    consume: () => Promise<BoatBootstrapAdmin | null>;
+  };
   backup: {
     createLocal: () => Promise<{ ok: boolean; backupPath: string; backupFileName: string; createdAt: string }>;
   };

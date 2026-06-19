@@ -10,6 +10,7 @@ import { organizationRoutes } from "./routes/organizations.js";
 import { notificationRoutes } from "./routes/notifications.js";
 import { messagingWebhookRoutes } from "./routes/messaging-webhooks.js";
 import { clearingRoutes } from "./routes/clearing.js";
+import { schoolRoutes } from "./routes/school.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -100,6 +101,7 @@ export async function buildApp() {
   await app.register(organizationRoutes, { prefix: "/api/v1" });
   await app.register(notificationRoutes, { prefix: "/api/v1" });
   await app.register(messagingWebhookRoutes, { prefix: "/api/v1" });
+  await app.register(schoolRoutes, { prefix: "/api/v1" });
 
   return app;
 }

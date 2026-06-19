@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -110,6 +111,29 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       setLoading(false);
       return;
     }
+    if (canUseSchoolApi()) {
+      try {
+        const [invoices, studentRows, feeRows, classRows] = await Promise.all([
+          listSchoolRows<InvRow>("invoices", orgId),
+          listSchoolRows<StudentOpt>("students", orgId),
+          listSchoolRows<FeeOpt>("fee-structures", orgId),
+          listSchoolRows<ClassOpt>("classes", orgId),
+        ]);
+        setRows(invoices);
+        setStudents(studentRows.filter((s) => s.status !== "left" && s.status !== "graduated"));
+        setFees(feeRows.filter((f) => (f as FeeOpt & { is_active?: boolean }).is_active !== false));
+        setClasses(classRows);
+        setBursaries([]);
+        setSpecialFees([]);
+        setErr(null);
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to load invoices.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
     const [iRes, sRes, fRes, cRes, bRes, sfRes] = await Promise.all([
       supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("created_at", { ascending: false }),
       supabase
@@ -244,14 +268,22 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     setBulkSummary(null);
     setBulkRunning(true);
 
-    const { data: existing } = await supabase
-      .from("student_invoices")
-      .select("student_id")
-      .eq("organization_id", orgId)
-      .eq("academic_year", fee.academic_year)
-      .eq("term_name", fee.term_name);
+    let existingStudentIds: string[] = [];
+    if (canUseSchoolApi()) {
+      existingStudentIds = rows
+        .filter((r) => r.academic_year === fee.academic_year && r.term_name === fee.term_name)
+        .map((r) => r.student_id);
+    } else {
+      const { data: existing } = await supabase
+        .from("student_invoices")
+        .select("student_id")
+        .eq("organization_id", orgId)
+        .eq("academic_year", fee.academic_year)
+        .eq("term_name", fee.term_name);
+      existingStudentIds = (existing ?? []).map((x) => x.student_id);
+    }
 
-    const invoiced = new Set<string>((existing ?? []).map((x) => x.student_id));
+    const invoiced = new Set<string>(existingStudentIds);
     const toCreate = list.filter((s) => !invoiced.has(s.id));
     const skippedDup = list.length - toCreate.length;
 
@@ -289,6 +321,25 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       status: total > 0 ? "sent" : "paid",
       };
     });
+
+    if (canUseSchoolApi()) {
+      try {
+        const insertedRows: InvRow[] = [];
+        for (const invoice of invoiceRows) {
+          const row = await createSchoolRow<InvRow>("invoices", orgId, { ...invoice, staff_user_id: user?.id ?? null });
+          insertedRows.push(row);
+        }
+        setBulkRunning(false);
+        setBulkSummary(
+          `Created ${insertedRows.length} invoice${insertedRows.length === 1 ? "" : "s"}. Skipped ${skippedDup} (already invoiced for this term).`
+        );
+        await load();
+      } catch (error) {
+        setBulkRunning(false);
+        setErr(error instanceof Error ? error.message : "Failed to create bulk invoices.");
+      }
+      return;
+    }
 
     const { data: inserted, error } = await supabase
       .from("student_invoices")
@@ -350,6 +401,31 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const invNo = `INV-${Date.now().toString(36).toUpperCase()}`;
     setErr(null);
     const orgId = user?.organization_id;
+    if (canUseSchoolApi()) {
+      if (!orgId) return;
+      try {
+        await createSchoolRow<InvRow>("invoices", orgId, {
+          student_id: form.student_id,
+          fee_structure_id: fee.id,
+          academic_year: fee.academic_year,
+          term_name: fee.term_name,
+          invoice_number: invNo,
+          subtotal,
+          discount_amount: disc,
+          bursary_amount: burs,
+          scholarship_amount: schol,
+          total_due: total,
+          amount_paid: 0,
+          status: total > 0 ? "sent" : "paid",
+          staff_user_id: user?.id ?? null,
+        });
+        setForm({ student_id: "", fee_structure_id: "", discount_amount: "", scholarship_amount: "" });
+        await load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to generate invoice.");
+      }
+      return;
+    }
     const { data: ins, error } = await supabase
       .from("student_invoices")
       .insert({
@@ -431,6 +507,25 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }
 
     setErr(null);
+    if (canUseSchoolApi()) {
+      const orgId = user?.organization_id;
+      if (!orgId) return;
+      try {
+        await updateSchoolRow<InvRow>("invoices", orgId, editingId, {
+          discount_amount: disc,
+          scholarship_amount: schol,
+          total_due,
+          status,
+          notes: editDraft.notes.trim() || null,
+          staff_user_id: user?.id ?? null,
+        });
+        cancelEdit();
+        await load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to update invoice.");
+      }
+      return;
+    }
     const { error } = await supabase
       .from("student_invoices")
       .update({

@@ -35,6 +35,32 @@ function formatSaveError(e: unknown): string {
   }
 }
 
+type PurchaseOrderItemInsert = {
+  purchase_order_id: string;
+  product_id: string;
+  description: string;
+  cost_price: number;
+  quantity: number;
+};
+
+function isMissingPurchaseItemProductColumn(error: { message?: string | null } | null): boolean {
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("product_id") && message.includes("purchase_order_items");
+}
+
+async function insertPurchaseOrderItems(rows: PurchaseOrderItemInsert[]): Promise<void> {
+  if (rows.length === 0) return;
+  const result = await supabase.from("purchase_order_items").insert(rows);
+  if (!result.error) return;
+  if (!isMissingPurchaseItemProductColumn(result.error)) throw result.error;
+
+  // Compatibility for databases that have not yet received the product-link migration.
+  // Description remains an exact product name, so GRN stock posting can resolve it safely.
+  const legacyRows = rows.map(({ product_id: _productId, ...row }) => row);
+  const legacyResult = await supabase.from("purchase_order_items").insert(legacyRows);
+  if (legacyResult.error) throw legacyResult.error;
+}
+
 /** One row per item name for pickers (local merges `products` + legacy POS rows; DB can hold duplicate names). */
 function dedupeProductsByNormalizedName<T extends { id: string; name: string; cost_price?: number }>(list: T[]): T[] {
   const byKey = new Map<string, T>();
@@ -400,8 +426,14 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       .from("purchase_order_items")
       .select("product_id,description,cost_price,quantity")
       .eq("purchase_order_id", order.id);
-    if (error) throw error;
-    return (data || []) as LineItem[];
+    if (!error) return (data || []) as LineItem[];
+    if (!isMissingPurchaseItemProductColumn(error)) throw error;
+    const fallback = await supabase
+      .from("purchase_order_items")
+      .select("description,cost_price,quantity")
+      .eq("purchase_order_id", order.id);
+    if (fallback.error) throw fallback.error;
+    return (fallback.data || []).map((row) => ({ ...row, product_id: "" })) as LineItem[];
   };
 
   const assertPurchaseLinesUseExistingItems = async (order: PurchaseOrder) => {
@@ -559,10 +591,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           cost_price: i.cost_price,
           quantity: i.quantity,
         }));
-        if (itemRows.length > 0) {
-          const { error: itemsErr } = await supabase.from("purchase_order_items").insert(itemRows);
-          if (itemsErr) throw itemsErr;
-        }
+        await insertPurchaseOrderItems(itemRows);
       } else {
         const { data: poData, error: poErr } = await supabase
           .from("purchase_orders")
@@ -583,10 +612,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           cost_price: i.cost_price,
           quantity: i.quantity,
         }));
-        if (newItemRows.length > 0) {
-          const { error: itemsErr } = await supabase.from("purchase_order_items").insert(newItemRows);
-          if (itemsErr) throw itemsErr;
-        }
+        await insertPurchaseOrderItems(newItemRows);
       }
       setShowModal(false);
       resetForm();

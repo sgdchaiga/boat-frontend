@@ -1,0 +1,4 @@
+services:
+  api:
+    image: boat-api:school-offline
+    build: null

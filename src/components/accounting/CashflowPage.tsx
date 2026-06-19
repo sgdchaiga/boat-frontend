@@ -27,6 +27,7 @@ import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 
 type CashMovement = {
+  entry_id: string;
   transaction_id: string | null;
   entry_date: string;
   description: string;
@@ -38,6 +39,7 @@ type CashMovement = {
 type StatementMethod = "direct" | "indirect";
 
 const JOURNAL_ENTRY_ID_CHUNK_SIZE = 100;
+const LEDGER_PAGE_SIZE = 25;
 
 function chunkEntryIds(entryIds: string[]): string[][] {
   const chunks: string[][] = [];
@@ -100,6 +102,7 @@ export function CashflowPage() {
   const [movements, setMovements] = useState<CashMovement[]>([]);
   const [openingBalance, setOpeningBalance] = useState(0);
   const [closingBalance, setClosingBalance] = useState(0);
+  const [ledgerPage, setLedgerPage] = useState(0);
 
   const [cashBegin, setCashBegin] = useState(0);
   const [cashEnd, setCashEnd] = useState(0);
@@ -137,7 +140,8 @@ export function CashflowPage() {
         .from("journal_entries")
         .select("id")
         .lt("entry_date", fromStr)
-        .eq("is_posted", true),
+        .eq("is_posted", true)
+        .eq("is_deleted", false),
       orgId,
       superAdmin
     );
@@ -170,6 +174,7 @@ export function CashflowPage() {
         .gte("entry_date", fromStr)
         .lte("entry_date", toStr)
         .eq("is_posted", true)
+        .eq("is_deleted", false)
         .order("entry_date"),
       orgId,
       superAdmin
@@ -209,7 +214,7 @@ export function CashflowPage() {
     let running = opening;
     const mov: CashMovement[] = [];
     (entriesData as { id: string; transaction_id: string | null; entry_date: string; description: string }[])
-      .sort((a, b) => a.entry_date.localeCompare(b.entry_date))
+      .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || a.id.localeCompare(b.id))
       .forEach((e) => {
         const l = linesByEntry[e.id];
         if (!l) return;
@@ -217,6 +222,7 @@ export function CashflowPage() {
           credit = l.credit;
         running += debit - credit;
         mov.push({
+          entry_id: e.id,
           transaction_id: e.transaction_id,
           entry_date: e.entry_date,
           description: e.description,
@@ -520,6 +526,10 @@ export function CashflowPage() {
   }, [view, cashAccountId, fetchLedger]);
 
   useEffect(() => {
+    setLedgerPage(0);
+  }, [cashAccountId, dateRange, customFrom, customTo, view]);
+
+  useEffect(() => {
     if (view === "statement") fetchStatement();
   }, [view, fetchStatement]);
 
@@ -529,6 +539,11 @@ export function CashflowPage() {
   }, [dateRange, customFrom, customTo]);
 
   const fileStamp = useMemo(() => computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10), [dateRange, customFrom, customTo]);
+  const ledgerPageCount = Math.max(1, Math.ceil(movements.length / LEDGER_PAGE_SIZE));
+  const safeLedgerPage = Math.min(ledgerPage, ledgerPageCount - 1);
+  const pagedMovements = movements.slice(safeLedgerPage * LEDGER_PAGE_SIZE, safeLedgerPage * LEDGER_PAGE_SIZE + LEDGER_PAGE_SIZE);
+  const ledgerFromRow = movements.length === 0 ? 0 : safeLedgerPage * LEDGER_PAGE_SIZE + 1;
+  const ledgerToRow = Math.min((safeLedgerPage + 1) * LEDGER_PAGE_SIZE, movements.length);
 
   const exportStatementExcel = () => {
     const rows: (string | number)[][] = [
@@ -815,8 +830,8 @@ export function CashflowPage() {
                 </tr>
               </thead>
               <tbody>
-                {movements.map((m, i) => (
-                  <tr key={i} className="border-t">
+                {pagedMovements.map((m) => (
+                  <tr key={m.entry_id} className="border-t">
                     <td className="p-2 font-mono text-slate-600">{m.transaction_id ?? "—"}</td>
                     <td className="p-2">{m.entry_date}</td>
                     <td className="p-2">{m.description}</td>
@@ -829,6 +844,31 @@ export function CashflowPage() {
             </table>
             {movements.length === 0 && (
               <p className="p-4 text-sm text-slate-500">No movements in this period for the selected account.</p>
+            )}
+            {movements.length > 0 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t bg-white px-4 py-3 text-sm text-slate-600">
+                <span>
+                  Showing {ledgerFromRow}-{ledgerToRow} of {movements.length} movements. Balances remain full-period running balances.
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    disabled={safeLedgerPage === 0}
+                    onClick={() => setLedgerPage((page) => Math.max(0, page - 1))}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <button
+                    type="button"
+                    disabled={safeLedgerPage >= ledgerPageCount - 1}
+                    onClick={() => setLedgerPage((page) => Math.min(ledgerPageCount - 1, page + 1))}
+                    className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
             )}
             <div className="p-4 border-t bg-slate-50 flex justify-between font-medium">
               <span>Closing balance</span>

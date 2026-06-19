@@ -16,6 +16,11 @@ function localAuthEnvEnabled(): boolean {
   return v === "true" || v === "1" || v === "yes";
 }
 
+function desktopApiDataModeEnabled(): boolean {
+  const v = import.meta.env.VITE_DESKTOP_DATA_MODE?.trim().toLowerCase();
+  return v === "api" || v === "server" || v === "postgres";
+}
+
 const LOCAL_PLACEHOLDER_URL = "http://127.0.0.1:1";
 const LOCAL_PLACEHOLDER_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJsb2NhbC1wbGFjZWhvbGRlciIsInJvbGUiOiJhbm9uIn0.local-auth-placeholder";
@@ -24,6 +29,7 @@ const envSupabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
 const envSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
 const hasCloudEnv = Boolean(envSupabaseUrl) && Boolean(envSupabaseAnonKey);
 const localAuthEnabled = localAuthEnvEnabled();
+const desktopApiDataMode = desktopApiDataModeEnabled();
 const supabaseUrl = localAuthEnvEnabled()
   ? hasCloudEnv
     ? (envSupabaseUrl as string)
@@ -317,7 +323,7 @@ const cloudOrResilientFetch =
 const browserFetch = createFunctionsDevProxyFetch(cloudOrResilientFetch);
 
 export const supabase: any =
-  localAuthEnabled && desktopApi.isAvailable()
+  localAuthEnabled && desktopApi.isAvailable() && !desktopApiDataMode
     ? createLocalSupabaseClient()
     : createClient(supabaseUrl, supabaseAnonKey, {
         global: {

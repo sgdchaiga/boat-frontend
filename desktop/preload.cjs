@@ -5,6 +5,17 @@ contextBridge.exposeInMainWorld("boatDesktop", {
   backup: {
     createLocal: () => ipcRenderer.invoke("boat:backup:create-local"),
   },
+  settings: {
+    get: () => ipcRenderer.invoke("boat:settings:get"),
+    update: (payload) => ipcRenderer.invoke("boat:settings:update", payload),
+  },
+  api: {
+    health: (payload) => ipcRenderer.invoke("boat:api:health", payload),
+  },
+  bootstrapAdmin: {
+    peek: () => ipcRenderer.invoke("boat:bootstrap-admin:peek"),
+    consume: () => ipcRenderer.invoke("boat:bootstrap-admin:consume"),
+  },
   license: {
     getDeviceId: () => ipcRenderer.invoke("boat:license:get-device-id"),
   },

@@ -1,4 +1,4 @@
-import type { BoatDesktopApi } from "@/types/desktop-api";
+﻿import type { BoatApiHealth, BoatBootstrapAdmin, BoatDesktopApi, BoatDesktopSettings } from "@/types/desktop-api";
 
 function getDesktopApi(): BoatDesktopApi | null {
   if (typeof window === "undefined") return null;
@@ -20,6 +20,37 @@ export const desktopApi = {
     const api = getDesktopApi();
     if (!api) return { ok: false as const, sqlitePath: "" };
     return api.health();
+  },
+  async getSettings(): Promise<BoatDesktopSettings> {
+    const api = getDesktopApi();
+    if (!api?.settings) {
+      return { apiBaseUrl: "", deploymentMode: "lan", businessType: "school" };
+    }
+    return api.settings.get();
+  },
+  async updateSettings(payload: Partial<BoatDesktopSettings>): Promise<BoatDesktopSettings> {
+    const api = getDesktopApi();
+    if (!api?.settings) {
+      return { apiBaseUrl: payload.apiBaseUrl || "", deploymentMode: payload.deploymentMode || "lan", businessType: payload.businessType || "school" };
+    }
+    return api.settings.update(payload);
+  },
+  async checkApiHealth(baseUrl?: string): Promise<BoatApiHealth> {
+    const api = getDesktopApi();
+    if (!api?.api) {
+      return { ok: false, status: 0, baseUrl: baseUrl || "", service: null, time: null, message: "Desktop API bridge is unavailable." };
+    }
+    return api.api.health({ baseUrl });
+  },
+  async peekBootstrapAdmin(): Promise<BoatBootstrapAdmin | null> {
+    const api = getDesktopApi();
+    if (!api?.bootstrapAdmin) return null;
+    return api.bootstrapAdmin.peek();
+  },
+  async consumeBootstrapAdmin(): Promise<BoatBootstrapAdmin | null> {
+    const api = getDesktopApi();
+    if (!api?.bootstrapAdmin) return null;
+    return api.bootstrapAdmin.consume();
   },
   async getDeviceId(): Promise<string | null> {
     const api = getDesktopApi();

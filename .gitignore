@@ -33,6 +33,10 @@ subscription-renewal-public.pem
 release/
 release-desktop/
 dist-electron/
+deploy/prerequisites/*
+!deploy/prerequisites/
+!deploy/prerequisites/.gitkeep
+!deploy/prerequisites/README.md
 out/
 *.blockmap
 *.nsis.7z

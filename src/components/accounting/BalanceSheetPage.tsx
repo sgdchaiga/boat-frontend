@@ -6,10 +6,11 @@ import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
-import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { normalizeGlAccountRow, normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { accountBalanceDelta, isCashEquivalentAccount } from "../../lib/cashFlowStatement";
 import { Info } from "lucide-react";
 
-type AccountTotal = { account_id: string; account_code: string; account_name: string; account_type: "asset" | "liability" | "equity"; total: number };
+type AccountTotal = { account_id: string; account_code: string; account_name: string; account_type: "asset" | "liability" | "equity"; category: string | null; total: number };
 type DrillLine = {
   id: string;
   entry_date: string;
@@ -21,17 +22,7 @@ type DrillLine = {
   line_description: string | null;
 };
 const CASH_BASIS_REFERENCE_TYPES = ["payment", "pos", "vendor_payment", "expense", "school_payment"] as const;
-
-function accountBalanceDelta(
-  accountType: string,
-  debit: number,
-  credit: number
-): number {
-  const dr = debit || 0;
-  const cr = credit || 0;
-  if (accountType === "asset" || accountType === "expense") return dr - cr;
-  return cr - dr;
-}
+const JOURNAL_LINE_PAGE_SIZE = 1000;
 
 export function BalanceSheetPage() {
   const { user } = useAuth();
@@ -69,24 +60,38 @@ export function BalanceSheetPage() {
   }, [asOfDate, compareRange, basis]);
 
   const fetchSnapshotForDate = async (toDate: string) => {
-    const linesQuery = supabase
-      .from("journal_entry_lines")
-      .select(
-        "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type), journal_entries!inner(entry_date)"
-      )
-      .lte("journal_entries.entry_date", toDate)
-      .eq("journal_entries.is_posted", true)
-      .eq("journal_entries.is_deleted", false)
-      .in("gl_accounts.account_type", ["asset", "liability", "equity", "income", "expense"]);
-    if (basis === "cash") {
-      linesQuery.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
-    }
-    const [linesRes, accRes] = await Promise.all([
-      filterJournalLinesByOrganizationId(
-        linesQuery,
-        orgId,
-        superAdmin
-      ),
+    const fetchLinesPage = (from: number, to: number) => {
+      const query = supabase
+        .from("journal_entry_lines")
+        .select(
+          "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date)"
+        )
+        .lte("journal_entries.entry_date", toDate)
+        .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false)
+        .order("entry_date", { ascending: true, referencedTable: "journal_entries" })
+        .order("id", { ascending: true })
+        .range(from, to);
+      if (basis === "cash") {
+        query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+      }
+      return filterJournalLinesByOrganizationId(query, orgId, superAdmin);
+    };
+    const [linesData, accRes] = await Promise.all([
+      (async () => {
+        const rows: Array<{
+          debit: number;
+          credit: number;
+          gl_accounts: { id: string; account_code: string; account_name: string; account_type: string; category: string | null } | null;
+        }> = [];
+        for (let from = 0; ; from += JOURNAL_LINE_PAGE_SIZE) {
+          const { data, error } = await fetchLinesPage(from, from + JOURNAL_LINE_PAGE_SIZE - 1);
+          if (error) throw new Error(error.message);
+          rows.push(...((data || []) as typeof rows));
+          if ((data || []).length < JOURNAL_LINE_PAGE_SIZE) break;
+        }
+        return rows;
+      })(),
       filterByOrganizationId(
         supabase
           .from("gl_accounts")
@@ -96,8 +101,6 @@ export function BalanceSheetPage() {
         superAdmin
       ),
     ]);
-    const linesData = linesRes.data;
-    if (linesRes.error) throw new Error(linesRes.error.message);
     if (accRes.error) throw new Error(accRes.error.message);
 
     const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
@@ -110,13 +113,14 @@ export function BalanceSheetPage() {
         account_code: row.account_code,
         account_name: row.account_name,
         account_type: row.account_type,
+        category: row.category,
       }));
-    const accMap: Record<string, { id: string; account_code: string; account_name: string; account_type: string }> = Object.fromEntries(
+    const accMap: Record<string, { id: string; account_code: string; account_name: string; account_type: string; category: string | null }> = Object.fromEntries(
       accounts.map((a) => [a.id, a])
     );
     const byAccount: Record<string, number> = {};
-    (linesData || []).forEach((l: { debit: number; credit: number; gl_accounts: { id: string; account_code: string; account_name: string; account_type: string } | null }) => {
-      const acc = l.gl_accounts;
+    (linesData || []).forEach((l: { debit: number; credit: number; gl_accounts: { id: string; account_code: string; account_name: string; account_type: string; category: string | null } | null }) => {
+      const acc = l.gl_accounts ? normalizeGlAccountRow(l.gl_accounts as unknown as Record<string, unknown>) : null;
       if (!acc) return;
       accMap[acc.id] = acc;
       if (!byAccount[acc.id]) byAccount[acc.id] = 0;
@@ -138,6 +142,7 @@ export function BalanceSheetPage() {
         account_code: acc.account_code,
         account_name: acc.account_name,
         account_type: acc.account_type as "asset" | "liability" | "equity",
+        category: acc.category,
         total,
       };
       if (acc.account_type === "asset") { a.push(row); ta += total; }
@@ -243,6 +248,16 @@ export function BalanceSheetPage() {
   /** Assets = Liabilities + Equity + (Revenue − Expenses) when P&L is not closed into equity. */
   const totalLiabEquityAndPnL = totalLiabilities + totalEquity + netIncome;
   const balanced = Math.abs(totalAssets - totalLiabEquityAndPnL) < 0.01;
+  const fundsUnderManagement = useMemo(
+    () => assets.filter((account) => isCashEquivalentAccount({
+      id: account.account_id,
+      account_code: account.account_code,
+      account_name: account.account_name,
+      account_type: account.account_type,
+      category: account.category,
+    })).reduce((sum, account) => sum + account.total, 0),
+    [assets]
+  );
 
   const assetsDisplayed = useMemo(
     () => (showZeroBalanceAccounts ? assets : assets.filter((r) => isNonZeroGlAmount(r.total))),
@@ -261,11 +276,14 @@ export function BalanceSheetPage() {
   const previousEquityByCode = useMemo(() => new Map(previousEquity.map((r) => [r.account_code, r.total])), [previousEquity]);
   const drillRowsWithBalance = useMemo(() => {
     if (!drillAccount) return [];
+    const rowsWithImpact = drillRows.map((row) => ({
+      ...row,
+      impact: accountBalanceDelta(drillAccount.account_type, row.debit, row.credit),
+    }));
     let runningBalance = 0;
-    return drillRows.map((row) => {
-      const impact = accountBalanceDelta(drillAccount.account_type, row.debit, row.credit);
-      runningBalance += impact;
-      return { ...row, impact, runningBalance };
+    return rowsWithImpact.map((row) => {
+      runningBalance += row.impact;
+      return { ...row, runningBalance };
     });
   }, [drillAccount, drillRows]);
 
@@ -275,34 +293,44 @@ export function BalanceSheetPage() {
     setDrillError(null);
     setDrillLoading(true);
     try {
-      const query = supabase
-        .from("journal_entry_lines")
-        .select(
-          "id, debit, credit, line_description, journal_entries!inner(id, entry_date, description, transaction_id, reference_type), gl_accounts!inner(id)"
-        )
-        .eq("gl_account_id", account.account_id)
-        .lte("journal_entries.entry_date", asOfDate)
-        .eq("journal_entries.is_posted", true)
-        .eq("journal_entries.is_deleted", false)
-        .order("entry_date", { ascending: true, referencedTable: "journal_entries" });
-      if (basis === "cash") {
-        query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+      const fetchDrillPage = (from: number, to: number) => {
+        const query = supabase
+          .from("journal_entry_lines")
+          .select(
+            "id, debit, credit, line_description, journal_entries!inner(id, entry_date, description, transaction_id, reference_type), gl_accounts!inner(id)"
+          )
+          .eq("gl_account_id", account.account_id)
+          .lte("journal_entries.entry_date", asOfDate)
+          .eq("journal_entries.is_posted", true)
+          .eq("journal_entries.is_deleted", false)
+          .order("entry_date", { ascending: true, referencedTable: "journal_entries" })
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (basis === "cash") {
+          query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+        }
+        return filterJournalLinesByOrganizationId(query, orgId, superAdmin);
+      };
+      const data: Array<{
+        id: string;
+        debit: number;
+        credit: number;
+        line_description: string | null;
+        journal_entries: {
+          entry_date: string;
+          description: string;
+          transaction_id: string | null;
+          reference_type: string | null;
+        } | null;
+      }> = [];
+      for (let from = 0; ; from += JOURNAL_LINE_PAGE_SIZE) {
+        const { data: pageData, error } = await fetchDrillPage(from, from + JOURNAL_LINE_PAGE_SIZE - 1);
+        if (error) throw new Error(error.message);
+        data.push(...((pageData || []) as typeof data));
+        if ((pageData || []).length < JOURNAL_LINE_PAGE_SIZE) break;
       }
-      const { data, error } = await filterJournalLinesByOrganizationId(query, orgId, superAdmin);
-      if (error) throw new Error(error.message);
       setDrillRows(
-        ((data || []) as Array<{
-          id: string;
-          debit: number;
-          credit: number;
-          line_description: string | null;
-          journal_entries: {
-            entry_date: string;
-            description: string;
-            transaction_id: string | null;
-            reference_type: string | null;
-          } | null;
-        }>).map((row) => ({
+        data.map((row) => ({
           id: row.id,
           entry_date: row.journal_entries?.entry_date || "",
           description: row.journal_entries?.description || "",
@@ -453,6 +481,14 @@ export function BalanceSheetPage() {
         </div>
         {!loading && !fetchError && <AccountingExportButtons onExcel={exportExcel} onPdf={exportPdf} />}
       </div>
+
+      {!loading && !fetchError && basis === "accrual" && (
+        <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+          <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Treasury funds under management</p>
+          <p className="mt-1 text-2xl font-bold text-slate-900">{fundsUnderManagement.toFixed(2)}</p>
+          <p className="mt-1 text-xs text-slate-600">Sum of posted cash and cash-equivalent asset accounts as of {asOfDate}; this equals the Treasury module total for the same date.</p>
+        </div>
+      )}
 
       {loading ? (
         <div className="text-slate-500">Loading…</div>

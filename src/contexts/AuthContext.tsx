@@ -19,6 +19,7 @@ import {
   startLocalAccessSession,
   unlockActiveAccessSession,
   validatePin,
+  generateStaffCode,
   type LocalAuthAccount,
   type LocalAccessSession,
 } from "@/lib/localAuthStore";
@@ -926,6 +927,32 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     [activateCloudOrganization, memberships, user?.email, user?.id]
   );
 
+  const importBootstrapAdminIfNeeded = useCallback(async (): Promise<LocalAuthAccount[]> => {
+    const accounts = readLocalAccounts();
+    if (accounts.length > 0 || !desktopApi.isAvailable()) return accounts;
+    const seed = await desktopApi.consumeBootstrapAdmin();
+    if (!seed?.email || !seed.password) return accounts;
+    const email = seed.email.trim().toLowerCase();
+    const now = new Date().toISOString();
+    const next: LocalAuthAccount = {
+      id: crypto.randomUUID(),
+      email,
+      password: seed.password,
+      full_name: seed.full_name?.trim() || "School Administrator",
+      role: (seed.role || "admin") as UserRole,
+      phone: seed.phone || "",
+      staff_code: seed.staff_code || generateStaffCode(seed.full_name || "School Administrator", email, []),
+      pin: seed.pin || "1234",
+      pin_set_at: now,
+      pin_changed_at: now,
+      pin_change_required: true,
+      created_at: now,
+    };
+    writeLocalAccounts([next]);
+    await ensureLocalSqliteStaffRow(next);
+    return [next];
+  }, []);
+
   const refreshUserFlags = useCallback(async () => {
     if (IS_LOCAL_AUTH_MODE) {
       const sessionEmail = readLocalSessionEmail();
@@ -975,7 +1002,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (IS_LOCAL_AUTH_MODE) {
       const hydrateLocalUser = async () => {
         const sessionEmail = readLocalSessionEmail();
-        const accounts = readLocalAccounts();
+        const accounts = await importBootstrapAdminIfNeeded();
         const account = accounts.find((a) => a.email.toLowerCase() === (sessionEmail || "").toLowerCase());
         let effectiveAccount = account ?? null;
         if (account?.id) {
@@ -1077,7 +1104,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       mounted = false;
       listener.subscription.unsubscribe();
     };
-  }, [applySessionUser]);
+  }, [applySessionUser, importBootstrapAdminIfNeeded]);
 
   useEffect(() => {
     if (IS_LOCAL_AUTH_MODE) return;

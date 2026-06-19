@@ -3,11 +3,37 @@ const fs = require("node:fs");
 const os = require("node:os");
 const crypto = require("node:crypto");
 const { app, BrowserWindow, ipcMain } = require("electron");
-const dbApi = require("./db.cjs");
+const settingsApi = require("./settings.cjs");
 
 let win = null;
 let db = null;
 let dbPath = null;
+let loadedDbApi = null;
+
+function getDesktopDataMode() {
+  const raw = String(process.env.VITE_DESKTOP_DATA_MODE || process.env.BOAT_DESKTOP_DATA_MODE || "").toLowerCase();
+  if (raw === "api") {
+    return "api";
+  }
+  return "sqlite";
+}
+
+function isApiDataMode() {
+  return getDesktopDataMode() === "api";
+}
+
+function getDbApi() {
+  if (!loadedDbApi) {
+    loadedDbApi = require("./db.cjs");
+  }
+  return loadedDbApi;
+}
+
+const dbApi = new Proxy({}, {
+  get(_target, prop) {
+    return getDbApi()[prop];
+  },
+});
 
 function getLocalBackupRetentionCount() {
   const raw = process.env.BOAT_BACKUP_RETENTION_COUNT;
@@ -103,16 +129,71 @@ function createWindow() {
   }
 }
 
+async function checkBoatApiHealth(baseUrl) {
+  const normalized = settingsApi.normalizeApiBaseUrl(baseUrl);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  try {
+    const res = await fetch(`${normalized}/health`, { signal: controller.signal });
+    const body = await res.json().catch(() => ({}));
+    return {
+      ok: res.ok && body?.ok !== false,
+      status: res.status,
+      baseUrl: normalized,
+      service: body?.service || null,
+      time: body?.time || null,
+      message: res.ok ? null : body?.message || res.statusText,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      status: 0,
+      baseUrl: normalized,
+      service: null,
+      time: null,
+      message: err instanceof Error ? err.message : "Unable to reach BOAT API.",
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function registerIpc() {
   ipcMain.handle("boat:health", () => {
     return {
       ok: true,
-      sqlitePath: dbPath,
+      dataMode: getDesktopDataMode(),
+      sqlitePath: dbPath || null,
     };
   });
 
   ipcMain.handle("boat:license:get-device-id", () => {
     return { deviceId: getStableDeviceId() };
+  });
+
+  ipcMain.handle("boat:settings:get", () => {
+    return settingsApi.readSettings(app.getPath("userData"));
+  });
+
+  ipcMain.handle("boat:settings:update", (_event, payload) => {
+    return settingsApi.updateSettings(app.getPath("userData"), payload || {});
+  });
+
+  ipcMain.handle("boat:api:health", async (_event, payload) => {
+    const settings = settingsApi.readSettings(app.getPath("userData"));
+    const baseUrl = payload?.baseUrl || settings.apiBaseUrl;
+    if (!baseUrl) {
+      return { ok: false, status: 0, baseUrl: "", service: null, time: null, message: "API server URL is not set." };
+    }
+    return checkBoatApiHealth(baseUrl);
+  });
+
+  ipcMain.handle("boat:bootstrap-admin:peek", () => {
+    return settingsApi.readBootstrapAdmin(app.getPath("userData"));
+  });
+
+  ipcMain.handle("boat:bootstrap-admin:consume", () => {
+    return settingsApi.consumeBootstrapAdmin(app.getPath("userData"));
   });
 
   ipcMain.handle("boat:backup:create-local", async () => {
@@ -203,9 +284,11 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
-  const state = dbApi.openDatabase(app.getPath("userData"));
-  db = state.db;
-  dbPath = state.dbPath;
+  if (!isApiDataMode()) {
+    const state = dbApi.openDatabase(app.getPath("userData"));
+    db = state.db;
+    dbPath = state.dbPath;
+  }
   registerIpc();
   createWindow();
 });

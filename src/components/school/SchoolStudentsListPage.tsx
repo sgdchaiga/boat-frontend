@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import * as XLSX from "xlsx";
+import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
 type StudentRow = {
   id: string;
@@ -39,6 +40,19 @@ export function StudentsListPage() {
   const load = async () => {
     setLoading(true);
     setError(null);
+    const orgId = user?.organization_id;
+    if (canUseSchoolApi() && orgId) {
+      try {
+        const data = await listSchoolRows<StudentRow>("students", orgId);
+        setRows(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load students.");
+        setRows([]);
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     const { data, error: loadErr } = await supabase.from("students").select("*");
     if (loadErr) {
       setError(loadErr.message);
@@ -87,15 +101,28 @@ export function StudentsListPage() {
     }
     setSaving(true);
     setError(null);
+    const payload = {
+      admission_number: editDraft.admission_number.trim(),
+      first_name: editDraft.first_name.trim(),
+      last_name: editDraft.last_name.trim(),
+      class_name: editDraft.class_name.trim(),
+      is_boarding: editDraft.is_boarding,
+    };
+    if (canUseSchoolApi() && user?.organization_id) {
+      try {
+        await updateSchoolRow<StudentRow>("students", user.organization_id, editingId, payload);
+        cancelEdit();
+        await load();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to update student.");
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
     const { error: saveErr } = await supabase
       .from("students")
-      .update({
-        admission_number: editDraft.admission_number.trim(),
-        first_name: editDraft.first_name.trim(),
-        last_name: editDraft.last_name.trim(),
-        class_name: editDraft.class_name.trim(),
-        is_boarding: editDraft.is_boarding,
-      })
+      .update(payload)
       .eq("id", editingId);
     if (saveErr) {
       setError(saveErr.message);
@@ -117,6 +144,10 @@ export function StudentsListPage() {
     if (!confirmed) return;
 
     setError(null);
+    if (canUseSchoolApi()) {
+      setError("Deleting students through the BOAT API is not enabled yet. Archive or delete linked records from the server tools.");
+      return;
+    }
     const { error: delErr } = await supabase.from("students").delete().eq("id", row.id);
     if (delErr) {
       setError(

@@ -7,6 +7,7 @@ import { useAuth, type UserRole } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { fetchOrganizationMembers } from "@/lib/orgMembership";
 import { desktopApi } from "@/lib/desktopApi";
+import { boatApi, isDesktopApiDataMode } from "@/lib/boatApi";
 import { generateStaffCode, normalizePin, normalizeStaffCode, readLocalAccounts, validatePin, writeLocalAccounts } from "@/lib/localAuthStore";
 
 type Staff = Database["public"]["Tables"]["staff"]["Row"];
@@ -40,6 +41,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+  const apiDataMode = isDesktopApiDataMode();
   const useLocalDesktopNewStaff = localAuthEnabled && desktopApi.isAvailable();
   const pinAccessAvailable = useLocalDesktopNewStaff || !localAuthEnabled;
 
@@ -74,6 +76,10 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const [editCanEditCashReceipts, setEditCanEditCashReceipts] = useState(false);
 
   const loadRoleTypes = useCallback(async () => {
+    if (apiDataMode && orgId) {
+      const { data } = await boatApi.school.list<OrgRoleType>("organization-role-types", orgId);
+      return data;
+    }
     let q = supabase.from("organization_role_types").select("*").order("sort_order", { ascending: true });
     q = filterByOrganizationId(q, orgId, superAdmin);
     const { data, error } = await q;
@@ -82,7 +88,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       return [];
     }
     return (data || []) as OrgRoleType[];
-  }, [orgId, superAdmin]);
+  }, [apiDataMode, orgId, superAdmin]);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);
@@ -507,6 +513,24 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const saveRoleType = async () => {
     if (editingRoleType) {
       const so = Math.max(0, parseInt(editSortOrder, 10) || 0);
+      if (apiDataMode && orgId) {
+        try {
+          await boatApi.school.update<OrgRoleType>("organization-role-types", editingRoleType.id, {
+            organization_id: orgId,
+            display_name: editDisplayName.trim(),
+            sort_order: so,
+            can_edit_pos_orders: editCanEditPosOrders,
+            can_edit_cash_receipts: editCanEditCashReceipts,
+          });
+        } catch (error) {
+          alert(error instanceof Error ? error.message : "Failed to update role type.");
+          return;
+        }
+        setShowRoleTypeModal(false);
+        const next = await loadRoleTypes();
+        setRoleTypes(next);
+        return;
+      }
       const { error } = await supabase
         .from("organization_role_types")
         .update({
@@ -534,6 +558,25 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         alert("No organization context.");
         return;
       }
+      if (apiDataMode && orgId) {
+        try {
+          await boatApi.school.create<OrgRoleType>("organization-role-types", {
+            organization_id: orgId,
+            role_key: key,
+            display_name: newDisplayName.trim(),
+            sort_order: roleTypes.length,
+            can_edit_pos_orders: newCanEditPosOrders || key === "admin",
+            can_edit_cash_receipts: newCanEditCashReceipts || key === "admin",
+          });
+        } catch (error) {
+          alert(error instanceof Error ? error.message : "Failed to create role type.");
+          return;
+        }
+        setShowRoleTypeModal(false);
+        const next = await loadRoleTypes();
+        setRoleTypes(next);
+        return;
+      }
       const { error } = await supabase.from("organization_role_types").insert({
         organization_id: orgId!,
         role_key: key,
@@ -555,6 +598,23 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const deleteRoleType = async (rt: OrgRoleType) => {
     if (rt.role_key === "admin") {
       alert("The admin role cannot be removed.");
+      return;
+    }
+    if (apiDataMode && orgId) {
+      try {
+        const { data } = await boatApi.school.list<Staff>("staff", orgId);
+        const count = data.filter((member) => member.role === rt.role_key).length;
+        if (count > 0) {
+          alert("Reassign or remove staff using this role before deleting the role type.");
+          return;
+        }
+        if (!confirm(`Delete role type "${rt.display_name}" (${rt.role_key})?`)) return;
+        await boatApi.school.remove<OrgRoleType>("organization-role-types", rt.id, orgId);
+        const next = await loadRoleTypes();
+        setRoleTypes(next);
+      } catch (error) {
+        alert(error instanceof Error ? error.message : "Failed to delete role type.");
+      }
       return;
     }
     let q = supabase.from("staff").select("id", { count: "exact", head: true }).eq("role", rt.role_key);

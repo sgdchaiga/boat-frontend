@@ -3,6 +3,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
 type LineItem = { code: string; label: string; amount: number; priority: number };
 
@@ -81,6 +82,24 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
     const orgId = user?.organization_id;
     if (!orgId) {
       setLoading(false);
+      return;
+    }
+    if (canUseSchoolApi()) {
+      try {
+        const [fees, classRows, streamRows] = await Promise.all([
+          listSchoolRows<FeeRow>("fee-structures", orgId),
+          listSchoolRows<CatRow>("classes", orgId),
+          listSchoolRows<CatRow>("streams", orgId),
+        ]);
+        setRows(fees);
+        setClasses(classRows);
+        setStreams(streamRows);
+        setErr(null);
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to load fee structures.");
+      } finally {
+        setLoading(false);
+      }
       return;
     }
     const [fRes, cRes, sRes] = await Promise.all([
@@ -214,7 +233,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
       return;
     }
     setErr(null);
-    const { error } = await supabase.from("fee_structures").insert({
+    const payload = {
       class_id: form.class_id || null,
       stream_id: form.stream_id || null,
       class_name,
@@ -222,6 +241,29 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
       academic_year: form.academic_year.trim(),
       term_name: form.term_name.trim(),
       line_items: vl.lines,
+      currency: "UGX",
+      is_active: true,
+    };
+    if (canUseSchoolApi()) {
+      try {
+        await createSchoolRow<FeeRow>("fee-structures", user?.organization_id || "", payload);
+        setForm({
+          class_id: "",
+          stream_id: "",
+          class_name: "",
+          stream: "",
+          academic_year: new Date().getFullYear().toString(),
+          term_name: "Term 1",
+          lines: defaultLines(),
+        });
+        load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to save fee structure.");
+      }
+      return;
+    }
+    const { error } = await supabase.from("fee_structures").insert({
+      ...payload,
     });
     if (error) setErr(error.message);
     else {
@@ -280,18 +322,29 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
       return;
     }
     setErr(null);
+    const payload = {
+      class_id: editFee.class_id || null,
+      stream_id: editFee.stream_id || null,
+      class_name,
+      stream,
+      academic_year: editFee.academic_year.trim(),
+      term_name: editFee.term_name.trim(),
+      line_items: vl.lines,
+      is_active: editFee.is_active,
+    };
+    if (canUseSchoolApi()) {
+      try {
+        await updateSchoolRow<FeeRow>("fee-structures", user?.organization_id || "", editingFeeId, payload);
+        cancelEditFee();
+        load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to update fee structure.");
+      }
+      return;
+    }
     const { error } = await supabase
       .from("fee_structures")
-      .update({
-        class_id: editFee.class_id || null,
-        stream_id: editFee.stream_id || null,
-        class_name,
-        stream,
-        academic_year: editFee.academic_year.trim(),
-        term_name: editFee.term_name.trim(),
-        line_items: vl.lines,
-        is_active: editFee.is_active,
-      })
+      .update(payload)
       .eq("id", editingFeeId);
     if (error) setErr(error.message);
     else {

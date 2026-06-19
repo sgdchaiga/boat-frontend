@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
 type ParentRow = {
   id: string;
@@ -31,6 +32,18 @@ export function SchoolParentsPage({ readOnly }: Props) {
       setLoading(false);
       return;
     }
+    if (canUseSchoolApi()) {
+      try {
+        const data = await listSchoolRows<ParentRow>("parents", orgId);
+        setRows(data);
+        setErr(null);
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to load parents.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     const { data, error } = await supabase.from("parents").select("*").eq("organization_id", orgId).order("full_name");
     setErr(error?.message || null);
     setRows((data as ParentRow[]) || []);
@@ -48,11 +61,24 @@ export function SchoolParentsPage({ readOnly }: Props) {
       return;
     }
     setErr(null);
-    const { error } = await supabase.from("parents").insert({
+    const payload = {
       full_name: form.full_name.trim(),
       email: form.email.trim() || null,
       phone: form.phone.trim() || null,
       phone_alt: form.phone_alt.trim() || null,
+    };
+    if (canUseSchoolApi()) {
+      try {
+        await createSchoolRow<ParentRow>("parents", user?.organization_id || "", payload);
+        setForm({ full_name: "", email: "", phone: "", phone_alt: "" });
+        load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to save parent.");
+      }
+      return;
+    }
+    const { error } = await supabase.from("parents").insert({
+      ...payload,
     });
     if (error) setErr(error.message);
     else {
@@ -83,14 +109,25 @@ export function SchoolParentsPage({ readOnly }: Props) {
       return;
     }
     setErr(null);
+    const payload = {
+      full_name: editDraft.full_name.trim(),
+      email: editDraft.email.trim() || null,
+      phone: editDraft.phone.trim() || null,
+      phone_alt: editDraft.phone_alt.trim() || null,
+    };
+    if (canUseSchoolApi()) {
+      try {
+        await updateSchoolRow<ParentRow>("parents", user?.organization_id || "", editingId, payload);
+        cancelEdit();
+        load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to update parent.");
+      }
+      return;
+    }
     const { error } = await supabase
       .from("parents")
-      .update({
-        full_name: editDraft.full_name.trim(),
-        email: editDraft.email.trim() || null,
-        phone: editDraft.phone.trim() || null,
-        phone_alt: editDraft.phone_alt.trim() || null,
-      })
+      .update(payload)
       .eq("id", editingId);
     if (error) setErr(error.message);
     else {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
 
 type CatRow = { id: string; name: string };
 type ParentRow = { id: string; full_name: string };
@@ -51,6 +52,24 @@ export function SchoolStudentsBioPage() {
     const orgId = user?.organization_id;
     if (!orgId) return;
 
+    if (canUseSchoolApi()) {
+      try {
+        const [s, p, c, st] = await Promise.all([
+          listSchoolRows<StudentRow>("students", orgId),
+          listSchoolRows<ParentRow>("parents", orgId),
+          listSchoolRows<CatRow>("classes", orgId),
+          listSchoolRows<CatRow>("streams", orgId),
+        ]);
+        setRows(s);
+        setParents(p);
+        setClasses(c);
+        setStreams(st);
+      } catch (e) {
+        setErrorMsg(e instanceof Error ? e.message : "Failed to load school records.");
+      }
+      return;
+    }
+
     const [s, p, c, st] = await Promise.all([
       supabase.from("students").select("*").eq("organization_id", orgId),
       supabase.from("parents").select("*").eq("organization_id", orgId),
@@ -96,22 +115,43 @@ export function SchoolStudentsBioPage() {
 
     setSaving(true);
     try {
+      const payload = {
+        admission_number: form.admission_number.trim(),
+        first_name: form.first_name.trim(),
+        last_name: form.last_name.trim(),
+        class_id: form.class_id || null,
+        stream_id: form.stream_id || null,
+        parent_id: form.parent_id || null,
+        class_name: selectedClass.name,
+        stream: selectedStream?.name ?? null,
+        date_of_birth: form.date_of_birth || null,
+        is_boarding: form.is_boarding,
+        has_health_issue: form.has_health_issue,
+        photo_url: form.photo_url || null,
+      };
+
+      if (canUseSchoolApi()) {
+        await createSchoolRow<StudentRow>("students", orgId, payload);
+        setForm({
+          admission_number: "",
+          first_name: "",
+          last_name: "",
+          class_id: "",
+          stream_id: "",
+          parent_id: "",
+          date_of_birth: "",
+          is_boarding: false,
+          has_health_issue: false,
+          photo_url: "",
+        });
+        setSuccessMsg("Student saved successfully.");
+        await load();
+        return;
+      }
+
       const { data: student, error: studentErr } = await supabase
         .from("students")
-        .insert({
-          organization_id: orgId,
-          admission_number: form.admission_number.trim(),
-          first_name: form.first_name.trim(),
-          last_name: form.last_name.trim(),
-          class_id: form.class_id || null,
-          stream_id: form.stream_id || null,
-          class_name: selectedClass.name,
-          stream: selectedStream?.name ?? null,
-          date_of_birth: form.date_of_birth || null,
-          is_boarding: form.is_boarding,
-          has_health_issue: form.has_health_issue,
-          photo_url: form.photo_url || null,
-        })
+        .insert({ organization_id: orgId, ...payload })
         .select("id")
         .single();
 
@@ -226,8 +266,8 @@ export function SchoolStudentsBioPage() {
         </label>
 
         {/* PHOTO */}
-        <input type="file"
-          onChange={async (e) => {
+        {!canUseSchoolApi() && (
+          <input type="file" onChange={async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
 
@@ -237,7 +277,8 @@ export function SchoolStudentsBioPage() {
             const { data } = supabase.storage.from("school").getPublicUrl(path);
             setForm({ ...form, photo_url: data.publicUrl });
           }}
-        />
+          />
+        )}
 
         <button
           type="button"

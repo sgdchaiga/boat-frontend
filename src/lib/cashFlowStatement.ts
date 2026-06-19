@@ -32,10 +32,10 @@ export function accountBalanceDelta(accountType: string, debit: number, credit: 
 export function isCashEquivalentAccount(a: GlAccountRow): boolean {
   if (a.account_type !== "asset") return false;
   const c = (a.category || "").toLowerCase();
-  if (c === "cash") return true;
-  const n = (a.account_name || "").toLowerCase();
-  if (/\b(cash on hand|petty cash)\b/.test(n)) return true;
-  if (/\b(bank|mobile money|momo|mpesa|airtel)\b/.test(n)) return true;
+  if (c === "cash" || c.includes("cash equivalent")) return true;
+  const n = `${a.account_code || ""} ${a.account_name || ""}`.toLowerCase();
+  if (/\b(cash|petty cash|imprest|float|till)\b/.test(n)) return true;
+  if (/\b(bank|current account|checking|savings account|mobile money|momo|mpesa|m-pesa|airtel money|mtn money|wallet)\b/.test(n)) return true;
   return false;
 }
 

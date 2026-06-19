@@ -8,9 +8,11 @@ import { schoolFeeReceiptDetailFromPayment, type SchoolFeeReceiptDetail } from "
 import { buildSchoolFeesAutoReference } from "@/lib/autoReference";
 import { postSchoolFeePaymentAccounting } from "@/lib/schoolFeeJournal";
 import { randomUuid } from "@/lib/randomUuid";
+import { boatApi } from "@/lib/boatApi";
+import { canUseSchoolApi, listSchoolRows } from "@/lib/schoolApiData";
 
 type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string };
-type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; created_at?: string };
+type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; created_at?: string; student_id?: string; status?: string };
 type FeeLine = { code?: string; label?: string; amount?: number; priority?: number };
 type FeeStructure = { id: string; line_items: FeeLine[] | null };
 type PaymentSlice = { invoice_id: string; amount: number; category_code?: string; category_label?: string; priority?: number };
@@ -22,6 +24,8 @@ type PayRow = {
   reference: string | null;
   paid_at: string;
   student_id: string;
+  receipt_number?: string | null;
+  receipt_issued_at?: string | null;
 };
 
 type Props = {
@@ -84,6 +88,22 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       setLoading(false);
       return;
     }
+    if (canUseSchoolApi()) {
+      try {
+        const [payments, studentRows] = await Promise.all([
+          listSchoolRows<PayRow>("payments", orgId),
+          listSchoolRows<StudentOpt>("students", orgId),
+        ]);
+        setRows(payments);
+        setStudents(studentRows);
+        setErr(null);
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to load school payments.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
     const [pRes, sRes] = await Promise.all([
       supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }),
       supabase.from("students").select("id,first_name,last_name,admission_number").eq("organization_id", orgId).order("last_name"),
@@ -122,6 +142,20 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         setInvoices([]);
         return;
       }
+      if (canUseSchoolApi()) {
+        try {
+          const allInvoices = await listSchoolRows<InvOpt>("invoices", user.organization_id);
+          setInvoices(
+            allInvoices
+              .filter((invoice) => invoice.student_id === form.student_id && invoice.status !== "cancelled")
+              .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+          );
+        } catch (error) {
+          setErr(error instanceof Error ? error.message : "Failed to load student invoices.");
+          setInvoices([]);
+        }
+        return;
+      }
       const { data } = await supabase
         .from("student_invoices")
         .select("id,invoice_number,total_due,amount_paid,fee_structure_id,created_at")
@@ -146,6 +180,44 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     const orgId = user?.organization_id;
     if (!orgId) return;
+    if (canUseSchoolApi()) {
+      if (form.method === "wallet") {
+        setErr("Wallet payments are not enabled in server-backed school mode yet. Use cash, mobile money, bank, transfer, or other.");
+        return;
+      }
+      setErr(null);
+      try {
+        const result = await boatApi.school.recordPayment<{
+          payment: PayRow;
+          receipt: { receipt_number: string; issued_at: string };
+        }>({
+          organization_id: orgId,
+          student_id: form.student_id,
+          invoice_id: form.invoice_id || null,
+          amount: amt,
+          method: form.method,
+          staff_user_id: user?.id ?? null,
+        });
+        const payment = result.data.payment;
+        const receipt = result.data.receipt;
+        const st = students.find((s) => s.id === payment.student_id);
+        setReceiptPreview(
+          schoolFeeReceiptDetailFromPayment(
+            payment,
+            receipt.receipt_number,
+            receipt.issued_at,
+            st ? `${st.admission_number} - ${st.first_name} ${st.last_name}` : payment.student_id,
+            orgName,
+            orgAddress
+          )
+        );
+        setForm({ student_id: "", invoice_id: "", amount: "", method: "cash" });
+        await load();
+      } catch (error) {
+        setErr(error instanceof Error ? error.message : "Failed to record payment.");
+      }
+      return;
+    }
     const targetInvoices = form.invoice_id
       ? invoices.filter((i) => i.id === form.invoice_id)
       : invoices.filter((i) => Number(i.total_due) > Number(i.amount_paid));
@@ -367,6 +439,20 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const openPrintReceipt = async (payment: PayRow) => {
     setErr(null);
+    if (canUseSchoolApi()) {
+      const st = students.find((s) => s.id === payment.student_id);
+      setReceiptPreview(
+        schoolFeeReceiptDetailFromPayment(
+          payment,
+          payment.receipt_number || payment.reference || `R-${payment.id.slice(0, 8).toUpperCase()}`,
+          payment.receipt_issued_at || payment.paid_at,
+          st ? `${st.admission_number} - ${st.first_name} ${st.last_name}` : payment.student_id,
+          orgName,
+          orgAddress
+        )
+      );
+      return;
+    }
     const { data: existingRows, error: fetchErr } = await supabase
       .from("school_receipts")
       .select("receipt_number,issued_at")

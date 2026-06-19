@@ -12,6 +12,8 @@ interface ImportMetaEnv {
   readonly VITE_CLEARING_RETAIL_SETTLEMENT?: string;
   /** `online` (default) or `lan` (on-prem + optional cloud sync queue). */
   readonly VITE_DEPLOYMENT_MODE: string;
+  /** `sqlite` keeps the legacy local DB. `api` makes Electron require a BOAT API URL on first run. */
+  readonly VITE_DESKTOP_DATA_MODE?: string;
   /** Same uuid as `tenant_settings.cloud_tenant_id` on the LAN DB / cloud tenancy. */
   readonly VITE_TENANT_ID: string;
   /** Optional local-auth profile business type (e.g. retail, hotel, school). */

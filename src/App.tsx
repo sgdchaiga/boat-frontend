@@ -189,6 +189,9 @@ import { HotelAssessmentDashboardPage } from './components/hotel-assessment/Hote
 import { HotelAssessmentWizardPage } from './components/hotel-assessment/HotelAssessmentWizardPage';
 import { IntegrationsHubPage } from './components/system/IntegrationsHubPage';
 import { loadPermissionSnapshot } from './lib/permissions';
+import { DesktopServerConnectionPage } from './components/system/DesktopServerConnectionPage';
+import { desktopApi } from './lib/desktopApi';
+import { isDesktopApiDataMode } from './lib/boatApi';
 
 /** Old bookmarks / links: Financial Summary was removed; land on Revenue by Charge Type. */
 function normalizeLegacyPage(page: string): string {
@@ -374,6 +377,39 @@ function AppContent() {
   const [currentPage, setCurrentPage] = useState(() => getPageFromUrl('dashboard'));
   const [pageState, setPageState] = useState<Record<string, unknown>>(() => getPageStateFromUrl());
   const [pageHistory, setPageHistory] = useState<Array<{ page: string; state: Record<string, unknown> }>>([]);
+  const needsServerConnection = isDesktopApiDataMode() && desktopApi.isAvailable();
+  const [serverConnectionReady, setServerConnectionReady] = useState(!needsServerConnection);
+  const [checkingServerConnection, setCheckingServerConnection] = useState(needsServerConnection);
+
+  useEffect(() => {
+    if (!needsServerConnection) {
+      setServerConnectionReady(true);
+      setCheckingServerConnection(false);
+      return;
+    }
+    let cancelled = false;
+    const run = async () => {
+      setCheckingServerConnection(true);
+      try {
+        const settings = await desktopApi.getSettings();
+        if (!settings.apiBaseUrl) {
+          if (!cancelled) setServerConnectionReady(false);
+          return;
+        }
+        const health = await desktopApi.checkApiHealth(settings.apiBaseUrl);
+        if (!cancelled) setServerConnectionReady(health.ok);
+      } catch {
+        if (!cancelled) setServerConnectionReady(false);
+      } finally {
+        if (!cancelled) setCheckingServerConnection(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [needsServerConnection]);
+
   const navigate = (page: string, state?: Record<string, unknown>) => {
     const nextPage = normalizeLegacyPage(page);
     let nextState: Record<string, unknown> = {};
@@ -608,6 +644,21 @@ function AppContent() {
       window.clearInterval(timer);
     };
   }, [user?.id]);
+
+  if (checkingServerConnection) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-white border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <p className="text-white text-lg">Checking BOAT server...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (needsServerConnection && !serverConnectionReady) {
+    return <DesktopServerConnectionPage onConnected={() => setServerConnectionReady(true)} />;
+  }
 
   if (loading) {
     return (
