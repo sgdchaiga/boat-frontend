@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { Pencil, Plus, Trash2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import {
+  createJournalForExpenseWithLines,
   deleteJournalEntryByReference,
   type ExpenseJournalLineInput,
 } from "../../lib/journal";
@@ -1042,6 +1043,9 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           throw lineErr;
         }
       }
+
+      const journal = await createJournalForExpenseWithLines(expenseId, expDate, journalRows, user?.id ?? null);
+      if (!journal.ok) throw new Error(`Expense was saved, but its cash journal could not be posted: ${journal.error}`);
 
       await queueExpenseForTreasury({
         organizationId: user?.organization_id,

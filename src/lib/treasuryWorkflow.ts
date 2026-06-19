@@ -31,7 +31,7 @@ export async function isSpendMoneyApprovalEnabled(organizationId: string): Promi
 
 export async function queueExpenseForTreasury(input: QueueBase): Promise<void> {
   if (!input.organizationId) throw new Error("Your account is not linked to an organization.");
-  const approvalEnabled = await isSpendMoneyApprovalEnabled(input.organizationId);
+  const releasedAt = new Date().toISOString();
   await upsertTreasuryRequest({
     organization_id: input.organizationId,
     source_type: "expense",
@@ -42,14 +42,14 @@ export async function queueExpenseForTreasury(input: QueueBase): Promise<void> {
     amount: input.amount,
     vendor_id: input.vendorId || null,
     requested_by: input.requestedBy || null,
-    status: approvalEnabled ? "pending_approval" : "approved",
-    approved_by: approvalEnabled ? null : input.requestedBy || null,
-    approved_at: approvalEnabled ? null : new Date().toISOString(),
+    status: "disbursed",
+    approved_by: input.requestedBy || null,
+    approved_at: releasedAt,
     rejected_by: null,
     rejected_at: null,
     rejection_reason: null,
-    disbursed_by: null,
-    disbursed_at: null,
+    disbursed_by: input.requestedBy || null,
+    disbursed_at: releasedAt,
     payment_method: null,
     payment_reference: null,
   });

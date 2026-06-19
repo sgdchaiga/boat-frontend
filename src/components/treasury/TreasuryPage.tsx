@@ -118,6 +118,11 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
   const [releasePaymentMethod, setReleasePaymentMethod] = useState<PaymentMethod>("bank_transfer");
   const [releaseFundingAccountId, setReleaseFundingAccountId] = useState("");
   const [releaseReference, setReleaseReference] = useState("");
+  const [releaseDate, setReleaseDate] = useState(() => businessTodayISO());
+  const [editingSupplierPayment, setEditingSupplierPayment] = useState<Disbursement | null>(null);
+  const [editPaymentDate, setEditPaymentDate] = useState("");
+  const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>("bank_transfer");
+  const [editPaymentReference, setEditPaymentReference] = useState("");
   const [cashAccounts, setCashAccounts] = useState<CashAccount[]>([]);
   const [moneyJournals, setMoneyJournals] = useState<MoneyJournal[]>([]);
   const [showComments, setShowComments] = useState(false);
@@ -159,7 +164,11 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     }
     if (vendorPaymentRes.error) console.error("Unable to load Treasury supplier payments:", vendorPaymentRes.error);
     if (expenseRes.error) console.error("Unable to load Treasury expenses:", expenseRes.error);
-    setRequests((requestRes.data || []) as TreasuryRequest[]);
+    setRequests(((requestRes.data || []) as TreasuryRequest[]).map((request) =>
+      request.source_type === "expense" && !["disbursed", "rejected"].includes(request.status)
+        ? { ...request, status: "disbursed" as const }
+        : request
+    ));
     const loadedCollections = (collectionRes.data || []) as Collection[];
     const retailSaleIds = [...new Set(
       loadedCollections
@@ -315,7 +324,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
 
   const totals = useMemo(() => {
     const pending = filteredRequests.filter((r) => r.status === "pending_approval").reduce((s, r) => s + Number(r.amount), 0);
-    const ready = filteredRequests.filter((r) => r.status === "approved").reduce((s, r) => s + Number(r.amount), 0);
+    const ready = filteredRequests.filter((r) => r.source_type === "bill" && r.status === "approved").reduce((s, r) => s + Number(r.amount), 0);
     const pos = filteredCollections.filter((r) => r.payment_source?.startsWith("pos_")).reduce((s, r) => s + Number(r.amount), 0);
     const billing = filteredCollections.filter((r) => r.payment_source === "debtor").reduce((s, r) => s + Number(r.amount), 0);
     const disbursed = filteredDisbursements.reduce((s, r) => s + Number(r.amount), 0);
@@ -328,7 +337,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     return filteredRequests.filter((request) => {
       if (sourceFilter !== "all" && request.source_type !== sourceFilter) return false;
       if (activeTab === "approvals" && request.status !== "pending_approval") return false;
-      if (activeTab === "disbursements" && request.status !== "approved") return false;
+      if (activeTab === "disbursements" && (request.source_type !== "bill" || request.status !== "approved")) return false;
       if (activeTab === "history" && !["disbursed", "rejected"].includes(request.status)) return false;
       if (!q) return true;
       return [request.payee_name, request.purpose, request.source_type, request.status]
@@ -555,6 +564,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     setReleasePaymentMethod(method);
     setReleaseFundingAccountId("");
     setReleaseReference(request.payment_reference || "");
+    setReleaseDate(businessTodayISO());
   };
 
   const disburse = async () => {
@@ -565,13 +575,17 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
       alert("Select the cash, bank, wallet, or other account funding this payment.");
       return;
     }
+    if (!releaseDate) {
+      alert("Select the payment date.");
+      return;
+    }
     const paymentMethod = releasePaymentMethod;
     const reference = releaseReference.trim() || null;
     setWorkingId(request.id);
     try {
       if (request.source_type === "bill") {
         if (!request.vendor_id) throw new Error("The supplier is missing from this Treasury request.");
-        const paymentDate = new Date().toISOString().slice(0, 10);
+        const paymentDate = releaseDate;
         const { data: payment, error } = await supabase.from("vendor_payments").insert({
           vendor_id: request.vendor_id,
           bill_id: request.source_id,
@@ -604,7 +618,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
           .update({ source_cash_gl_account_id: releaseFundingAccountId })
           .eq("expense_id", request.source_id);
         if (sourceUpdateError) throw sourceUpdateError;
-        const journal = await createJournalForExpenseWithLines(request.source_id, expenseRes.data.expense_date, releaseLines, user?.id ?? null);
+        const journal = await createJournalForExpenseWithLines(request.source_id, releaseDate || expenseRes.data.expense_date, releaseLines, user?.id ?? null);
         if (!journal.ok) throw new Error(`Expense journal was not posted: ${journal.error}`);
       }
       const { error } = await supabase.from("treasury_requests").update({
@@ -621,6 +635,47 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     }
     await fetchData();
     setWorkingId(null);
+  };
+
+  const openSupplierPaymentEdit = (payment: Disbursement) => {
+    if (payment.source !== "vendor_payment") return;
+    const method = (["cash", "bank_transfer", "mobile_money", "wallet", "card"].includes(payment.payment_method || "")
+      ? payment.payment_method
+      : "bank_transfer") as PaymentMethod;
+    setEditingSupplierPayment(payment);
+    setEditPaymentDate(payment.date || businessTodayISO());
+    setEditPaymentMethod(method);
+    setEditPaymentReference(payment.reference || "");
+  };
+
+  const saveSupplierPaymentEdit = async () => {
+    const payment = editingSupplierPayment;
+    if (!payment || payment.source !== "vendor_payment" || readOnly) return;
+    if (!editPaymentDate) {
+      alert("Select the payment date.");
+      return;
+    }
+    setWorkingId(`edit-payment-${payment.id}`);
+    try {
+      const { error: paymentError } = await supabase.from("vendor_payments").update({
+        payment_date: editPaymentDate,
+        payment_method: editPaymentMethod,
+        reference: editPaymentReference.trim() || null,
+      }).eq("id", payment.id).eq("organization_id", user?.organization_id ?? "");
+      if (paymentError) throw paymentError;
+      const { error: journalError } = await supabase.from("journal_entries").update({ entry_date: editPaymentDate })
+        .eq("reference_type", "vendor_payment")
+        .eq("reference_id", payment.id)
+        .eq("organization_id", user?.organization_id ?? "")
+        .eq("is_deleted", false);
+      if (journalError) throw new Error(`Payment saved, but its journal date could not be updated: ${journalError.message}`);
+      setEditingSupplierPayment(null);
+      await fetchData();
+    } catch (error) {
+      alert(`Supplier payment could not be updated: ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setWorkingId(null);
+    }
   };
 
   return (
@@ -770,15 +825,16 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
           <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Payments and expenses register</h2><p data-treasury-comment className="text-sm text-slate-500">All active supplier payments and Spend Money expenses for the selected dates.</p></div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Type</th><th className="px-5 py-3">Payee / purpose</th><th className="px-5 py-3">Method</th><th className="px-5 py-3 text-right">Amount</th></tr></thead>
+              <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Type</th><th className="px-5 py-3">Payee / purpose</th><th className="px-5 py-3">Method</th><th className="px-5 py-3 text-right">Amount</th><th className="px-5 py-3 text-right">Actions</th></tr></thead>
               <tbody className="divide-y divide-slate-100">
-                {visibleDisbursements.length === 0 ? <tr><td colSpan={5} className="px-5 py-8 text-center text-slate-500">No payments or expenses found for the selected dates.</td></tr> : visibleDisbursements.slice(0, 80).map((disbursement) => (
+                {visibleDisbursements.length === 0 ? <tr><td colSpan={6} className="px-5 py-8 text-center text-slate-500">No payments or expenses found for the selected dates.</td></tr> : visibleDisbursements.slice(0, 80).map((disbursement) => (
                   <tr key={`${disbursement.source}-${disbursement.id}`}>
                     <td className="px-5 py-4 text-slate-600">{new Date(`${disbursement.date}T12:00:00`).toLocaleDateString()}</td>
                     <td className="px-5 py-4 font-semibold text-slate-800">{disbursement.source === "vendor_payment" ? "Supplier payment" : "Spend Money"}</td>
                     <td className="px-5 py-4"><p className="font-medium text-slate-900">{disbursement.payee || "Internal"}</p><p className="max-w-md truncate text-slate-500">{disbursement.purpose}{disbursement.reference ? ` - ${disbursement.reference}` : ""}</p></td>
                     <td className="px-5 py-4 capitalize text-slate-600">{methodLabel(disbursement.payment_method)}</td>
                     <td className="px-5 py-4 text-right font-bold text-rose-700">{money.format(disbursement.amount)}</td>
+                    <td className="px-5 py-4 text-right">{disbursement.source === "vendor_payment" && <button type="button" disabled={readOnly || workingId === `edit-payment-${disbursement.id}`} onClick={() => openSupplierPaymentEdit(disbursement)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-50"><Edit2 className="h-3.5 w-3.5" /> Edit</button>}</td>
                   </tr>
                 ))}
               </tbody>
@@ -984,6 +1040,21 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
         </div>
       )}
 
+      {editingSupplierPayment && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => !workingId && setEditingSupplierPayment(null)}>
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-4"><div><h2 className="text-xl font-bold text-slate-900">Edit supplier payment</h2><p className="mt-1 text-sm text-slate-500">{editingSupplierPayment.payee || "Supplier"} · {money.format(editingSupplierPayment.amount)}</p></div><button type="button" disabled={workingId === `edit-payment-${editingSupplierPayment.id}`} onClick={() => setEditingSupplierPayment(null)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button></div>
+            <div className="mt-5 space-y-4">
+              <label className="block text-sm font-semibold text-slate-700">Payment date<input type="date" value={editPaymentDate} onChange={(event) => setEditPaymentDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal" /></label>
+              <label className="block text-sm font-semibold text-slate-700">Payment method<select value={editPaymentMethod} onChange={(event) => setEditPaymentMethod(event.target.value as PaymentMethod)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal"><option value="cash">Cash</option><option value="bank_transfer">Bank transfer</option><option value="mobile_money">Mobile money</option><option value="wallet">Wallet</option><option value="card">Card</option></select></label>
+              <label className="block text-sm font-semibold text-slate-700">Payment reference <span className="font-normal text-slate-400">(optional)</span><input value={editPaymentReference} onChange={(event) => setEditPaymentReference(event.target.value)} placeholder="Cheque, transfer, or transaction reference" className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal" /></label>
+              <p className="rounded-xl bg-blue-50 p-3 text-xs text-blue-800">Changing the date also updates the posted vendor-payment journal, keeping Treasury and the Balance Sheet aligned.</p>
+            </div>
+            <div className="mt-6 flex justify-end gap-2"><button type="button" disabled={workingId === `edit-payment-${editingSupplierPayment.id}`} onClick={() => setEditingSupplierPayment(null)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button><button type="button" disabled={workingId === `edit-payment-${editingSupplierPayment.id}` || !editPaymentDate} onClick={() => void saveSupplierPaymentEdit()} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{workingId === `edit-payment-${editingSupplierPayment.id}` ? "Saving..." : "Save changes"}</button></div>
+          </div>
+        </div>
+      )}
+
       {releaseRequest && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => !workingId && setReleaseRequest(null)}>
           <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()}>
@@ -995,6 +1066,10 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
               <button type="button" disabled={workingId === releaseRequest.id} onClick={() => setReleaseRequest(null)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
             </div>
             <div className="mt-5 space-y-4">
+              <label className="block text-sm font-semibold text-slate-700">
+                Payment date
+                <input type="date" value={releaseDate} onChange={(event) => setReleaseDate(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal" />
+              </label>
               <label className="block text-sm font-semibold text-slate-700">
                 Payment method
                 <select value={releasePaymentMethod} onChange={(event) => setReleasePaymentMethod(event.target.value as PaymentMethod)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal">
@@ -1020,7 +1095,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
             </div>
             <div className="mt-6 flex justify-end gap-2">
               <button type="button" disabled={workingId === releaseRequest.id} onClick={() => setReleaseRequest(null)} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700">Cancel</button>
-              <button type="button" disabled={workingId === releaseRequest.id || !releaseFundingAccountId} onClick={() => void disburse()} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{workingId === releaseRequest.id ? "Releasing..." : "Release funds"}</button>
+              <button type="button" disabled={workingId === releaseRequest.id || !releaseFundingAccountId || !releaseDate} onClick={() => void disburse()} className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-bold text-white disabled:opacity-50">{workingId === releaseRequest.id ? "Releasing..." : "Release funds"}</button>
             </div>
           </div>
         </div>
