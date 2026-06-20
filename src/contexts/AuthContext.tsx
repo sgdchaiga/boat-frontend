@@ -1175,8 +1175,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         return { error: new Error(message) };
       }
       if (!data?.ok) return { error: new Error(data?.error || data?.message || "PIN login failed") };
-      if (!data.action_link) return { error: new Error("PIN login did not return a session link.") };
-      window.location.assign(data.action_link);
+      if (!data.token_hash) return { error: new Error("PIN login did not return a session token.") };
+      const { error: verifyError } = await supabase.auth.verifyOtp({
+        token_hash: data.token_hash,
+        type: "magiclink",
+      });
+      if (verifyError) return { error: verifyError as Error };
       return { error: null };
     }
     const account = readLocalAccounts().find((a) => normalizeStaffCode(a.staff_code || "") === code);

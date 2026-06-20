@@ -75,14 +75,14 @@ Deno.serve(async (req) => {
       email,
       options: redirectTo ? { redirectTo } : undefined,
     });
-    if (linkError || !linkData?.properties?.action_link) {
+    if (linkError || !linkData?.properties?.hashed_token) {
       console.error("staff-pin-login magic-link generation failed", linkError);
-      return json({ ok: false, error: linkError?.message || "Failed to create PIN login session" }, 500);
+      return json({ ok: false, error: linkError?.message || "Failed to create PIN login session token" }, 500);
     }
 
     return json({
       ok: true,
-      action_link: linkData.properties.action_link,
+      token_hash: linkData.properties.hashed_token,
       staff: {
         id: row.staff_id,
         organization_id: row.organization_id,
