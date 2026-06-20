@@ -948,7 +948,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   }, [showSimpleOrgReportHub, currentPage, pageStateKey, reportHubCategories, pageStateResolved]);
 
   return (
-    <div className="app-page">
+    <div className="app-page h-[100dvh] overflow-hidden">
       <div className="lg:hidden fixed top-0 left-0 right-0 bg-slate-950 border-b border-slate-800 z-50 px-3 py-2 shadow-sm">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
@@ -1396,8 +1396,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         />
       )}
 
-      <div className="lg:pl-64 min-w-0 max-w-full overflow-x-hidden">
-        <main className="pt-14 lg:pt-0 min-w-0 max-w-full overflow-x-auto">
+      <div className="h-[100dvh] min-w-0 max-w-full overflow-hidden lg:pl-64">
+        <main className="h-full min-w-0 max-w-full overflow-x-auto overflow-y-auto overscroll-contain pt-14 lg:pt-0">
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">
