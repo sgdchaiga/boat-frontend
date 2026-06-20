@@ -176,6 +176,8 @@ export function RetailPOSPage({
   const [savingDiscountSetting, setSavingDiscountSetting] = useState(false);
   const [useManufacturingPriceList, setUseManufacturingPriceList] = useState(true);
   const [savingPricingSource, setSavingPricingSource] = useState(false);
+  // Temporary rollout: Manufacturing POS prices remain freely editable until role-based blocking is introduced.
+  const manufacturingPriceEditingEnabled = user?.business_type === "manufacturing";
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const useDesktopLocalMode = localAuthEnabled && desktopApi.isAvailable();
   const scanInputRef = useRef<HTMLInputElement | null>(null);
@@ -1653,7 +1655,8 @@ export function RetailPOSPage({
             hasMoreProducts={hasMoreProducts}
             catalogLoadingMore={catalogLoadingMore}
             onLoadMoreProducts={() => void loadMoreProducts()}
-            discountEnabled={discountEnabled}
+            discountEnabled={discountEnabled || manufacturingPriceEditingEnabled}
+            allowPriceIncrease={manufacturingPriceEditingEnabled}
             setLineUnitPrice={setLineUnitPrice}
           />
         )}

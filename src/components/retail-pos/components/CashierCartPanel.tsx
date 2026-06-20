@@ -29,6 +29,7 @@ interface CashierCartPanelProps<TProduct extends ProductLike> {
   catalogLoadingMore?: boolean;
   onLoadMoreProducts?: () => void;
   discountEnabled?: boolean;
+  allowPriceIncrease?: boolean;
   setLineUnitPrice?: (productId: string, price: number) => void;
 }
 
@@ -49,6 +50,7 @@ export function CashierCartPanel<TProduct extends ProductLike>({
   catalogLoadingMore = false,
   onLoadMoreProducts,
   discountEnabled = false,
+  allowPriceIncrease = false,
   setLineUnitPrice,
 }: CashierCartPanelProps<TProduct>) {
   const showSearchResults = productSearch.trim().length > 0;
@@ -153,18 +155,18 @@ export function CashierCartPanel<TProduct extends ProductLike>({
                 </p>
                 {discountEnabled && setLineUnitPrice ? (
                   <label className="mt-1 flex items-center gap-2 text-[11px] text-slate-500">
-                    Discounted unit price
+                    {allowPriceIncrease ? "Unit price" : "Discounted unit price"}
                     <input
                       type="number"
                       min="0"
                       step="0.01"
                       defaultValue={getUnitPrice(item.product, item.quantity)}
-                      onBlur={(event) =>
-                        setLineUnitPrice(
-                          item.product.id,
-                          Math.min(Number(event.target.value), getUnitPrice(item.product, item.quantity))
-                        )
-                      }
+                      onBlur={(event) => {
+                        const catalogPrice = getUnitPrice(item.product, item.quantity);
+                        const enteredPrice = Number(event.target.value);
+                        const validPrice = Number.isFinite(enteredPrice) && enteredPrice >= 0 ? enteredPrice : catalogPrice;
+                        setLineUnitPrice(item.product.id, allowPriceIncrease ? validPrice : Math.min(validPrice, catalogPrice));
+                      }}
                       className="w-24 rounded border border-slate-300 px-2 py-1 text-xs text-slate-800"
                     />
                   </label>
