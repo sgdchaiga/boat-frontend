@@ -268,7 +268,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
           .eq("is_posted", true)
           .eq("is_deleted", false)
           .order("entry_date", { ascending: false })
-          .limit(150),
+          .limit(1000),
       ]);
       const { data: cashLines, error: cashLinesError } = cashLinesRes;
       if (cashLinesError) console.error("Unable to load Treasury cash balances:", cashLinesError);
@@ -391,19 +391,63 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     }),
     { inflow: 0, outflow: 0, transfer: 0 }
   ), [journalMovementRows]);
+  const movementBreakdown = useMemo(() => journalMovementRows.reduce(
+    (sum, row) => {
+      if (row.transfer > 0) sum.transfers += row.transfer;
+      else if (row.reference_type === "expense") sum.spendMoney += row.outflow;
+      else if (row.reference_type === "vendor_payment") sum.supplierPayments += row.outflow;
+      else sum.otherOutflows += row.outflow;
+      return sum;
+    },
+    { spendMoney: 0, supplierPayments: 0, otherOutflows: 0, transfers: 0 }
+  ), [journalMovementRows]);
+  const grossOutflows = movementTotals.outflow + movementTotals.transfer;
+  const netCashEquivalentChange = movementTotals.inflow - movementTotals.outflow;
+  const todayIso = businessTodayISO();
+  const eodDateFrom = dateFrom || dateTo || todayIso;
+  const eodDateTo = dateTo || dateFrom || todayIso;
+  const eodCollections = useMemo(
+    () => collections.filter((collection) => {
+      const date = localDatePart(collection.paid_at);
+      return date >= eodDateFrom && date <= eodDateTo;
+    }),
+    [collections, eodDateFrom, eodDateTo]
+  );
+  const eodDisbursements = useMemo(
+    () => disbursements.filter((disbursement) => {
+      const date = localDatePart(disbursement.date);
+      return date >= eodDateFrom && date <= eodDateTo;
+    }),
+    [disbursements, eodDateFrom, eodDateTo]
+  );
+  const eodJournalRows = useMemo(
+    () => journalMovementRows.filter((journal) => journal.entry_date >= eodDateFrom && journal.entry_date <= eodDateTo),
+    [eodDateFrom, eodDateTo, journalMovementRows]
+  );
+  const eodMovement = useMemo(() => eodJournalRows.reduce(
+    (sum, row) => {
+      sum.inflows += row.inflow;
+      if (row.transfer > 0) sum.transfers += row.transfer;
+      else if (row.reference_type === "expense") sum.spendMoney += row.outflow;
+      else if (row.reference_type === "vendor_payment") sum.supplierPayments += row.outflow;
+      else sum.otherOutflows += row.outflow;
+      return sum;
+    },
+    { inflows: 0, spendMoney: 0, supplierPayments: 0, otherOutflows: 0, transfers: 0 }
+  ), [eodJournalRows]);
+  const eodExternalOutflows = eodMovement.spendMoney + eodMovement.supplierPayments + eodMovement.otherOutflows;
+  const eodGrossOutflows = eodExternalOutflows + eodMovement.transfers;
+  const eodCashEquivalentChange = eodMovement.inflows - eodExternalOutflows;
   const eodRows = useMemo(() => {
     const byMethod = new Map<string, { method: string; collections: number; disbursements: number }>();
     const ensure = (method: string) => {
       if (!byMethod.has(method)) byMethod.set(method, { method, collections: 0, disbursements: 0 });
       return byMethod.get(method)!;
     };
-    for (const collection of filteredCollections) ensure(methodLabel(collection.payment_method)).collections += Number(collection.amount || 0);
-    for (const disbursement of filteredDisbursements) ensure(methodLabel(disbursement.payment_method)).disbursements += Number(disbursement.amount || 0);
+    for (const collection of eodCollections) ensure(methodLabel(collection.payment_method)).collections += Number(collection.amount || 0);
+    for (const disbursement of eodDisbursements) ensure(methodLabel(disbursement.payment_method)).disbursements += Number(disbursement.amount || 0);
     return Array.from(byMethod.values()).sort((a, b) => a.method.localeCompare(b.method));
-  }, [filteredCollections, filteredDisbursements]);
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const todaysCollections = collections.filter((collection) => localDatePart(collection.paid_at) === todayIso).reduce((sum, row) => sum + Number(row.amount || 0), 0);
-  const todaysDisbursements = disbursements.filter((disbursement) => localDatePart(disbursement.date) === todayIso).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+  }, [eodCollections, eodDisbursements]);
 
   const setStatus = async (request: TreasuryRequest, status: "approved" | "rejected") => {
     if (readOnly) return;
@@ -717,10 +761,11 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Cash inflows captured" value={money.format(totals.inflows)} hint="POS and billing collections" icon={WalletCards} />
+        <MetricCard label="Posted cash-equivalent inflows" value={money.format(movementTotals.inflow)} hint="Debits posted to cash, bank, mobile money, wallet, and float accounts" icon={WalletCards} />
+        <MetricCard label="Gross outflows" value={money.format(grossOutflows)} hint="Spend Money, supplier payments, other cash outflows, and transfers out" icon={ArrowUpRight} />
         {spendMoneyApprovalEnabled && <MetricCard label="Pending approvals" value={money.format(totals.pending)} hint="Spend Money requests awaiting review" icon={ShieldCheck} />}
         <MetricCard label="Ready to release" value={money.format(totals.ready)} hint="Approved expenses and Buy Stock bills" icon={Banknote} />
-        <MetricCard label="Money moved" value={money.format(movementTotals.transfer)} hint="Transfers between cash, bank, mobile money, and float" icon={ArrowLeftRight} />
+        <MetricCard label="Net cash equivalents added" value={money.format(netCashEquivalentChange)} hint="Posted inflows less external outflows; internal transfers have no net effect" icon={ReceiptText} />
       </div>
 
       {activeTab === "overview" ? (
@@ -747,16 +792,16 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
               <p className="text-xs font-bold uppercase tracking-wide text-cyan-700">Fund movements</p><p className="mt-2 text-2xl font-bold text-slate-900">{money.format(movementTotals.transfer)}</p><p data-treasury-comment className="mt-1 text-sm text-slate-500">Posted transfers between money accounts in the selected period.</p>
             </button>
             <button type="button" onClick={() => setActiveTab("end-of-day")} className="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 text-left shadow-sm hover:border-indigo-400">
-              <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">End of day balancing</p><p className="mt-2 text-2xl font-bold text-slate-900">{money.format(todaysCollections - todaysDisbursements)}</p><p data-treasury-comment className="mt-1 text-sm text-slate-500">Today: collections less disbursements.</p>
+              <p className="text-xs font-bold uppercase tracking-wide text-indigo-700">End of day balancing</p><p className="mt-2 text-2xl font-bold text-slate-900">{money.format(eodCashEquivalentChange)}</p><p data-treasury-comment className="mt-1 text-sm text-slate-500">Net cash equivalents added for {eodDateFrom === eodDateTo ? eodDateFrom : "the selected period"}.</p>
             </button>
           </div>
           <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
             <h2 className="font-bold text-slate-900">Money position summary</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-4">
-              <div className="rounded-xl bg-emerald-50 p-4"><p className="text-xs font-semibold uppercase text-emerald-700">Collections</p><p className="mt-2 text-xl font-bold">{money.format(totals.inflows)}</p></div>
-              <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-semibold uppercase text-amber-700">Awaiting approval</p><p className="mt-2 text-xl font-bold">{money.format(totals.pending)}</p></div>
-              <div className="rounded-xl bg-blue-50 p-4"><p className="text-xs font-semibold uppercase text-blue-700">Approved outflow</p><p className="mt-2 text-xl font-bold">{money.format(totals.ready)}</p></div>
-              <div className="rounded-xl bg-slate-100 p-4"><p className="text-xs font-semibold uppercase text-slate-600">Cash on hand as of {balanceAsOfDate}</p><p className="mt-2 text-xl font-bold">{money.format(cashOnHandBalance)}</p></div>
+              <div className="rounded-xl bg-emerald-50 p-4"><p className="text-xs font-semibold uppercase text-emerald-700">Posted inflows</p><p className="mt-2 text-xl font-bold">{money.format(movementTotals.inflow)}</p></div>
+              <div className="rounded-xl bg-rose-50 p-4"><p className="text-xs font-semibold uppercase text-rose-700">External outflows</p><p className="mt-2 text-xl font-bold">{money.format(movementTotals.outflow)}</p></div>
+              <div className="rounded-xl bg-cyan-50 p-4"><p className="text-xs font-semibold uppercase text-cyan-700">Fund transfers</p><p className="mt-2 text-xl font-bold">{money.format(movementBreakdown.transfers)}</p></div>
+              <div className="rounded-xl bg-slate-100 p-4"><p className="text-xs font-semibold uppercase text-slate-600">Net cash equivalents added</p><p className="mt-2 text-xl font-bold">{money.format(netCashEquivalentChange)}</p></div>
             </div>
             {lowFloatAccounts.length > 0 && <div className="mt-4 grid gap-2 md:grid-cols-2">
               {lowFloatAccounts.map((account) => <div key={account.id} className="flex gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-800"><AlertTriangle className="h-5 w-5 shrink-0" /><span><strong>{account.account_name}</strong> has a zero or negative posted balance.</span></div>)}
@@ -954,11 +999,28 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
       </section> : null}
 
       {activeTab === "end-of-day" ? <section className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-3">
-          <MetricCard label="Selected collections" value={money.format(totals.inflows)} hint="Completed POS and billing receipts" icon={ArrowDownRight} />
-          <MetricCard label="Selected disbursements" value={money.format(totals.disbursed)} hint="Supplier payments and Spend Money expenses" icon={ArrowUpRight} />
-          <MetricCard label="Net expected cash movement" value={money.format(totals.inflows - totals.disbursed)} hint="Collections less payments and expenses for the selected dates" icon={ReceiptText} />
+        <div className="rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
+          <h2 className="font-bold text-slate-900">End-of-day movement: {eodDateFrom === eodDateTo ? eodDateFrom : `${eodDateFrom} to ${eodDateTo}`}</h2>
+          <p data-treasury-comment className="mt-1 text-sm text-slate-500">With no date filter, End of Day shows today. All figures below use posted cash-equivalent journal entries.</p>
         </div>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <MetricCard label="Inflows" value={money.format(eodMovement.inflows)} hint="External money added to cash-equivalent accounts" icon={ArrowDownRight} />
+          <MetricCard label="Spend Money" value={money.format(eodMovement.spendMoney)} hint="Posted expense cash outflows" icon={Banknote} />
+          <MetricCard label="Supplier payments" value={money.format(eodMovement.supplierPayments)} hint="Posted payments to suppliers" icon={Building2} />
+          <MetricCard label="Fund transfers" value={money.format(eodMovement.transfers)} hint="Transfers out of one Treasury account and into another" icon={ArrowLeftRight} />
+          <MetricCard label="Gross outflows" value={money.format(eodGrossOutflows)} hint="Spend Money, supplier payments, other outflows, and transfers out" icon={ArrowUpRight} />
+          <MetricCard label={eodCashEquivalentChange >= 0 ? "Cash equivalents added" : "Cash equivalents reduced"} value={money.format(Math.abs(eodCashEquivalentChange))} hint="Inflows less external outflows; transfers net to zero" icon={ReceiptText} />
+        </div>
+        <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Outflow breakdown</h2><p data-treasury-comment className="text-sm text-slate-500">Gross outflows include transfers for operational visibility. Net cash-equivalent change excludes transfers because both sides are Treasury accounts.</p></div>
+          <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="rounded-xl bg-rose-50 p-4"><p className="text-xs font-bold uppercase text-rose-700">Spend Money</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.spendMoney)}</p></div>
+            <div className="rounded-xl bg-orange-50 p-4"><p className="text-xs font-bold uppercase text-orange-700">Suppliers</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.supplierPayments)}</p></div>
+            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-bold uppercase text-amber-700">Other external</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.otherOutflows)}</p></div>
+            <div className="rounded-xl bg-cyan-50 p-4"><p className="text-xs font-bold uppercase text-cyan-700">Transfers out</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.transfers)}</p></div>
+            <div className="rounded-xl bg-slate-100 p-4"><p className="text-xs font-bold uppercase text-slate-700">Gross total</p><p className="mt-2 text-lg font-bold">{money.format(eodGrossOutflows)}</p></div>
+          </div>
+        </section>
         <div className="grid gap-4 lg:grid-cols-2">
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">End-of-day by method</h2><p data-treasury-comment className="text-sm text-slate-500">Compare expected cash, bank transfer, mobile money, card, and wallet totals against actual till and statements.</p></div>
