@@ -1155,7 +1155,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           redirect_to: `${window.location.origin}${window.location.pathname || "/"}`,
         },
       });
-      if (error) return { error: error as Error };
+      if (error) {
+        let message = error.message || "PIN login service failed.";
+        const response = (error as Error & { context?: Response }).context;
+        if (response && typeof response.clone === "function") {
+          try {
+            const payload = await response.clone().json() as { error?: unknown; message?: unknown };
+            const detailed = typeof payload.error === "string" ? payload.error : typeof payload.message === "string" ? payload.message : "";
+            if (detailed) message = detailed;
+          } catch {
+            try {
+              const text = await response.clone().text();
+              if (text.trim()) message = text.trim();
+            } catch {
+              /* Keep the original Functions client message. */
+            }
+          }
+        }
+        return { error: new Error(message) };
+      }
       if (!data?.ok) return { error: new Error(data?.error || data?.message || "PIN login failed") };
       if (!data.action_link) return { error: new Error("PIN login did not return a session link.") };
       window.location.assign(data.action_link);

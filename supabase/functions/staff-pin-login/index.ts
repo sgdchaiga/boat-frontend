@@ -13,6 +13,13 @@ const json = (body: unknown, status = 200) =>
     headers: { ...cors, "Content-Type": "application/json" },
   });
 
+function isExpectedPinFailure(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return normalized.includes("invalid staff code or pin")
+    || normalized.includes("pin locked until")
+    || normalized.includes("staff account is inactive");
+}
+
 type Body = {
   staff_code?: string;
   pin?: string;
@@ -51,7 +58,12 @@ Deno.serve(async (req) => {
       p_pin: pin,
     });
     if (verifyError) {
-      return json({ ok: false, error: verifyError.message || "Invalid staff code or PIN" }, 401);
+      const message = verifyError.message || "Invalid staff code or PIN";
+      if (isExpectedPinFailure(message)) {
+        return json({ ok: false, error: message });
+      }
+      console.error("staff-pin-login verification RPC failed", verifyError);
+      return json({ ok: false, error: message }, 500);
     }
 
     const row = Array.isArray(rows) ? rows[0] : rows;
@@ -64,6 +76,7 @@ Deno.serve(async (req) => {
       options: redirectTo ? { redirectTo } : undefined,
     });
     if (linkError || !linkData?.properties?.action_link) {
+      console.error("staff-pin-login magic-link generation failed", linkError);
       return json({ ok: false, error: linkError?.message || "Failed to create PIN login session" }, 500);
     }
 

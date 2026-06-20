@@ -46,6 +46,7 @@ CREATE OR REPLACE FUNCTION public.verify_manager_pin(pin text, org_id uuid)
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, extensions
 AS $$
 DECLARE
   ok boolean;
@@ -65,6 +66,7 @@ CREATE OR REPLACE FUNCTION public.set_my_manager_pin(pin text, org_id uuid)
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
+SET search_path = public, extensions
 AS $$
 BEGIN
   INSERT INTO public.pos_manager_pin_hashes(staff_id, organization_id, pin_hash, updated_at)

@@ -55,7 +55,7 @@ CREATE OR REPLACE FUNCTION public.set_staff_pin_credential(
 RETURNS void
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_code text := public.normalize_staff_pin_code(p_staff_code);
@@ -137,7 +137,7 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, extensions
 AS $$
 DECLARE
   v_code text := public.normalize_staff_pin_code(p_staff_code);
