@@ -27,7 +27,7 @@ BEGIN
           status = CASE
             WHEN greatest(0, completed_qty - coalesce(OLD.produced_qty, 0)) >= planned_qty THEN 'Completed'
             WHEN greatest(0, completed_qty - coalesce(OLD.produced_qty, 0)) > 0 THEN 'In Progress'
-            ELSE 'Draft'
+            ELSE 'Planned'
           END
       WHERE id = OLD.work_order_id AND organization_id = OLD.organization_id;
     END IF;
