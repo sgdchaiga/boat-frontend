@@ -72,6 +72,7 @@ let cachedAccounts: {
     receivable: string | null;
     expense: string | null;
     commissionExpense: string | null;
+    transportExpense: string | null;
     payable: string | null;
     vat: string | null;
     purchasesInventory: string | null;
@@ -105,6 +106,7 @@ export async function getDefaultGlAccounts(): Promise<{
   receivable: string | null;
   expense: string | null;
   commissionExpense: string | null;
+  transportExpense: string | null;
   payable: string | null;
   /** VAT / tax (input on purchases, output on sales) — from journal settings or chart name match. */
   vat: string | null;
@@ -162,7 +164,10 @@ export async function getDefaultGlAccounts(): Promise<{
     first(assets);
   const expense = settings.expense_id ?? byCategory("expense") ?? first(byType("expense"));
   const commissionExpense =
-    list.find((a) => a.account_type === "expense" && /(commission|agent|broker|delivery)/i.test(a.account_name || ""))?.id ??
+    list.find((a) => a.account_type === "expense" && /(commission|agent|broker)/i.test(a.account_name || ""))?.id ??
+    expense;
+  const transportExpense =
+    list.find((a) => a.account_type === "expense" && /(transport|delivery|freight|carriage)/i.test(a.account_name || ""))?.id ??
     expense;
   const payable = settings.payable_id ?? byCategory("payable") ?? first(byType("liability"));
 
@@ -248,6 +253,7 @@ export async function getDefaultGlAccounts(): Promise<{
     receivable: receivable ?? cash,
     expense,
     commissionExpense,
+    transportExpense,
     payable,
     vat,
     purchasesInventory,
@@ -1508,6 +1514,8 @@ export async function createJournalForPosOrder(
     settlementTotal?: number;
     agentCommissionAmount?: number;
     commissionExpenseGlAccountId?: string | null;
+    transportCostAmount?: number;
+    transportExpenseGlAccountId?: string | null;
     cogsByDept?: PosCogsByDept;
     cogsByDepartment?: PosDepartmentAmountLine[];
     /** Line totals by bar/kitchen/room; splits net revenue across department sales GLs (unless a single revenue override is set). */
@@ -1534,6 +1542,8 @@ export async function createJournalForPosOrder(
   const receivableAmount = roundMoney(settlementTotal - amountPaid);
   const agentCommissionAmount = roundMoney(Math.max(0, Number(options?.agentCommissionAmount ?? 0)));
   const commissionExpenseId = options?.commissionExpenseGlAccountId?.trim() || acc.commissionExpense;
+  const transportCostAmount = roundMoney(Math.max(0, Number(options?.transportCostAmount ?? 0)));
+  const transportExpenseId = options?.transportExpenseGlAccountId?.trim() || acc.transportExpense;
   const revenueId = o?.revenueGlAccountId?.trim() ? o.revenueGlAccountId : acc.revenue;
   const salesByDept = options?.salesByDept;
   const salesByDepartment = (options?.salesByDepartment || [])
@@ -1560,6 +1570,9 @@ export async function createJournalForPosOrder(
   }
   if (agentCommissionAmount > 0.001 && !commissionExpenseId) {
     return { ok: false, error: "Missing Commission Expense GL account for the POS agent commission." };
+  }
+  if (transportCostAmount > 0.001 && !transportExpenseId) {
+    return { ok: false, error: "Missing Transport Expense GL account for the POS transport cost." };
   }
 
   if (useRevenueSplit) {
@@ -1623,6 +1636,9 @@ export async function createJournalForPosOrder(
   }
   if (agentCommissionAmount > 0.001 && commissionExpenseId) {
     lines.push({ gl_account_id: commissionExpenseId, debit: agentCommissionAmount, credit: 0, line_description: "Agent / bodaboda commission" });
+  }
+  if (transportCostAmount > 0.001 && transportExpenseId) {
+    lines.push({ gl_account_id: transportExpenseId, debit: transportCostAmount, credit: 0, line_description: "POS rider transport cost" });
   }
 
   if (useRevenueSplit && salesByDepartment.length > 0) {

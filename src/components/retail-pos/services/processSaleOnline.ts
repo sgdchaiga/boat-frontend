@@ -24,6 +24,7 @@ export interface PosAgentCommissionContext {
   agentName: string;
   commissionPerUnit: number;
   commissionAmount: number;
+  transportCost: number;
   netAmountDue: number;
 }
 
@@ -114,6 +115,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       sales_agent_name: agentCommission?.agentName ?? null,
       agent_commission_per_unit: agentCommission?.commissionPerUnit ?? 0,
       agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+      transport_cost: agentCommission?.transportCost ?? 0,
       net_amount_due: agentCommission?.netAmountDue ?? total,
       amount_paid: amountPaid,
       amount_due: amountDue,
@@ -207,7 +209,12 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     })
     .filter((line) => line.amount > 0);
   const journalLines: Array<{ gl_account_id: string; debit: number; credit: number; line_description: string }> = [];
-  if (receiptLines.some((line) => !line.glAccountId) || !acc.revenue || ((agentCommission?.commissionAmount ?? 0) > 0 && !acc.commissionExpense)) {
+  if (
+    receiptLines.some((line) => !line.glAccountId) ||
+    !acc.revenue ||
+    ((agentCommission?.commissionAmount ?? 0) > 0 && !acc.commissionExpense) ||
+    ((agentCommission?.transportCost ?? 0) > 0 && !acc.transportExpense)
+  ) {
     throw new Error(
       "POS sale cannot be posted because the receipt, sales revenue, or Commission Expense GL account is missing. Configure Admin > Journal account settings."
     );
@@ -237,6 +244,14 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         debit: agentCommission!.commissionAmount,
         credit: 0,
         line_description: `Agent commission - ${agentCommission!.agentName}`,
+      });
+    }
+    if ((agentCommission?.transportCost ?? 0) > 0.001) {
+      journalLines.push({
+        gl_account_id: acc.transportExpense!,
+        debit: agentCommission!.transportCost,
+        credit: 0,
+        line_description: `Transport cost - ${agentCommission!.agentName}`,
       });
     }
     if ((cogsByDept.bar ?? 0) > 0 && acc.posCogsBar && acc.posInvBar) {
@@ -315,7 +330,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
           sales_agent_id: agentCommission?.agentId ?? null,
           sales_agent_name: agentCommission?.agentName ?? null,
           agent_commission_per_unit: agentCommission?.commissionPerUnit ?? 0,
-          agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+           agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+           transport_cost: agentCommission?.transportCost ?? 0,
           net_amount_due: settlementTotal,
         })
         .eq("id", saleId);
@@ -364,6 +380,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       sales_agent_name: agentCommission?.agentName ?? null,
       agent_commission_per_unit: agentCommission?.commissionPerUnit ?? 0,
       agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+      transport_cost: agentCommission?.transportCost ?? 0,
       net_amount_due: settlementTotal,
     }).eq("id", saleId);
     if (saleSnapshotError) throw saleSnapshotError;
@@ -396,6 +413,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
           sales_agent_id: agentCommission?.agentId ?? null,
           sales_agent_name: agentCommission?.agentName ?? null,
           agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+          transport_cost: agentCommission?.transportCost ?? 0,
           net_amount_due: settlementTotal,
         },
         paid_at: saleAt,
@@ -447,6 +465,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     settlementTotal,
     agentCommissionAmount: agentCommission?.commissionAmount ?? 0,
     commissionExpenseGlAccountId: acc.commissionExpense,
+    transportCostAmount: agentCommission?.transportCost ?? 0,
+    transportExpenseGlAccountId: acc.transportExpense,
     receiptLines: receiptLines.map((line) => ({
       glAccountId: line.glAccountId!,
       amount: line.amount,
