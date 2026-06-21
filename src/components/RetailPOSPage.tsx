@@ -503,10 +503,6 @@ export function RetailPOSPage({
   };
 
   const enterTransportCost = () => {
-    if (!selectedPosSalesAgent) {
-      toast({ title: "Select an agent", description: "Choose the rider or bodaboda before entering transport cost." });
-      return;
-    }
     const entered = window.prompt("Transport cost for this sale", transportCost ? String(transportCost) : "0");
     if (entered == null) return;
     const amount = Number(entered.replace(/,/g, "").trim());
@@ -954,12 +950,12 @@ export function RetailPOSPage({
   const agentCommissionAmount = selectedPosSalesAgent
     && agentCommissionEnabled ? Math.round(commissionUnits * selectedPosSalesAgent.commission_per_unit * 100) / 100
     : 0;
-  const appliedTransportCost = selectedPosSalesAgent ? transportCost : 0;
+  const appliedTransportCost = transportCost;
   const netSaleAmount = Math.max(0, Math.round((total - agentCommissionAmount - appliedTransportCost) * 100) / 100);
-  const agentCommissionContext: PosAgentCommissionContext | null = selectedPosSalesAgent ? {
-    agentId: selectedPosSalesAgent.id,
-    agentName: selectedPosSalesAgent.name,
-    commissionPerUnit: selectedPosSalesAgent.commission_per_unit,
+  const agentCommissionContext: PosAgentCommissionContext | null = selectedPosSalesAgent || appliedTransportCost > 0 ? {
+    agentId: selectedPosSalesAgent?.id ?? null,
+    agentName: selectedPosSalesAgent?.name ?? null,
+    commissionPerUnit: selectedPosSalesAgent?.commission_per_unit ?? 0,
     commissionAmount: agentCommissionAmount,
     transportCost: appliedTransportCost,
     netAmountDue: netSaleAmount,
@@ -1397,7 +1393,7 @@ export function RetailPOSPage({
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "offline") {
         if (agentCommissionContext) {
-          toast({ title: "Agent sale requires online access", description: "Reconnect before completing a sale with agent commission." });
+          toast({ title: "POS deduction requires online access", description: "Reconnect before completing a sale with commission or transport cost." });
         } else {
           handleOfflineFallback(ctx, saleCustomer);
           didSucceed = true;
@@ -1711,13 +1707,13 @@ export function RetailPOSPage({
       {user?.business_type === "manufacturing" ? (
         <div className="mb-2 grid shrink-0 gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 md:grid-cols-[minmax(220px,1fr)_auto_auto_auto_auto] md:items-end">
           <label className="text-xs font-semibold text-amber-950">Agent / Bodaboda
-            <select value={selectedPosSalesAgentId} onChange={(event) => { setSelectedPosSalesAgentId(event.target.value); if (!event.target.value) setTransportCost(0); }} className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-slate-900">
-              <option value="">No agent commission</option>
+            <select value={selectedPosSalesAgentId} onChange={(event) => setSelectedPosSalesAgentId(event.target.value)} className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-slate-900">
+              <option value="">No agent / commission</option>
               {posSalesAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name}{agentCommissionEnabled ? ` - ${agent.commission_per_unit.toLocaleString()} per bag` : ""}</option>)}
             </select>
           </label>
           <button type="button" onClick={() => void addPosSalesAgent()} disabled={readOnly || useDesktopLocalMode} className="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-50">+ Add agent</button>
-          <button type="button" onClick={enterTransportCost} disabled={readOnly || !selectedPosSalesAgent} className="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-50">Transport: {appliedTransportCost.toFixed(2)}</button>
+          <button type="button" onClick={enterTransportCost} disabled={readOnly} className="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-50">Transport: {appliedTransportCost.toFixed(2)}</button>
           <div className="rounded-lg bg-white px-3 py-2 text-sm"><p className="text-xs text-slate-500">Gross sale</p><p className="font-bold text-slate-900">{total.toFixed(2)}</p></div>
           <div className="rounded-lg bg-white px-3 py-2 text-sm"><p className="text-xs text-slate-500">Commission + transport / Net due</p><p className="font-bold text-rose-700">-{(agentCommissionAmount + appliedTransportCost).toFixed(2)} <span className="text-slate-400">/</span> <span className="text-emerald-700">{netSaleAmount.toFixed(2)}</span></p></div>
         </div>

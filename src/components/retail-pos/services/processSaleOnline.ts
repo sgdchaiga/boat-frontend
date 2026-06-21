@@ -20,8 +20,8 @@ interface DepartmentLite {
 }
 
 export interface PosAgentCommissionContext {
-  agentId: string;
-  agentName: string;
+  agentId: string | null;
+  agentName: string | null;
   commissionPerUnit: number;
   commissionAmount: number;
   transportCost: number;
@@ -243,7 +243,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         gl_account_id: acc.commissionExpense!,
         debit: agentCommission!.commissionAmount,
         credit: 0,
-        line_description: `Agent commission - ${agentCommission!.agentName}`,
+        line_description: agentCommission!.agentName ? `Agent commission - ${agentCommission!.agentName}` : "Agent commission",
       });
     }
     if ((agentCommission?.transportCost ?? 0) > 0.001) {
@@ -251,7 +251,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         gl_account_id: acc.transportExpense!,
         debit: agentCommission!.transportCost,
         credit: 0,
-        line_description: `Transport cost - ${agentCommission!.agentName}`,
+        line_description: agentCommission!.agentName ? `Transport cost - ${agentCommission!.agentName}` : "POS transport cost",
       });
     }
     if ((cogsByDept.bar ?? 0) > 0 && acc.posCogsBar && acc.posInvBar) {
