@@ -14,7 +14,7 @@ export async function syncRetailPosOrderAfterEdit(
   ] = await Promise.all([
     supabase.from("retail_sale_lines").select("product_id,description,quantity,unit_price,line_total,department_id").eq("sale_id", saleId),
     supabase.from("payments").select("amount,payment_method,payment_status").eq("transaction_id", saleId),
-    supabase.from("retail_sales").select("vat_enabled,vat_rate").eq("id", saleId).maybeSingle(),
+    supabase.from("retail_sales").select("vat_enabled,vat_rate,agent_commission_amount,transport_cost").eq("id", saleId).maybeSingle(),
   ]);
   if (linesError) return { ok: false, error: linesError.message };
   if (paymentsError) return { ok: false, error: paymentsError.message };
@@ -43,19 +43,23 @@ export async function syncRetailPosOrderAfterEdit(
   );
 
   const total = Math.round(lines.reduce((sum, line) => sum + Number(line.line_total ?? Number(line.quantity || 0) * Number(line.unit_price || 0)), 0) * 100) / 100;
+  const agentCommissionAmount = Math.max(0, Number(saleHeader?.agent_commission_amount || 0));
+  const transportCost = Math.max(0, Number(saleHeader?.transport_cost || 0));
+  const settlementTotal = Math.max(0, Math.round((total - agentCommissionAmount - transportCost) * 100) / 100);
   const completedPayments = (rawPayments || []).filter((payment) => payment.payment_status === "completed");
   const amountPaid = Math.round(completedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0) * 100) / 100;
-  const amountDue = Math.max(0, Math.round((total - amountPaid) * 100) / 100);
-  const paymentStatus = amountPaid <= 0 ? "pending" : amountPaid + 0.01 >= total ? "completed" : "partial";
+  const amountDue = Math.max(0, Math.round((settlementTotal - amountPaid) * 100) / 100);
+  const paymentStatus = amountPaid <= 0 ? "pending" : amountPaid + 0.01 >= settlementTotal ? "completed" : "partial";
 
   const { error: headerError } = await supabase.from("retail_sales").update({
     sale_at: saleAt,
     total_amount: total,
+    net_amount_due: settlementTotal,
     amount_paid: amountPaid,
     amount_due: amountDue,
-    change_amount: Math.max(0, amountPaid - total),
+    change_amount: Math.max(0, amountPaid - settlementTotal),
     payment_status: paymentStatus,
-    sale_type: amountPaid <= 0 ? "credit" : amountPaid + 0.01 >= total ? "cash" : "mixed",
+    sale_type: amountPaid <= 0 ? "credit" : amountPaid + 0.01 >= settlementTotal ? "cash" : "mixed",
   }).eq("id", saleId);
   if (headerError) return { ok: false, error: headerError.message };
 
@@ -102,6 +106,9 @@ export async function syncRetailPosOrderAfterEdit(
     {
       paymentMethod: completedPayments[0]?.payment_method || "cash",
       amountPaid,
+      settlementTotal,
+      agentCommissionAmount,
+      transportCostAmount: transportCost,
       cogsByDept,
       vatRatePercent: saleHeader?.vat_enabled ? Number(saleHeader.vat_rate || 0) : undefined,
       organizationId: organizationId ?? null,

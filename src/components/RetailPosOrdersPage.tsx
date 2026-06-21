@@ -32,6 +32,9 @@ type RetailSaleOrder = {
   sale_status: string | null;
   customer_id: string | null;
   customer_name: string | null;
+  net_amount_due: number | null;
+  agent_commission_amount: number | null;
+  transport_cost: number | null;
   retail_sale_lines: SaleLine[];
   payments_total?: number;
   payment_methods?: PaymentMethodCode[];
@@ -134,7 +137,7 @@ export function RetailPosOrdersPage() {
         filterByOrganizationId(
           supabase
             .from("retail_sales")
-            .select("id,sale_at,customer_name,customer_id,sale_status")
+            .select("id,sale_at,customer_name,customer_id,sale_status,net_amount_due,agent_commission_amount,transport_cost")
             .gte("sale_at", from.toISOString())
             .lt("sale_at", to.toISOString())
             .order("sale_at", { ascending: false }),
@@ -156,6 +159,9 @@ export function RetailPosOrdersPage() {
         sale_status: string | null;
         customer_name: string | null;
         customer_id: string | null;
+        net_amount_due: number | null;
+        agent_commission_amount: number | null;
+        transport_cost: number | null;
       }>;
       const saleIds = sales.map((s) => s.id);
       const linesRes = saleIds.length
@@ -215,10 +221,15 @@ export function RetailPosOrdersPage() {
     const lines = deptId
       ? (order.retail_sale_lines || []).filter((l) => l.department_id === deptId)
       : order.retail_sale_lines || [];
-    const total = lines.reduce((sum, l) => sum + Number(l.line_total || Number(l.quantity || 0) * Number(l.unit_price || 0)), 0);
+    const grossTotal = lines.reduce((sum, l) => sum + Number(l.line_total || Number(l.quantity || 0) * Number(l.unit_price || 0)), 0);
+    const commission = Number(order.agent_commission_amount || 0);
+    const transport = Number(order.transport_cost || 0);
+    const total = deptId
+      ? grossTotal
+      : Number(order.net_amount_due ?? Math.max(0, grossTotal - commission - transport));
     const paid = Number(order.payments_total || 0);
     const balance = Math.max(0, total - paid);
-    return { total, paid, balance, lines };
+    return { total, grossTotal, commission, transport, paid, balance, lines };
   };
 
   const openPayModal = (order: RetailSaleOrder) => {
@@ -460,7 +471,7 @@ export function RetailPosOrdersPage() {
   };
 
   const printOrderReceipt = (order: RetailSaleOrder) => {
-    const { total, paid, balance, lines } = getTotals(order, departmentTab === "all" ? undefined : departmentTab);
+    const { total, grossTotal, commission, transport, paid, balance, lines } = getTotals(order, departmentTab === "all" ? undefined : departmentTab);
     const doc = window.open("", "_blank", "width=420,height=720");
     if (!doc) return alert("Allow popups to print receipt.");
     const lineHtml = lines
@@ -493,7 +504,10 @@ export function RetailPosOrdersPage() {
         <div class="line"></div>
         ${lineHtml}
         <div class="line"></div>
-        <div class="row"><strong>Total</strong><strong>${total.toFixed(2)}</strong></div>
+        <div class="row"><span>Gross Sale</span><span>${grossTotal.toFixed(2)}</span></div>
+        ${commission > 0 ? `<div class="row muted"><span>Agent Commission</span><span>-${commission.toFixed(2)}</span></div>` : ""}
+        ${transport > 0 ? `<div class="row muted"><span>Transport Cost</span><span>-${transport.toFixed(2)}</span></div>` : ""}
+        <div class="row"><strong>Net Amount Due</strong><strong>${total.toFixed(2)}</strong></div>
         <div class="row muted"><span>Paid</span><span>${paid.toFixed(2)}</span></div>
         <div class="row muted"><span>Outstanding</span><span>${balance.toFixed(2)}</span></div>
         <div class="row muted"><span>Method</span><span>${methods}</span></div>
@@ -589,7 +603,9 @@ export function RetailPosOrdersPage() {
           {filteredOrders.map((order) => {
             const reversed = order.sale_status === "refunded" || order.sale_status === "reversed" || order.sale_status === "void";
             const totals = getTotals(order, departmentTab === "all" ? undefined : departmentTab);
-            const { total, paid, balance } = reversed ? { total: 0, paid: 0, balance: 0 } : totals;
+            const { total, grossTotal, commission, transport, paid, balance } = reversed
+              ? { total: 0, grossTotal: 0, commission: 0, transport: 0, paid: 0, balance: 0 }
+              : totals;
             const lines = reversed ? [] : totals.lines;
             return (
               <div key={order.id} className="bg-white rounded-xl border border-slate-200 p-4">
@@ -612,7 +628,10 @@ export function RetailPosOrdersPage() {
                   ))}
                 </div>
                 <div className="border-t pt-2 mt-2 text-xs text-slate-700">
-                  <p>Total: {total.toFixed(2)}</p>
+                  <p>Gross Sale: {grossTotal.toFixed(2)}</p>
+                  {commission > 0 ? <p>Agent Commission: -{commission.toFixed(2)}</p> : null}
+                  {transport > 0 ? <p>Transport Cost: -{transport.toFixed(2)}</p> : null}
+                  <p>Net Amount Due: {total.toFixed(2)}</p>
                   <p>Paid: {paid.toFixed(2)}</p>
                   <p>
                     Method:{" "}
