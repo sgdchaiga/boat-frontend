@@ -19,6 +19,14 @@ interface DepartmentLite {
   name: string;
 }
 
+export interface PosAgentCommissionContext {
+  agentId: string;
+  agentName: string;
+  commissionPerUnit: number;
+  commissionAmount: number;
+  netAmountDue: number;
+}
+
 interface ProcessSaleOnlineArgs {
   saleId: string;
   lines: OfflineRetailLine[];
@@ -49,6 +57,7 @@ interface ProcessSaleOnlineArgs {
   /** Clinic dispensing workspace (`clinic_pos` route), not shop-floor retail POS. */
   clinicPos?: boolean;
   saleAt: string;
+  agentCommission?: PosAgentCommissionContext | null;
 }
 
 export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
@@ -77,6 +86,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     clinicDispensing,
     clinicPos = false,
     saleAt,
+    agentCommission,
   } = args;
 
   const paymentSource = clinicPos || clinicDispensing?.clinicPatientId ? "pos_clinic" : "pos_retail";
@@ -100,6 +110,11 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       clinic_patient_id: clinicDispensing?.clinicPatientId ?? null,
       clinic_diagnosis_snapshot: clinicDispensing?.clinicDiagnosisSnapshot ?? null,
       total_amount: total,
+      sales_agent_id: agentCommission?.agentId ?? null,
+      sales_agent_name: agentCommission?.agentName ?? null,
+      agent_commission_per_unit: agentCommission?.commissionPerUnit ?? 0,
+      agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+      net_amount_due: agentCommission?.netAmountDue ?? total,
       amount_paid: amountPaid,
       amount_due: amountDue,
       change_amount: changeDue,
@@ -177,7 +192,8 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         : tender.method === "airtel_money"
           ? acc.posAirtelMoney ?? acc.posMtnMobileMoney ?? acc.cash
           : acc.posMtnMobileMoney ?? acc.cash);
-  let journalReceiptRemaining = total;
+  const settlementTotal = agentCommission?.netAmountDue ?? total;
+  let journalReceiptRemaining = settlementTotal;
   const receiptLines = tenders
     .filter((tender) => tender.status === "completed" && tender.amount > 0)
     .map((tender) => {
@@ -191,9 +207,9 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     })
     .filter((line) => line.amount > 0);
   const journalLines: Array<{ gl_account_id: string; debit: number; credit: number; line_description: string }> = [];
-  if (receiptLines.some((line) => !line.glAccountId) || !acc.revenue) {
+  if (receiptLines.some((line) => !line.glAccountId) || !acc.revenue || ((agentCommission?.commissionAmount ?? 0) > 0 && !acc.commissionExpense)) {
     throw new Error(
-      "POS sale cannot be posted because the receipt or sales revenue GL account is missing. Configure Admin > Journal account settings."
+      "POS sale cannot be posted because the receipt, sales revenue, or Commission Expense GL account is missing. Configure Admin > Journal account settings."
     );
   }
   {
@@ -213,6 +229,14 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         debit: amountDue,
         credit: 0,
         line_description: "Retail sale outstanding balance",
+      });
+    }
+    if ((agentCommission?.commissionAmount ?? 0) > 0.001) {
+      journalLines.push({
+        gl_account_id: acc.commissionExpense!,
+        debit: agentCommission!.commissionAmount,
+        credit: 0,
+        line_description: `Agent commission - ${agentCommission!.agentName}`,
       });
     }
     if ((cogsByDept.bar ?? 0) > 0 && acc.posCogsBar && acc.posInvBar) {
@@ -282,10 +306,20 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       p_clinic_diagnosis_snapshot: clinicDispensing?.clinicDiagnosisSnapshot ?? null,
     });
     if (!atomicErr) {
-      await supabase
+      const { error: saleSnapshotError } = await supabase
         .from("retail_sales")
-        .update({ sale_type: saleType, credit_due_date: creditDueDate || null, sale_at: saleAt })
+        .update({
+          sale_type: saleType,
+          credit_due_date: creditDueDate || null,
+          sale_at: saleAt,
+          sales_agent_id: agentCommission?.agentId ?? null,
+          sales_agent_name: agentCommission?.agentName ?? null,
+          agent_commission_per_unit: agentCommission?.commissionPerUnit ?? 0,
+          agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+          net_amount_due: settlementTotal,
+        })
         .eq("id", saleId);
+      if (saleSnapshotError) throw saleSnapshotError;
       await Promise.all([
         supabase.from("payments").update({ paid_at: saleAt }).eq("transaction_id", saleId),
         supabase.from("retail_sale_payments").update({ paid_at: saleAt }).eq("sale_id", saleId),
@@ -325,6 +359,14 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     saleAt,
   });
   if (persistedNewSale) {
+    const { error: saleSnapshotError } = await supabase.from("retail_sales").update({
+      sales_agent_id: agentCommission?.agentId ?? null,
+      sales_agent_name: agentCommission?.agentName ?? null,
+      agent_commission_per_unit: agentCommission?.commissionPerUnit ?? 0,
+      agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+      net_amount_due: settlementTotal,
+    }).eq("id", saleId);
+    if (saleSnapshotError) throw saleSnapshotError;
     runClearingHook();
   }
   await bumpCustomerCreditExposure();
@@ -351,6 +393,10 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
           mobile_money_tx_ref: tender.reference ?? null,
           gateway_transaction_id: tender.gatewayTransactionId ?? null,
           receipt_gl_account_id: tender.glAccountId ?? null,
+          sales_agent_id: agentCommission?.agentId ?? null,
+          sales_agent_name: agentCommission?.agentName ?? null,
+          agent_commission_amount: agentCommission?.commissionAmount ?? 0,
+          net_amount_due: settlementTotal,
         },
         paid_at: saleAt,
       },
@@ -398,6 +444,9 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
   const jr = await createJournalForPosOrder(saleId, total, description || "Retail POS sale", saleAt, staffRow?.id ?? null, {
     paymentMethod: tenders[0]?.method ?? "cash",
     amountPaid,
+    settlementTotal,
+    agentCommissionAmount: agentCommission?.commissionAmount ?? 0,
+    commissionExpenseGlAccountId: acc.commissionExpense,
     receiptLines: receiptLines.map((line) => ({
       glAccountId: line.glAccountId!,
       amount: line.amount,

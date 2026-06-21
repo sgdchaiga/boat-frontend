@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Printer } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { createJournalEntry } from "../lib/journal";
@@ -43,7 +43,7 @@ import {
   type MobileMoneyGatewayProvider,
   type SaleCustomerContext,
 } from "./retail-pos/services/checkoutService";
-import { processSaleOnline } from "./retail-pos/services/processSaleOnline";
+import { processSaleOnline, type PosAgentCommissionContext } from "./retail-pos/services/processSaleOnline";
 import type { PosExperience } from "../lib/posExperience";
 import { getPosLabels } from "../lib/posExperience";
 import { fetchClinicConsultations, fetchClinicPatients } from "@/lib/clinicData";
@@ -75,6 +75,11 @@ interface ReceiptData {
   paidAt: string;
   paymentMethod: PaymentMethodCode;
   total: number;
+  grossSale: number;
+  agentCommission: number;
+  netAmountDue: number;
+  amountPaid: number;
+  agentName?: string | null;
   /** When VAT-inclusive sale */
   netAmount?: number;
   vatAmount?: number;
@@ -107,6 +112,13 @@ interface ManufacturingPriceRow {
 interface ManufacturingCustomerTypeRow {
   id: string;
   name: string;
+}
+
+interface PosSalesAgentRow {
+  id: string;
+  name: string;
+  phone: string | null;
+  commission_per_unit: number;
 }
 
 type PosPaymentStatus = "pending" | "partial" | "completed" | "overpaid";
@@ -149,6 +161,8 @@ export function RetailPOSPage({
   const [customers, setCustomers] = useState<RetailCustomerRow[]>([]);
   const [manufacturingPrices, setManufacturingPrices] = useState<ManufacturingPriceRow[]>([]);
   const [manufacturingCustomerTypes, setManufacturingCustomerTypes] = useState<ManufacturingCustomerTypeRow[]>([]);
+  const [posSalesAgents, setPosSalesAgents] = useState<PosSalesAgentRow[]>([]);
+  const [selectedPosSalesAgentId, setSelectedPosSalesAgentId] = useState("");
   const [processing, setProcessing] = useState(false);
   const [receipt, setReceipt] = useState<ReceiptData | null>(null);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
@@ -364,6 +378,51 @@ export function RetailPOSPage({
       .maybeSingle()
       .then(({ data }) => setUseManufacturingPriceList(data?.allowed !== false));
   }, [orgId, user?.business_type]);
+
+  const loadPosSalesAgents = useCallback(async () => {
+    if (!orgId || user?.business_type !== "manufacturing" || useDesktopLocalMode) {
+      setPosSalesAgents([]);
+      return;
+    }
+    const { data, error } = await supabase
+      .from("pos_sales_agents")
+      .select("id,name,phone,commission_per_unit")
+      .eq("organization_id", orgId)
+      .eq("is_active", true)
+      .order("name");
+    if (error) {
+      console.warn("Unable to load POS sales agents:", error.message);
+      return;
+    }
+    setPosSalesAgents((data || []).map((row) => ({ ...row, commission_per_unit: Number(row.commission_per_unit || 0) })) as PosSalesAgentRow[]);
+  }, [orgId, useDesktopLocalMode, user?.business_type]);
+
+  useEffect(() => { void loadPosSalesAgents(); }, [loadPosSalesAgents]);
+
+  const addPosSalesAgent = async () => {
+    if (!orgId || readOnly) return;
+    const name = window.prompt("Agent / Bodaboda name")?.trim();
+    if (!name) return;
+    const rateText = window.prompt("Commission per bag", "2500")?.trim();
+    if (rateText == null) return;
+    const rate = Number(rateText);
+    if (!Number.isFinite(rate) || rate < 0) {
+      toast({ title: "Invalid commission", description: "Enter a commission of zero or more." });
+      return;
+    }
+    const { data, error } = await supabase.from("pos_sales_agents").insert({
+      organization_id: orgId,
+      name,
+      commission_per_unit: rate,
+    }).select("id,name,phone,commission_per_unit").single();
+    if (error) {
+      toast({ title: "Could not add agent", description: error.message });
+      return;
+    }
+    const next = { ...data, commission_per_unit: Number(data.commission_per_unit || 0) } as PosSalesAgentRow;
+    setPosSalesAgents((current) => [...current, next].sort((a, b) => a.name.localeCompare(b.name)));
+    setSelectedPosSalesAgentId(next.id);
+  };
 
   const toggleDiscountSetting = async () => {
     if (!orgId) return;
@@ -828,6 +887,20 @@ export function RetailPOSPage({
     return merged;
   }, [products, recentQuickPickIds, quickPickProducts]);
 
+  const selectedPosSalesAgent = posSalesAgents.find((agent) => agent.id === selectedPosSalesAgentId) ?? null;
+  const commissionUnits = cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
+  const agentCommissionAmount = selectedPosSalesAgent
+    ? Math.round(commissionUnits * selectedPosSalesAgent.commission_per_unit * 100) / 100
+    : 0;
+  const netSaleAmount = Math.max(0, Math.round((total - agentCommissionAmount) * 100) / 100);
+  const agentCommissionContext: PosAgentCommissionContext | null = selectedPosSalesAgent ? {
+    agentId: selectedPosSalesAgent.id,
+    agentName: selectedPosSalesAgent.name,
+    commissionPerUnit: selectedPosSalesAgent.commission_per_unit,
+    commissionAmount: agentCommissionAmount,
+    netAmountDue: netSaleAmount,
+  } : null;
+
   const {
     paymentMode,
     setPaymentMode,
@@ -847,7 +920,7 @@ export function RetailPOSPage({
     removePaymentLine,
     updatePaymentLine,
     resetPayments,
-  } = usePayments(total);
+  } = usePayments(netSaleAmount);
 
   useEffect(() => {
     if (!orgId || useDesktopLocalMode) {
@@ -881,7 +954,7 @@ export function RetailPOSPage({
       });
   }, [orgId, useDesktopLocalMode]);
   const saleType: "cash" | "credit" | "mixed" =
-    amountPaid <= 0 ? "credit" : amountPaid < total ? "mixed" : "cash";
+    amountPaid <= 0 ? "credit" : amountPaid < netSaleAmount ? "mixed" : "cash";
   const canUseAdvancedPayments =
     advancedModeEnabled && (useDesktopLocalMode || posMode === "manager" || Boolean(user?.isSuperAdmin));
   const stkPushEnabled = receiptOrgHeader?.stkPushEnabled === true;
@@ -1053,7 +1126,14 @@ export function RetailPOSPage({
       saleId,
       paidAt: `${saleDate}T12:00:00`,
       paymentMethod: paymentLines[0]?.method ?? "cash",
-      total,
+      total: netSaleAmount,
+      grossSale: total,
+      agentCommission: agentCommissionAmount,
+      netAmountDue: netSaleAmount,
+      amountPaid,
+      agentName: selectedPosSalesAgent?.name ?? null,
+      netAmount: posVatBreakdown?.net,
+      vatAmount: posVatBreakdown?.vat,
       lines: cart.map((i) => ({
         name: i.product.name,
         qty: i.quantity,
@@ -1068,6 +1148,7 @@ export function RetailPOSPage({
     setScanCode("");
     setCreditDueDate(new Date().toISOString().slice(0, 10));
     setSaleDate(new Date().toISOString().slice(0, 10));
+    setSelectedPosSalesAgentId("");
   };
 
   const resolveCheckoutPhone = (shouldUseStkPush: boolean) => {
@@ -1105,6 +1186,10 @@ export function RetailPOSPage({
     }
     if (!saleDate) {
       toast({ title: "Transaction date required", description: "Select the POS transaction date." });
+      return null;
+    }
+    if (agentCommissionAmount > total) {
+      toast({ title: "Commission exceeds gross sale", description: "Reduce the commission rate or increase the sale value before checkout." });
       return null;
     }
     if (saleDate > new Date().toISOString().slice(0, 10)) {
@@ -1187,6 +1272,7 @@ export function RetailPOSPage({
       clinicPos: leftPanelMode === "clinic_workspace",
       clinicDispensing: clinicDispensingForCheckout,
       saleAt: ctx.saleAt,
+      agentCommission: agentCommissionContext,
     };
     if (ctx.shouldUseStkPush) {
       await Promise.race([processSaleOnline(payload), new Promise((_, reject) => window.setTimeout(() => reject(new Error("payment_timeout")), 60_000))]);
@@ -1244,8 +1330,12 @@ export function RetailPOSPage({
       didSucceed = true;
     } catch (error: unknown) {
       if (error instanceof Error && error.message === "offline") {
-        handleOfflineFallback(ctx, saleCustomer);
-        didSucceed = true;
+        if (agentCommissionContext) {
+          toast({ title: "Agent sale requires online access", description: "Reconnect before completing a sale with agent commission." });
+        } else {
+          handleOfflineFallback(ctx, saleCustomer);
+          didSucceed = true;
+        }
       } else if (ctx.shouldUseStkPush && error instanceof Error && error.message === "payment_timeout") {
         const cancelledPending = ctx.tenders.filter((p) => p.status === "pending").map((p) => ({ method: p.method, amount: p.amount }));
         setPaymentLines((prev) => prev.filter((p) => p.status !== "pending"));
@@ -1373,7 +1463,7 @@ export function RetailPOSPage({
       toast({ title: "Print blocked", description: "Allow popups to print receipt." });
       return;
     }
-    const paid = paymentLines.reduce((sum, p) => sum + p.amount, 0);
+    const paid = receipt.amountPaid;
     const lineHtml = receipt.lines
       .map(
         (line) =>
@@ -1409,7 +1499,10 @@ export function RetailPOSPage({
         <div class="line"></div>
         ${lineHtml}
         <div class="line"></div>
-        <div class="row"><strong>Total</strong><strong>${receipt.total.toFixed(2)}</strong></div>
+        ${receipt.agentName ? `<div class="muted">Agent / Bodaboda: ${receipt.agentName}</div>` : ""}
+        <div class="row"><span>Gross Sale</span><strong>${receipt.grossSale.toFixed(2)}</strong></div>
+        <div class="row"><span>Agent Commission</span><strong>-${receipt.agentCommission.toFixed(2)}</strong></div>
+        <div class="row"><strong>Net Amount Due</strong><strong>${receipt.netAmountDue.toFixed(2)}</strong></div>
         <div class="row muted"><span>Method</span><span>${formatPaymentMethodLabel(receipt.paymentMethod)}</span></div>
         <div class="row muted"><span>Tendered</span><span>${paid.toFixed(2)}</span></div>
         <div class="row muted"><span>Change</span><span>${Math.max(0, paid - receipt.total).toFixed(2)}</span></div>
@@ -1548,6 +1641,20 @@ export function RetailPOSPage({
         <ReadOnlyNotice />
       )}
 
+      {user?.business_type === "manufacturing" ? (
+        <div className="mb-2 grid shrink-0 gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 md:grid-cols-[minmax(220px,1fr)_auto_auto_auto] md:items-end">
+          <label className="text-xs font-semibold text-amber-950">Agent / Bodaboda
+            <select value={selectedPosSalesAgentId} onChange={(event) => setSelectedPosSalesAgentId(event.target.value)} className="mt-1 w-full rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-normal text-slate-900">
+              <option value="">No agent commission</option>
+              {posSalesAgents.map((agent) => <option key={agent.id} value={agent.id}>{agent.name} - {agent.commission_per_unit.toLocaleString()} per bag</option>)}
+            </select>
+          </label>
+          <button type="button" onClick={() => void addPosSalesAgent()} disabled={readOnly || useDesktopLocalMode} className="inline-flex items-center justify-center rounded-lg border border-amber-300 bg-white px-3 py-2 text-sm font-semibold text-amber-900 disabled:opacity-50">+ Add agent</button>
+          <div className="rounded-lg bg-white px-3 py-2 text-sm"><p className="text-xs text-slate-500">Gross sale</p><p className="font-bold text-slate-900">{total.toFixed(2)}</p></div>
+          <div className="rounded-lg bg-white px-3 py-2 text-sm"><p className="text-xs text-slate-500">Commission / Net due</p><p className="font-bold text-rose-700">-{agentCommissionAmount.toFixed(2)} <span className="text-slate-400">/</span> <span className="text-emerald-700">{netSaleAmount.toFixed(2)}</span></p></div>
+        </div>
+      ) : null}
+
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2 shrink-0">
         <div className="flex items-center gap-2">
           <button
@@ -1662,7 +1769,7 @@ export function RetailPOSPage({
         )}
         <div className={leftPanelMode === "clinic_workspace" ? "min-h-0 h-full min-w-0" : "lg:col-span-3 min-h-0 h-full min-w-0"}>
         <CashierPaymentPanel
-          total={total}
+          total={netSaleAmount}
           posCustomerSummary={posCustomerSummary}
           selectedCustomerId={selectedCustomerId}
           setSelectedCustomerId={setSelectedCustomerId}
@@ -1919,6 +2026,7 @@ export function RetailPOSPage({
           </div>
           {receipt.netAmount != null && receipt.vatAmount != null ? (
             <div className="border-t border-slate-200 mt-3 pt-3 space-y-1 text-sm">
+              {receipt.agentName ? <div className="text-slate-600">Agent / Bodaboda: {receipt.agentName}</div> : null}
               <div className="flex justify-between">
                 <span>Net</span>
                 <span>{receipt.netAmount.toFixed(2)}</span>
@@ -1927,15 +2035,16 @@ export function RetailPOSPage({
                 <span>VAT</span>
                 <span>{receipt.vatAmount.toFixed(2)}</span>
               </div>
-              <div className="flex justify-between font-bold text-base">
-                <span>Total ({formatPaymentMethodLabel(receipt.paymentMethod)})</span>
-                <span>{receipt.total.toFixed(2)}</span>
-              </div>
+              <div className="flex justify-between"><span>Gross Sale</span><span>{receipt.grossSale.toFixed(2)}</span></div>
+              <div className="flex justify-between text-rose-700"><span>Agent Commission</span><span>-{receipt.agentCommission.toFixed(2)}</span></div>
+              <div className="flex justify-between font-bold text-base"><span>Net Amount Due ({formatPaymentMethodLabel(receipt.paymentMethod)})</span><span>{receipt.netAmountDue.toFixed(2)}</span></div>
             </div>
           ) : (
-            <div className="border-t border-slate-200 mt-3 pt-3 flex justify-between font-bold">
-              <span>Total ({formatPaymentMethodLabel(receipt.paymentMethod)})</span>
-              <span>{receipt.total.toFixed(2)}</span>
+            <div className="border-t border-slate-200 mt-3 space-y-1 pt-3">
+              {receipt.agentName ? <div className="text-sm text-slate-600">Agent / Bodaboda: {receipt.agentName}</div> : null}
+              <div className="flex justify-between text-sm"><span>Gross Sale</span><span>{receipt.grossSale.toFixed(2)}</span></div>
+              <div className="flex justify-between text-sm text-rose-700"><span>Agent Commission</span><span>-{receipt.agentCommission.toFixed(2)}</span></div>
+              <div className="flex justify-between font-bold"><span>Net Amount Due ({formatPaymentMethodLabel(receipt.paymentMethod)})</span><span>{receipt.netAmountDue.toFixed(2)}</span></div>
             </div>
           )}
         </div>

@@ -71,6 +71,7 @@ let cachedAccounts: {
     cash: string | null;
     receivable: string | null;
     expense: string | null;
+    commissionExpense: string | null;
     payable: string | null;
     vat: string | null;
     purchasesInventory: string | null;
@@ -103,6 +104,7 @@ export async function getDefaultGlAccounts(): Promise<{
   cash: string | null;
   receivable: string | null;
   expense: string | null;
+  commissionExpense: string | null;
   payable: string | null;
   /** VAT / tax (input on purchases, output on sales) — from journal settings or chart name match. */
   vat: string | null;
@@ -159,6 +161,9 @@ export async function getDefaultGlAccounts(): Promise<{
     list.find((a) => (a.account_name || "").toLowerCase().includes("receivable"))?.id ??
     first(assets);
   const expense = settings.expense_id ?? byCategory("expense") ?? first(byType("expense"));
+  const commissionExpense =
+    list.find((a) => a.account_type === "expense" && /(commission|agent|broker|delivery)/i.test(a.account_name || ""))?.id ??
+    expense;
   const payable = settings.payable_id ?? byCategory("payable") ?? first(byType("liability"));
 
   const vat =
@@ -242,6 +247,7 @@ export async function getDefaultGlAccounts(): Promise<{
     cash,
     receivable: receivable ?? cash,
     expense,
+    commissionExpense,
     payable,
     vat,
     purchasesInventory,
@@ -1498,6 +1504,10 @@ export async function createJournalForPosOrder(
     receiptLines?: Array<{ glAccountId: string; amount: number; description?: string }>;
     /** Completed payments received against this order. The unpaid balance posts to receivables. */
     amountPaid?: number;
+    /** Amount payable after agent commission. Defaults to gross `total`. */
+    settlementTotal?: number;
+    agentCommissionAmount?: number;
+    commissionExpenseGlAccountId?: string | null;
     cogsByDept?: PosCogsByDept;
     cogsByDepartment?: PosDepartmentAmountLine[];
     /** Line totals by bar/kitchen/room; splits net revenue across department sales GLs (unless a single revenue override is set). */
@@ -1516,11 +1526,14 @@ export async function createJournalForPosOrder(
   const receiptGl = o?.receiptGlAccountId?.trim()
     ? o.receiptGlAccountId
     : resolvePosReceiptGlAccountId(acc, options?.paymentMethod);
-  const amountPaid = Math.min(roundMoney(Math.max(0, Number(options?.amountPaid ?? total))), roundMoney(total));
+  const settlementTotal = roundMoney(Math.max(0, Number(options?.settlementTotal ?? total)));
+  const amountPaid = Math.min(roundMoney(Math.max(0, Number(options?.amountPaid ?? settlementTotal))), settlementTotal);
   const receiptLines = (options?.receiptLines || [])
     .map((line) => ({ ...line, amount: roundMoney(line.amount) }))
     .filter((line) => line.glAccountId && line.amount > 0.001);
-  const receivableAmount = roundMoney(total - amountPaid);
+  const receivableAmount = roundMoney(settlementTotal - amountPaid);
+  const agentCommissionAmount = roundMoney(Math.max(0, Number(options?.agentCommissionAmount ?? 0)));
+  const commissionExpenseId = options?.commissionExpenseGlAccountId?.trim() || acc.commissionExpense;
   const revenueId = o?.revenueGlAccountId?.trim() ? o.revenueGlAccountId : acc.revenue;
   const salesByDept = options?.salesByDept;
   const salesByDepartment = (options?.salesByDepartment || [])
@@ -1544,6 +1557,9 @@ export async function createJournalForPosOrder(
       ok: false,
       error: "Missing receivable GL account for the unpaid POS balance. Configure Accounting > Journal account settings.",
     };
+  }
+  if (agentCommissionAmount > 0.001 && !commissionExpenseId) {
+    return { ok: false, error: "Missing Commission Expense GL account for the POS agent commission." };
   }
 
   if (useRevenueSplit) {
@@ -1604,6 +1620,9 @@ export async function createJournalForPosOrder(
   }
   if (receivableAmount > 0.001 && acc.receivable) {
     lines.push({ gl_account_id: acc.receivable, debit: receivableAmount, credit: 0, line_description: `${description} - outstanding` });
+  }
+  if (agentCommissionAmount > 0.001 && commissionExpenseId) {
+    lines.push({ gl_account_id: commissionExpenseId, debit: agentCommissionAmount, credit: 0, line_description: "Agent / bodaboda commission" });
   }
 
   if (useRevenueSplit && salesByDepartment.length > 0) {
