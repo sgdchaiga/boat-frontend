@@ -38,7 +38,9 @@ export type JournalAccountRole =
   | "manufacturing_finished_goods"
   | "manufacturing_wip"
   | "manufacturing_consumables_expense"
-  | "manufacturing_scrap_inventory";
+  | "manufacturing_scrap_inventory"
+  | "pos_agent_commission_expense"
+  | "pos_transport_expense";
 
 export interface JournalAccountSettings {
   revenue_id: string | null;
@@ -95,6 +97,10 @@ export interface JournalAccountSettings {
   manufacturing_consumables_expense_id: string | null;
   /** Manufacturing production — scrap metal inventory value. */
   manufacturing_scrap_inventory_id: string | null;
+  /** Manufacturing POS agent / bodaboda commission expense. */
+  pos_agent_commission_expense_id: string | null;
+  /** Manufacturing POS rider transport expense. */
+  pos_transport_expense_id: string | null;
 }
 
 const DEFAULT_SETTINGS: JournalAccountSettings = {
@@ -135,6 +141,8 @@ const DEFAULT_SETTINGS: JournalAccountSettings = {
   manufacturing_wip_id: null,
   manufacturing_consumables_expense_id: null,
   manufacturing_scrap_inventory_id: null,
+  pos_agent_commission_expense_id: null,
+  pos_transport_expense_id: null,
 };
 
 export function loadJournalAccountSettings(): JournalAccountSettings {
@@ -330,6 +338,8 @@ function mapJournalGlRowToSettings(d: {
     manufacturing_wip_id: d.manufacturing_wip_gl_account_id ?? null,
     manufacturing_consumables_expense_id: d.manufacturing_consumables_expense_gl_account_id ?? null,
     manufacturing_scrap_inventory_id: d.manufacturing_scrap_inventory_gl_account_id ?? null,
+    pos_agent_commission_expense_id: null,
+    pos_transport_expense_id: null,
   };
 }
 
@@ -497,6 +507,24 @@ export async function fetchJournalGlSettings(organizationId: string): Promise<Jo
     const local = loadJournalAccountSettings();
     settings.manufacturing_consumables_expense_id = local.manufacturing_consumables_expense_id;
     settings.manufacturing_scrap_inventory_id = local.manufacturing_scrap_inventory_id;
+  }
+
+  const { data: posDeductionData, error: posDeductionError } = await supabase
+    .from("journal_gl_settings")
+    .select("pos_agent_commission_expense_gl_account_id,pos_transport_expense_gl_account_id")
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!posDeductionError && posDeductionData) {
+    const row = posDeductionData as {
+      pos_agent_commission_expense_gl_account_id?: string | null;
+      pos_transport_expense_gl_account_id?: string | null;
+    };
+    settings.pos_agent_commission_expense_id = row.pos_agent_commission_expense_gl_account_id ?? null;
+    settings.pos_transport_expense_id = row.pos_transport_expense_gl_account_id ?? null;
+  } else if (posDeductionError) {
+    const local = loadJournalAccountSettings();
+    settings.pos_agent_commission_expense_id = local.pos_agent_commission_expense_id;
+    settings.pos_transport_expense_id = local.pos_transport_expense_id;
   }
 
   return settings;
@@ -698,6 +726,16 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
       "[journal_gl_settings] Production consumables / scrap inventory mappings are stored locally until migration 20260701200000_manufacturing_production_account_settings.sql is applied."
     );
   }
+
+  const { error: posDeductionError } = await supabase
+    .from("journal_gl_settings")
+    .update({
+      pos_agent_commission_expense_gl_account_id: settings.pos_agent_commission_expense_id,
+      pos_transport_expense_gl_account_id: settings.pos_transport_expense_id,
+      updated_at: updatedAt,
+    })
+    .eq("organization_id", organizationId);
+  if (posDeductionError) throw posDeductionError;
 }
 
 /** DB row if present, otherwise localStorage defaults. */
@@ -766,6 +804,16 @@ export const JOURNAL_ACCOUNT_ROLES: { id: JournalAccountRole; label: string; acc
     id: "manufacturing_scrap_inventory",
     label: "Manufacturing — scrap metal inventory (from production entries)",
     accountType: "asset",
+  },
+  {
+    id: "pos_agent_commission_expense",
+    label: "Manufacturing POS — Agent / bodaboda commission expense",
+    accountType: "expense",
+  },
+  {
+    id: "pos_transport_expense",
+    label: "Manufacturing POS — Rider transport expense",
+    accountType: "expense",
   },
 ];
 
@@ -885,6 +933,8 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
       "manufacturing_wip",
       "manufacturing_consumables_expense",
       "manufacturing_scrap_inventory",
+      "pos_agent_commission_expense",
+      "pos_transport_expense",
     ]);
     const mfgRows = JOURNAL_ACCOUNT_ROLES.filter((r) => mfgSet.has(r.id)).map((r) => {
       const group =
@@ -895,6 +945,8 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
         r.id === "manufacturing_wip" ||
         r.id === "manufacturing_consumables_expense" ||
         r.id === "manufacturing_scrap_inventory"
+        || r.id === "pos_agent_commission_expense"
+        || r.id === "pos_transport_expense"
           ? "Manufacturing / inventory"
           : "Core accounting";
       const label =

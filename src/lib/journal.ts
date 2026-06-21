@@ -164,9 +164,11 @@ export async function getDefaultGlAccounts(): Promise<{
     first(assets);
   const expense = settings.expense_id ?? byCategory("expense") ?? first(byType("expense"));
   const commissionExpense =
+    settings.pos_agent_commission_expense_id ??
     list.find((a) => a.account_type === "expense" && /(commission|agent|broker)/i.test(a.account_name || ""))?.id ??
     expense;
   const transportExpense =
+    settings.pos_transport_expense_id ??
     list.find((a) => a.account_type === "expense" && /(transport|delivery|freight|carriage)/i.test(a.account_name || ""))?.id ??
     expense;
   const payable = settings.payable_id ?? byCategory("payable") ?? first(byType("liability"));

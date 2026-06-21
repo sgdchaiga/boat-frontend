@@ -466,6 +466,8 @@ export interface Database {
           pos_revenue_bar_gl_account_id: string | null
           pos_revenue_kitchen_gl_account_id: string | null
           pos_revenue_room_gl_account_id: string | null
+          pos_agent_commission_expense_gl_account_id: string | null
+          pos_transport_expense_gl_account_id: string | null
           updated_at: string
         }
         Insert: {
@@ -490,6 +492,8 @@ export interface Database {
           pos_revenue_bar_gl_account_id?: string | null
           pos_revenue_kitchen_gl_account_id?: string | null
           pos_revenue_room_gl_account_id?: string | null
+          pos_agent_commission_expense_gl_account_id?: string | null
+          pos_transport_expense_gl_account_id?: string | null
           updated_at?: string
         }
         Update: {
@@ -514,6 +518,8 @@ export interface Database {
           pos_revenue_bar_gl_account_id?: string | null
           pos_revenue_kitchen_gl_account_id?: string | null
           pos_revenue_room_gl_account_id?: string | null
+          pos_agent_commission_expense_gl_account_id?: string | null
+          pos_transport_expense_gl_account_id?: string | null
           updated_at?: string
         }
       }
