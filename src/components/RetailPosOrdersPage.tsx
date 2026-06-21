@@ -48,6 +48,7 @@ type ProductOption = {
 };
 
 type RetailCustomerOption = { id: string; name: string };
+type OrderStatusFilter = "all" | "paid" | "outstanding" | "partial" | "unpaid" | "reversed";
 
 export function RetailPosOrdersPage() {
   const { user } = useAuth();
@@ -60,6 +61,7 @@ export function RetailPosOrdersPage() {
   const [dateRange, setDateRange] = useState<DateRangeKey>("last_30_days");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  const [statusFilter, setStatusFilter] = useState<OrderStatusFilter>("all");
   const [departmentTab, setDepartmentTab] = useState<string>("all");
   const [departmentOptions, setDepartmentOptions] = useState<Array<{ id: string; name: string }>>([]);
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
@@ -534,14 +536,25 @@ export function RetailPosOrdersPage() {
   }, [orders, departmentOptions]);
 
   const filteredOrders = useMemo(() => {
-    if (departmentTab === "all") return orders;
-    return orders
-      .map((o) => ({
+    const departmentOrders = departmentTab === "all"
+      ? orders
+      : orders.map((o) => ({
         ...o,
         retail_sale_lines: (o.retail_sale_lines || []).filter((l) => l.department_id === departmentTab),
       }))
       .filter((o) => o.retail_sale_lines.length > 0);
-  }, [orders, departmentTab]);
+    if (statusFilter === "all") return departmentOrders;
+    return departmentOrders.filter((order) => {
+      const reversed = order.sale_status === "refunded" || order.sale_status === "reversed" || order.sale_status === "void";
+      if (statusFilter === "reversed") return reversed;
+      if (reversed) return false;
+      const { paid, balance } = getTotals(order);
+      if (statusFilter === "paid") return balance <= 0.01;
+      if (statusFilter === "outstanding") return balance > 0.01;
+      if (statusFilter === "partial") return paid > 0.01 && balance > 0.01;
+      return paid <= 0.01 && balance > 0.01;
+    });
+  }, [orders, departmentTab, statusFilter]);
 
   return (
     <div className="p-6 md:p-8">
@@ -561,7 +574,16 @@ export function RetailPosOrdersPage() {
             <option value="last_30_days">Last 30 days</option>
             <option value="this_week">This week</option>
             <option value="this_month">This month</option>
+            <option value="last_month">Last month</option>
             <option value="custom">Custom</option>
+          </select>
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as OrderStatusFilter)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm">
+            <option value="all">All statuses</option>
+            <option value="paid">Paid</option>
+            <option value="outstanding">Outstanding</option>
+            <option value="partial">Partially paid</option>
+            <option value="unpaid">Unpaid</option>
+            <option value="reversed">Reversed</option>
           </select>
           {dateRange === "custom" ? (
             <>
