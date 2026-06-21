@@ -29,6 +29,7 @@ type SaleLine = {
 type RetailSaleOrder = {
   id: string;
   sale_at: string;
+  sale_status: string | null;
   customer_id: string | null;
   customer_name: string | null;
   retail_sale_lines: SaleLine[];
@@ -133,7 +134,7 @@ export function RetailPosOrdersPage() {
         filterByOrganizationId(
           supabase
             .from("retail_sales")
-            .select("id,sale_at,customer_name,customer_id")
+            .select("id,sale_at,customer_name,customer_id,sale_status")
             .gte("sale_at", from.toISOString())
             .lt("sale_at", to.toISOString())
             .order("sale_at", { ascending: false }),
@@ -152,6 +153,7 @@ export function RetailPosOrdersPage() {
       const sales = (salesRes.data || []) as Array<{
         id: string;
         sale_at: string;
+        sale_status: string | null;
         customer_name: string | null;
         customer_id: string | null;
       }>;
@@ -283,6 +285,22 @@ export function RetailPosOrdersPage() {
       alert("You are not authorized to edit POS orders.");
       return;
     }
+    const nextLines = editingOrderLines
+      .filter((line) => (line.product_id || line.description.trim()) && Number(line.quantity) > 0)
+      .map((line, index) => ({
+        sale_id: editingOrderId,
+        line_no: index + 1,
+        product_id: line.product_id || null,
+        description: line.description.trim() || productOptions.find((product) => product.id === line.product_id)?.name || "Item",
+        quantity: Number(line.quantity),
+        unit_price: Number(line.unit_price),
+        line_total: Number(line.quantity) * Number(line.unit_price),
+        department_id: line.department_id || null,
+      }));
+    if (nextLines.length === 0) {
+      alert("An active order must contain at least one item. Use Cancel / Reverse to close the order instead.");
+      return;
+    }
     setEditOrderSaving(true);
     try {
       const saleAt = new Date(editingOrderDate).toISOString();
@@ -301,22 +319,8 @@ export function RetailPosOrdersPage() {
       const { error: delErr } = await supabase.from("retail_sale_lines").delete().eq("sale_id", editingOrderId);
       if (delErr) throw delErr;
 
-      const nextLines = editingOrderLines
-        .filter((l) => (l.product_id || l.description.trim()) && Number(l.quantity) > 0)
-        .map((l, idx) => ({
-          sale_id: editingOrderId,
-          line_no: idx + 1,
-          product_id: l.product_id || null,
-          description: l.description.trim() || productOptions.find((p) => p.id === l.product_id)?.name || "Item",
-          quantity: Number(l.quantity),
-          unit_price: Number(l.unit_price),
-          line_total: Number(l.quantity) * Number(l.unit_price),
-          department_id: l.department_id || null,
-        }));
-      if (nextLines.length > 0) {
-        const { error: insErr } = await supabase.from("retail_sale_lines").insert(nextLines);
-        if (insErr) throw insErr;
-      }
+      const { error: insErr } = await supabase.from("retail_sale_lines").insert(nextLines);
+      if (insErr) throw insErr;
       const sync = await syncRetailPosOrderAfterEdit(editingOrderId, saleAt, user?.id ?? null, orgId);
       if (!sync.ok) throw new Error(`Order saved, but accounting synchronization failed: ${sync.error}`);
       setEditingOrderId(null);
@@ -583,7 +587,10 @@ export function RetailPosOrdersPage() {
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filteredOrders.map((order) => {
-            const { total, paid, balance, lines } = getTotals(order, departmentTab === "all" ? undefined : departmentTab);
+            const reversed = order.sale_status === "refunded" || order.sale_status === "reversed" || order.sale_status === "void";
+            const totals = getTotals(order, departmentTab === "all" ? undefined : departmentTab);
+            const { total, paid, balance } = reversed ? { total: 0, paid: 0, balance: 0 } : totals;
+            const lines = reversed ? [] : totals.lines;
             return (
               <div key={order.id} className="bg-white rounded-xl border border-slate-200 p-4">
                 <div className="flex items-center justify-between mb-1">
@@ -593,9 +600,12 @@ export function RetailPosOrdersPage() {
                     {new Date(order.sale_at).toLocaleString()}
                   </span>
                 </div>
-                <p className="text-xs text-slate-500 mb-2">Order: <span className="font-mono">{order.id.slice(0, 8)}</span></p>
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-xs text-slate-500">Order: <span className="font-mono">{order.id.slice(0, 8)}</span></p>
+                  {reversed ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Reversed</span> : null}
+                </div>
                 <div className="text-sm text-slate-700 space-y-1">
-                  {lines.map((line) => (
+                  {reversed ? <p className="italic text-slate-500">Items returned to stock.</p> : lines.map((line) => (
                     <p key={line.id}>
                       {Number(line.quantity || 0)} × {line.description || "Item"} - {Number(line.line_total || 0).toFixed(2)}
                     </p>
@@ -620,21 +630,21 @@ export function RetailPosOrdersPage() {
                   >
                     Print Receipt
                   </button>
-                  {balance > 0.01 ? (
+                  {!reversed && balance > 0.01 ? (
                     <button type="button" onClick={() => openPayModal(order)} className="flex-1 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 px-3 py-2 text-sm font-semibold hover:bg-emerald-100">
                       Pay Outstanding
                     </button>
                   ) : null}
-                  <button type="button" onClick={() => startEditOrder(order)} disabled={!canEditPosOrdersByRole} className="flex-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed">
+                  <button type="button" onClick={() => startEditOrder(order)} disabled={!canEditPosOrdersByRole || reversed} className="flex-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 px-3 py-2 text-sm font-semibold hover:bg-slate-100 disabled:opacity-50 disabled:cursor-not-allowed">
                     Edit
                   </button>
                   <button
                     type="button"
                     onClick={() => void reverseOrder(order)}
-                    disabled={reversingOrderId === order.id || !canReverse}
+                    disabled={reversingOrderId === order.id || !canReverse || reversed}
                     className="flex-1 rounded-lg border border-red-200 bg-red-50 text-red-700 px-3 py-2 text-sm font-semibold hover:bg-red-100 disabled:opacity-50"
                   >
-                    {reversingOrderId === order.id ? "Reversing..." : "Cancel / Reverse"}
+                    {reversed ? "Reversed" : reversingOrderId === order.id ? "Reversing..." : "Cancel / Reverse"}
                   </button>
                 </div>
               </div>

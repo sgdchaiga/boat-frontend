@@ -28,6 +28,9 @@ export async function syncRetailPosOrderAfterEdit(
     line_total: number | null;
     department_id: string | null;
   }>;
+  if (lines.length === 0) {
+    return { ok: false, error: "An active order must contain at least one item. Reverse the order instead of saving it empty." };
+  }
   const productIds = [...new Set(lines.map((line) => line.product_id).filter((id): id is string => !!id))];
   const { data: rawProducts, error: productsError } = productIds.length
     ? await supabase.from("products").select("id,cost_price,track_inventory,department_id").in("id", productIds)
