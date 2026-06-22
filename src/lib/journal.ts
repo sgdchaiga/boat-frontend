@@ -1971,7 +1971,7 @@ export async function syncHotelPosOrderJournal(
     orderId,
     total,
     items.map((item) => `${item.quantity}x ${item.name}`).join(", "),
-    String(order.created_at),
+    String(completedPayments[0]?.paid_at || order.created_at),
     createdBy,
     {
       paymentMethod: completedPayments[0]?.payment_method as PosPaymentMethod | undefined,
@@ -3116,10 +3116,26 @@ export async function backfillJournalEntries(options?: {
   const orderIds = (orders || []).map((o: { id: string }) => o.id);
   if (orderIds.length > 0) {
     reportProgress("pos", "Backfilling POS orders", 0, (orders || []).length);
-    const { data: items } = await supabase
+    const [{ data: items }, { data: posPayments }] = await Promise.all([
+      supabase
       .from("kitchen_order_items")
       .select("order_id, quantity, product_id")
-      .in("order_id", orderIds);
+      .in("order_id", orderIds),
+      supabase
+        .from("payments")
+        .select("transaction_id,paid_at")
+        .eq("organization_id", organizationId)
+        .eq("payment_source", "pos_hotel")
+        .eq("payment_status", "completed")
+        .in("transaction_id", orderIds)
+        .order("paid_at", { ascending: false }),
+    ]);
+    const paidAtByOrder = new Map<string, string>();
+    ((posPayments || []) as Array<{ transaction_id: string | null; paid_at: string }>).forEach((payment) => {
+      if (payment.transaction_id && !paidAtByOrder.has(payment.transaction_id)) {
+        paidAtByOrder.set(payment.transaction_id, payment.paid_at);
+      }
+    });
     const productIds = [...new Set((items || []).map((i: { product_id: string }) => i.product_id).filter(Boolean))];
     const { data: products } = await supabase.from("products").select("id, sales_price").in("id", productIds);
     const priceMap = Object.fromEntries(
@@ -3142,7 +3158,7 @@ export async function backfillJournalEntries(options?: {
             row.id,
             total,
             "POS order (backfill)",
-            toBusinessDateString(row.created_at || new Date().toISOString()),
+            toBusinessDateString(paidAtByOrder.get(row.id) || row.created_at || new Date().toISOString()),
             backfillCreatedBy
           );
       if (jr.ok) {

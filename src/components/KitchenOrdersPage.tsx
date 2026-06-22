@@ -329,6 +329,12 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
         .update({ created_at: iso })
         .eq("id", editingOrderId);
       if (orderErr) throw orderErr;
+      const { error: paymentDateErr } = await supabase
+        .from("payments")
+        .update({ paid_at: iso })
+        .eq("transaction_id", editingOrderId)
+        .eq("payment_source", "pos_hotel");
+      if (paymentDateErr) throw new Error(`Order date changed, but its linked payment date could not be updated: ${paymentDateErr.message}`);
       const { error: delErr } = await supabase.from("kitchen_order_items").delete().eq("order_id", editingOrderId);
       if (delErr) throw delErr;
       const nextItems = editingOrderItems

@@ -42,7 +42,7 @@ type TreasuryRequest = {
   status: string;
   disbursed_at: string | null;
 };
-type ExpenseJournalDate = { reference_id: string; entry_date: string };
+type ExpenseJournalDate = { reference_id: string; entry_date: string; created_at: string };
 type Tab = "cross-month" | "unmatched" | "outstanding";
 
 const money = new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 });
@@ -89,7 +89,7 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
         supabase.from("expenses").select("id,expense_date,amount,description,status,vendors(name)").eq("organization_id", orgId),
         supabase.from("vendor_payments").select("id,bill_id,amount,payment_date,created_at,reference,bill_allocations,vendors(name)").eq("organization_id", orgId),
         supabase.from("treasury_requests").select("source_type,source_id,status,disbursed_at").eq("organization_id", orgId),
-        supabase.from("journal_entries").select("reference_id,entry_date").eq("organization_id", orgId).eq("reference_type", "expense").eq("is_deleted", false),
+        supabase.from("journal_entries").select("reference_id,entry_date,created_at").eq("organization_id", orgId).eq("reference_type", "expense").eq("is_deleted", false).order("created_at", { ascending: false }),
       ]);
       if (billRes.error) throw billRes.error;
       if (expenseRes.error) throw expenseRes.error;
@@ -221,10 +221,13 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
     const treasuryByExpense = new Map(
       treasuryRequests.filter((row) => row.source_type === "expense").map((row) => [row.source_id, row])
     );
-    const journalDateByExpense = new Map(expenseJournalDates.map((row) => [row.reference_id, row.entry_date]));
+    const journalDateByExpense = new Map<string, string>();
+    expenseJournalDates.forEach((row) => {
+      if (!journalDateByExpense.has(row.reference_id)) journalDateByExpense.set(row.reference_id, row.entry_date);
+    });
     expenses.forEach((expense) => {
       const request = treasuryByExpense.get(expense.id);
-      const paidDate = journalDateByExpense.get(expense.id) || request?.disbursed_at || null;
+      const paidDate = journalDateByExpense.get(expense.id) || expense.expense_date || request?.disbursed_at || null;
       if (request?.status === "disbursed" && paidDate && monthKey(expense.expense_date) !== monthKey(paidDate)) {
         crossMonth.push({
           id: expense.id,
