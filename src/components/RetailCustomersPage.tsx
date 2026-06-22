@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Plus, Pencil, Trash2, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, FileText, Printer } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { getPosLabels } from "../lib/posExperience";
@@ -23,6 +23,26 @@ export type RetailCustomerRow = {
   updated_at: string;
 };
 
+type CustomerSaleRow = {
+  id: string;
+  customer_id: string | null;
+  sale_at: string;
+  total_amount: number | null;
+  net_amount_due: number | null;
+  sale_status: string | null;
+};
+
+type CustomerPaymentRow = {
+  id: string;
+  retail_customer_id: string | null;
+  transaction_id: string | null;
+  amount: number | null;
+  paid_at: string | null;
+  payment_status: string | null;
+};
+
+type StatementLine = { id: string; date: string; description: string; debit: number; credit: number; balance: number };
+
 export function RetailCustomersPage({
   readOnly = false,
   highlightCustomerId,
@@ -41,6 +61,10 @@ export function RetailCustomersPage({
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<RetailCustomerRow | null>(null);
   const [saving, setSaving] = useState(false);
+  const [debtFilter, setDebtFilter] = useState<"all" | "with_debt" | "no_debt">("all");
+  const [customerSales, setCustomerSales] = useState<CustomerSaleRow[]>([]);
+  const [customerPayments, setCustomerPayments] = useState<CustomerPaymentRow[]>([]);
+  const [statementCustomer, setStatementCustomer] = useState<RetailCustomerRow | null>(null);
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -65,6 +89,8 @@ export function RetailCustomersPage({
       try {
         const data = await desktopApi.listRetailCustomers();
         setRows((data || []) as RetailCustomerRow[]);
+        setCustomerSales([]);
+        setCustomerPayments([]);
       } catch (e) {
         setError(e instanceof Error ? e.message : "Failed to load local customers.");
         setRows([]);
@@ -73,12 +99,18 @@ export function RetailCustomersPage({
       }
       return;
     }
-    const { data, error: e } = await sb.from("retail_customers").select("*").eq("organization_id", orgId).order("name");
+    const [{ data, error: e }, salesResult, paymentsResult] = await Promise.all([
+      sb.from("retail_customers").select("*").eq("organization_id", orgId).order("name"),
+      sb.from("retail_sales").select("id,customer_id,sale_at,total_amount,net_amount_due,sale_status").eq("organization_id", orgId),
+      sb.from("payments").select("id,retail_customer_id,transaction_id,amount,paid_at,payment_status").eq("organization_id", orgId),
+    ]);
     if (e) {
       setError(e.message);
       setRows([]);
     } else {
       setRows((data || []) as RetailCustomerRow[]);
+      setCustomerSales((salesResult.data || []) as CustomerSaleRow[]);
+      setCustomerPayments((paymentsResult.data || []) as CustomerPaymentRow[]);
     }
     setLoading(false);
   }, [orgId, useDesktopLocalMode]);
@@ -200,6 +232,56 @@ export function RetailCustomersPage({
       return;
     }
     await load();
+  };
+
+  const debtByCustomerId = (() => {
+    const balances = new Map<string, number>();
+    const saleCustomerById = new Map<string, string>();
+    for (const sale of customerSales) {
+      if (!sale.customer_id || ["refunded", "reversed", "void"].includes(String(sale.sale_status || "").toLowerCase())) continue;
+      saleCustomerById.set(sale.id, sale.customer_id);
+      balances.set(sale.customer_id, (balances.get(sale.customer_id) || 0) + Number(sale.net_amount_due ?? sale.total_amount ?? 0));
+    }
+    for (const payment of customerPayments) {
+      if (payment.payment_status !== "completed") continue;
+      const customerId = payment.retail_customer_id || (payment.transaction_id ? saleCustomerById.get(payment.transaction_id) : null);
+      if (!customerId) continue;
+      balances.set(customerId, (balances.get(customerId) || 0) - Number(payment.amount || 0));
+    }
+    for (const [customerId, balance] of balances) balances.set(customerId, Math.max(0, Math.round(balance * 100) / 100));
+    return balances;
+  })();
+
+  const statementLines = (customer: RetailCustomerRow): StatementLine[] => {
+    const saleIds = new Set<string>();
+    const entries: Array<Omit<StatementLine, "balance"> & { order: number }> = [];
+    for (const sale of customerSales) {
+      if (sale.customer_id !== customer.id || ["refunded", "reversed", "void"].includes(String(sale.sale_status || "").toLowerCase())) continue;
+      saleIds.add(sale.id);
+      entries.push({ id: `sale-${sale.id}`, date: sale.sale_at, description: `POS sale ${sale.id.slice(0, 8)}`, debit: Number(sale.net_amount_due ?? sale.total_amount ?? 0), credit: 0, order: 0 });
+    }
+    for (const payment of customerPayments) {
+      if (payment.payment_status !== "completed") continue;
+      if (payment.retail_customer_id !== customer.id && (!payment.transaction_id || !saleIds.has(payment.transaction_id))) continue;
+      entries.push({ id: `payment-${payment.id}`, date: payment.paid_at || "", description: payment.transaction_id ? `Payment for ${payment.transaction_id.slice(0, 8)}` : "Customer payment", debit: 0, credit: Number(payment.amount || 0), order: 1 });
+    }
+    entries.sort((a, b) => a.date.localeCompare(b.date) || a.order - b.order);
+    let balance = 0;
+    return entries.map(({ order: _order, ...entry }) => {
+      balance = Math.max(0, Math.round((balance + entry.debit - entry.credit) * 100) / 100);
+      return { ...entry, balance };
+    });
+  };
+
+  const printStatement = (customer: RetailCustomerRow) => {
+    const lines = statementLines(customer);
+    const doc = window.open("", "_blank", "width=760,height=800");
+    if (!doc) return alert("Allow popups to print the customer statement.");
+    const rowsHtml = lines.map((line) => `<tr><td>${line.date ? new Date(line.date).toLocaleDateString() : "-"}</td><td>${line.description}</td><td class="num">${line.debit.toFixed(2)}</td><td class="num">${line.credit.toFixed(2)}</td><td class="num">${line.balance.toFixed(2)}</td></tr>`).join("");
+    doc.document.write(`<html><head><title>Customer Statement</title><style>body{font-family:Arial,sans-serif;padding:24px;color:#0f172a}table{width:100%;border-collapse:collapse;margin-top:16px}th,td{padding:8px;border-bottom:1px solid #cbd5e1;text-align:left}.num{text-align:right}</style></head><body><h2>Customer Statement</h2><p><strong>${customer.name}</strong></p><p>${customer.phone || customer.email || ""}</p><table><thead><tr><th>Date</th><th>Description</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Balance</th></tr></thead><tbody>${rowsHtml || '<tr><td colspan="5">No transactions.</td></tr>'}</tbody></table></body></html>`);
+    doc.document.close();
+    doc.focus();
+    doc.print();
   };
 
   if (!orgId && !useDesktopLocalMode) {

@@ -707,12 +707,13 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
         reference: editPaymentReference.trim() || null,
       }).eq("id", payment.id).eq("organization_id", user?.organization_id ?? "");
       if (paymentError) throw paymentError;
-      const { error: journalError } = await supabase.from("journal_entries").update({ entry_date: editPaymentDate })
+      const { data: updatedJournals, error: journalError } = await supabase.from("journal_entries").update({ entry_date: editPaymentDate })
         .eq("reference_type", "vendor_payment")
         .eq("reference_id", payment.id)
-        .eq("organization_id", user?.organization_id ?? "")
-        .eq("is_deleted", false);
+        .eq("is_deleted", false)
+        .select("id");
       if (journalError) throw new Error(`Payment saved, but its journal date could not be updated: ${journalError.message}`);
+      if (!updatedJournals?.length) throw new Error("Payment saved, but no active journal was found to update.");
       setEditingSupplierPayment(null);
       await fetchData();
     } catch (error) {

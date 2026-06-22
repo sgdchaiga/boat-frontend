@@ -42,6 +42,7 @@ type TreasuryRequest = {
   status: string;
   disbursed_at: string | null;
 };
+type ExpenseJournalDate = { reference_id: string; entry_date: string };
 type Tab = "cross-month" | "unmatched" | "outstanding";
 
 const money = new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 });
@@ -72,6 +73,7 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
   const [payments, setPayments] = useState<Payment[]>([]);
   const [allocationRows, setAllocationRows] = useState<AllocationRow[]>([]);
   const [treasuryRequests, setTreasuryRequests] = useState<TreasuryRequest[]>([]);
+  const [expenseJournalDates, setExpenseJournalDates] = useState<ExpenseJournalDate[]>([]);
   const [tab, setTab] = useState<Tab>("cross-month");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -82,11 +84,12 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
     setLoading(true);
     setError(null);
     try {
-      const [billRes, expenseRes, initialPaymentRes, treasuryRes] = await Promise.all([
+      const [billRes, expenseRes, initialPaymentRes, treasuryRes, expenseJournalRes] = await Promise.all([
         supabase.from("bills").select("id,vendor_id,bill_date,due_date,amount,description,status,approved_at,vendors(name)").eq("organization_id", orgId),
         supabase.from("expenses").select("id,expense_date,amount,description,status,vendors(name)").eq("organization_id", orgId),
         supabase.from("vendor_payments").select("id,bill_id,amount,payment_date,created_at,reference,bill_allocations,vendors(name)").eq("organization_id", orgId),
         supabase.from("treasury_requests").select("source_type,source_id,status,disbursed_at").eq("organization_id", orgId),
+        supabase.from("journal_entries").select("reference_id,entry_date").eq("organization_id", orgId).eq("reference_type", "expense").eq("is_deleted", false),
       ]);
       if (billRes.error) throw billRes.error;
       if (expenseRes.error) throw expenseRes.error;
@@ -154,6 +157,7 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
       setPayments(allPayments);
       setAllocationRows(rows);
       setTreasuryRequests(treasuryRes.error ? [] : (treasuryRes.data || []) as TreasuryRequest[]);
+      setExpenseJournalDates(expenseJournalRes.error ? [] : (expenseJournalRes.data || []) as ExpenseJournalDate[]);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not load cash-out reconciliation.");
     } finally {
@@ -217,16 +221,18 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
     const treasuryByExpense = new Map(
       treasuryRequests.filter((row) => row.source_type === "expense").map((row) => [row.source_id, row])
     );
+    const journalDateByExpense = new Map(expenseJournalDates.map((row) => [row.reference_id, row.entry_date]));
     expenses.forEach((expense) => {
       const request = treasuryByExpense.get(expense.id);
-      if (request?.status === "disbursed" && request.disbursed_at && monthKey(expense.expense_date) !== monthKey(request.disbursed_at)) {
+      const paidDate = journalDateByExpense.get(expense.id) || request?.disbursed_at || null;
+      if (request?.status === "disbursed" && paidDate && monthKey(expense.expense_date) !== monthKey(paidDate)) {
         crossMonth.push({
           id: expense.id,
           type: "Expense",
           party: vendorName(expense.vendors),
           description: expense.description || "Spend money expense",
           sourceDate: expense.expense_date,
-          paidDate: request.disbursed_at,
+          paidDate,
           amount: Number(expense.amount || 0),
           page: "purchases_expenses",
           state: {},
@@ -263,7 +269,7 @@ export function CashOutReconciliationPage({ onNavigate }: { onNavigate?: Navigat
       );
 
     return { crossMonth, unmatched, outstandingBills, outstandingExpenses };
-  }, [allocationRows, bills, expenses, payments, treasuryRequests]);
+  }, [allocationRows, bills, expenseJournalDates, expenses, payments, treasuryRequests]);
 
   const query = search.trim().toLowerCase();
   const includesQuery = (...values: unknown[]) => !query || values.some((value) => String(value || "").toLowerCase().includes(query));
