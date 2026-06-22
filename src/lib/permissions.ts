@@ -70,6 +70,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "practice_engagements", label: "Engagements", group: "Practice" },
   { page: "practice_documents", label: "Document Vault", group: "Practice" },
   { page: "practice_reconciliation", label: "Reconciliation Center", group: "Practice" },
+  { page: "practice_stock_take", label: "Stock Take", group: "Practice" },
   { page: "practice_tasks", label: "Tasks & Deadlines", group: "Practice" },
   { page: "practice_billing", label: "Billing", group: "Practice" },
   { page: "rooms", label: "Rooms", group: "Front desk" },

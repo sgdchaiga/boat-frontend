@@ -67,6 +67,7 @@ import { ManualJournalsPage } from './components/accounting/ManualJournalsPage';
 import { GeneralLedgerPage } from './components/accounting/GeneralLedgerPage';
 import { BankReconciliationPage } from './components/accounting/BankReconciliationPage';
 import { PracticeWorkspacePage } from './components/accounting-practice/PracticeWorkspacePage';
+import { PracticeStockTakePage } from './components/accounting-practice/PracticeStockTakePage';
 import { TrialBalancePage } from './components/accounting/TrialBalancePage';
 import { IncomeStatementPage } from './components/accounting/IncomeStatementPage';
 import { BalanceSheetPage } from './components/accounting/BalanceSheetPage';
@@ -831,6 +832,8 @@ function AppContent() {
         return <PracticeWorkspacePage section="tasks" readOnly={access.readOnly} />;
       case 'practice_billing':
         return <PracticeWorkspacePage section="billing" readOnly={access.readOnly} />;
+      case 'practice_stock_take':
+        return <PracticeStockTakePage readOnly={access.readOnly} />;
       case 'retail_dashboard':
         return <RetailDashboard onNavigate={navigate} />;
       case SACCOPRO_PAGE.dashboard:

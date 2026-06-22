@@ -473,6 +473,7 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
   "practice_engagements",
   "practice_documents",
   "practice_reconciliation",
+  "practice_stock_take",
   "practice_tasks",
   "practice_billing",
 ]);

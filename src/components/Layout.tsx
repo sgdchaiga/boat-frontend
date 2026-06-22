@@ -31,6 +31,7 @@ import {
   ArrowLeft,
   Landmark,
   Briefcase,
+  PackageCheck,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -712,6 +713,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Engagements', icon: Briefcase, page: 'practice_engagements' },
     { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
     { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
+    { name: 'Stock Take', icon: PackageCheck, page: 'practice_stock_take' },
     { name: 'Tasks & Deadlines', icon: BookOpen, page: 'practice_tasks' },
     { name: 'Billing', icon: Receipt, page: 'practice_billing' },
     { name: 'Staff', icon: UsersRound, page: 'staff' },
