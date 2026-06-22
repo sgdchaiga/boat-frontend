@@ -13,13 +13,16 @@ type ImportLine = Omit<StockLine, "id" | "physical_qty">;
 
 const input = "rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
 const numberFrom = (value: string) => {
-  const parsed = Number(String(value || "").replace(/,/g, "").trim());
+  const raw = String(value ?? "").replace(/,/g, "").trim();
+  if (!raw || raw === "-") return null;
+  const normalized = /^\(.*\)$/.test(raw) ? `-${raw.slice(1, -1)}` : raw;
+  const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 };
-const valueFrom = (row: Record<string, string>, aliases: string[]) => {
-  for (const alias of aliases) if (row[alias]?.trim()) return row[alias].trim();
-  return "";
-};
+const detectHeader = (headers: string[], aliases: string[], patterns: RegExp[], exclusions: RegExp[] = []) =>
+  aliases.find((alias) => headers.includes(alias)) ||
+  headers.find((header) => patterns.some((pattern) => pattern.test(header)) && !exclusions.some((pattern) => pattern.test(header))) ||
+  "";
 
 export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean }) {
   const { user } = useAuth();
@@ -77,24 +80,40 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
     if (!file) return;
     try {
       const parsed = await parseBulkImportFile(file);
+      const nameHeader = detectHeader(parsed.headers, ["item_name", "product_name", "description", "name", "item", "product"], [/^(item|product).*(name|description)$/, /^(item|product|description)$/]);
+      const quantityHeader = detectHeader(
+        parsed.headers,
+        ["system_qty", "system_quantity", "book_qty", "book_quantity", "quantity", "qty", "stock", "stock_on_hand", "on_hand"],
+        [/(system|book|expected|theoretical).*(qty|quantity|stock|balance)/, /(qty|quantity|stock_on_hand|on_hand|stock|balance)/],
+        [/(physical|actual|counted|cost|value|amount|rate|code|sku)/]
+      );
+      if (!nameHeader || !quantityHeader) {
+        setSourceFile(file.name); setImportLines([]);
+        setMessage(`Could not identify ${!nameHeader ? "an item-name" : "a system-quantity"} column. File columns: ${parsed.headers.join(", ") || "none"}.`);
+        return;
+      }
+      const codeHeader = detectHeader(parsed.headers, ["item_code", "product_code", "sku", "code", "barcode"], [/(item|product).*code/, /^(sku|code|barcode)$/]);
+      const categoryHeader = detectHeader(parsed.headers, ["category", "group", "department", "class"], [/(category|department|group|class)/]);
+      const unitHeader = detectHeader(parsed.headers, ["unit", "uom", "unit_of_measure"], [/^(unit|uom|unit_of_measure)$/]);
+      const costHeader = detectHeader(parsed.headers, ["unit_cost", "cost", "cost_price", "average_cost"], [/(unit|average|avg).*(cost|price)/, /^(cost|cost_price)$/], [/(total|value|amount)/]);
       const mapped: ImportLine[] = [];
       let skipped = 0;
       parsed.rows.forEach((row) => {
-        const itemName = valueFrom(row, ["item_name", "product_name", "description", "name", "item", "product"]);
-        const systemQty = numberFrom(valueFrom(row, ["system_qty", "system_quantity", "book_qty", "book_quantity", "quantity", "qty", "stock", "stock_on_hand", "on_hand"]));
+        const itemName = row[nameHeader]?.trim() || "";
+        const systemQty = numberFrom(row[quantityHeader]);
         if (!itemName || systemQty == null) { skipped += 1; return; }
         mapped.push({
-          item_code: valueFrom(row, ["item_code", "product_code", "sku", "code", "barcode"]) || null,
+          item_code: codeHeader ? row[codeHeader]?.trim() || null : null,
           item_name: itemName,
-          category: valueFrom(row, ["category", "group", "department", "class"]) || null,
-          unit: valueFrom(row, ["unit", "uom", "unit_of_measure"]) || null,
+          category: categoryHeader ? row[categoryHeader]?.trim() || null : null,
+          unit: unitHeader ? row[unitHeader]?.trim() || null : null,
           system_qty: systemQty,
-          unit_cost: numberFrom(valueFrom(row, ["unit_cost", "cost", "cost_price", "average_cost"])) || 0,
+          unit_cost: costHeader ? numberFrom(row[costHeader]) || 0 : 0,
         });
       });
       setSourceFile(file.name);
       setImportLines(mapped);
-      setMessage(`${mapped.length} item(s) ready to import${skipped ? `; ${skipped} row(s) skipped because item name or system quantity was missing` : ""}.`);
+      setMessage(`${mapped.length} item(s) ready. System quantity mapped from “${quantityHeader}”${skipped ? `; ${skipped} row(s) skipped because item name or system quantity was missing` : ""}.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not read the stock file.");
     }
