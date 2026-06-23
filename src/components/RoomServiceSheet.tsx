@@ -69,6 +69,7 @@ export function RoomServiceSheet() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   });
   const [mode, setMode] = useState<EntryMode>('quick');
+  const [workspaceTab, setWorkspaceTab] = useState<'rooms' | 'laundry'>('rooms');
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [attendantId, setAttendantId] = useState('');
@@ -397,23 +398,31 @@ export function RoomServiceSheet() {
           <div><p className="text-sm font-semibold">{online ? 'Synchronizing saved work' : 'Working offline'}</p><p className="text-xs">{pendingSync} update{pendingSync === 1 ? '' : 's'} stored safely on this device and queued for automatic sync.</p></div>
         </div>
       )}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 grid md:grid-cols-[auto_1fr_auto] gap-4 items-end">
+
+      <div className="flex gap-2 border-b border-slate-200">
+        <button type="button" onClick={() => setWorkspaceTab('rooms')} className={`px-4 py-3 text-sm font-semibold border-b-2 flex items-center gap-2 ${workspaceTab === 'rooms' ? 'border-brand-700 text-brand-700' : 'border-transparent text-slate-500'}`}><ClipboardCheck className="w-4 h-4" />Room Service</button>
+        <button type="button" onClick={() => setWorkspaceTab('laundry')} className={`px-4 py-3 text-sm font-semibold border-b-2 flex items-center gap-2 ${workspaceTab === 'laundry' ? 'border-brand-700 text-brand-700' : 'border-transparent text-slate-500'}`}><Shirt className="w-4 h-4" />Laundry</button>
+      </div>
+
+      <div className={`bg-white border border-slate-200 rounded-xl p-4 grid gap-4 items-end ${workspaceTab === 'rooms' ? 'md:grid-cols-[auto_1fr_auto]' : 'md:grid-cols-[auto_1fr]'}`}>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Service date</label>
           <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="border border-slate-300 rounded-lg px-3 py-2" />
         </div>
-        <div>
+        {workspaceTab === 'rooms' && <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Room attendant</label>
           <select value={attendantId} onChange={(event) => setAttendantId(event.target.value)} className="w-full max-w-sm border border-slate-300 rounded-lg px-3 py-2">
             <option value="">Select attendant</option>
             {staff.map((person) => <option key={person.id} value={person.id}>{person.full_name}</option>)}
           </select>
-        </div>
-        <button type="button" onClick={saveAll} disabled={dirty.size === 0} className="app-btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
+        </div>}
+        {workspaceTab === 'rooms' && <button type="button" onClick={saveAll} disabled={dirty.size === 0} className="app-btn-primary flex items-center justify-center gap-2 disabled:opacity-50">
           <Save className="w-4 h-4" /> Save all ({dirty.size})
-        </button>
+        </button>}
+        {workspaceTab === 'laundry' && <p className="text-sm text-slate-500 md:pb-2">Laundry issues, returns and reconciliation for the selected date.</p>}
       </div>
 
+      {workspaceTab === 'rooms' && <>
       <div className="bg-brand-50 border border-brand-200 rounded-xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <p className="font-semibold text-slate-900">Choose how the attendant records usage</p>
@@ -519,8 +528,9 @@ export function RoomServiceSheet() {
         </table>
         {rooms.length === 0 && <div className="p-10 text-center text-slate-500">No rooms are configured.</div>}
       </div>
+      </>}
 
-      <section className="space-y-4">
+      {workspaceTab === 'laundry' && <section className="space-y-4">
         <div className="flex items-center gap-2"><Shirt className="w-6 h-6 text-brand-700" /><div><h2 className="text-xl font-bold text-slate-900">Laundry reconciliation</h2><p className="text-sm text-slate-500">Compare room consumption with clean issues and soiled returns for {date}.</p></div></div>
         <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
           <table className="w-full min-w-[750px] text-sm">
@@ -543,7 +553,7 @@ export function RoomServiceSheet() {
           <div className="grid grid-cols-2 md:grid-cols-5 gap-3">{ITEMS.map(({ key, label }) => <label key={key} className="text-xs font-medium text-slate-600">{label}<input type="number" min="0" value={laundryQty[key]} onChange={(event) => setLaundryQty((current) => ({ ...current, [key]: Math.max(0, Number.parseInt(event.target.value, 10) || 0) }))} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-base text-slate-900" /></label>)}</div>
           <div className="flex flex-col md:flex-row gap-3 mt-4"><input value={laundryNotes} onChange={(event) => setLaundryNotes(event.target.value)} placeholder="Reference or notes" className="flex-1 border border-slate-300 rounded-lg px-3 py-2" /><button type="button" onClick={() => void recordLaundry()} disabled={savingLaundry} className="app-btn-primary flex items-center justify-center gap-2"><ClipboardCheck className="w-4 h-4" />{savingLaundry ? 'Recording…' : 'Record movement'}</button><button type="button" onClick={() => void fetchData()} className="px-3 py-2 border border-slate-300 rounded-lg"><RefreshCw className="w-4 h-4" /></button></div>
         </div>
-      </section>
+      </section>}
     </div>
   );
 }

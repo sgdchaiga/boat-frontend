@@ -4,6 +4,7 @@ import {
   ArrowUpRight,
   Banknote,
   Bell,
+  CheckCircle2,
   ClipboardList,
   CreditCard,
   FileText,
@@ -15,6 +16,8 @@ import {
   ShieldCheck,
   Smartphone,
   UserRound,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { PageNotes } from "@/components/common/PageNotes";
 import { useAppContext } from "@/contexts/AppContext";
@@ -24,6 +27,13 @@ import {
   fetchSavingsAccountsList,
   type SaccoSavingsAccountListRow,
 } from "@/lib/saccoSavingsAccountsList";
+import {
+  queueMemberRequest,
+  readMemberRequests,
+  syncMemberRequests,
+  type MemberRequestKind,
+  type SaccoMemberRequest,
+} from "@/lib/saccoMemberOffline";
 
 type Props = {
   navigate?: (page: string, state?: Record<string, unknown>) => void;
@@ -54,6 +64,12 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
   const [memberSearch, setMemberSearch] = useState("");
   const [accounts, setAccounts] = useState<SaccoSavingsAccountListRow[]>([]);
   const [accountsError, setAccountsError] = useState<string | null>(null);
+  const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [memberRequests, setMemberRequests] = useState<SaccoMemberRequest[]>([]);
+  const [activeAction, setActiveAction] = useState<MemberRequestKind | null>(null);
+  const [actionForm, setActionForm] = useState({ amount: "", destination: "", provider: "MTN", reference: "", note: "" });
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
     if (!selectedMemberId) {
@@ -67,17 +83,55 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
     if (!orgId) return;
     let alive = true;
     setAccountsError(null);
+    const cacheKey = `boat.sacco.member.accounts.v1:${orgId}`;
+    try {
+      const cached = JSON.parse(localStorage.getItem(cacheKey) || "[]");
+      if (Array.isArray(cached) && cached.length) setAccounts(cached);
+    } catch { /* keep server data */ }
     void fetchSavingsAccountsList(orgId)
       .then((rows) => {
-        if (alive) setAccounts(rows);
+        if (alive) {
+          setAccounts(rows);
+          localStorage.setItem(cacheKey, JSON.stringify(rows));
+        }
       })
       .catch((e) => {
-        if (alive) setAccountsError(e instanceof Error ? e.message : "Could not load savings accounts.");
+        if (alive) setAccountsError(navigator.onLine
+          ? (e instanceof Error ? e.message : "Could not load savings accounts.")
+          : "Offline: showing the most recently saved account information on this device.");
       });
     return () => {
       alive = false;
     };
   }, [user?.organization_id]);
+
+  useEffect(() => {
+    const setConnected = () => setOnline(navigator.onLine);
+    window.addEventListener("online", setConnected);
+    window.addEventListener("offline", setConnected);
+    return () => {
+      window.removeEventListener("online", setConnected);
+      window.removeEventListener("offline", setConnected);
+    };
+  }, []);
+
+  useEffect(() => {
+    const orgId = user?.organization_id;
+    if (!orgId || !selectedMemberId) return;
+    const refresh = () => setMemberRequests(readMemberRequests(orgId, selectedMemberId));
+    refresh();
+    window.addEventListener("boat:sacco-member-queue", refresh);
+    return () => window.removeEventListener("boat:sacco-member-queue", refresh);
+  }, [selectedMemberId, user?.organization_id]);
+
+  useEffect(() => {
+    const orgId = user?.organization_id;
+    if (!online || !orgId || !selectedMemberId) return;
+    setSyncing(true);
+    void syncMemberRequests(orgId, selectedMemberId)
+      .then(setMemberRequests)
+      .finally(() => setSyncing(false));
+  }, [online, selectedMemberId, user?.organization_id]);
 
   const memberOptions = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
@@ -114,6 +168,36 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
   const activeLoans = memberLoans.filter((l) => ["approved", "disbursed", "defaulted"].includes(l.status));
   const totalLoanBalance = activeLoans.reduce((sum, loan) => sum + Number(loan.balance || 0), 0);
   const lastTransaction = memberTransactions[0] ?? null;
+
+  const submitMemberRequest = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const orgId = user?.organization_id;
+    const amount = Number(actionForm.amount);
+    if (!orgId || !member || !activeAction || !Number.isFinite(amount) || amount <= 0) return;
+    if (activeAction === "member_transfer" && !actionForm.destination.trim()) return;
+    if (activeAction === "bill_payment" && !actionForm.reference.trim()) return;
+    queueMemberRequest({
+      organizationId: orgId,
+      memberId: member.id,
+      kind: activeAction,
+      amount,
+      destination: actionForm.destination.trim() || undefined,
+      provider: actionForm.provider || undefined,
+      accountReference: actionForm.reference.trim() || undefined,
+      note: actionForm.note.trim() || undefined,
+    });
+    if (online) {
+      setSyncing(true);
+      const rows = await syncMemberRequests(orgId, member.id);
+      setMemberRequests(rows);
+      setSyncing(false);
+      setActionMessage("Request submitted for confirmation. Your balance changes only after it is processed.");
+    } else {
+      setActionMessage("Saved safely on this phone. It will submit automatically when internet returns.");
+    }
+    setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "" });
+    setActiveAction(null);
+  };
 
   if (!member) {
     return (
@@ -160,10 +244,12 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
     onClick?: () => void;
   }> = [
     {
-      label: "Balance",
-      desc: "Inquiry",
+      label: "Save",
+      desc: "Add savings",
       icon: <PiggyBank size={20} />,
       tone: "bg-emerald-50 text-emerald-700 border-emerald-100",
+      disabled: readOnly,
+      onClick: () => setActiveAction("savings_deposit"),
     },
     {
       label: "Transfer",
@@ -171,7 +257,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
       icon: <Send size={20} />,
       tone: "bg-sky-50 text-sky-700 border-sky-100",
       disabled: readOnly,
-      onClick: () => navigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "transfer" }),
+      onClick: () => setActiveAction("member_transfer"),
     },
     {
       label: "Loans",
@@ -189,31 +275,45 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
       onClick: () => navigate?.(SACCOPRO_PAGE.savingsStatements, { memberId: member.id }),
     },
     {
-      label: "QR Pay",
-      desc: "Scan or show code",
-      icon: <QrCode size={20} />,
+      label: "Bills",
+      desc: "Utilities & airtime",
+      icon: <Smartphone size={20} />,
       tone: "bg-amber-50 text-amber-700 border-amber-100",
       disabled: readOnly,
+      onClick: () => setActiveAction("bill_payment"),
     },
     {
-      label: "MoMo",
-      desc: "Mobile money",
-      icon: <Smartphone size={20} />,
+      label: "Balance",
+      desc: "Available offline",
+      icon: <QrCode size={20} />,
       tone: "bg-rose-50 text-rose-700 border-rose-100",
-      disabled: readOnly,
-      onClick: () => navigate?.(SACCOPRO_PAGE.teller, { tellerDesk: "receive", tellerTask: "deposit", channel: "mobile_money" }),
     },
   ];
 
   return (
     <div className="space-y-6">
+      <div className={`sticky top-2 z-20 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 shadow-sm ${online ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-950"}`}>
+        <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
+          {online ? <Wifi size={18} /> : <WifiOff size={18} />}
+          <span>{online ? (syncing ? "Internet restored — syncing…" : "Online") : "Offline mode — balances are last synced"}</span>
+        </div>
+        <span className="shrink-0 rounded-full bg-white/80 px-2.5 py-1 text-xs font-bold">
+          {memberRequests.filter((row) => row.status !== "submitted").length} pending
+        </span>
+      </div>
+
+      {actionMessage && (
+        <div className="flex items-start gap-2 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+          <CheckCircle2 size={18} className="mt-0.5 shrink-0" /> {actionMessage}
+        </div>
+      )}
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex flex-wrap items-center gap-2">
           <Landmark className="text-emerald-600" size={26} />
           <h1 className="text-2xl font-bold text-slate-900">SACCO member app</h1>
           <PageNotes ariaLabel="SACCO member app help">
             <p>
-              Read-only member account view. Posting still happens in Teller, and loan applications use the existing SACCO loan workflow.
+              Mobile member self-service with cached balances and an offline request queue. Money is posted only after server confirmation.
             </p>
           </PageNotes>
         </div>
@@ -364,6 +464,64 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
           </div>
         </div>
       </section>
+
+      {activeAction && (
+        <section className="fixed inset-0 z-50 flex items-end justify-center bg-slate-950/55 p-0 sm:items-center sm:p-4" role="dialog" aria-modal="true">
+          <form onSubmit={submitMemberRequest} className="w-full max-w-md rounded-t-3xl bg-white p-5 shadow-2xl sm:rounded-3xl">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Member self-service</p>
+                <h2 className="mt-1 text-xl font-black text-slate-950">
+                  {activeAction === "savings_deposit" ? "Add to savings" : activeAction === "member_transfer" ? "Send to a member" : "Pay a bill"}
+                </h2>
+                <p className="mt-1 text-xs text-slate-500">{online ? "Will submit now for confirmation." : "Will be saved in this device's local app storage and queued until online."}</p>
+              </div>
+              <button type="button" onClick={() => setActiveAction(null)} className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-bold">Close</button>
+            </div>
+            <div className="space-y-4">
+              {activeAction === "member_transfer" && (
+                <label className="block text-sm font-semibold text-slate-700">Recipient member number
+                  <input required value={actionForm.destination} onChange={(e) => setActionForm((f) => ({ ...f, destination: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3" placeholder="e.g. SAC-00124" />
+                </label>
+              )}
+              {activeAction === "bill_payment" && (<>
+                <label className="block text-sm font-semibold text-slate-700">Provider
+                  <select value={actionForm.provider} onChange={(e) => setActionForm((f) => ({ ...f, provider: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3">
+                    <option>MTN</option><option>Airtel</option><option>UMEME</option><option>NWSC</option><option>TV</option><option>Other</option>
+                  </select>
+                </label>
+                <label className="block text-sm font-semibold text-slate-700">Phone / meter / account number
+                  <input required value={actionForm.reference} onChange={(e) => setActionForm((f) => ({ ...f, reference: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3" />
+                </label>
+              </>)}
+              <label className="block text-sm font-semibold text-slate-700">Amount (UGX)
+                <input required type="number" inputMode="decimal" min="500" step="100" value={actionForm.amount} onChange={(e) => setActionForm((f) => ({ ...f, amount: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3 text-lg font-bold" placeholder="0" />
+              </label>
+              <label className="block text-sm font-semibold text-slate-700">Note (optional)
+                <input value={actionForm.note} onChange={(e) => setActionForm((f) => ({ ...f, note: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3" />
+              </label>
+              <button type="submit" className="min-h-12 w-full rounded-xl bg-emerald-600 px-4 font-bold text-white hover:bg-emerald-700">
+                {online ? "Submit request" : "Save offline"}
+              </button>
+              <p className="text-center text-xs text-slate-500">No balance is deducted until the SACCO or payment provider confirms the transaction.</p>
+            </div>
+          </form>
+        </section>
+      )}
+
+      {memberRequests.length > 0 && (
+        <section className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between"><h2 className="font-bold text-slate-900">Requests from this phone</h2><span className="text-xs text-slate-500">Auto-sync enabled</span></div>
+          <div className="mt-3 divide-y divide-slate-100">
+            {memberRequests.slice(0, 5).map((row) => (
+              <div key={row.id} className="flex items-center justify-between gap-3 py-3 text-sm">
+                <div><p className="font-semibold capitalize text-slate-900">{row.kind.replace(/_/g, " ")}</p><p className="text-xs text-slate-500">{new Date(row.createdAt).toLocaleString()} {row.error ? `· ${row.error}` : ""}</p></div>
+                <div className="text-right"><p className="font-bold tabular-nums">{formatCurrency(row.amount)}</p><p className={`text-xs font-semibold capitalize ${row.status === "failed" ? "text-rose-700" : row.status === "submitted" ? "text-emerald-700" : "text-amber-700"}`}>{row.status}</p></div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">

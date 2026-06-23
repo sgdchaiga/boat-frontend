@@ -29,7 +29,9 @@ function suggestedAnnualRatePct(m: Member | undefined, lt: LoanProduct | undefin
   return String(tierDefaultDecliningRatePa(sharesToTier(m?.sharesBalance ?? 0)));
 }
 
-const LoanInput: React.FC = () => {
+type Props = { initialMemberId?: string };
+
+const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
   const { members, addLoan, formatCurrency, loanProducts, refreshSaccoWorkspace, saccoLoanPolicies } = useAppContext();
 
   useEffect(() => {
@@ -41,7 +43,7 @@ const LoanInput: React.FC = () => {
   const activeProducts = loanProducts.filter(p => p.isActive);
 
   const [form, setForm] = useState({
-    memberId: '', memberName: '', loanType: activeProducts[0]?.name || '',
+    memberId: initialMemberId || '', memberName: members.find((m) => m.id === initialMemberId)?.name || '', loanType: activeProducts[0]?.name || '',
     amount: '', interestRate: String(activeProducts[0]?.interestRate || 12),
     term: '12', guarantors: [''], purpose: '',
     applicationDate: new Date().toISOString().split('T')[0],

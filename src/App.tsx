@@ -913,7 +913,7 @@ function AppContent() {
       case SACCOPRO_PAGE.loanList:
         return <SaccoLoanList />;
       case SACCOPRO_PAGE.loanInput:
-        return <SacoLoanInput />;
+        return <SacoLoanInput initialMemberId={pageState.memberId as string | undefined} />;
       case SACCOPRO_PAGE.loanApproval:
         return <SaccoLoanApproval pipeline="approval_gates" />;
       case SACCOPRO_PAGE.loanDisbursement:
