@@ -398,6 +398,53 @@ export interface Database {
           source_documents?: unknown
         }
       }
+      housekeeping_attendant_sheets: {
+        Row: {
+          id: string
+          organization_id: string
+          service_date: string
+          room_id: string
+          attendant_id: string | null
+          bed_sheets: number
+          pillow_cases: number
+          bath_towels: number
+          hand_towels: number
+          bath_mats: number
+          notes: string | null
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string | null
+          service_date?: string
+          room_id: string
+          attendant_id?: string | null
+          bed_sheets?: number
+          pillow_cases?: number
+          bath_towels?: number
+          hand_towels?: number
+          bath_mats?: number
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          service_date?: string
+          room_id?: string
+          attendant_id?: string | null
+          bed_sheets?: number
+          pillow_cases?: number
+          bath_towels?: number
+          hand_towels?: number
+          bath_mats?: number
+          notes?: string | null
+          created_at?: string
+          updated_at?: string
+        }
+      }
       housekeeping_tasks: {
         Row: {
           id: string
