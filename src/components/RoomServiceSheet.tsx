@@ -524,12 +524,12 @@ export function RoomServiceSheet() {
         <div className="flex items-center gap-2"><Shirt className="w-6 h-6 text-brand-700" /><div><h2 className="text-xl font-bold text-slate-900">Laundry reconciliation</h2><p className="text-sm text-slate-500">Compare room consumption with clean issues and soiled returns for {date}.</p></div></div>
         <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
           <table className="w-full min-w-[750px] text-sm">
-            <thead className="bg-slate-50"><tr><th className="p-3 text-left">Item</th><th className="p-3 text-right">Room consumption</th><th className="p-3 text-right">Laundry issued</th><th className="p-3 text-right">Laundry returned</th><th className="p-3 text-right">Issue variance</th><th className="p-3 text-right">Unreturned</th></tr></thead>
+            <thead className="bg-slate-50"><tr><th className="p-3 text-left">Item</th><th className="p-3 text-right">Room consumption</th><th className="p-3 text-right">Laundry issued</th><th className="p-3 text-right">Laundry returned</th><th className="p-3 text-right">Issue variance</th><th className="p-3 text-right" title="Laundry issued minus laundry returned">Unreturned</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
               {ITEMS.map(({ key, label }) => {
                 const issueVariance = totals.issued[key] - totals.consumed[key];
-                const unreturned = totals.consumed[key] - totals.returned[key];
-                return <tr key={key}><td className="p-3 font-semibold">{label}</td><td className="p-3 text-right">{totals.consumed[key]}</td><td className="p-3 text-right">{totals.issued[key]}</td><td className="p-3 text-right">{totals.returned[key]}</td><td className={`p-3 text-right font-semibold ${issueVariance < 0 ? 'text-red-600' : issueVariance > 0 ? 'text-amber-600' : 'text-green-600'}`}>{issueVariance > 0 ? '+' : ''}{issueVariance}</td><td className={`p-3 text-right font-semibold ${unreturned > 0 ? 'text-red-600' : 'text-green-600'}`}>{unreturned}</td></tr>;
+                const unreturned = totals.issued[key] - totals.returned[key];
+                return <tr key={key}><td className="p-3 font-semibold">{label}</td><td className="p-3 text-right">{totals.consumed[key]}</td><td className="p-3 text-right">{totals.issued[key]}</td><td className="p-3 text-right">{totals.returned[key]}</td><td className={`p-3 text-right font-semibold ${issueVariance < 0 ? 'text-red-600' : issueVariance > 0 ? 'text-amber-600' : 'text-green-600'}`}>{issueVariance > 0 ? '+' : ''}{issueVariance}</td><td className={`p-3 text-right font-semibold ${unreturned > 0 ? 'text-red-600' : unreturned < 0 ? 'text-amber-600' : 'text-green-600'}`}>{unreturned}</td></tr>;
               })}
             </tbody>
           </table>
