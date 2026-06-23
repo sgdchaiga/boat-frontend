@@ -718,6 +718,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
     { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
     { name: 'Stock Take', icon: PackageCheck, page: 'practice_stock_take' },
+    { name: 'Housekeeping Audit', icon: FileText, page: 'practice_housekeeping_audit' },
     { name: 'Tasks & Deadlines', icon: BookOpen, page: 'practice_tasks' },
     { name: 'Billing', icon: Receipt, page: 'practice_billing' },
     { name: 'Staff', icon: UsersRound, page: 'staff' },

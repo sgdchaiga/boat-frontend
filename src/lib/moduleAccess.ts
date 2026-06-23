@@ -471,6 +471,7 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
   "practice_dashboard",
   "practice_clients",
   "practice_engagements",
+  "practice_housekeeping_audit",
   "practice_documents",
   "practice_reconciliation",
   "practice_stock_take",
