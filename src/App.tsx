@@ -375,13 +375,17 @@ function getPageStateFromUrl(): Record<string, unknown> {
 }
 
 function AppContent() {
-  const { user, loading, needsOrganizationPicker, isSuperAdmin, isHotelStaff } = useAuth();
+  const { user, loading, needsOrganizationPicker, isSuperAdmin, isHotelStaff, signOut, completeMemberInitialPassword } = useAuth();
   const [currentPage, setCurrentPage] = useState(() => getPageFromUrl('dashboard'));
   const [pageState, setPageState] = useState<Record<string, unknown>>(() => getPageStateFromUrl());
   const [pageHistory, setPageHistory] = useState<Array<{ page: string; state: Record<string, unknown> }>>([]);
   const needsServerConnection = isDesktopApiDataMode() && desktopApi.isAvailable();
   const [serverConnectionReady, setServerConnectionReady] = useState(!needsServerConnection);
   const [checkingServerConnection, setCheckingServerConnection] = useState(needsServerConnection);
+  const [memberNewPassword, setMemberNewPassword] = useState("");
+  const [memberConfirmPassword, setMemberConfirmPassword] = useState("");
+  const [memberPasswordError, setMemberPasswordError] = useState<string | null>(null);
+  const [memberPasswordSaving, setMemberPasswordSaving] = useState(false);
 
   useEffect(() => {
     if (!needsServerConnection) {
@@ -679,6 +683,50 @@ function AppContent() {
 
   if (needsOrganizationPicker) {
     return <OrganizationPickerPage />;
+  }
+
+  if (user.isSaccoMember && user.sacco_member_id) {
+    if (!["active", "invited"].includes(user.sacco_member_access_status || "")) {
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 text-center shadow-lg">
+            <h1 className="text-xl font-bold text-slate-900">Member app access suspended</h1>
+            <p className="mt-2 text-sm text-slate-600">Contact your SACCO office to restore access. Your account records remain protected.</p>
+            <button type="button" onClick={() => void signOut()} className="mt-5 min-h-11 rounded-xl bg-slate-900 px-5 font-semibold text-white">Sign out</button>
+          </div>
+        </div>
+      );
+    }
+    if (user.sacco_member_must_change_password) {
+      const saveMemberPassword = async (event: React.FormEvent) => {
+        event.preventDefault();
+        setMemberPasswordError(null);
+        if (memberNewPassword.length < 8) return setMemberPasswordError("Use at least 8 characters.");
+        if (memberNewPassword !== memberConfirmPassword) return setMemberPasswordError("Passwords do not match.");
+        setMemberPasswordSaving(true);
+        const { error } = await completeMemberInitialPassword(memberNewPassword);
+        setMemberPasswordSaving(false);
+        if (error) setMemberPasswordError(error.message);
+      };
+      return (
+        <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
+          <form onSubmit={saveMemberPassword} className="w-full max-w-md space-y-4 rounded-2xl bg-white p-6 shadow-xl">
+            <div><h1 className="text-xl font-bold text-slate-900">Secure your member account</h1><p className="mt-1 text-sm text-slate-600">Replace the temporary password before opening the app.</p></div>
+            {memberPasswordError && <p className="rounded-lg bg-rose-50 p-3 text-sm text-rose-700">{memberPasswordError}</p>}
+            <label className="block text-sm font-semibold">New password<input type="password" autoComplete="new-password" required minLength={8} value={memberNewPassword} onChange={(e) => setMemberNewPassword(e.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3" /></label>
+            <label className="block text-sm font-semibold">Confirm password<input type="password" autoComplete="new-password" required value={memberConfirmPassword} onChange={(e) => setMemberConfirmPassword(e.target.value)} className="mt-1 min-h-11 w-full rounded-lg border border-slate-300 px-3" /></label>
+            <button disabled={memberPasswordSaving} className="min-h-11 w-full rounded-xl bg-emerald-600 font-bold text-white disabled:opacity-50">{memberPasswordSaving ? "Saving…" : "Set password and continue"}</button>
+          </form>
+        </div>
+      );
+    }
+    if (currentPage === SACCOPRO_PAGE.loanInput) {
+      return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">← Back to member app</button><SacoLoanInput initialMemberId={user.sacco_member_id} /></div>;
+    }
+    if (currentPage === SACCOPRO_PAGE.savingsStatements) {
+      return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">← Back to member app</button><SaccoSavingsStatementsPage memberIdFromNav={user.sacco_member_id} navigate={navigate} /></div>;
+    }
+    return <SaccoClientDashboard memberIdFromAuth={user.sacco_member_id} memberMode navigate={navigate} />;
   }
 
   const renderPage = () => {

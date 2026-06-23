@@ -11,7 +11,9 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
+  Smartphone,
 } from "lucide-react";
+import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
@@ -56,6 +58,7 @@ interface SaccoMembersPageProps {
 }
 
 type MemberSortKey = "member_number" | "full_name" | "phone" | "email" | "status";
+type MemberAppAccess = { auth_user_id: string; sacco_member_id: string; login_email: string; status: "invited" | "active" | "suspended" | "revoked" };
 
 function memberMatchesSearch(r: SaccoMemberRow, q: string): boolean {
   const hay = [r.member_number, r.full_name, r.phone, r.email, r.national_id, r.notes]
@@ -86,6 +89,8 @@ export function SaccoMembersPage({
   const [showModal, setShowModal] = useState(false);
   const [editing, setEditing] = useState<SaccoMemberRow | null>(null);
   const [saving, setSaving] = useState(false);
+  const [appAccess, setAppAccess] = useState<Record<string, MemberAppAccess>>({});
+  const [appAccessSaving, setAppAccessSaving] = useState<string | null>(null);
 
   const [memberNumber, setMemberNumber] = useState("");
   const [fullName, setFullName] = useState("");
@@ -119,9 +124,64 @@ export function SaccoMembersPage({
       setRows([]);
     } else {
       setRows((data || []) as SaccoMemberRow[]);
+      const { data: accessRows } = await sb
+        .from("sacco_member_app_users")
+        .select("auth_user_id,sacco_member_id,login_email,status")
+        .eq("organization_id", orgId);
+      setAppAccess(Object.fromEntries(((accessRows || []) as MemberAppAccess[]).map((item) => [item.sacco_member_id, item])));
     }
     setLoading(false);
   }, [orgId]);
+
+  const enableMemberApp = async (member: SaccoMemberRow) => {
+    if (!orgId || readOnly) return;
+    const loginEmail = window.prompt("Member app login email", member.email || "")?.trim().toLowerCase();
+    if (!loginEmail) return;
+    const temporaryPassword = window.prompt("Temporary password (at least 8 characters). The member should change it after login.", "");
+    if (!temporaryPassword || temporaryPassword.length < 8) {
+      alert("A temporary password of at least 8 characters is required.");
+      return;
+    }
+    setAppAccessSaving(member.id);
+    try {
+      const signupClient = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      });
+      const { data, error: signupError } = await signupClient.auth.signUp({
+        email: loginEmail,
+        password: temporaryPassword,
+        options: { data: { full_name: member.full_name, phone: member.phone || "", account_type: "sacco_member" } },
+      });
+      if (signupError) throw signupError;
+      if (!data.user?.id) throw new Error("The authentication account was not created.");
+      const { error: linkError } = await sb.from("sacco_member_app_users").insert({
+        auth_user_id: data.user.id,
+        organization_id: orgId,
+        sacco_member_id: member.id,
+        login_email: loginEmail,
+        status: "invited",
+        invited_by: user?.id ?? null,
+      });
+      if (linkError) throw linkError;
+      toast({ title: "Member app enabled", description: `Login created for ${loginEmail}. Share the temporary password securely.` });
+      await load();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Could not enable member app access.");
+    } finally {
+      setAppAccessSaving(null);
+    }
+  };
+
+  const toggleMemberApp = async (member: SaccoMemberRow) => {
+    const access = appAccess[member.id];
+    if (!access || readOnly) return;
+    setAppAccessSaving(member.id);
+    const nextStatus = access.status === "suspended" ? "active" : "suspended";
+    const { error: updateError } = await sb.from("sacco_member_app_users").update({ status: nextStatus }).eq("auth_user_id", access.auth_user_id);
+    setAppAccessSaving(null);
+    if (updateError) alert(updateError.message);
+    else await load();
+  };
 
   useEffect(() => {
     void load();
@@ -520,6 +580,27 @@ export function SaccoMembersPage({
                             </button>
                           </>
                         ) : null}
+                        {!appAccess[r.id] ? (
+                          <button
+                            type="button"
+                            onClick={() => void enableMemberApp(r)}
+                            disabled={readOnly || appAccessSaving === r.id || !r.is_active}
+                            className="inline-flex items-center gap-1 rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 hover:bg-sky-100 disabled:opacity-50"
+                            title="Create a private member-app login"
+                          >
+                            <Smartphone className="h-3.5 w-3.5" /> Enable app
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void toggleMemberApp(r)}
+                            disabled={readOnly || appAccessSaving === r.id}
+                            className={`rounded-md border px-2 py-1 text-xs font-medium disabled:opacity-50 ${appAccess[r.id].status === "suspended" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}
+                            title={`Member app: ${appAccess[r.id].login_email}`}
+                          >
+                            {appAccess[r.id].status === "suspended" ? "Restore app" : "Suspend app"}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => openEdit(r)}

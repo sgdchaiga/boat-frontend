@@ -38,6 +38,8 @@ import {
 type Props = {
   navigate?: (page: string, state?: Record<string, unknown>) => void;
   readOnly?: boolean;
+  memberIdFromAuth?: string;
+  memberMode?: boolean;
 };
 
 function statusClass(status: string): string {
@@ -57,8 +59,8 @@ function moneyDelta(row: { debit: number; credit: number }): number {
   return Number(row.debit || 0) - Number(row.credit || 0);
 }
 
-const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
-  const { user, isSuperAdmin } = useAuth();
+const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFromAuth, memberMode = false }) => {
+  const { user, isSuperAdmin, signOut } = useAuth();
   const { members, loans, fixedDeposits, cashbook, formatCurrency } = useAppContext();
   const [selectedMemberId, setSelectedMemberId] = useState("");
   const [memberSearch, setMemberSearch] = useState("");
@@ -72,11 +74,15 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
+    if (memberIdFromAuth) {
+      setSelectedMemberId(memberIdFromAuth);
+      return;
+    }
     if (!selectedMemberId) {
       const firstActive = members.find((m) => m.status === "active") ?? members[0];
       if (firstActive) setSelectedMemberId(firstActive.id);
     }
-  }, [members, selectedMemberId]);
+  }, [memberIdFromAuth, members, selectedMemberId]);
 
   useEffect(() => {
     const orgId = user?.organization_id;
@@ -135,11 +141,12 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
 
   const memberOptions = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
+    const allowedMembers = memberIdFromAuth ? members.filter((m) => m.id === memberIdFromAuth) : members;
     const source = q
-      ? members.filter((m) => `${m.name} ${m.accountNumber} ${m.phone ?? ""}`.toLowerCase().includes(q))
-      : members;
+      ? allowedMembers.filter((m) => `${m.name} ${m.accountNumber} ${m.phone ?? ""}`.toLowerCase().includes(q))
+      : allowedMembers;
     return source.slice().sort((a, b) => a.accountNumber.localeCompare(b.accountNumber));
-  }, [memberSearch, members]);
+  }, [memberIdFromAuth, memberSearch, members]);
 
   const member = members.find((m) => m.id === selectedMemberId) ?? null;
   const memberLoans = useMemo(
@@ -200,6 +207,9 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
   };
 
   if (!member) {
+    if (memberMode) {
+      return <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4 text-sm font-semibold text-slate-600">Loading your SACCO account…</div>;
+    }
     return (
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-2">
@@ -291,7 +301,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
   ];
 
   return (
-    <div className="space-y-6">
+    <div className={memberMode ? "min-h-screen space-y-5 bg-slate-100 p-3 pb-10 sm:p-6" : "space-y-6"}>
       <div className={`sticky top-2 z-20 flex items-center justify-between gap-3 rounded-xl border px-4 py-3 shadow-sm ${online ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-950"}`}>
         <div className="flex min-w-0 items-center gap-2 text-sm font-semibold">
           {online ? <Wifi size={18} /> : <WifiOff size={18} />}
@@ -317,7 +327,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
             </p>
           </PageNotes>
         </div>
-        <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        {!memberMode && <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <div className="relative">
             <Search size={15} className="pointer-events-none absolute left-3 top-2.5 text-slate-400" />
             <input
@@ -338,7 +348,8 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly }) => {
               </option>
             ))}
           </select>
-        </div>
+        </div>}
+        {memberMode && <button type="button" onClick={() => void signOut()} className="min-h-10 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-700">Sign out</button>}
       </div>
 
       {accountsError && (

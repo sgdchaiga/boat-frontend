@@ -81,6 +81,11 @@ interface AuthUser {
   /** Has a staff row (hotel property workspace) */
   isHotelStaff?: boolean;
   organization_id?: string | null;
+  /** Member-app identity; deliberately separate from staff/organization membership. */
+  isSaccoMember?: boolean;
+  sacco_member_id?: string | null;
+  sacco_member_access_status?: "invited" | "active" | "suspended" | "revoked";
+  sacco_member_must_change_password?: boolean;
   organization_name?: string | null;
   /** When set, hospitality POS/orders/payments are limited to this branch (see hospitality_branches). */
   hospitality_branch_id?: string | null;
@@ -162,6 +167,7 @@ interface AuthContextType {
   resetPasswordForEmail: (email: string) => Promise<{ error: Error | null }>;
   /** Set new password after recovery link; then completes login */
   setNewPassword: (newPassword: string) => Promise<{ error: Error | null }>;
+  completeMemberInitialPassword: (newPassword: string) => Promise<{ error: Error | null }>;
   /** Organizations this login can access (cloud multi-org). */
   memberships: OrganizationMembership[];
   /** True when signed in but must pick an organization before entering the app. */
@@ -796,6 +802,39 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const meta = (sessionUser as { user_metadata?: Record<string, unknown> }).user_metadata;
       const flags = await loadUserFlags(sessionUser.id);
 
+      const { data: memberAccess } = await supabase
+        .from("sacco_member_app_users")
+        .select("organization_id,sacco_member_id,status,must_change_password,sacco_members(full_name,phone)")
+        .eq("auth_user_id", sessionUser.id)
+        .maybeSingle();
+      const appAccess = memberAccess as {
+        organization_id?: string;
+        sacco_member_id?: string;
+        status?: string;
+        must_change_password?: boolean;
+        sacco_members?: { full_name?: string | null; phone?: string | null } | null;
+      } | null;
+      if (appAccess?.sacco_member_id) {
+        const tenant = await loadTenantProfile(sessionUser.id, appAccess.organization_id);
+        setMemberships([]);
+        setNeedsOrganizationPicker(false);
+        setUser({
+          ...buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta),
+          organization_id: appAccess.organization_id,
+          business_type: "sacco",
+          role: undefined,
+          full_name: appAccess.sacco_members?.full_name ?? (meta?.full_name as string | undefined),
+          phone: appAccess.sacco_members?.phone ?? (meta?.phone as string | undefined),
+          isSaccoMember: true,
+          sacco_member_id: appAccess.sacco_member_id,
+          sacco_member_access_status: appAccess.status as AuthUser["sacco_member_access_status"],
+          sacco_member_must_change_password: appAccess.must_change_password !== false,
+          isHotelStaff: false,
+        });
+        if (["invited", "active"].includes(appAccess.status || "")) void supabase.rpc("mark_sacco_member_app_login");
+        return;
+      }
+
       if (IS_LOCAL_AUTH_MODE) {
         const [tenant] = await Promise.all([loadTenantProfile(sessionUser.id)]);
         setMemberships([]);
@@ -1389,6 +1428,16 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return { error: null };
   };
 
+  const completeMemberInitialPassword = async (newPassword: string) => {
+    const result = await setNewPassword(newPassword);
+    if (result.error) return result;
+    const { error } = await supabase.rpc("complete_sacco_member_password_change");
+    if (error) return { error: error as Error };
+    const { data } = await supabase.auth.getSession();
+    if (data.session?.user) await applySessionUser(data.session.user);
+    return { error: null };
+  };
+
   const isSuperAdmin = !!user?.isSuperAdmin;
   const isHotelStaff = !!user?.isHotelStaff;
 
@@ -1416,6 +1465,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         approveWithSupervisorPin,
         resetPasswordForEmail,
         setNewPassword,
+        completeMemberInitialPassword,
         memberships,
         needsOrganizationPicker,
         switchOrganization,
