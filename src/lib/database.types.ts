@@ -411,6 +411,13 @@ export interface Database {
           hand_towels: number
           bath_mats: number
           notes: string | null
+          occupancy_observed: 'occupied' | 'vacant' | null
+          cleaned: boolean
+          linen_changed: boolean
+          towels_changed: boolean
+          missing_items: string | null
+          photo_path: string | null
+          entry_mode: 'quick' | 'quantities'
           created_at: string
           updated_at: string
         }
@@ -426,6 +433,13 @@ export interface Database {
           hand_towels?: number
           bath_mats?: number
           notes?: string | null
+          occupancy_observed?: 'occupied' | 'vacant' | null
+          cleaned?: boolean
+          linen_changed?: boolean
+          towels_changed?: boolean
+          missing_items?: string | null
+          photo_path?: string | null
+          entry_mode?: 'quick' | 'quantities'
           created_at?: string
           updated_at?: string
         }
@@ -441,8 +455,59 @@ export interface Database {
           hand_towels?: number
           bath_mats?: number
           notes?: string | null
+          occupancy_observed?: 'occupied' | 'vacant' | null
+          cleaned?: boolean
+          linen_changed?: boolean
+          towels_changed?: boolean
+          missing_items?: string | null
+          photo_path?: string | null
+          entry_mode?: 'quick' | 'quantities'
           created_at?: string
           updated_at?: string
+        }
+      }
+      housekeeping_laundry_movements: {
+        Row: {
+          id: string
+          organization_id: string
+          movement_date: string
+          movement_type: 'issue' | 'return'
+          bed_sheets: number
+          pillow_cases: number
+          bath_towels: number
+          hand_towels: number
+          bath_mats: number
+          notes: string | null
+          recorded_by: string | null
+          created_at: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string | null
+          movement_date?: string
+          movement_type: 'issue' | 'return'
+          bed_sheets?: number
+          pillow_cases?: number
+          bath_towels?: number
+          hand_towels?: number
+          bath_mats?: number
+          notes?: string | null
+          recorded_by?: string | null
+          created_at?: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          movement_date?: string
+          movement_type?: 'issue' | 'return'
+          bed_sheets?: number
+          pillow_cases?: number
+          bath_towels?: number
+          hand_towels?: number
+          bath_mats?: number
+          notes?: string | null
+          recorded_by?: string | null
+          created_at?: string
         }
       }
       housekeeping_tasks: {

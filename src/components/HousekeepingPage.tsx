@@ -1,38 +1,15 @@
 import { useEffect, useState } from 'react';
-import { Sparkles, Plus, X, ClipboardList, BedDouble, Trash2 } from 'lucide-react';
+import { Sparkles, Plus, X, ClipboardList } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import type { Database } from '../lib/database.types';
 import { PageNotes } from './common/PageNotes';
 import { useAuth } from '../contexts/AuthContext';
 import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
+import { RoomServiceSheet } from './RoomServiceSheet';
 
 type HousekeepingTask = Database['public']['Tables']['housekeeping_tasks']['Row'] & {
   rooms: { room_number: string } | null;
   staff: { full_name: string } | null;
-};
-
-type AttendantSheetEntry = {
-  id: string;
-  service_date: string;
-  room_id: string;
-  attendant_id: string | null;
-  bed_sheets: number;
-  pillow_cases: number;
-  bath_towels: number;
-  hand_towels: number;
-  bath_mats: number;
-  notes: string | null;
-  created_at: string;
-  rooms: { room_number: string } | null;
-  staff: { full_name: string } | null;
-};
-
-const today = () => {
-  const value = new Date();
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
 };
 
 export function HousekeepingPage() {
@@ -41,10 +18,6 @@ export function HousekeepingPage() {
   const superAdmin = !!user?.isSuperAdmin;
   const [tasks, setTasks] = useState<HousekeepingTask[]>([]);
   const [activeTab, setActiveTab] = useState<'tasks' | 'attendant'>('tasks');
-  const [sheetEntries, setSheetEntries] = useState<AttendantSheetEntry[]>([]);
-  const [sheetDate, setSheetDate] = useState(today());
-  const [sheetLoading, setSheetLoading] = useState(false);
-  const [showSheetModal, setShowSheetModal] = useState(false);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterPriority, setFilterPriority] = useState<string>('all');
@@ -57,27 +30,13 @@ export function HousekeepingPage() {
   const [newNotes, setNewNotes] = useState('');
   const [newAssignedTo, setNewAssignedTo] = useState('');
   const [saving, setSaving] = useState(false);
-  const [entryRoomId, setEntryRoomId] = useState('');
-  const [entryAttendantId, setEntryAttendantId] = useState('');
-  const [entryNotes, setEntryNotes] = useState('');
-  const [linenUsage, setLinenUsage] = useState({
-    bed_sheets: 0,
-    pillow_cases: 0,
-    bath_towels: 0,
-    hand_towels: 0,
-    bath_mats: 0,
-  });
 
   useEffect(() => {
     fetchTasks();
   }, [orgId, superAdmin]);
 
   useEffect(() => {
-    if (activeTab === 'attendant') fetchSheetEntries();
-  }, [activeTab, sheetDate, orgId, superAdmin]);
-
-  useEffect(() => {
-    if (!showAddModal && !showSheetModal) return;
+    if (!showAddModal) return;
     let cancelled = false;
     (async () => {
       if (!orgId && !superAdmin) {
@@ -104,7 +63,7 @@ export function HousekeepingPage() {
     return () => {
       cancelled = true;
     };
-  }, [showAddModal, showSheetModal, orgId, superAdmin]);
+  }, [showAddModal, orgId, superAdmin]);
 
   const fetchTasks = async () => {
     try {
@@ -127,81 +86,6 @@ export function HousekeepingPage() {
       console.error('Error fetching tasks:', error);
     } finally {
       setLoading(false);
-    }
-  };
-
-  const fetchSheetEntries = async () => {
-    setSheetLoading(true);
-    try {
-      if (!orgId && !superAdmin) {
-        setSheetEntries([]);
-        return;
-      }
-      const { data, error } = await filterByOrganizationId(
-        supabase
-          .from('housekeeping_attendant_sheets')
-          .select('*, rooms(room_number), staff:attendant_id(full_name)')
-          .eq('service_date', sheetDate)
-          .order('created_at', { ascending: false }),
-        orgId,
-        superAdmin
-      );
-      if (error) throw error;
-      setSheetEntries((data || []) as AttendantSheetEntry[]);
-    } catch (error) {
-      console.error('Error fetching room attendant sheet:', error);
-    } finally {
-      setSheetLoading(false);
-    }
-  };
-
-  const resetSheetForm = () => {
-    setEntryRoomId('');
-    setEntryAttendantId('');
-    setEntryNotes('');
-    setLinenUsage({ bed_sheets: 0, pillow_cases: 0, bath_towels: 0, hand_towels: 0, bath_mats: 0 });
-  };
-
-  const handleCreateSheetEntry = async () => {
-    if (!entryRoomId || !entryAttendantId) {
-      alert('Please select both a room and an attendant.');
-      return;
-    }
-    setSaving(true);
-    try {
-      const { error } = await supabase.from('housekeeping_attendant_sheets').insert({
-        organization_id: orgId ?? null,
-        service_date: sheetDate,
-        room_id: entryRoomId,
-        attendant_id: entryAttendantId,
-        ...linenUsage,
-        notes: entryNotes.trim() || null,
-      });
-      if (error) throw error;
-      setShowSheetModal(false);
-      resetSheetForm();
-      fetchSheetEntries();
-    } catch (error) {
-      console.error('Error recording room attendant sheet:', error);
-      alert('Failed to save the attendant sheet entry: ' + (error instanceof Error ? error.message : String(error)));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const deleteSheetEntry = async (entryId: string) => {
-    if (!confirm('Remove this room from the attendant sheet?')) return;
-    try {
-      const { error } = await filterByOrganizationId(
-        supabase.from('housekeeping_attendant_sheets').delete().eq('id', entryId),
-        orgId,
-        superAdmin
-      );
-      if (error) throw error;
-      fetchSheetEntries();
-    } catch (error) {
-      console.error('Error deleting attendant sheet entry:', error);
-      alert('Failed to remove the entry.');
     }
   };
 
@@ -265,17 +149,6 @@ export function HousekeepingPage() {
     return matchesStatus && matchesPriority;
   });
 
-  const usageTotals = sheetEntries.reduce(
-    (totals, entry) => ({
-      bed_sheets: totals.bed_sheets + entry.bed_sheets,
-      pillow_cases: totals.pillow_cases + entry.pillow_cases,
-      bath_towels: totals.bath_towels + entry.bath_towels,
-      hand_towels: totals.hand_towels + entry.hand_towels,
-      bath_mats: totals.bath_mats + entry.bath_mats,
-    }),
-    { bed_sheets: 0, pillow_cases: 0, bath_towels: 0, hand_towels: 0, bath_mats: 0 }
-  );
-
   const getStatusColor = (status: string) => {
     switch (status) {
       case 'pending': return 'bg-amber-100 text-amber-800 border-amber-200';
@@ -325,14 +198,15 @@ export function HousekeepingPage() {
             </PageNotes>
           </div>
         </div>
-        <button
+        {activeTab === 'tasks' && <button
           type="button"
-          onClick={() => activeTab === 'tasks' ? setShowAddModal(true) : setShowSheetModal(true)}
+          onClick={() => setShowAddModal(true)}
           className="bg-brand-700 hover:bg-brand-800 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition cursor-pointer"
         >
           <Plus className="w-5 h-5" />
-          <span className="hidden sm:inline">{activeTab === 'tasks' ? 'New Task' : 'Record Room'}</span>
+          <span className="hidden sm:inline">New Task</span>
         </button>
+        }
       </div>
 
       <div className="flex gap-2 border-b border-slate-200 mb-6">
@@ -348,7 +222,7 @@ export function HousekeepingPage() {
           onClick={() => setActiveTab('attendant')}
           className={`px-4 py-3 text-sm font-semibold border-b-2 transition flex items-center gap-2 ${activeTab === 'attendant' ? 'border-brand-700 text-brand-700' : 'border-transparent text-slate-500 hover:text-slate-800'}`}
         >
-          <ClipboardList className="w-4 h-4" /> Room Attendant Sheet
+          <ClipboardList className="w-4 h-4" /> Room Service
         </button>
       </div>
 
@@ -445,71 +319,7 @@ export function HousekeepingPage() {
         </div>
       )}
         </>
-      ) : (
-        <div className="space-y-6">
-          <div className="bg-white rounded-xl border border-slate-200 p-4 flex flex-col sm:flex-row sm:items-end gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">Sheet date</label>
-              <input type="date" value={sheetDate} onChange={(e) => setSheetDate(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2" />
-            </div>
-            <p className="text-sm text-slate-500 sm:pb-2">{sheetEntries.length} room{sheetEntries.length === 1 ? '' : 's'} recorded</p>
-          </div>
-
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-            {[
-              ['Bed sheets', usageTotals.bed_sheets],
-              ['Pillow cases', usageTotals.pillow_cases],
-              ['Bath towels', usageTotals.bath_towels],
-              ['Hand towels', usageTotals.hand_towels],
-              ['Bath mats', usageTotals.bath_mats],
-            ].map(([label, value]) => (
-              <div key={String(label)} className="bg-white rounded-xl border border-slate-200 p-4">
-                <p className="text-xs text-slate-500">{label}</p>
-                <p className="text-2xl font-bold text-slate-900 mt-1">{value}</p>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-            <table className="w-full min-w-[900px] text-sm">
-              <thead className="bg-slate-50 text-slate-600">
-                <tr>
-                  {['Room', 'Attendant', 'Bed sheets', 'Pillow cases', 'Bath towels', 'Hand towels', 'Bath mats', 'Notes', ''].map((heading) => (
-                    <th key={heading} className="px-4 py-3 text-left font-semibold">{heading}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {sheetEntries.map((entry) => (
-                  <tr key={entry.id} className="hover:bg-slate-50">
-                    <td className="px-4 py-3 font-semibold text-slate-900">Room {entry.rooms?.room_number || 'N/A'}</td>
-                    <td className="px-4 py-3 text-slate-700">{entry.staff?.full_name || 'Unassigned'}</td>
-                    <td className="px-4 py-3">{entry.bed_sheets}</td>
-                    <td className="px-4 py-3">{entry.pillow_cases}</td>
-                    <td className="px-4 py-3">{entry.bath_towels}</td>
-                    <td className="px-4 py-3">{entry.hand_towels}</td>
-                    <td className="px-4 py-3">{entry.bath_mats}</td>
-                    <td className="px-4 py-3 text-slate-500 max-w-xs truncate">{entry.notes || '—'}</td>
-                    <td className="px-4 py-3 text-right">
-                      <button type="button" onClick={() => deleteSheetEntry(entry.id)} className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg" aria-label="Remove entry">
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            {!sheetLoading && sheetEntries.length === 0 && (
-              <div className="text-center py-12">
-                <BedDouble className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-                <p className="text-slate-600 font-medium">No rooms recorded for this date</p>
-                <p className="text-sm text-slate-400">Use Record Room to start the attendant sheet.</p>
-              </div>
-            )}
-            {sheetLoading && <div className="text-center py-10 text-slate-500">Loading attendant sheet…</div>}
-          </div>
-        </div>
-      )}
+      ) : <RoomServiceSheet />}
 
       {showAddModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !saving && setShowAddModal(false)}>
@@ -605,74 +415,6 @@ export function HousekeepingPage() {
         </div>
       )}
 
-      {showSheetModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !saving && setShowSheetModal(false)}>
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-6">
-              <div>
-                <h2 className="text-xl font-bold text-slate-900">Record Room Service</h2>
-                <p className="text-sm text-slate-500">{new Date(`${sheetDate}T00:00:00`).toLocaleDateString()}</p>
-              </div>
-              <button type="button" onClick={() => !saving && setShowSheetModal(false)} className="p-1 hover:bg-slate-100 rounded">
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Room *</label>
-                <select value={entryRoomId} onChange={(e) => setEntryRoomId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2">
-                  <option value="">Select room</option>
-                  {rooms.map((room) => <option key={room.id} value={room.id}>Room {room.room_number}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Room attendant *</label>
-                <select value={entryAttendantId} onChange={(e) => setEntryAttendantId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2">
-                  <option value="">Select attendant</option>
-                  {staffList.map((staff) => <option key={staff.id} value={staff.id}>{staff.full_name}</option>)}
-                </select>
-              </div>
-            </div>
-
-            <div className="mt-6">
-              <h3 className="font-semibold text-slate-900 mb-1">Used linens and towels</h3>
-              <p className="text-sm text-slate-500 mb-4">Enter the number of clean items placed in the room.</p>
-              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-                {([
-                  ['bed_sheets', 'Bed sheets'],
-                  ['pillow_cases', 'Pillow cases'],
-                  ['bath_towels', 'Bath towels'],
-                  ['hand_towels', 'Hand towels'],
-                  ['bath_mats', 'Bath mats'],
-                ] as const).map(([key, label]) => (
-                  <div key={key}>
-                    <label className="block text-xs font-medium text-slate-600 mb-1">{label}</label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={linenUsage[key]}
-                      onChange={(e) => setLinenUsage((current) => ({ ...current, [key]: Math.max(0, Number.parseInt(e.target.value, 10) || 0) }))}
-                      className="w-full border border-slate-300 rounded-lg px-3 py-2"
-                    />
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="mt-5">
-              <label className="block text-sm font-medium text-slate-700 mb-1">Notes</label>
-              <textarea value={entryNotes} onChange={(e) => setEntryNotes(e.target.value)} rows={3} className="w-full border border-slate-300 rounded-lg px-3 py-2" placeholder="Lost property, damage, minibar, maintenance issue…" />
-            </div>
-            <div className="flex gap-2 mt-6">
-              <button type="button" onClick={handleCreateSheetEntry} disabled={saving} className="app-btn-primary flex-1 disabled:cursor-not-allowed">
-                {saving ? 'Saving…' : 'Save Entry'}
-              </button>
-              <button type="button" onClick={() => !saving && setShowSheetModal(false)} className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50">Cancel</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
