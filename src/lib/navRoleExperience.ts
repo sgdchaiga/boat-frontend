@@ -27,7 +27,8 @@ export type NavRoleExperience =
 
   | "manager"
 
-  | "storekeeper";
+  | "storekeeper"
+  | "housekeeping";
 
 
 
@@ -70,6 +71,8 @@ export function getNavRoleExperience(roleKey: string | undefined | null): NavRol
   if (r === "manager") return "manager";
 
   if (r === "storekeeper") return "storekeeper";
+
+  if (r === "housekeeping" || r === "room_attendant") return "housekeeping";
 
   return "full";
 
@@ -118,6 +121,14 @@ export function isPageAllowedForNavRole(
   _businessType: BusinessType | null | undefined
 
 ): boolean {
+
+  const xp = getNavRoleExperience(_roleKey);
+
+  if (xp === "housekeeping" && shouldApplyNavRoleScope(_businessType)) {
+
+    return page === "housekeeping";
+
+  }
 
   const configuredDecision = pageAccessDecision(page);
 

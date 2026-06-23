@@ -43,6 +43,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from '../lib/moduleAccess';
 import { isPageAllowedForNavRole } from '@/lib/navRoleExperience';
 import { buildRoleNavigation, getRoleBasedNavMenuTitle, hasRoleScopedNavigation } from '@/lib/roleNavigation';
+import { normalizeNavRoleKey } from '@/lib/navRoleExperience';
 import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
 import { isSidebarLeafActive } from '@/lib/navSidebarActiveLeaf';
 import {
@@ -219,6 +220,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const businessType = user?.business_type ?? null;
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   /** Submenus stay collapsed until the user clicks the section header (no auto-expand on navigation). */
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
   /** Collapsible subgroups under Reports (e.g. Sales, Operations). Undefined = expand if current page is in group. */
@@ -708,6 +710,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   );
   const roleNavMenuTitle = getRoleBasedNavMenuTitle(user?.role);
   const useRoleScopedNav = hasRoleScopedNavigation(user?.role, businessType) && roleScopedNav != null;
+  const isHousekeepingWorkspace = normalizeNavRoleKey(user?.role) === 'housekeeping' &&
+    (businessType === 'hotel' || businessType === 'mixed');
   const practiceNavigation: NavItem[] = [
     { name: 'Clients', icon: UsersRound, page: 'practice_clients' },
     { name: 'Engagements', icon: Briefcase, page: 'practice_engagements' },
@@ -948,6 +952,44 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     const next = active?.id ?? reportHubCategories[0]?.id ?? null;
     if (next) setReportHubCategoryId((prev) => (prev === next ? prev : next));
   }, [showSimpleOrgReportHub, currentPage, pageStateKey, reportHubCategories, pageStateResolved]);
+
+  useEffect(() => {
+    const online = () => setBrowserOnline(true);
+    const offline = () => setBrowserOnline(false);
+    window.addEventListener('online', online);
+    window.addEventListener('offline', offline);
+    return () => {
+      window.removeEventListener('online', online);
+      window.removeEventListener('offline', offline);
+    };
+  }, []);
+
+  if (isHousekeepingWorkspace) {
+    return (
+      <div className="min-h-[100dvh] bg-slate-100">
+        <header className="sticky top-0 z-40 border-b border-slate-800 bg-slate-950 px-4 py-3 text-white shadow-sm">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="rounded-lg bg-brand-600 p-2"><Hotel className="h-5 w-5" /></div>
+              <div className="min-w-0">
+                <p className="truncate font-bold">Housekeeping</p>
+                <p className="truncate text-xs text-slate-400">{user?.full_name || user?.email || 'Room attendant'}</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${browserOnline ? 'bg-emerald-500/20 text-emerald-300' : 'bg-amber-500/20 text-amber-200'}`}>
+                {browserOnline ? 'Online' : 'Offline'}
+              </span>
+              <button type="button" onClick={clockOut} className="inline-flex min-h-11 items-center gap-1.5 rounded-lg px-3 text-sm font-semibold text-red-300 hover:bg-red-950/50">
+                <LogOut className="h-4 w-4" /><span className="hidden sm:inline">Sign out</span>
+              </button>
+            </div>
+          </div>
+        </header>
+        <main className="mx-auto max-w-5xl p-3 sm:p-5">{children}</main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-page h-[100dvh] overflow-hidden">

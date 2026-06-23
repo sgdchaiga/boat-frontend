@@ -1,14 +1,24 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Camera, Check, ClipboardCheck, RefreshCw, Save, Shirt, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Camera, Check, ClipboardCheck, RefreshCw, Save, Shirt, Upload, WifiOff } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import type { Database } from '../lib/database.types';
 import { supabase } from '../lib/supabase';
 import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
+import {
+  listHousekeepingOutbox,
+  queueHousekeepingItem,
+  readHousekeepingCache,
+  removeHousekeepingOutboxItem,
+  writeHousekeepingCache,
+} from '../lib/housekeepingOffline';
 
 type SheetRow = Database['public']['Tables']['housekeeping_attendant_sheets']['Row'];
 type LaundryRow = Database['public']['Tables']['housekeeping_laundry_movements']['Row'];
 type EntryMode = 'quick' | 'quantities';
 type QuantityKey = 'bed_sheets' | 'pillow_cases' | 'bath_towels' | 'hand_towels' | 'bath_mats';
+type RoomRow = { id: string; room_number: string; status: string };
+type StaffRow = { id: string; full_name: string };
+type CachedSheet = { rooms: RoomRow[]; staff: StaffRow[]; entries: SheetRow[]; laundry: LaundryRow[] };
 
 type Draft = {
   occupancy_observed: '' | 'occupied' | 'vacant';
@@ -59,8 +69,8 @@ export function RoomServiceSheet() {
     return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
   });
   const [mode, setMode] = useState<EntryMode>('quick');
-  const [rooms, setRooms] = useState<{ id: string; room_number: string; status: string }[]>([]);
-  const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
+  const [rooms, setRooms] = useState<RoomRow[]>([]);
+  const [staff, setStaff] = useState<StaffRow[]>([]);
   const [attendantId, setAttendantId] = useState('');
   const [entries, setEntries] = useState<SheetRow[]>([]);
   const [laundry, setLaundry] = useState<LaundryRow[]>([]);
@@ -73,11 +83,48 @@ export function RoomServiceSheet() {
   const [laundryQty, setLaundryQty] = useState(emptyQuantities());
   const [laundryNotes, setLaundryNotes] = useState('');
   const [savingLaundry, setSavingLaundry] = useState(false);
+  const [online, setOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
+  const [pendingSync, setPendingSync] = useState(0);
+  const syncing = useRef(false);
+  const entriesRef = useRef<SheetRow[]>([]);
+  const laundryRef = useRef<LaundryRow[]>([]);
+
+  const applySnapshot = (snapshot: CachedSheet) => {
+    setRooms(snapshot.rooms);
+    setStaff(snapshot.staff);
+    setEntries(snapshot.entries);
+    setLaundry(snapshot.laundry);
+    entriesRef.current = snapshot.entries;
+    laundryRef.current = snapshot.laundry;
+    if (!attendantId && user?.id && snapshot.staff.some((person) => person.id === user.id)) setAttendantId(user.id);
+    setDrafts(Object.fromEntries(snapshot.rooms.map((room) => {
+      const entry = snapshot.entries.find((item) => item.room_id === room.id);
+      return [room.id, entry ? {
+        occupancy_observed: entry.occupancy_observed || '',
+        cleaned: entry.cleaned,
+        linen_changed: entry.linen_changed,
+        towels_changed: entry.towels_changed,
+        bed_sheets: entry.bed_sheets,
+        pillow_cases: entry.pillow_cases,
+        bath_towels: entry.bath_towels,
+        hand_towels: entry.hand_towels,
+        bath_mats: entry.bath_mats,
+        missing_items: entry.missing_items || '',
+        notes: entry.notes || '',
+        photo_path: entry.photo_path,
+      } : { ...EMPTY_DRAFT }];
+    })));
+  };
 
   const fetchData = async () => {
     setLoading(true);
     try {
       if (!orgId && !superAdmin) return;
+      const cacheOrg = orgId || 'platform';
+      const cached = readHousekeepingCache<CachedSheet>(cacheOrg, date);
+      if (cached) applySnapshot(cached);
+      setPendingSync((await listHousekeepingOutbox(cacheOrg)).length);
+      if (typeof navigator !== 'undefined' && !navigator.onLine) return;
       const [roomsResult, staffResult, sheetResult, laundryResult] = await Promise.all([
         filterByOrganizationId(supabase.from('rooms').select('id, room_number, status').order('room_number'), orgId, superAdmin),
         filterByOrganizationId(supabase.from('staff').select('id, full_name').eq('is_active', true).order('full_name'), orgId, superAdmin),
@@ -88,28 +135,14 @@ export function RoomServiceSheet() {
       if (staffResult.error) throw staffResult.error;
       if (sheetResult.error) throw sheetResult.error;
       if (laundryResult.error) throw laundryResult.error;
-      const nextEntries = (sheetResult.data || []) as SheetRow[];
-      setRooms(roomsResult.data || []);
-      setStaff(staffResult.data || []);
-      setEntries(nextEntries);
-      setLaundry((laundryResult.data || []) as LaundryRow[]);
-      setDrafts(Object.fromEntries((roomsResult.data || []).map((room) => {
-        const entry = nextEntries.find((item) => item.room_id === room.id);
-        return [room.id, entry ? {
-          occupancy_observed: entry.occupancy_observed || '',
-          cleaned: entry.cleaned,
-          linen_changed: entry.linen_changed,
-          towels_changed: entry.towels_changed,
-          bed_sheets: entry.bed_sheets,
-          pillow_cases: entry.pillow_cases,
-          bath_towels: entry.bath_towels,
-          hand_towels: entry.hand_towels,
-          bath_mats: entry.bath_mats,
-          missing_items: entry.missing_items || '',
-          notes: entry.notes || '',
-          photo_path: entry.photo_path,
-        } : { ...EMPTY_DRAFT }];
-      })));
+      const snapshot: CachedSheet = {
+        rooms: roomsResult.data || [],
+        staff: staffResult.data || [],
+        entries: (sheetResult.data || []) as SheetRow[],
+        laundry: (laundryResult.data || []) as LaundryRow[],
+      };
+      applySnapshot(snapshot);
+      writeHousekeepingCache(cacheOrg, date, snapshot);
       setDirty(new Set());
       setFiles({});
     } catch (error) {
@@ -147,7 +180,6 @@ export function RoomServiceSheet() {
     const draft = drafts[roomId] || { ...EMPTY_DRAFT };
     setSavingIds((current) => new Set(current).add(roomId));
     try {
-      const photoPath = await uploadPhoto(roomId, draft.photo_path);
       const quantities = mode === 'quick'
         ? {
             bed_sheets: draft.linen_changed ? 1 : 0,
@@ -159,7 +191,7 @@ export function RoomServiceSheet() {
         : Object.fromEntries(ITEMS.map(({ key }) => [key, draft[key]])) as Record<QuantityKey, number>;
       const linenChanged = mode === 'quick' ? draft.linen_changed : quantities.bed_sheets + quantities.pillow_cases > 0;
       const towelsChanged = mode === 'quick' ? draft.towels_changed : quantities.bath_towels + quantities.hand_towels + quantities.bath_mats > 0;
-      const { error } = await supabase.from('housekeeping_attendant_sheets').upsert({
+      const payload: Database['public']['Tables']['housekeeping_attendant_sheets']['Insert'] = {
         organization_id: orgId ?? null,
         service_date: date,
         room_id: roomId,
@@ -170,17 +202,48 @@ export function RoomServiceSheet() {
         towels_changed: towelsChanged,
         missing_items: draft.missing_items.trim() || null,
         notes: draft.notes.trim() || null,
-        photo_path: photoPath,
+        photo_path: draft.photo_path,
         entry_mode: mode,
         ...quantities,
-      }, { onConflict: 'organization_id,service_date,room_id' });
-      if (error) throw error;
+      };
+      if (!online) {
+        if (!orgId) throw new Error('Select an organization before working offline.');
+        await queueHousekeepingItem({
+          kind: 'room',
+          organizationId: orgId,
+          payload: payload as Record<string, unknown>,
+          photo: files[roomId],
+          photoName: files[roomId]?.name,
+        });
+        const existing = entriesRef.current.find((entry) => entry.room_id === roomId);
+        const localEntry = {
+          ...payload,
+          id: existing?.id || `offline-${crypto.randomUUID()}`,
+          organization_id: orgId,
+          created_at: existing?.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        } as SheetRow;
+        const nextEntries = [...entriesRef.current.filter((entry) => entry.room_id !== roomId), localEntry];
+        entriesRef.current = nextEntries;
+        setEntries(nextEntries);
+        writeHousekeepingCache(orgId, date, { rooms, staff, entries: nextEntries, laundry: laundryRef.current } satisfies CachedSheet);
+        setPendingSync((current) => current + 1);
+      } else {
+        payload.photo_path = await uploadPhoto(roomId, draft.photo_path);
+        const { error } = await supabase.from('housekeeping_attendant_sheets').upsert(payload, { onConflict: 'organization_id,service_date,room_id' });
+        if (error) throw error;
+      }
       setDirty((current) => {
         const next = new Set(current);
         next.delete(roomId);
         return next;
       });
-      if (refresh) await fetchData();
+      setFiles((current) => {
+        const next = { ...current };
+        delete next[roomId];
+        return next;
+      });
+      if (refresh && online) await fetchData();
       return true;
     } catch (error) {
       console.error('Error saving room service row:', error);
@@ -214,18 +277,36 @@ export function RoomServiceSheet() {
     }
     setSavingLaundry(true);
     try {
-      const { error } = await supabase.from('housekeeping_laundry_movements').insert({
+      const payload: Database['public']['Tables']['housekeeping_laundry_movements']['Insert'] = {
         organization_id: orgId ?? null,
         movement_date: date,
         movement_type: laundryType,
         ...laundryQty,
         notes: laundryNotes.trim() || null,
         recorded_by: user?.id || null,
-      });
-      if (error) throw error;
+      };
+      if (!online) {
+        if (!orgId) throw new Error('Select an organization before working offline.');
+        payload.id = crypto.randomUUID();
+        await queueHousekeepingItem({ kind: 'laundry', organizationId: orgId, payload: payload as Record<string, unknown> });
+        const localMovement = {
+          ...payload,
+          id: payload.id,
+          organization_id: orgId,
+          created_at: new Date().toISOString(),
+        } as LaundryRow;
+        const nextLaundry = [localMovement, ...laundryRef.current];
+        laundryRef.current = nextLaundry;
+        setLaundry(nextLaundry);
+        writeHousekeepingCache(orgId, date, { rooms, staff, entries: entriesRef.current, laundry: nextLaundry } satisfies CachedSheet);
+        setPendingSync((current) => current + 1);
+      } else {
+        const { error } = await supabase.from('housekeeping_laundry_movements').insert(payload);
+        if (error) throw error;
+      }
       setLaundryQty(emptyQuantities());
       setLaundryNotes('');
-      await fetchData();
+      if (online) await fetchData();
     } catch (error) {
       console.error('Error recording laundry movement:', error);
       alert('Failed to record laundry movement: ' + (error instanceof Error ? error.message : String(error)));
@@ -233,6 +314,58 @@ export function RoomServiceSheet() {
       setSavingLaundry(false);
     }
   };
+
+  const syncOfflineWork = async () => {
+    if (!orgId || !navigator.onLine || syncing.current) return;
+    syncing.current = true;
+    try {
+      const queued = await listHousekeepingOutbox(orgId);
+      setPendingSync(queued.length);
+      for (const item of queued) {
+        try {
+        if (item.kind === 'room') {
+          const payload = { ...item.payload } as Database['public']['Tables']['housekeeping_attendant_sheets']['Insert'];
+          if (item.photo) {
+            const extension = item.photoName?.split('.').pop()?.toLowerCase() || 'jpg';
+            const path = `${orgId}/${String(payload.service_date)}/${String(payload.room_id)}-${Date.now()}.${extension}`;
+            const { error: uploadError } = await supabase.storage.from('housekeeping-photos').upload(path, item.photo, { contentType: item.photo.type, upsert: false });
+            if (uploadError) throw uploadError;
+            payload.photo_path = path;
+          }
+          const { error } = await supabase.from('housekeeping_attendant_sheets').upsert(payload, { onConflict: 'organization_id,service_date,room_id' });
+          if (error) throw error;
+        } else {
+          const payload = item.payload as Database['public']['Tables']['housekeeping_laundry_movements']['Insert'];
+          const { error } = await supabase.from('housekeeping_laundry_movements').upsert(payload, { onConflict: 'id' });
+          if (error) throw error;
+        }
+          await removeHousekeepingOutboxItem(item.id);
+        } catch (error) {
+          console.error('Housekeeping offline sync paused:', error);
+          break;
+        }
+      }
+      setPendingSync((await listHousekeepingOutbox(orgId)).length);
+      await fetchData();
+    } finally {
+      syncing.current = false;
+    }
+  };
+
+  useEffect(() => {
+    const handleOnline = () => setOnline(true);
+    const handleOffline = () => setOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (online && orgId) void syncOfflineWork();
+  }, [online, orgId]);
 
   const viewPhoto = async (path: string) => {
     const { data, error } = await supabase.storage.from('housekeeping-photos').createSignedUrl(path, 300);
@@ -258,6 +391,12 @@ export function RoomServiceSheet() {
 
   return (
     <div className="space-y-6">
+      {(!online || pendingSync > 0) && (
+        <div className={`rounded-xl border p-3 flex items-center gap-3 ${online ? 'border-blue-200 bg-blue-50 text-blue-800' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
+          <WifiOff className="h-5 w-5 shrink-0" />
+          <div><p className="text-sm font-semibold">{online ? 'Synchronizing saved work' : 'Working offline'}</p><p className="text-xs">{pendingSync} update{pendingSync === 1 ? '' : 's'} stored safely on this device and queued for automatic sync.</p></div>
+        </div>
+      )}
       <div className="bg-white border border-slate-200 rounded-xl p-4 grid md:grid-cols-[auto_1fr_auto] gap-4 items-end">
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Service date</label>
@@ -286,7 +425,47 @@ export function RoomServiceSheet() {
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
+      <div className="space-y-4 md:hidden">
+        {rooms.map((room) => {
+          const draft = drafts[room.id] || { ...EMPTY_DRAFT };
+          const saved = entries.some((entry) => entry.room_id === room.id) && !dirty.has(room.id);
+          return (
+            <article key={room.id} className={`rounded-2xl border p-4 shadow-sm ${dirty.has(room.id) ? 'border-amber-300 bg-amber-50/60' : 'border-slate-200 bg-white'}`}>
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div><h3 className="text-xl font-bold text-slate-900">Room {room.room_number}</h3><p className="text-xs capitalize text-slate-500">System status: {room.status}</p></div>
+                {saved && <span className="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-700"><Check className="h-3.5 w-3.5" /> Saved</span>}
+              </div>
+              <label className="block text-sm font-semibold text-slate-700">Observed occupancy
+                <select value={draft.occupancy_observed} onChange={(event) => updateDraft(room.id, { occupancy_observed: event.target.value as Draft['occupancy_observed'] })} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 bg-white px-3 text-base">
+                  <option value="">Not checked</option><option value="occupied">Occupied</option><option value="vacant">Vacant</option>
+                </select>
+              </label>
+              <div className="mt-4 grid grid-cols-1 gap-2">
+                {([
+                  ['cleaned', 'Room cleaned'],
+                  ...(mode === 'quick' ? [['linen_changed', 'Linen changed'], ['towels_changed', 'Towels changed']] : []),
+                ] as [keyof Draft, string][]).map(([key, label]) => (
+                  <label key={key} className={`flex min-h-12 items-center justify-between rounded-xl border px-4 font-semibold ${draft[key] ? 'border-brand-500 bg-brand-50 text-brand-800' : 'border-slate-300 bg-white text-slate-700'}`}>
+                    {label}<input type="checkbox" checked={Boolean(draft[key])} onChange={(event) => updateDraft(room.id, { [key]: event.target.checked })} className="h-6 w-6 accent-brand-700" />
+                  </label>
+                ))}
+              </div>
+              {mode === 'quantities' && <div className="mt-4 grid grid-cols-2 gap-3">{ITEMS.map(({ key, label }) => <label key={key} className="text-xs font-semibold text-slate-600">{label}<input type="number" min="0" value={draft[key]} onChange={(event) => updateDraft(room.id, { [key]: Math.max(0, Number.parseInt(event.target.value, 10) || 0) })} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3 text-lg text-slate-900" /></label>)}</div>}
+              <div className="mt-4 grid gap-3">
+                <label className="text-sm font-semibold text-slate-700">Missing items<input value={draft.missing_items} onChange={(event) => updateDraft(room.id, { missing_items: event.target.value })} placeholder="None" className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3 font-normal" /></label>
+                <label className="text-sm font-semibold text-slate-700">Notes<input value={draft.notes} onChange={(event) => updateDraft(room.id, { notes: event.target.value })} placeholder="Optional notes" className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3 font-normal" /></label>
+              </div>
+              <div className="mt-4 flex gap-2">
+                <label className="inline-flex min-h-12 flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-slate-300 bg-white font-semibold text-slate-700"><Upload className="h-5 w-5" />{files[room.id] ? 'Photo selected' : 'Add photo'}<input type="file" accept="image/jpeg,image/png,image/webp" capture="environment" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; setFiles((current) => ({ ...current, [room.id]: file })); if (file) setDirty((current) => new Set(current).add(room.id)); }} /></label>
+                {draft.photo_path && <button type="button" onClick={() => void viewPhoto(draft.photo_path!)} className="min-h-12 rounded-xl border border-slate-300 px-4 text-brand-700"><Camera className="h-5 w-5" /></button>}
+              </div>
+              <button type="button" onClick={() => void saveRoom(room.id)} disabled={!dirty.has(room.id) || savingIds.has(room.id)} className="mt-4 min-h-12 w-full rounded-xl bg-slate-900 font-bold text-white disabled:opacity-40">{savingIds.has(room.id) ? 'Saving…' : online ? 'Save room' : 'Save offline'}</button>
+            </article>
+          );
+        })}
+      </div>
+
+      <div className="hidden md:block bg-white border border-slate-200 rounded-xl overflow-x-auto">
         <table className={`w-full text-sm ${mode === 'quantities' ? 'min-w-[1500px]' : 'min-w-[1150px]'}`}>
           <thead className="bg-slate-50 text-slate-600 sticky top-0">
             <tr>

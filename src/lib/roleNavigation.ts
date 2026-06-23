@@ -142,6 +142,7 @@ export const ROLE_PAGE_ALLOW: Record<Exclude<NavRoleExperience, "full">, Set<str
     "retail_credit_invoices",
     "accounting_cashflow",
   ]),
+  housekeeping: new Set(["housekeeping"]),
 };
 
 export function getRolePageAllowList(xp: NavRoleExperience): Set<string> | null {
@@ -162,6 +163,8 @@ export function getRoleBasedNavMenuTitle(roleKey: string | undefined | null): st
     cashier: "Cashier Menu",
     accountant: "Accountant Menu",
     storekeeper: "Store Menu",
+    housekeeping: "Housekeeping",
+    room_attendant: "Housekeeping",
   };
   return titles[r] ?? null;
 }
@@ -264,6 +267,8 @@ export function buildRoleNavigation(
         { name: "Stock levels", icon: Package, page: "inventory_stock_balances" },
         { name: "Buy stock", icon: ClipboardList, page: "purchases_orders" },
       ];
+    case "housekeeping":
+      return [{ name: "Room Service", icon: ClipboardList, page: "housekeeping" }];
     default:
       return null;
   }
@@ -313,6 +318,7 @@ export function defaultLandingPageForRole(
   if (xp === "accountant") return "accounting_journal";
   if (xp === "manager") return "dashboard";
   if (xp === "storekeeper") return "Products";
+  if (xp === "housekeeping") return "housekeeping";
   return null;
 }
 

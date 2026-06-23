@@ -14,10 +14,11 @@ type HousekeepingTask = Database['public']['Tables']['housekeeping_tasks']['Row'
 
 export function HousekeepingPage() {
   const { user } = useAuth();
+  const focusedHousekeeping = ['housekeeping', 'room_attendant'].includes(String(user?.role || '').toLowerCase());
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const [tasks, setTasks] = useState<HousekeepingTask[]>([]);
-  const [activeTab, setActiveTab] = useState<'tasks' | 'attendant'>('tasks');
+  const [activeTab, setActiveTab] = useState<'tasks' | 'attendant'>(() => focusedHousekeeping ? 'attendant' : 'tasks');
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterPriority, setFilterPriority] = useState<string>('all');
@@ -32,8 +33,9 @@ export function HousekeepingPage() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
+    if (focusedHousekeeping) return;
     fetchTasks();
-  }, [orgId, superAdmin]);
+  }, [orgId, superAdmin, focusedHousekeeping]);
 
   useEffect(() => {
     if (!showAddModal) return;
@@ -171,6 +173,10 @@ export function HousekeepingPage() {
   const getTaskTypeIcon = (type: string) => {
     return type.charAt(0).toUpperCase() + type.slice(1);
   };
+
+  if (focusedHousekeeping) {
+    return <RoomServiceSheet />;
+  }
 
   if (loading) {
     return (
