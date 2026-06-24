@@ -1438,7 +1438,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const { data, error } = await supabase.functions.invoke("sacco-member-pin-login", {
       body: { phone: normalizedPhone, pin: normalizedPin, redirect_to: `${window.location.origin}${window.location.pathname || "/"}` },
     });
-    if (error) return { error: new Error(error.message || "Member PIN login service failed.") };
+    if (error) {
+      let message = error.message || "Member PIN login service failed.";
+      const response = (error as Error & { context?: Response }).context;
+      if (response && typeof response.clone === "function") {
+        try {
+          const payload = await response.clone().json() as { error?: unknown; message?: unknown };
+          const detail = typeof payload.error === "string" ? payload.error : typeof payload.message === "string" ? payload.message : "";
+          if (detail) message = detail;
+        } catch {
+          try { const detail = await response.clone().text(); if (detail.trim()) message = detail.trim(); } catch { /* keep original */ }
+        }
+      }
+      if (/non-2xx/i.test(message)) message = "Member PIN service is unavailable. Deploy sacco-member-pin-login with JWT verification disabled.";
+      return { error: new Error(message) };
+    }
     if (!data?.ok || !data.token_hash) return { error: new Error(data?.error || "Invalid telephone or PIN.") };
     const { error: verifyError } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: "magiclink" });
     return { error: verifyError as Error | null };
