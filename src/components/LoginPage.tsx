@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Eye, EyeOff, Loader2, AlertCircle, UserCircle, Landmark, KeyRound, Mail, CheckCircle2 } from "lucide-react";
 
 import { APP_NAME, APP_SHORT_NAME } from "@/constants/branding";
@@ -7,9 +7,9 @@ import { useAuth, type UserRole } from "@/contexts/AuthContext";
 export const LoginPage: React.FC = () => {
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
 
-  const { signIn, signInWithPin, signUp, pendingPasswordReset, resetPasswordForEmail, setNewPassword } = useAuth();
+  const { signIn, signInWithPin, signInMemberWithPin, signUp, pendingPasswordReset, resetPasswordForEmail, setNewPassword } = useAuth();
 
-  const [mode, setMode] = useState<"login" | "pin" | "signup">("login");
+  const [mode, setMode] = useState<"login" | "member" | "pin" | "signup">(() => new URLSearchParams(window.location.search).get("memberApp") === "1" ? "member" : "login");
   const [showForgotForm, setShowForgotForm] = useState(false);
   const [forgotSuccess, setForgotSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -29,6 +29,13 @@ export const LoginPage: React.FC = () => {
     staffCode: "",
     pin: "",
   });
+  const [memberPinForm, setMemberPinForm] = useState({ phone: "", pin: "" });
+
+  useEffect(() => {
+    const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (!link) return;
+    link.href = mode === "member" ? "/member-app.webmanifest" : "/manifest.webmanifest";
+  }, [mode]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,6 +54,15 @@ export const LoginPage: React.FC = () => {
     setError(null);
     setLoading(true);
     const { error } = await signInWithPin(pinForm.staffCode, pinForm.pin);
+    if (error) setError(error.message);
+    setLoading(false);
+  };
+
+  const handleMemberPinLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+    const { error } = await signInMemberWithPin(memberPinForm.phone, memberPinForm.pin);
     if (error) setError(error.message);
     setLoading(false);
   };
@@ -96,9 +112,10 @@ export const LoginPage: React.FC = () => {
     setError(null);
     setShowPassword(false);
     setPinForm({ staffCode: "", pin: "" });
+    setMemberPinForm({ phone: "", pin: "" });
   };
 
-  const switchMode = (newMode: "login" | "pin" | "signup") => {
+  const switchMode = (newMode: "login" | "member" | "pin" | "signup") => {
     setMode(newMode);
     setShowForgotForm(false);
     setForgotSuccess(false);
@@ -178,6 +195,8 @@ export const LoginPage: React.FC = () => {
                 ? "Reset your password"
                 : mode === "login"
                   ? "Sign in to access your account"
+                  : mode === "member"
+                    ? "SACCO member telephone + PIN"
                   : mode === "pin"
                     ? "Quick staff PIN access"
                   : "Create a new staff account"}
@@ -208,6 +227,12 @@ export const LoginPage: React.FC = () => {
               }`}
             >
               <Mail size={14} /> Full Login
+            </button>
+            <button
+              onClick={() => switchMode("member")}
+              className={`flex-1 py-3 text-sm font-medium border-b-2 ${mode === "member" ? "border-emerald-500 text-emerald-600" : "border-transparent text-slate-400"}`}
+            >
+              Member PIN
             </button>
             <button
               onClick={() => switchMode("pin")}
@@ -346,6 +371,13 @@ export const LoginPage: React.FC = () => {
                 </button>
               </>
             )}
+          </form>
+        ) : mode === "member" ? (
+          <form onSubmit={handleMemberPinLogin} className="p-6 space-y-4">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-800">Use the telephone number and six-digit PIN registered by your SACCO.</div>
+            <div><label className="text-xs font-medium text-slate-700">Telephone number</label><input type="tel" inputMode="tel" autoComplete="tel" required value={memberPinForm.phone} onChange={(e) => setMemberPinForm((p) => ({ ...p, phone: e.target.value }))} className="w-full mt-1 px-3 py-2 border rounded-lg text-sm" placeholder="e.g. 0772 123 456" /></div>
+            <div><label className="text-xs font-medium text-slate-700">6-digit PIN</label><input type="password" inputMode="numeric" pattern="[0-9]{6}" minLength={6} maxLength={6} autoComplete="current-password" required value={memberPinForm.pin} onChange={(e) => setMemberPinForm((p) => ({ ...p, pin: e.target.value.replace(/\D/g, "").slice(0, 6) }))} className="w-full mt-1 px-3 py-2 border rounded-lg text-center text-lg tracking-[0.35em]" placeholder="••••••" /></div>
+            <button type="submit" disabled={loading} className="w-full py-3 bg-emerald-600 text-white rounded-lg">{loading ? <Loader2 size={16} className="animate-spin mx-auto" /> : "Open member app"}</button>
           </form>
         ) : mode === "pin" ? (
           <form onSubmit={handlePinLogin} className="p-6 space-y-4">

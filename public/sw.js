@@ -1,5 +1,5 @@
 const CACHE = 'boat-app-shell-v2';
-const APP_SHELL = ['/', '/?page=housekeeping', '/?page=sacco_client_dashboard', '/manifest.webmanifest', '/boat-logo-square.svg'];
+const APP_SHELL = ['/', '/?page=housekeeping', '/?page=sacco_client_dashboard', '/?memberApp=1', '/manifest.webmanifest', '/member-app.webmanifest', '/boat-logo-square.svg'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {

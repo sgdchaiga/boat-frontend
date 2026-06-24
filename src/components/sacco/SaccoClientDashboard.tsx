@@ -74,6 +74,12 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
+    if (!memberMode) return;
+    const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (link) link.href = "/member-app.webmanifest";
+  }, [memberMode]);
+
+  useEffect(() => {
     if (memberIdFromAuth) {
       setSelectedMemberId(memberIdFromAuth);
       return;

@@ -149,6 +149,7 @@ interface AuthContextType {
   refreshUserFlags: () => Promise<void>;
   signIn: (email: string, password: string) => Promise<{ error: Error | null }>;
   signInWithPin: (staffCode: string, pin: string) => Promise<{ error: Error | null }>;
+  signInMemberWithPin: (phone: string, pin: string) => Promise<{ error: Error | null }>;
   signUp: (
     email: string,
     password: string,
@@ -1428,6 +1429,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     return { error: null };
   };
 
+  const signInMemberWithPin = async (phone: string, pin: string) => {
+    if (IS_LOCAL_AUTH_MODE) return { error: new Error("Member telephone login requires the online SACCO service.") };
+    const normalizedPhone = phone.replace(/\D/g, "");
+    const normalizedPin = pin.replace(/\D/g, "");
+    if (normalizedPhone.length < 9) return { error: new Error("Enter a valid telephone number.") };
+    if (!/^\d{6}$/.test(normalizedPin)) return { error: new Error("Enter your 6-digit member PIN.") };
+    const { data, error } = await supabase.functions.invoke("sacco-member-pin-login", {
+      body: { phone: normalizedPhone, pin: normalizedPin, redirect_to: `${window.location.origin}${window.location.pathname || "/"}` },
+    });
+    if (error) return { error: new Error(error.message || "Member PIN login service failed.") };
+    if (!data?.ok || !data.token_hash) return { error: new Error(data?.error || "Invalid telephone or PIN.") };
+    const { error: verifyError } = await supabase.auth.verifyOtp({ token_hash: data.token_hash, type: "magiclink" });
+    return { error: verifyError as Error | null };
+  };
+
   const completeMemberInitialPassword = async (newPassword: string) => {
     const result = await setNewPassword(newPassword);
     if (result.error) return result;
@@ -1455,6 +1471,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         refreshUserFlags,
         signIn,
         signInWithPin,
+        signInMemberWithPin,
         signUp,
         signOut,
         switchUser,

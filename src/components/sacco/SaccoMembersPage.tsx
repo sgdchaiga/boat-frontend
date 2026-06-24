@@ -58,7 +58,7 @@ interface SaccoMembersPageProps {
 }
 
 type MemberSortKey = "member_number" | "full_name" | "phone" | "email" | "status";
-type MemberAppAccess = { auth_user_id: string; sacco_member_id: string; login_email: string; status: "invited" | "active" | "suspended" | "revoked" };
+type MemberAppAccess = { auth_user_id: string; sacco_member_id: string; login_email: string; login_phone?: string | null; status: "invited" | "active" | "suspended" | "revoked" };
 
 function memberMatchesSearch(r: SaccoMemberRow, q: string): boolean {
   const hay = [r.member_number, r.full_name, r.phone, r.email, r.national_id, r.notes]
@@ -126,7 +126,7 @@ export function SaccoMembersPage({
       setRows((data || []) as SaccoMemberRow[]);
       const { data: accessRows } = await sb
         .from("sacco_member_app_users")
-        .select("auth_user_id,sacco_member_id,login_email,status")
+        .select("auth_user_id,sacco_member_id,login_email,login_phone,status")
         .eq("organization_id", orgId);
       setAppAccess(Object.fromEntries(((accessRows || []) as MemberAppAccess[]).map((item) => [item.sacco_member_id, item])));
     }
@@ -135,13 +135,19 @@ export function SaccoMembersPage({
 
   const enableMemberApp = async (member: SaccoMemberRow) => {
     if (!orgId || readOnly) return;
-    const loginEmail = window.prompt("Member app login email", member.email || "")?.trim().toLowerCase();
+    const usePhonePin = window.confirm("Use telephone + 6-digit PIN?\n\nOK = telephone and PIN (recommended)\nCancel = email and password");
+    const phone = usePhonePin ? window.prompt("Member telephone number", member.phone || "")?.trim() : "";
+    if (usePhonePin && (!phone || phone.replace(/\D/g, "").length < 9)) return alert("Enter a valid telephone number.");
+    const pin = usePhonePin ? window.prompt("Create a 6-digit member PIN", "")?.trim() : "";
+    if (usePhonePin && !/^\d{6}$/.test(pin || "")) return alert("The member PIN must be exactly 6 digits.");
+    const loginEmail = usePhonePin
+      ? `member.${member.id}@member.boat.invalid`
+      : window.prompt("Member app login email", member.email || "")?.trim().toLowerCase();
     if (!loginEmail) return;
-    const temporaryPassword = window.prompt("Temporary password (at least 8 characters). The member should change it after login.", "");
-    if (!temporaryPassword || temporaryPassword.length < 8) {
-      alert("A temporary password of at least 8 characters is required.");
-      return;
-    }
+    const temporaryPassword = usePhonePin
+      ? `${crypto.randomUUID()}Aa7!`
+      : window.prompt("Temporary password (at least 8 characters). The member should change it after login.", "");
+    if (!temporaryPassword || temporaryPassword.length < 8) return alert("A temporary password of at least 8 characters is required.");
     setAppAccessSaving(member.id);
     try {
       const signupClient = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
@@ -159,17 +165,46 @@ export function SaccoMembersPage({
         organization_id: orgId,
         sacco_member_id: member.id,
         login_email: loginEmail,
+        login_phone: usePhonePin ? phone!.replace(/\D/g, "") : null,
         status: "invited",
         invited_by: user?.id ?? null,
+        must_change_password: !usePhonePin,
       });
       if (linkError) throw linkError;
-      toast({ title: "Member app enabled", description: `Login created for ${loginEmail}. Share the temporary password securely.` });
+      if (usePhonePin) {
+        const { error: pinError } = await supabase.rpc("set_sacco_member_app_pin", { p_member_id: member.id, p_phone: phone, p_pin: pin });
+        if (pinError) throw pinError;
+      }
+      toast({ title: "Member app enabled", description: usePhonePin ? `Login created for ${phone}. Share the app link and PIN separately.` : `Login created for ${loginEmail}. Share the temporary password securely.` });
       await load();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Could not enable member app access.");
     } finally {
       setAppAccessSaving(null);
     }
+  };
+
+  const shareMemberApp = async (member: SaccoMemberRow) => {
+    const access = appAccess[member.id];
+    const url = `${window.location.origin}${window.location.pathname}?memberApp=1`;
+    const loginHint = access?.login_phone ? `Telephone: ${access.login_phone}` : `Email: ${access?.login_email || member.email || ""}`;
+    const text = `Your BOAT SACCO member app is ready. Open ${url}\n${loginHint}\nUse the PIN or temporary password given to you securely.`;
+    try {
+      if (navigator.share) await navigator.share({ title: "BOAT SACCO Member App", text, url });
+      else { await navigator.clipboard.writeText(text); toast({ title: "Member app link copied", description: "Paste it into SMS or WhatsApp." }); }
+    } catch (error) {
+      if ((error as DOMException)?.name !== "AbortError") alert("Could not share the link. Copy this address: " + url);
+    }
+  };
+
+  const resetMemberPin = async (member: SaccoMemberRow) => {
+    const access = appAccess[member.id];
+    if (!access?.login_phone || readOnly) return;
+    const pin = window.prompt("Enter a new 6-digit member PIN", "")?.trim();
+    if (!/^\d{6}$/.test(pin || "")) return alert("The member PIN must be exactly 6 digits.");
+    const { error } = await supabase.rpc("set_sacco_member_app_pin", { p_member_id: member.id, p_phone: access.login_phone, p_pin: pin });
+    if (error) alert(error.message);
+    else toast({ title: "Member PIN reset", description: "Give the new PIN to the member securely." });
   };
 
   const toggleMemberApp = async (member: SaccoMemberRow) => {
@@ -591,7 +626,7 @@ export function SaccoMembersPage({
                             <Smartphone className="h-3.5 w-3.5" /> Enable app
                           </button>
                         ) : (
-                          <button
+                          <><button
                             type="button"
                             onClick={() => void toggleMemberApp(r)}
                             disabled={readOnly || appAccessSaving === r.id}
@@ -599,7 +634,7 @@ export function SaccoMembersPage({
                             title={`Member app: ${appAccess[r.id].login_email}`}
                           >
                             {appAccess[r.id].status === "suspended" ? "Restore app" : "Suspend app"}
-                          </button>
+                          </button>{appAccess[r.id].login_phone && <button type="button" onClick={() => void resetMemberPin(r)} className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50">Reset PIN</button>}<button type="button" onClick={() => void shareMemberApp(r)} className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-800 hover:bg-sky-100">Send app</button></>
                         )}
                         <button
                           type="button"
