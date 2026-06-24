@@ -685,7 +685,8 @@ function AppContent() {
     return <OrganizationPickerPage />;
   }
 
-  if (user.isSaccoMember && user.sacco_member_id) {
+  if (user.isSaccoMember && user.sacco_member_id &&
+      (!['active', 'invited'].includes(user.sacco_member_access_status || '') || user.sacco_member_must_change_password)) {
     if (!["active", "invited"].includes(user.sacco_member_access_status || "")) {
       return (
         <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4">
@@ -1430,9 +1431,20 @@ function AppContent() {
     }
   };
 
+  const renderMemberPage = () => {
+    if (!user.sacco_member_id) return null;
+    if (currentPage === SACCOPRO_PAGE.loanInput) {
+      return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">Back to member app</button><SacoLoanInput initialMemberId={user.sacco_member_id} /></div>;
+    }
+    if (currentPage === SACCOPRO_PAGE.savingsStatements) {
+      return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">Back to member app</button><SaccoSavingsStatementsPage memberIdFromNav={user.sacco_member_id} navigate={navigate} /></div>;
+    }
+    return <SaccoClientDashboard memberIdFromAuth={user.sacco_member_id} memberMode navigate={navigate} />;
+  };
+
   return (
     <AppProvider navigate={(p, state) => navigate(normalizeLegacyPage(p), state)}>
-      <Layout
+      {user.isSaccoMember ? renderMemberPage() : <Layout
         currentPage={currentPage}
         pageState={pageState}
         onNavigate={(page, state) => navigate(page, state)}
@@ -1440,7 +1452,7 @@ function AppContent() {
         canGoBack={pageHistory.length > 0}
       >
         {renderPage()}
-      </Layout>
+      </Layout>}
     </AppProvider>
   );
 }
