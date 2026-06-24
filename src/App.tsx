@@ -119,6 +119,7 @@ import SaccoSavingsStatementsPage from './components/sacco/SaccoSavingsStatement
 import SaccoFinancialSummariesPage from './components/sacco/SaccoFinancialSummariesPage';
 import SaccoSavingsInterest from './components/sacco/SaccoSavingsInterest';
 import SaccoClientDashboard from './components/sacco/SaccoClientDashboard';
+import { SaccoMemberLoanApplication } from './components/sacco/SaccoMemberLoanApplication';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from './lib/moduleAccess';
 import {
   defaultLandingPageForNavRole,
@@ -722,7 +723,7 @@ function AppContent() {
       );
     }
     if (currentPage === SACCOPRO_PAGE.loanInput) {
-      return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">← Back to member app</button><SacoLoanInput initialMemberId={user.sacco_member_id} /></div>;
+      return <SaccoMemberLoanApplication memberId={user.sacco_member_id} onBack={() => navigate(SACCOPRO_PAGE.clientDashboard)} />;
     }
     if (currentPage === SACCOPRO_PAGE.savingsStatements) {
       return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">← Back to member app</button><SaccoSavingsStatementsPage memberIdFromNav={user.sacco_member_id} navigate={navigate} /></div>;
@@ -1434,7 +1435,7 @@ function AppContent() {
   const renderMemberPage = () => {
     if (!user.sacco_member_id) return null;
     if (currentPage === SACCOPRO_PAGE.loanInput) {
-      return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">Back to member app</button><SacoLoanInput initialMemberId={user.sacco_member_id} /></div>;
+      return <SaccoMemberLoanApplication memberId={user.sacco_member_id} onBack={() => navigate(SACCOPRO_PAGE.clientDashboard)} />;
     }
     if (currentPage === SACCOPRO_PAGE.savingsStatements) {
       return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">Back to member app</button><SaccoSavingsStatementsPage memberIdFromNav={user.sacco_member_id} navigate={navigate} /></div>;

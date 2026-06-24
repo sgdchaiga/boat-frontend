@@ -220,7 +220,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
       <div className="space-y-6">
         <div className="flex flex-wrap items-center gap-2">
           <Landmark className="text-emerald-600" size={26} />
-          <h1 className="text-2xl font-bold text-slate-900">SACCO member app</h1>
+          <h1 className="text-2xl font-bold text-slate-900">{memberMode ? "My SACCO" : "SACCO member app"}</h1>
           <PageNotes ariaLabel="SACCO member app help">
             <p>Member-facing account view built from the SACCO member, savings, teller, cashbook, and loan records.</p>
           </PageNotes>
@@ -363,8 +363,8 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
       )}
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(320px,420px)_1fr]">
-        <div className="mx-auto w-full max-w-[420px] rounded-[2rem] border border-slate-300 bg-slate-950 p-3 shadow-2xl">
-          <div className="overflow-hidden rounded-[1.5rem] bg-slate-50">
+        <div className={memberMode ? "mx-auto w-full max-w-[520px]" : "mx-auto w-full max-w-[420px] rounded-[2rem] border border-slate-300 bg-slate-950 p-3 shadow-2xl"}>
+          <div className={memberMode ? "overflow-hidden rounded-3xl bg-slate-50 shadow-sm" : "overflow-hidden rounded-[1.5rem] bg-slate-50"}>
             <div className="bg-slate-900 px-5 pb-5 pt-4 text-white">
               <div className="mx-auto mb-4 h-1.5 w-16 rounded-full bg-white/25" />
               <div className="flex items-center justify-between">
@@ -395,7 +395,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
 
             <div className="space-y-5 px-4 py-5">
               <div className="grid grid-cols-3 gap-3">
-                {mobileActions.map((action) => (
+                {mobileActions.filter((action) => !memberMode || action.label !== "Balance").map((action) => (
                   <button
                     key={action.label}
                     type="button"
@@ -459,7 +459,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
           </div>
         </div>
 
-        <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+        {!memberMode && <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
           <div>
             <p className="text-xs font-semibold uppercase text-emerald-700">Smartphone member experience</p>
             <h2 className="mt-1 text-xl font-bold text-slate-900">Member self-service app</h2>
@@ -479,7 +479,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
               </div>
             ))}
           </div>
-        </div>
+        </div>}
       </section>
 
       {activeAction && (
@@ -540,7 +540,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
         </section>
       )}
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
+      {!memberMode && <><section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div className="flex items-center gap-3">
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 text-emerald-700">
@@ -764,7 +764,9 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
         </section>
       </div>
 
-      {isSuperAdmin && (
+      </>}
+
+      {isSuperAdmin && !memberMode && (
         <p className="text-xs text-slate-400">
           Admin note: this screen uses SACCO tables only: members, savings accounts, loans, fixed deposits, and cashbook lines.
         </p>
