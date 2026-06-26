@@ -11,6 +11,7 @@ type Org = {
   business_type: string;
   created_at: string;
   enable_fixed_assets?: boolean | null;
+  enable_asset_verification?: boolean | null;
   school_enable_reports?: boolean | null;
   school_enable_fixed_deposit?: boolean | null;
   school_enable_accounting?: boolean | null;
@@ -177,6 +178,7 @@ export function PlatformOrganizationsPage() {
   const [copyName, setCopyName] = useState("");
   const [copySlug, setCopySlug] = useState("");
   const [editEnableFixedAssets, setEditEnableFixedAssets] = useState(false);
+  const [editEnableAssetVerification, setEditEnableAssetVerification] = useState(false);
   const [editSchoolReports, setEditSchoolReports] = useState(false);
   const [editSchoolFixedDeposit, setEditSchoolFixedDeposit] = useState(false);
   const [editSchoolAccounting, setEditSchoolAccounting] = useState(false);
@@ -594,6 +596,7 @@ export function PlatformOrganizationsPage() {
     setSubStart(sub?.period_start || new Date().toISOString().slice(0, 10));
     setSubEnd(sub?.period_end || "");
     setEditEnableFixedAssets(!!org.enable_fixed_assets);
+    setEditEnableAssetVerification(org.business_type === "accounting_practice" || !!org.enable_asset_verification);
     setEditSchoolReports(!!org.school_enable_reports);
     setEditSchoolFixedDeposit(!!org.school_enable_fixed_deposit);
     setEditSchoolAccounting(!!org.school_enable_accounting);
@@ -637,6 +640,7 @@ export function PlatformOrganizationsPage() {
         ...(slugTrim ? { slug: slugify(slugTrim) } : { slug: null }),
         business_type: editBiz,
         enable_fixed_assets: editEnableFixedAssets,
+        enable_asset_verification: editBiz === "accounting_practice" || editEnableAssetVerification,
         school_enable_reports: editSchoolReports,
         school_enable_fixed_deposit: editSchoolFixedDeposit,
         school_enable_accounting: editSchoolAccounting,
@@ -1256,6 +1260,21 @@ export function PlatformOrganizationsPage() {
                 onChange={(e) => setEditEnableFixedAssets(e.target.checked)}
               />
               Enable fixed assets module (standalone register, depreciation, GL)
+            </label>
+            <label className="flex items-start gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5"
+                checked={editBiz === "accounting_practice" || editEnableAssetVerification}
+                disabled={editBiz === "accounting_practice"}
+                onChange={(e) => setEditEnableAssetVerification(e.target.checked)}
+              />
+              <span>
+                Enable asset verification
+                {editBiz === "accounting_practice" && (
+                  <span className="block text-xs text-slate-500">Included automatically for accounting practices.</span>
+                )}
+              </span>
             </label>
             {(editBiz === "hotel" || editBiz === "mixed") && (
               <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">

@@ -96,6 +96,8 @@ interface AuthUser {
   subscription_period_end?: string | null;
   /** Platform enables per organization; gates Fixed assets navigation. */
   enable_fixed_assets?: boolean;
+  /** Always available to accounting practices; platform-controlled for other organizations. */
+  enable_asset_verification?: boolean;
   /** Platform: Communications hub (SMS/WhatsApp). */
   enable_communications?: boolean;
   /** Platform: Wallet module. */
@@ -265,6 +267,7 @@ type TenantProfile = {
   subscription_plan_code: string | null;
   subscription_period_end: string | null;
   enable_fixed_assets: boolean;
+  enable_asset_verification: boolean;
   enable_communications: boolean;
   enable_wallet: boolean;
   enable_payroll: boolean;
@@ -350,6 +353,8 @@ function localTenantDefaults(): TenantProfile {
     subscription_plan_code: localSubscription?.plan_code ?? "desktop-local",
     subscription_period_end: localSubscription?.period_end ?? null,
     enable_fixed_assets: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_FIXED_ASSETS, true),
+    enable_asset_verification:
+      businessType === "accounting_practice" || parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_ASSET_VERIFICATION, false),
     enable_communications: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_COMMUNICATIONS, true),
     enable_wallet: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_WALLET, true),
     enable_payroll: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_PAYROLL, true),
@@ -510,6 +515,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     subscription_plan_code: null,
     subscription_period_end: null,
     enable_fixed_assets: false,
+    enable_asset_verification: false,
     enable_communications: true,
     enable_wallet: true,
     enable_payroll: true,
@@ -558,7 +564,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, desktop_device_limit, enable_fixed_assets, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -585,6 +591,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       business_type?: BusinessType | null;
       desktop_device_limit?: number | null;
       enable_fixed_assets?: boolean | null;
+      enable_asset_verification?: boolean | null;
       enable_communications?: boolean | null;
       enable_wallet?: boolean | null;
       enable_payroll?: boolean | null;
@@ -628,6 +635,8 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       subscription_plan_code: sub?.subscription_plans?.code ?? null,
       subscription_period_end: sub?.period_end ?? null,
       enable_fixed_assets: !!org?.enable_fixed_assets,
+      enable_asset_verification:
+        org?.business_type === "accounting_practice" || org?.enable_asset_verification === true,
       enable_communications: org?.enable_communications !== false,
       enable_wallet: org?.enable_wallet !== false,
       enable_payroll: org?.enable_payroll !== false,
@@ -889,6 +898,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           subscription_plan_code: null,
           subscription_period_end: null,
           enable_fixed_assets: false,
+          enable_asset_verification: false,
           enable_communications: true,
           enable_wallet: true,
           enable_payroll: true,

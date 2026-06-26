@@ -23,6 +23,7 @@ export type ModuleId =
   | "accounting"
   | "reconciliation"
   | "fixed_assets"
+  | "asset_verification"
   | "staff"
   | "admin"
   | "sacco"
@@ -83,6 +84,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   accounting: "both",
   reconciliation: "both",
   fixed_assets: "both",
+  asset_verification: "both",
   staff: "both",
   admin: "both",
   sacco: "sacco",
@@ -119,6 +121,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   accounting: true,
   reconciliation: true,
   fixed_assets: true,
+  asset_verification: true,
   staff: true,
   admin: true,
   sacco: true,
@@ -179,6 +182,8 @@ export function getModuleAccess(input: {
   subscriptionStatus?: SubscriptionStatus;
   /** When not true, Fixed assets navigation is hidden (superuser-controlled per organization). */
   enableFixedAssets?: boolean;
+  /** Accounting practices always have this; other organizations require the platform flag. */
+  enableAssetVerification?: boolean;
   /** Platform: Communications hub. */
   enableCommunications?: boolean;
   /** Platform: Wallet module. */
@@ -213,6 +218,7 @@ export function getModuleAccess(input: {
     businessType,
     subscriptionStatus = "none",
     enableFixedAssets,
+    enableAssetVerification,
     enableCommunications,
     enableWallet,
     enablePayroll,
@@ -320,6 +326,18 @@ export function getModuleAccess(input: {
       visible: false,
       readOnly: true,
       blockedReason: "Fixed assets is not enabled for this business. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (
+    moduleId === "asset_verification" &&
+    businessType !== "accounting_practice" &&
+    enableAssetVerification !== true
+  ) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "Asset verification is not enabled for this organization. Ask a platform admin to turn it on.",
     };
   }
 
@@ -481,6 +499,7 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  if (page === "asset_verification") return true;
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
   if (CLINIC_PAGE_IDS.has(page)) {
     return businessType === "clinic";
@@ -538,6 +557,7 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
 }
 
 export function pageToModuleId(page: string): ModuleId | null {
+  if (page === "asset_verification") return "asset_verification";
   if (page === "system_integrations") return null;
   if (page === "communications") return "communications";
   if (page === "agent_hub") return "agent";

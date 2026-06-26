@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BarChart3, CheckCircle2, Download, EyeOff, FileSpreadsheet, Filter, PackageCheck, Printer, RefreshCw, ScanBarcode, Send, ShieldCheck, Trash2, Upload, X } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { parseBulkImportFile } from "../../lib/saccoBulkImport";
@@ -24,6 +24,12 @@ const detectHeader = (headers: string[], aliases: string[], patterns: RegExp[], 
   headers.find((header) => patterns.some((pattern) => pattern.test(header)) && !exclusions.some((pattern) => pattern.test(header))) ||
   "";
 const matchKey = (value: string | null | undefined) => String(value || "").trim().toLowerCase().replace(/\s+/g, " ");
+const normalizeStockLine = (row: StockLine): StockLine => ({
+  ...row,
+  system_qty: Number(row.system_qty || 0),
+  physical_qty: row.physical_qty == null ? null : Number(row.physical_qty),
+  unit_cost: Number(row.unit_cost || 0),
+});
 
 export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean }) {
   const { user } = useAuth();
@@ -50,6 +56,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const pendingLineSaves = useRef(new Map<string, number>());
 
   const loadTakes = useCallback(async (selectedClient: string) => {
     if (!selectedClient) { setTakes([]); setTakeId(""); setLines([]); return; }
@@ -59,7 +66,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
     setTakes(rows);
     if (rows.length) {
       const itemResult = await db.from("practice_stock_take_items").select("*").in("stock_take_id", rows.map((row) => row.id));
-      if (!itemResult.error) setAllTakeLines((itemResult.data || []).map((row: StockLine) => ({ ...row, system_qty: Number(row.system_qty || 0), physical_qty: row.physical_qty == null ? null : Number(row.physical_qty), unit_cost: Number(row.unit_cost || 0) })));
+      if (!itemResult.error) setAllTakeLines((itemResult.data || []).map(normalizeStockLine));
     } else setAllTakeLines([]);
     setTakeId((current) => rows.some((row) => row.id === current) ? current : rows[0]?.id || "");
   }, []);
@@ -86,19 +93,35 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
       if (cached) { setLines(JSON.parse(cached)); setMessage("Offline mode: showing locally saved counts."); }
       else setMessage(result.error.message);
     } else {
-      const loaded = (result.data || []).map((row: StockLine) => ({ ...row, system_qty: Number(row.system_qty || 0), physical_qty: row.physical_qty == null ? null : Number(row.physical_qty), unit_cost: Number(row.unit_cost || 0) }));
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        const local = new Map((JSON.parse(cached) as StockLine[]).map((line) => [line.id, line]));
-        setLines(loaded.map((line: StockLine) => local.has(line.id) ? { ...line, physical_qty: local.get(line.id)!.physical_qty } : line));
-      } else setLines(loaded);
+      setLines((result.data || []).map(normalizeStockLine));
+      if (!pendingLineSaves.current.size) localStorage.removeItem(cacheKey);
     }
   }, []);
 
   useEffect(() => { void loadClients(); }, [loadClients]);
   useEffect(() => { void loadTakes(clientId); }, [clientId, loadTakes]);
   useEffect(() => { void loadLines(takeId); }, [takeId, loadLines]);
-  useEffect(() => { if (takeId && lines.length) localStorage.setItem(`boat.practice.stocktake.${takeId}`, JSON.stringify(lines)); }, [lines, takeId]);
+  useEffect(() => () => {
+    pendingLineSaves.current.forEach((timer) => window.clearTimeout(timer));
+    pendingLineSaves.current.clear();
+  }, []);
+  useEffect(() => {
+    if (!takeId) return;
+    const refresh = () => {
+      void loadLines(takeId);
+      if (clientId) void loadTakes(clientId);
+    };
+    const channel = db
+      .channel(`practice-stock-take-${takeId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "practice_stock_take_items", filter: `stock_take_id=eq.${takeId}` }, refresh)
+      .on("postgres_changes", { event: "*", schema: "public", table: "practice_stock_takes", filter: `id=eq.${takeId}` }, refresh)
+      .subscribe();
+    const poll = window.setInterval(refresh, 8000);
+    return () => {
+      window.clearInterval(poll);
+      void db.removeChannel(channel);
+    };
+  }, [clientId, loadLines, loadTakes, takeId]);
 
   const readFile = async (file: File | null) => {
     if (!file) return;
@@ -241,6 +264,21 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
       localStorage.setItem(`boat.practice.stocktake.${takeId}`, JSON.stringify(next));
       return next;
     });
+    const existing = pendingLineSaves.current.get(lineId);
+    if (existing) window.clearTimeout(existing);
+    const timer = window.setTimeout(async () => {
+      pendingLineSaves.current.delete(lineId);
+      if (!takeId) return;
+      const result = await db.from("practice_stock_take_items").update({
+        physical_qty: value,
+        counted_by: value == null ? null : user?.id || null,
+        counted_by_name: value == null ? null : user?.email || "Counter",
+        counted_at: value == null ? null : new Date().toISOString(),
+      }).eq("id", lineId);
+      if (result.error) setMessage(`${result.error.message}. Count kept on this device until you save again.`);
+      else if (!pendingLineSaves.current.size) localStorage.removeItem(`boat.practice.stocktake.${takeId}`);
+    }, 700);
+    pendingLineSaves.current.set(lineId, timer);
   };
 
   const scanBarcode = () => {

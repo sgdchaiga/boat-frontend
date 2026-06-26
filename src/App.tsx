@@ -69,6 +69,7 @@ import { BankReconciliationPage } from './components/accounting/BankReconciliati
 import { PracticeWorkspacePage } from './components/accounting-practice/PracticeWorkspacePage';
 import { PracticeStockTakePage } from './components/accounting-practice/PracticeStockTakePage';
 import { PracticeHousekeepingAuditPage } from './components/accounting-practice/PracticeHousekeepingAuditPage';
+import { AssetVerificationPage } from './components/accounting-practice/AssetVerificationPage';
 import { TrialBalancePage } from './components/accounting/TrialBalancePage';
 import { IncomeStatementPage } from './components/accounting/IncomeStatementPage';
 import { BalanceSheetPage } from './components/accounting/BalanceSheetPage';
@@ -766,6 +767,7 @@ function AppContent() {
           businessType: user?.business_type ?? null,
           subscriptionStatus: user?.subscription_status ?? "none",
           enableFixedAssets: user?.enable_fixed_assets === true,
+          enableAssetVerification: user?.enable_asset_verification === true,
           enableCommunications: user?.enable_communications !== false,
           enableWallet: user?.enable_wallet !== false,
           enablePayroll: user?.enable_payroll !== false,
@@ -887,6 +889,8 @@ function AppContent() {
         return <PracticeStockTakePage readOnly={access.readOnly} />;
       case 'practice_housekeeping_audit':
         return <PracticeHousekeepingAuditPage />;
+      case 'asset_verification':
+        return <AssetVerificationPage readOnly={access.readOnly} />;
       case 'retail_dashboard':
         return <RetailDashboard onNavigate={navigate} />;
       case SACCOPRO_PAGE.dashboard:

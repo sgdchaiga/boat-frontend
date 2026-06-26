@@ -250,6 +250,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   ];
 
   const enableFixedAssets = user?.enable_fixed_assets === true;
+  const enableAssetVerification =
+    businessType === 'accounting_practice' || user?.enable_asset_verification === true;
   const enablePayroll = user?.enable_payroll !== false;
   const enableBudget = user?.enable_budget !== false;
   const enableTreasury = user?.enable_treasury !== false;
@@ -718,6 +720,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
     { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
     { name: 'Stock Take', icon: PackageCheck, page: 'practice_stock_take' },
+    { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' },
     { name: 'Housekeeping Audit', icon: FileText, page: 'practice_housekeeping_audit' },
     { name: 'Tasks & Deadlines', icon: BookOpen, page: 'practice_tasks' },
     { name: 'Billing', icon: Receipt, page: 'practice_billing' },
@@ -725,7 +728,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Permissions & settings', icon: Settings, page: 'admin' },
   ];
 
-  const mainNavigation: NavItem[] = businessType === 'accounting_practice'
+  const baseNavigation: NavItem[] = businessType === 'accounting_practice'
     ? practiceNavigation
     : useRoleScopedNav
     ? roleScopedNav
@@ -736,6 +739,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         : businessType === 'vsla'
           ? vslaNavigation
           : simpleNavigation;
+  const mainNavigation: NavItem[] =
+    businessType !== 'accounting_practice' && enableAssetVerification
+      ? [...baseNavigation, { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' }]
+      : baseNavigation;
 
   const showPlatform = isSuperAdmin;
   const showHotel = !isSuperAdmin || isHotelStaff;
@@ -853,6 +860,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         businessType,
         subscriptionStatus,
         enableFixedAssets: user?.enable_fixed_assets === true,
+        enableAssetVerification: user?.enable_asset_verification === true,
         enableCommunications: allowCommunications,
         enableWallet: allowWallet,
         enablePayroll: allowPayroll,
@@ -881,6 +889,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.enable_inventory,
       user?.enable_purchases,
       user?.enable_fixed_assets,
+      user?.enable_asset_verification,
       user?.enable_treasury,
       user?.enable_reconciliation,
       user?.school_enable_reports,
@@ -909,6 +918,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       businessType,
       subscriptionStatus,
       enableFixedAssets: user?.enable_fixed_assets === true,
+      enableAssetVerification: user?.enable_asset_verification === true,
       enableCommunications: allowCommunications,
       enableWallet: allowWallet,
       enablePayroll: allowPayroll,
