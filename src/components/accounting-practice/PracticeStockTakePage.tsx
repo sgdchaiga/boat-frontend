@@ -8,7 +8,7 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 const db = supabase as any;
 type Client = { id: string; name: string };
 type StockTake = { id: string; client_id: string; title: string; stock_date: string; source_file: string | null; status: "draft" | "completed" | "submitted" | "adjusted"; created_at: string };
-type StockLine = { id: string; stock_take_id?: string; item_code: string | null; barcode?: string | null; item_name: string; category: string | null; unit: string | null; system_qty: number; physical_qty: number | null; unit_cost: number; last_movement_date?: string | null; counted_by_name?: string | null };
+type StockLine = { id: string; stock_take_id?: string; item_code: string | null; barcode?: string | null; item_name: string; category: string | null; department?: string | null; unit: string | null; system_qty: number; physical_qty: number | null; unit_cost: number; last_movement_date?: string | null; counted_by_name?: string | null };
 type ImportLine = Omit<StockLine, "id" | "physical_qty">;
 
 const input = "rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm";
@@ -141,7 +141,8 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
       }
       const codeHeader = detectHeader(parsed.headers, ["item_code", "product_code", "sku", "code", "barcode"], [/(item|product).*code/, /^(sku|code|barcode)$/]);
       const barcodeHeader = detectHeader(parsed.headers, ["barcode", "bar_code", "ean", "upc"], [/(barcode|bar_code|ean|upc)/]);
-      const categoryHeader = detectHeader(parsed.headers, ["category", "group", "department", "class"], [/(category|department|group|class)/]);
+      const categoryHeader = detectHeader(parsed.headers, ["category", "group", "class"], [/(category|group|class)/]);
+      const departmentHeader = detectHeader(parsed.headers, ["department", "dept"], [/^(department|dept)$/]);
       const unitHeader = detectHeader(parsed.headers, ["unit", "uom", "unit_of_measure"], [/^(unit|uom|unit_of_measure)$/]);
       const costHeader = detectHeader(parsed.headers, ["unit_cost", "cost", "cost_price", "average_cost"], [/(unit|average|avg).*(cost|price)/, /^(cost|cost_price)$/], [/(total|value|amount)/]);
       const movementHeader = detectHeader(parsed.headers, ["last_movement_date", "last_sale_date", "last_transaction_date"], [/(last).*(movement|sale|transaction).*(date)/]);
@@ -156,6 +157,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
           barcode: barcodeHeader ? row[barcodeHeader]?.trim() || null : null,
           item_name: itemName,
           category: categoryHeader ? row[categoryHeader]?.trim() || null : null,
+          department: departmentHeader ? row[departmentHeader]?.trim() || null : null,
           unit: unitHeader ? row[unitHeader]?.trim() || null : null,
           system_qty: systemQty,
           unit_cost: costHeader ? numberFrom(row[costHeader]) || 0 : 0,
@@ -240,6 +242,64 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
       setMessage(`${counts.size} physical count(s) loaded from ${file.name}${unmatched ? `; ${unmatched} item(s) did not match` : ""}${invalid ? `; ${invalid} row(s) had no valid physical quantity` : ""}. Review, then Save counts.`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not read the physical-count file.");
+    }
+  };
+
+  const readClassificationFile = async (file: File | null) => {
+    if (!file || !takeId || !lines.length) return;
+    try {
+      const parsed = await parseBulkImportFile(file);
+      const nameHeader = detectHeader(parsed.headers, ["item_name", "product_name", "description", "name", "item", "product"], [/^(item|product).*(name|description)$/, /^(item|product|description)$/]);
+      const codeHeader = detectHeader(parsed.headers, ["item_code", "product_code", "sku", "code"], [/(item|product).*code/, /^(sku|code)$/]);
+      const barcodeHeader = detectHeader(parsed.headers, ["barcode", "bar_code", "ean", "upc"], [/(barcode|bar_code|ean|upc)/]);
+      const categoryHeader = detectHeader(parsed.headers, ["category", "group", "class"], [/(category|group|class)/]);
+      const departmentHeader = detectHeader(parsed.headers, ["department", "dept"], [/^(department|dept)$/]);
+      if ((!nameHeader && !codeHeader && !barcodeHeader) || (!categoryHeader && !departmentHeader)) {
+        setMessage(`Could not identify an item column plus category or department. File columns: ${parsed.headers.join(", ") || "none"}.`);
+        return;
+      }
+
+      const byBarcode = new Map(lines.filter((line) => line.barcode).map((line) => [matchKey(line.barcode), line.id]));
+      const byCode = new Map(lines.filter((line) => line.item_code).map((line) => [matchKey(line.item_code), line.id]));
+      const byName = new Map(lines.map((line) => [matchKey(line.item_name), line.id]));
+      const updates = new Map<string, Partial<Pick<StockLine, "category" | "department">>>();
+      let unmatched = 0;
+      let skipped = 0;
+
+      parsed.rows.forEach((row) => {
+        const id =
+          (barcodeHeader ? byBarcode.get(matchKey(row[barcodeHeader])) : undefined) ||
+          (codeHeader ? byCode.get(matchKey(row[codeHeader])) : undefined) ||
+          (nameHeader ? byName.get(matchKey(row[nameHeader])) : undefined);
+        if (!id) { unmatched += 1; return; }
+        const categoryValue = categoryHeader ? row[categoryHeader]?.trim() || null : undefined;
+        const departmentValue = departmentHeader ? row[departmentHeader]?.trim() || null : undefined;
+        const update: Partial<Pick<StockLine, "category" | "department">> = {};
+        if (categoryValue) update.category = categoryValue;
+        if (departmentValue) update.department = departmentValue;
+        if (!Object.keys(update).length) { skipped += 1; return; }
+        updates.set(id, { ...updates.get(id), ...update });
+      });
+
+      if (!updates.size) {
+        setMessage(`No category or department values were matched from ${file.name}${unmatched ? `; ${unmatched} row(s) did not match stock items` : ""}.`);
+        return;
+      }
+
+      setSaving(true);
+      const results = await Promise.all(Array.from(updates.entries()).map(([id, update]) => db.from("practice_stock_take_items").update(update).eq("id", id)));
+      const failed = results.find((result) => result.error)?.error;
+      if (failed) setMessage(failed.message);
+      else {
+        setLines((current) => current.map((line) => updates.has(line.id) ? { ...line, ...updates.get(line.id)! } : line));
+        setMessage(`${updates.size} item(s) updated from ${file.name}${unmatched ? `; ${unmatched} row(s) did not match` : ""}${skipped ? `; ${skipped} matched row(s) had no category or department value` : ""}.`);
+        await loadLines(takeId);
+        await loadTakes(clientId);
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not read the category/department file.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -341,13 +401,13 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
   const ranked = [...lines].filter((line) => line.physical_qty != null).map((line) => ({ ...line, varianceValue: (Number(line.physical_qty) - line.system_qty) * line.unit_cost }));
   const topShortages = ranked.filter((line) => line.varianceValue < 0).sort((a, b) => a.varianceValue - b.varianceValue).slice(0, 5);
   const topSurpluses = ranked.filter((line) => line.varianceValue > 0).sort((a, b) => b.varianceValue - a.varianceValue).slice(0, 5);
-  const departmentSummary = Array.from(filtered.reduce((map, line) => { const key = line.category || "Uncategorised"; const value = line.physical_qty == null ? 0 : (line.physical_qty - line.system_qty) * line.unit_cost; map.set(key, (map.get(key) || 0) + value); return map; }, new Map<string, number>()).entries()).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+  const departmentSummary = Array.from(filtered.reduce((map, line) => { const key = line.department || line.category || "Uncategorised"; const value = line.physical_qty == null ? 0 : (line.physical_qty - line.system_qty) * line.unit_cost; map.set(key, (map.get(key) || 0) + value); return map; }, new Map<string, number>()).entries()).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
 
   const downloadReport = () => {
     const escape = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
-    const rows = [["Item code", "Item name", "Category", "Unit", "System qty", "Physical qty", "Variance qty", "Unit cost", "Variance value"], ...filtered.map((line) => {
+    const rows = [["Item code", "Item name", "Category", "Department", "Unit", "System qty", "Physical qty", "Variance qty", "Unit cost", "Variance value"], ...filtered.map((line) => {
       const variance = line.physical_qty == null ? "" : line.physical_qty - line.system_qty;
-      return [line.item_code || "", line.item_name, line.category || "", line.unit || "", line.system_qty, line.physical_qty ?? "", variance, line.unit_cost, variance === "" ? "" : Number(variance) * line.unit_cost];
+      return [line.item_code || "", line.item_name, line.category || "", line.department || "", line.unit || "", line.system_qty, line.physical_qty ?? "", variance, line.unit_cost, variance === "" ? "" : Number(variance) * line.unit_cost];
     })];
     const blob = new Blob([rows.map((row) => row.map(escape).join(",")).join("\n")], { type: "text/csv;charset=utf-8" });
     const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `stock_take_${selectedTake?.stock_date || stockDate}.csv`; link.click(); URL.revokeObjectURL(link.href);
@@ -366,7 +426,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
       <label className="text-xs text-slate-600">Stock date<input className={`${input} mt-1 w-full`} type="date" value={stockDate} onChange={(event) => setStockDate(event.target.value)}/></label>
       <label className="app-btn-secondary mt-5 cursor-pointer"><FileSpreadsheet className="h-4 w-4"/> Upload CSV / Excel<input type="file" accept=".csv,.xls,.xlsx" className="hidden" disabled={readOnly || !clientId} onChange={(event) => void readFile(event.target.files?.[0] || null)}/></label>
       <button className="app-btn-primary mt-5" disabled={readOnly || saving || !importLines.length} onClick={() => void createTake()}><Upload className="h-4 w-4"/> Import {importLines.length || "stock"}</button>
-      {sourceFile && <div className="flex items-center justify-between gap-3 text-xs text-slate-500 lg:col-span-5"><p>Ready: {sourceFile}. Required columns: item/name and system quantity. Optional: code, category, unit, unit cost.</p><button type="button" className="inline-flex items-center gap-1 font-semibold text-rose-700" onClick={cancelPendingImport}><X className="h-4 w-4"/> Cancel upload</button></div>}
+      {sourceFile && <div className="flex items-center justify-between gap-3 text-xs text-slate-500 lg:col-span-5"><p>Ready: {sourceFile}. Required columns: item/name and system quantity. Optional: code, category, department, unit, unit cost.</p><button type="button" className="inline-flex items-center gap-1 font-semibold text-rose-700" onClick={cancelPendingImport}><X className="h-4 w-4"/> Cancel upload</button></div>}
     </div>}
     <div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-4"><label className="text-xs text-slate-600 md:col-span-2">Saved stock take<select className={`${input} mt-1 w-full`} value={takeId} onChange={(event) => setTakeId(event.target.value)}><option value="">No stock take selected</option>{takes.map((take) => <option key={take.id} value={take.id}>{take.stock_date} · {take.title} · {take.status}</option>)}</select></label><Metric label="Counted" value={`${counted.length}/${lines.length}`}/><Metric label="Variance value" value={varianceValue.toLocaleString("en-UG", { maximumFractionDigits: 2 })}/></div>
     {takeId && <>
@@ -377,7 +437,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
         <label className="text-xs text-slate-600">Category<select className={`${input} mt-1 block`} value={category} onChange={(event) => setCategory(event.target.value)}><option value="">All categories</option>{categories.map((value) => <option key={value}>{value}</option>)}</select></label>
         <label className="text-xs text-slate-600">Report<select className={`${input} mt-1 block`} value={reportView} onChange={(event) => setReportView(event.target.value as typeof reportView)}><option value="all">All items</option><option value="missing">Missing stock</option><option value="excess">Excess stock</option><option value="slow">Slow-moving (90+ days)</option><option value="high_value">High-value variances</option><option value="department">Department variance</option></select></label>
         <label className="inline-flex items-center gap-2 pb-2 text-sm"><input type="checkbox" checked={blindCount} onChange={(event) => setBlindCount(event.target.checked)}/><EyeOff className="h-4 w-4"/> Blind count</label><span className="pb-2 text-xs text-slate-500">{filtered.length} shown</span>
-        <div className="w-full flex flex-wrap gap-2"><label className={`app-btn-secondary cursor-pointer ${readOnly || selectedTake?.status !== "draft" ? "pointer-events-none opacity-50" : ""}`}><FileSpreadsheet className="h-4 w-4"/> Import physical counts<input type="file" accept=".csv,.xls,.xlsx" className="hidden" disabled={readOnly || selectedTake?.status !== "draft"} onChange={(event) => { void readPhysicalFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }}/></label><button className="app-btn-secondary" onClick={downloadReport}><Download className="h-4 w-4"/> CSV report</button><button className="app-btn-secondary" onClick={() => window.print()}><Printer className="h-4 w-4"/> Print</button>{selectedTake?.status === "draft" && <button className="app-btn-secondary text-rose-700" disabled={readOnly || saving} onClick={() => void removeTake()}><Trash2 className="h-4 w-4"/> Remove import</button>}<button className="app-btn-primary" disabled={readOnly || saving || selectedTake?.status !== "draft"} onClick={() => void saveCounts(false)}>Save & continue later</button><button className="app-btn-primary" disabled={readOnly || saving || selectedTake?.status !== "draft" || counted.length !== lines.length} onClick={() => void saveCounts(true)}><Send className="h-4 w-4"/> Submit for approval</button></div>
+        <div className="w-full flex flex-wrap gap-2"><label className={`app-btn-secondary cursor-pointer ${readOnly || selectedTake?.status !== "draft" ? "pointer-events-none opacity-50" : ""}`}><FileSpreadsheet className="h-4 w-4"/> Import physical counts<input type="file" accept=".csv,.xls,.xlsx" className="hidden" disabled={readOnly || selectedTake?.status !== "draft"} onChange={(event) => { void readPhysicalFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }}/></label><label className={`app-btn-secondary cursor-pointer ${readOnly || saving || selectedTake?.status !== "draft" ? "pointer-events-none opacity-50" : ""}`}><FileSpreadsheet className="h-4 w-4"/> Update category/department<input type="file" accept=".csv,.xls,.xlsx" className="hidden" disabled={readOnly || saving || selectedTake?.status !== "draft"} onChange={(event) => { void readClassificationFile(event.target.files?.[0] || null); event.currentTarget.value = ""; }}/></label><button className="app-btn-secondary" onClick={downloadReport}><Download className="h-4 w-4"/> CSV report</button><button className="app-btn-secondary" onClick={() => window.print()}><Printer className="h-4 w-4"/> Print</button>{selectedTake?.status === "draft" && <button className="app-btn-secondary text-rose-700" disabled={readOnly || saving} onClick={() => void removeTake()}><Trash2 className="h-4 w-4"/> Remove import</button>}<button className="app-btn-primary" disabled={readOnly || saving || selectedTake?.status !== "draft"} onClick={() => void saveCounts(false)}>Save & continue later</button><button className="app-btn-primary" disabled={readOnly || saving || selectedTake?.status !== "draft" || counted.length !== lines.length} onClick={() => void saveCounts(true)}><Send className="h-4 w-4"/> Submit for approval</button></div>
       </div>
       {selectedTake?.status === "submitted" && <div className="grid gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 md:grid-cols-3"><input className={input} value={inventoryAccount} onChange={(event) => setInventoryAccount(event.target.value)} placeholder="Inventory account"/><input className={input} value={gainLossAccount} onChange={(event) => setGainLossAccount(event.target.value)} placeholder="Stock gain/loss account"/><button className="app-btn-primary" disabled={readOnly || saving || !inventoryAccount.trim() || !gainLossAccount.trim()} onClick={() => void approveAndPost()}><ShieldCheck className="h-4 w-4"/> Approve & post adjustment</button><p className="text-xs text-amber-800 md:col-span-3">Shortage: Dr Stock Gain/Loss, Cr Inventory. Surplus: Dr Inventory, Cr Stock Gain/Loss. Posts to the client practice journal, not the firm ledger.</p></div>}
       {reportView === "department" && <div className="rounded-xl border bg-white p-4"><h3 className="font-semibold">Department variance report</h3><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{departmentSummary.map(([name, value]) => <Metric key={name} label={name} value={value.toLocaleString("en-UG", { maximumFractionDigits: 2 })}/>)}</div></div>}
