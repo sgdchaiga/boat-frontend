@@ -1165,7 +1165,7 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
+                    <td colSpan={3} className="p-3 text-right">
                       Total income
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
@@ -1221,7 +1221,7 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
+                    <td colSpan={3} className="p-3 text-right">
                       Total expenditure
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalExpenses)}</td>
@@ -1287,7 +1287,7 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
+                    <td colSpan={3} className="p-3 text-right">
                       Total revenue
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalRevenue)}</td>
@@ -1383,7 +1383,7 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
+                    <td colSpan={3} className="p-3 text-right">
                       Total cost of goods sold
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalCogs)}</td>
@@ -1459,7 +1459,7 @@ export function IncomeStatementPage() {
                 </tbody>
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
-                    <td colSpan={compareRange !== "none" ? 4 : 3} className="p-3 text-right">
+                    <td colSpan={3} className="p-3 text-right">
                       Total operating expenses
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalOpex)}</td>
