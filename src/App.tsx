@@ -72,6 +72,7 @@ import { PracticeHousekeepingAuditPage } from './components/accounting-practice/
 import { AssetVerificationPage } from './components/accounting-practice/AssetVerificationPage';
 import { TrialBalancePage } from './components/accounting/TrialBalancePage';
 import { IncomeStatementPage } from './components/accounting/IncomeStatementPage';
+import { PosIncomeReconciliationPage } from './components/accounting/PosIncomeReconciliationPage';
 import { BalanceSheetPage } from './components/accounting/BalanceSheetPage';
 import { CashflowPage } from './components/accounting/CashflowPage';
 import { BudgetingPage } from './components/accounting/BudgetingPage';
@@ -1407,6 +1408,8 @@ function AppContent() {
         return <TrialBalancePage />;
       case 'accounting_income':
         return <IncomeStatementPage />;
+      case 'accounting_pos_income_reconciliation':
+        return <PosIncomeReconciliationPage />;
       case 'accounting_balance':
         return <BalanceSheetPage />;
       case 'accounting_cashflow':

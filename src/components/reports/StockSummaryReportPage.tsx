@@ -6,6 +6,7 @@ import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { ensureActiveOrganization } from "../../lib/stockBulkImport";
 import { fetchStockLedgerMovementsForProducts } from "../../lib/stockLedger";
 import { businessDayRangeForDateString, businessTodayISO } from "../../lib/timezone";
+import { downloadCsv, downloadXlsx, exportAccountingPdf } from "../../lib/accountingReportExport";
 import { PageNotes } from "../common/PageNotes";
 
 type ValuationMethod = "product_cost" | "last_purchase" | "weighted_average";
@@ -109,6 +110,7 @@ export function StockSummaryReportPage() {
   const [valuationMethod, setValuationMethod] = useState<ValuationMethod>("weighted_average");
   const [selectedDepartmentId, setSelectedDepartmentId] = useState("");
   const [itemSearch, setItemSearch] = useState("");
+  const [showZeroStockItems, setShowZeroStockItems] = useState(true);
   const [selectedColumns, setSelectedColumns] = useState<ColumnKey[]>(defaultColumns);
   const [rows, setRows] = useState<StockSummaryRow[]>([]);
   const [departments, setDepartments] = useState<Array<{ id: string; name: string }>>([]);
@@ -255,11 +257,12 @@ export function StockSummaryReportPage() {
       rows.filter((row) => {
         const q = itemSearch.trim().toLowerCase();
         if (q && !row.product_name.toLowerCase().includes(q)) return false;
+        if (!showZeroStockItems && Math.abs(row.on_hand) < 0.000001) return false;
         if (!selectedDepartmentId) return true;
         if (selectedDepartmentId === "unassigned") return !row.department_id;
         return row.department_id === selectedDepartmentId;
       }),
-    [rows, selectedDepartmentId, itemSearch]
+    [rows, selectedDepartmentId, itemSearch, showZeroStockItems]
   );
 
   const totals = useMemo(
@@ -282,6 +285,73 @@ export function StockSummaryReportPage() {
     setSelectedColumns((prev) => {
       if (checked) return prev.includes(key) ? prev : [...prev, key];
       return prev.filter((c) => c !== key);
+    });
+  };
+
+  const exportFileStamp = () => `stock-summary-${asAtDate || todayDateString()}`;
+
+  const exportRows = (): (string | number)[][] => {
+    const head = visibleColumns.map((c) => c.label);
+    const body = filteredRows.map((row) => visibleColumns.map((c) => valueForColumn(row, c.key)));
+    const total = visibleColumns.map((c) => {
+      if (
+        c.key === "qty_in" ||
+        c.key === "qty_out" ||
+        c.key === "on_hand" ||
+        c.key === "stock_value" ||
+        c.key === "retail_value" ||
+        c.key === "margin_value"
+      ) {
+        return formatNumber(totals[c.key]);
+      }
+      return c.key === "product_name" ? "Total" : "";
+    });
+    return [
+      ["Stock Summary", `As at ${asAtDate || todayDateString()}`],
+      ["Valuation method", valuationMethod.replace(/_/g, " ")],
+      ["Zero stock items", showZeroStockItems ? "Included" : "Hidden"],
+      [],
+      head,
+      ...body,
+      total,
+    ];
+  };
+
+  const exportCsv = () => {
+    downloadCsv(`${exportFileStamp()}.csv`, exportRows());
+  };
+
+  const exportExcel = () => {
+    downloadXlsx(`${exportFileStamp()}.xlsx`, exportRows(), { sheetName: "Stock Summary" });
+  };
+
+  const exportPdf = () => {
+    exportAccountingPdf({
+      title: "Stock Summary",
+      subtitle: `As at ${asAtDate || todayDateString()} · Valuation: ${valuationMethod.replace(/_/g, " ")} · Zero stock items: ${showZeroStockItems ? "included" : "hidden"}`,
+      filename: `${exportFileStamp()}.pdf`,
+      sections: [
+        {
+          title: "Items",
+          head: visibleColumns.map((c) => c.label),
+          body: [
+            ...filteredRows.map((row) => visibleColumns.map((c) => valueForColumn(row, c.key))),
+            visibleColumns.map((c) => {
+              if (
+                c.key === "qty_in" ||
+                c.key === "qty_out" ||
+                c.key === "on_hand" ||
+                c.key === "stock_value" ||
+                c.key === "retail_value" ||
+                c.key === "margin_value"
+              ) {
+                return formatNumber(totals[c.key]);
+              }
+              return c.key === "product_name" ? "Total" : "";
+            }),
+          ],
+        },
+      ],
     });
   };
 
@@ -338,6 +408,32 @@ export function StockSummaryReportPage() {
           >
             Refresh
           </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={exportExcel}
+              disabled={loading || filteredRows.length === 0}
+              className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50"
+            >
+              Excel
+            </button>
+            <button
+              type="button"
+              onClick={exportCsv}
+              disabled={loading || filteredRows.length === 0}
+              className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50"
+            >
+              CSV
+            </button>
+            <button
+              type="button"
+              onClick={exportPdf}
+              disabled={loading || filteredRows.length === 0}
+              className="px-4 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm disabled:opacity-50"
+            >
+              PDF
+            </button>
+          </div>
         </div>
 
         <div className="bg-white rounded-xl border border-slate-200 p-4">
@@ -387,6 +483,14 @@ export function StockSummaryReportPage() {
                 placeholder="Search item..."
                 className="w-full border border-slate-300 rounded-lg px-3 py-2"
               />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-700 md:pt-7">
+              <input
+                type="checkbox"
+                checked={showZeroStockItems}
+                onChange={(e) => setShowZeroStockItems(e.target.checked)}
+              />
+              Show zero stock on hand
             </label>
           </div>
           <div className="mt-4 border-t border-slate-200 pt-4">

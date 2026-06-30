@@ -558,6 +558,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             items: [
               { name: 'Trial Balance', page: 'accounting_trial' },
               { name: 'Income Statement', page: 'accounting_income' },
+              ...(businessType === 'hotel' || businessType === 'mixed'
+                ? [{ name: 'POS Income Reconciliation', page: 'accounting_pos_income_reconciliation' }]
+                : []),
               { name: 'Balance Sheet', page: 'accounting_balance' },
               { name: 'Cash Flow', page: 'accounting_cashflow' },
               { name: 'Cash & Float Reconciliation', page: 'accounting_bank_reconciliation' },

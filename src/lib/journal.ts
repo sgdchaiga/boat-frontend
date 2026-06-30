@@ -31,6 +31,7 @@ export type JournalReferenceType =
   | "fixed_asset_disposal"
   | "fixed_asset_revaluation"
   | "fixed_asset_impairment"
+  | "stock_adjustment"
   /** SACCO teller cash deposit / withdrawal — idempotent on teller transaction id. */
   | "sacco_teller"
   | "school_invoice"
@@ -333,6 +334,185 @@ export async function createJournalEntry(params: CreateJournalEntryParams): Prom
   if (error) return { ok: false, error: error.message };
   if (!data) return { ok: false, error: "Journal entry was not created" };
   return { ok: true, journalId: data };
+}
+
+type StockAdjustmentMovementForJournal = {
+  id?: string | null;
+  product_id: string;
+  movement_date: string;
+  quantity_in: number | null;
+  quantity_out: number | null;
+  unit_cost: number | null;
+  note: string | null;
+  products?: { name?: string | null; cost_price?: number | null } | null;
+};
+
+function extractGlIdFromStockNote(note: string | null, key: "INV_GL" | "PL_GL"): string | null {
+  const match = new RegExp(`\\[${key}:([0-9a-f-]{32,36})\\]`, "i").exec(String(note || ""));
+  return match?.[1] ?? null;
+}
+
+function extractLegacyGlCodeFromStockNote(note: string | null): string | null {
+  return /^GL\s+(.+?)\s+-\s+/.exec(String(note || ""))?.[1]?.trim() ?? null;
+}
+
+async function resolveStockAdjustmentAccountIds(options: {
+  organizationId: string;
+  inventoryGlAccountId?: string | null;
+  stockGainLossGlAccountId?: string | null;
+  legacyInventoryGlCode?: string | null;
+}): Promise<{ inventoryGlAccountId: string | null; stockGainLossGlAccountId: string | null }> {
+  const accounts = await getDefaultGlAccounts();
+  let inventoryGlAccountId =
+    options.inventoryGlAccountId ??
+    accounts.posInvKitchen ??
+    accounts.purchasesInventory ??
+    accounts.posInvBar ??
+    accounts.posInvRoom ??
+    null;
+  const stockGainLossGlAccountId =
+    options.stockGainLossGlAccountId ??
+    accounts.posCogsKitchen ??
+    accounts.expense ??
+    accounts.posCogsBar ??
+    accounts.posCogsRoom ??
+    null;
+
+  if (!inventoryGlAccountId && options.legacyInventoryGlCode) {
+    const { data } = await filterByOrganizationId(
+      supabase.from("gl_accounts").select("id,account_code").eq("account_code", options.legacyInventoryGlCode).maybeSingle(),
+      options.organizationId,
+      false
+    );
+    inventoryGlAccountId = (data as { id?: string | null } | null)?.id ?? null;
+  }
+  return { inventoryGlAccountId, stockGainLossGlAccountId };
+}
+
+export async function createJournalForStockAdjustment(
+  sourceId: string,
+  createdBy: string | null,
+  options?: {
+    organizationId?: string | null;
+    inventoryGlAccountId?: string | null;
+    stockGainLossGlAccountId?: string | null;
+    replaceExisting?: boolean;
+  }
+): Promise<JournalPostResult> {
+  const organizationId = options?.organizationId ?? (await resolveOrganizationId());
+  if (!organizationId) return { ok: false, error: "Sign in under an organization before posting stock adjustment journals." };
+
+  const { data: movements, error } = await filterByOrganizationId(
+    supabase
+      .from("product_stock_movements")
+      .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price)")
+      .eq("source_type", "adjustment")
+      .eq("source_id", sourceId)
+      .order("movement_date", { ascending: true }),
+    organizationId,
+    false
+  );
+  if (error) return { ok: false, error: error.message };
+  const rows = (movements || []) as StockAdjustmentMovementForJournal[];
+  if (rows.length === 0) return { ok: false, error: "No stock adjustment movements found for this reference." };
+
+  const firstNote = rows[0]?.note ?? null;
+  const accounts = await resolveStockAdjustmentAccountIds({
+    organizationId,
+    inventoryGlAccountId: options?.inventoryGlAccountId ?? extractGlIdFromStockNote(firstNote, "INV_GL"),
+    stockGainLossGlAccountId: options?.stockGainLossGlAccountId ?? extractGlIdFromStockNote(firstNote, "PL_GL"),
+    legacyInventoryGlCode: extractLegacyGlCodeFromStockNote(firstNote),
+  });
+  if (!accounts.inventoryGlAccountId) return { ok: false, error: "Select or configure an inventory stock GL account for stock adjustments." };
+  if (!accounts.stockGainLossGlAccountId) return { ok: false, error: "Select or configure a P&L stock gain/loss GL account for stock adjustments." };
+  if (accounts.inventoryGlAccountId === accounts.stockGainLossGlAccountId) {
+    return { ok: false, error: "Stock adjustment inventory and P&L accounts must be different." };
+  }
+
+  const lines: JournalLine[] = [];
+  rows.forEach((movement) => {
+    const { inQty, outQty } = effectiveStockMovementInOut(movement);
+    const deltaQty = inQty - outQty;
+    if (Math.abs(deltaQty) <= 0.0001) return;
+    const unitCost = Number(movement.unit_cost ?? movement.products?.cost_price ?? 0) || 0;
+    const amount = roundMoney(Math.abs(deltaQty) * unitCost);
+    if (amount <= 0) return;
+    const productName = movement.products?.name || "Stock item";
+    const lineDescription = `${productName} stock adjustment`;
+    if (deltaQty > 0) {
+      lines.push({ gl_account_id: accounts.inventoryGlAccountId!, debit: amount, credit: 0, line_description: lineDescription });
+      lines.push({ gl_account_id: accounts.stockGainLossGlAccountId!, debit: 0, credit: amount, line_description: lineDescription });
+    } else {
+      lines.push({ gl_account_id: accounts.stockGainLossGlAccountId!, debit: amount, credit: 0, line_description: lineDescription });
+      lines.push({ gl_account_id: accounts.inventoryGlAccountId!, debit: 0, credit: amount, line_description: lineDescription });
+    }
+  });
+
+  if (lines.length === 0) {
+    return { ok: false, error: "Stock adjustment has no value to post. Add product cost prices or movement unit costs." };
+  }
+  if (options?.replaceExisting) {
+    const retired = await deleteJournalEntryByReference("stock_adjustment", sourceId, organizationId);
+    if (!retired.ok) return retired;
+  }
+  return createJournalEntry({
+    entry_date: toBusinessDateString(rows[0].movement_date || businessTodayISO()),
+    description: `Stock adjustment ${sourceId.slice(0, 8)}`,
+    reference_type: "stock_adjustment",
+    reference_id: sourceId,
+    created_by: createdBy,
+    organizationId,
+    lines,
+  });
+}
+
+export type StockAdjustmentJournalRepairResult = { repaired: number; errors: string[] };
+
+export async function repairStockAdjustmentJournals(options?: {
+  organizationId?: string | null;
+  onProgress?: (processed: number, total: number) => void;
+}): Promise<StockAdjustmentJournalRepairResult> {
+  const organizationId = options?.organizationId ?? (await resolveOrganizationId());
+  if (!organizationId) throw new Error("Sign in under an organization before repairing stock adjustment journals.");
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user?.id) throw new Error("Sign in before repairing stock adjustment journals.");
+
+  const { data, error } = await filterByOrganizationId(
+    supabase
+      .from("product_stock_movements")
+      .select("source_id")
+      .eq("source_type", "adjustment")
+      .not("source_id", "is", null),
+    organizationId,
+    false
+  );
+  if (error) throw error;
+  const sourceIds = Array.from(
+    new Set(
+      ((data || []) as Array<{ source_id: string | null }>)
+        .map((row) => row.source_id)
+        .filter((id): id is string => !!id)
+    )
+  );
+  const result: StockAdjustmentJournalRepairResult = { repaired: 0, errors: [] };
+  let processed = 0;
+  options?.onProgress?.(0, sourceIds.length);
+  for (const sourceId of sourceIds) {
+    const posted = await createJournalForStockAdjustment(sourceId, user.id, {
+      organizationId,
+      replaceExisting: true,
+    });
+    if (posted.ok) {
+      result.repaired += 1;
+    } else {
+      result.errors.push(`${sourceId.slice(0, 8)}: ${posted.error}`);
+    }
+    processed += 1;
+    options?.onProgress?.(processed, sourceIds.length);
+  }
+  return result;
 }
 
 /** Retires journals for a source transaction before reposting it. */
@@ -842,7 +1022,7 @@ export async function syncRoomChargeJournal(
   const { data, error } = await filterByOrganizationId(
     supabase
       .from("billing")
-      .select("id,amount,description,charged_at,charge_type")
+      .select("id,amount,description,charged_at,charge_type,stay_night_date")
       .eq("id", billingId)
       .maybeSingle(),
     organizationId,
@@ -858,6 +1038,7 @@ export async function syncRoomChargeJournal(
     description: string | null;
     charged_at: string | null;
     charge_type: string | null;
+    stay_night_date?: string | null;
   } | null;
   if (!row || row.charge_type !== "room") return { ok: true, journalId: null };
 
@@ -865,7 +1046,7 @@ export async function syncRoomChargeJournal(
     row.id,
     Number(row.amount || 0),
     row.description || "Room charge",
-    row.charged_at || new Date().toISOString(),
+    row.stay_night_date || row.charged_at || new Date().toISOString(),
     user.id,
     undefined,
     organizationId
@@ -1447,6 +1628,20 @@ function resolvePosRevenueGlForBucket(
   return (o?.revenueRoomGlAccountId?.trim() || acc.posRevenueRoom) ?? null;
 }
 
+function resolvePosRevenueGlForDepartmentLine(
+  line: PosDepartmentAmountLine,
+  acc: Awaited<ReturnType<typeof getDefaultGlAccounts>>,
+  o: PosJournalGlOverrides | undefined,
+  deptGlMap: Map<string, { sales: string | null; purchases: string | null; stock: string | null }>
+): string | null {
+  const departmentSales = line.departmentId ? deptGlMap.get(line.departmentId)?.sales ?? null : null;
+  if (departmentSales) return departmentSales;
+  if (line.departmentName) {
+    return resolvePosRevenueGlForBucket(mapDepartmentNameToPosBucket(line.departmentName), acc, o);
+  }
+  return null;
+}
+
 async function loadPosDepartmentGlMap(organizationId: string | null | undefined) {
   if (!organizationId) return new Map<string, { sales: string | null; purchases: string | null; stock: string | null }>();
   try {
@@ -1580,9 +1775,7 @@ export async function createJournalForPosOrder(
   if (useRevenueSplit) {
     if (salesByDepartment.length > 0) {
       for (const line of salesByDepartment) {
-        if (!line.departmentId) continue;
-        const depGl = deptGlMap.get(line.departmentId);
-        if (!(depGl?.sales || revenueId)) {
+        if (!resolvePosRevenueGlForDepartmentLine(line, acc, o, deptGlMap)) {
           return {
             ok: false,
             error:
@@ -1650,8 +1843,7 @@ export async function createJournalForPosOrder(
       const frac = line.amount / totalSalesByDepartment;
       const lineNet = i === salesByDepartment.length - 1 ? roundMoney(remaining) : roundMoney(revenueCredit * frac);
       remaining = roundMoney(remaining - lineNet);
-      const deptGl = line.departmentId ? deptGlMap.get(line.departmentId) : null;
-      const rid = deptGl?.sales ?? revenueId;
+      const rid = resolvePosRevenueGlForDepartmentLine(line, acc, o, deptGlMap);
       if (lineNet > 0.001 && rid) {
         lines.push({
           gl_account_id: rid,
@@ -1795,7 +1987,7 @@ export async function syncHotelPosOrderJournal(
     { data: payments, error: paymentError },
     { data: rawStockMovements, error: stockMovementsError },
   ] = await Promise.all([
-    (supabase as any).from("kitchen_order_items").select("quantity,product_id").eq("order_id", orderId),
+    (supabase as any).from("kitchen_order_items").select("quantity,product_id,notes").eq("order_id", orderId),
     (supabase as any)
       .from("payments")
       .select("amount,payment_method,payment_status,paid_at")
@@ -1848,12 +2040,19 @@ export async function syncHotelPosOrderJournal(
   const items = ((rawOrderItems || []) as any[])
     .map((item) => {
       const product = productById.get(String(item.product_id || ""));
+      const note = String(item.notes || "").toLowerCase();
+      const noteBucketName =
+        note.includes("[bar]") ? "Bar" :
+        note.includes("[room_service]") ? "Room service" :
+        note.includes("[breakfast]") || note.includes("[lunch]") ? "Kitchen" :
+        null;
       return {
         quantity: Number(item.quantity || 0),
         name: String(product?.name || "Item"),
         salesPrice: Number(product?.sales_price || 0),
         costPrice: Number(product?.cost_price || 0),
         departmentId: product?.department_id ? String(product.department_id) : null,
+        departmentNameFallback: noteBucketName,
       };
     })
     .filter((item) => item.quantity > 0);
@@ -1887,11 +2086,11 @@ export async function syncHotelPosOrderJournal(
         "Set each department's Sales revenue under Admin > Journal account settings, then rerun POS repair.",
     };
   }
-  if (items.some((item) => !item.departmentId)) {
+  if (items.some((item) => !item.departmentId && !item.departmentNameFallback)) {
     return {
       ok: false,
       error:
-        "One or more products on this order have no department. Assign their department, then rerun POS repair.",
+        "One or more products on this order have no department or POS menu bucket. Assign their department, then rerun POS repair.",
     };
   }
   const salesGlOwners = new Map<string, string[]>();
@@ -1915,11 +2114,11 @@ export async function syncHotelPosOrderJournal(
   const groupAmounts = (kind: "sales" | "cogs"): PosDepartmentAmountLine[] => {
     const grouped = new Map<string, PosDepartmentAmountLine>();
     items.forEach((item) => {
-      const key = item.departmentId ?? "__unassigned__";
+      const key = item.departmentId ?? item.departmentNameFallback ?? "__unassigned__";
       const previous = grouped.get(key);
       grouped.set(key, {
         departmentId: item.departmentId,
-        departmentName: item.departmentId ? departmentNameById.get(item.departmentId) ?? null : null,
+        departmentName: item.departmentId ? departmentNameById.get(item.departmentId) ?? item.departmentNameFallback : item.departmentNameFallback,
         amount: roundMoney((previous?.amount ?? 0) + item.quantity * (kind === "sales" ? item.salesPrice : item.costPrice)),
       });
     });
@@ -1971,7 +2170,7 @@ export async function syncHotelPosOrderJournal(
     orderId,
     total,
     items.map((item) => `${item.quantity}x ${item.name}`).join(", "),
-    String(completedPayments[0]?.paid_at || order.created_at),
+    String(order.created_at),
     createdBy,
     {
       paymentMethod: completedPayments[0]?.payment_method as PosPaymentMethod | undefined,
@@ -2341,16 +2540,24 @@ export async function createJournalForBill(
   amount: number,
   description: string | null,
   billDate: string,
-  createdBy: string | null
+  createdBy: string | null,
+  purchaseOrderId?: string | null
 ): Promise<JournalPostResult> {
   const acc = await getDefaultGlAccounts();
   const date = toBusinessDateString(billDate);
-  const debitGl = acc.purchasesInventory;
-  if (!debitGl) {
+  const debitLines = await buildBillDebitLines(amount, description, purchaseOrderId ?? null, acc);
+  if (debitLines.some((line) => line.kind === "inventory") && !acc.purchasesInventory) {
     return {
       ok: false,
       error:
         "Missing GL account for GRN/Bills inventory (shop stock). Set “GRN/Bills — Shop stock / inventory” or a POS inventory account under Admin → Journal account settings, or add an inventory/stock asset to your chart.",
+    };
+  }
+  if (debitLines.some((line) => line.kind === "expense") && !acc.expense) {
+    return {
+      ok: false,
+      error:
+        "Missing GL account for service/non-stock purchase expenses. Set the configured Expense GL account under Admin → Journal account settings.",
     };
   }
   if (!acc.payable) {
@@ -2359,22 +2566,96 @@ export async function createJournalForBill(
       error: "Missing GL account for accounts payable. Configure Accounting → Journal account settings.",
     };
   }
+  const lines: JournalLine[] = debitLines.map((line) => ({
+    gl_account_id: line.kind === "expense" ? acc.expense! : acc.purchasesInventory!,
+    debit: line.amount,
+    credit: 0,
+    line_description:
+      line.kind === "expense"
+        ? line.description || "Service / non-stock purchase expense"
+        : line.description || "Inventory / shop stock (GRN)",
+  }));
+  lines.push({ gl_account_id: acc.payable, debit: 0, credit: amount, line_description: "Accounts payable" });
   return createJournalEntry({
     entry_date: date,
     description: description ? `GRN/Bill: ${description}` : "GRN/Bill",
     reference_type: "bill",
     reference_id: billId,
-    lines: [
-      {
-        gl_account_id: debitGl,
-        debit: amount,
-        credit: 0,
-        line_description: description || "Inventory / shop stock (GRN)",
-      },
-      { gl_account_id: acc.payable, debit: 0, credit: amount, line_description: "Accounts payable" },
-    ],
+    lines,
     created_by: createdBy,
   });
+}
+
+type BillDebitLine = {
+  kind: "inventory" | "expense";
+  amount: number;
+  description: string;
+};
+
+async function buildBillDebitLines(
+  billAmount: number,
+  description: string | null,
+  purchaseOrderId: string | null,
+  acc: Awaited<ReturnType<typeof getDefaultGlAccounts>>
+): Promise<BillDebitLine[]> {
+  const total = roundMoney(Math.max(0, Number(billAmount || 0)));
+  if (!purchaseOrderId) {
+    return [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
+  }
+
+  try {
+    const { data: items, error } = await supabase
+      .from("purchase_order_items")
+      .select("product_id, description, quantity, cost_price")
+      .eq("purchase_order_id", purchaseOrderId);
+    if (error) throw error;
+    const rows = (items || []) as Array<{
+      product_id: string | null;
+      description: string | null;
+      quantity: number | null;
+      cost_price: number | null;
+    }>;
+    const productIds = Array.from(new Set(rows.map((row) => row.product_id).filter((id): id is string => !!id)));
+    const trackById = new Map<string, boolean | null>();
+    if (productIds.length > 0) {
+      const { data: products, error: prodError } = await supabase
+        .from("products")
+        .select("id, track_inventory")
+        .in("id", productIds);
+      if (prodError) throw prodError;
+      ((products || []) as Array<{ id: string; track_inventory: boolean | null }>).forEach((product) => {
+        trackById.set(product.id, product.track_inventory ?? null);
+      });
+    }
+
+    let inventoryTotal = 0;
+    let expenseTotal = 0;
+    for (const row of rows) {
+      const lineAmount = roundMoney((Number(row.quantity || 0) || 0) * (Number(row.cost_price || 0) || 0));
+      if (lineAmount <= 0) continue;
+      const isService = row.product_id ? trackById.get(row.product_id) === false : false;
+      if (isService) expenseTotal = roundMoney(expenseTotal + lineAmount);
+      else inventoryTotal = roundMoney(inventoryTotal + lineAmount);
+    }
+
+    const lineTotal = roundMoney(inventoryTotal + expenseTotal);
+    if (lineTotal <= 0) {
+      return [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
+    }
+    const scale = total > 0 ? total / lineTotal : 1;
+    const scaledExpense = roundMoney(expenseTotal * scale);
+    const scaledInventory = roundMoney(total - scaledExpense);
+    const out: BillDebitLine[] = [];
+    if (scaledInventory > 0.001) {
+      out.push({ kind: "inventory", amount: scaledInventory, description: "Inventory / shop stock (GRN)" });
+    }
+    if (scaledExpense > 0.001) {
+      out.push({ kind: "expense", amount: scaledExpense, description: "Service / non-stock purchases" });
+    }
+    return out.length ? out : [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
+  } catch {
+    return [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
+  }
 }
 
 /** Asset GL for vendor prepayment / excess (prepaid, advance, deposit, or unearned in name). */
@@ -2699,6 +2980,7 @@ export function getReferenceTypeLabel(ref: string | null): string {
     vendor_credit: "Vendor credit",
     expense: "Expense",
     manual: "Manual",
+    stock_adjustment: "Stock adjustment",
     fixed_asset_capitalization: "Fixed asset — capitalization",
     fixed_asset_depreciation_run: "Fixed asset — depreciation",
     fixed_asset_disposal: "Fixed asset — disposal",
@@ -2716,6 +2998,7 @@ export interface BackfillResult {
   vendor_payment: number;
   vendor_credit: number;
   expense: number;
+  stock_adjustment: number;
   manufacturing_costing: number;
   errors: string[];
 }
@@ -2729,6 +3012,7 @@ export interface BackfillProgress {
     | "vendor_payment"
     | "vendor_credit"
     | "expense"
+    | "stock_adjustment"
     | "pos"
     | "manufacturing_costing"
     | "done";
@@ -2795,6 +3079,7 @@ export async function backfillJournalEntries(options?: {
     vendor_payment: 0,
     vendor_credit: 0,
     expense: 0,
+    stock_adjustment: 0,
     manufacturing_costing: 0,
     errors: [],
   };
@@ -2905,7 +3190,7 @@ export async function backfillJournalEntries(options?: {
 
   // Bills
   const { data: bills } = await filterByOrganizationId(
-    supabase.from("bills").select("id, amount, description, bill_date, status"),
+    supabase.from("bills").select("id, amount, description, bill_date, status, purchase_order_id"),
     organizationId,
     false
   );
@@ -2913,7 +3198,7 @@ export async function backfillJournalEntries(options?: {
   reportProgress("bill", "Backfilling bills", 0, billsList.length);
   let billsProcessed = 0;
   for (const b of billsList) {
-    const row = b as { id: string; amount: number; description: string | null; bill_date: string | null; status?: string | null };
+    const row = b as { id: string; amount: number; description: string | null; bill_date: string | null; status?: string | null; purchase_order_id?: string | null };
     const status = String(row.status || "").toLowerCase();
     if (["pending", "pending_approval", "rejected", "cancelled"].includes(status)) {
       billsProcessed += 1;
@@ -2928,7 +3213,8 @@ export async function backfillJournalEntries(options?: {
           Number(row.amount),
           row.description,
           row.bill_date || businessTodayISO(),
-          backfillCreatedBy
+          backfillCreatedBy,
+          row.purchase_order_id ?? null
         );
     if (jr.ok) {
       add("bill", row.id);
@@ -3104,6 +3390,44 @@ export async function backfillJournalEntries(options?: {
     reportProgress("expense", "Backfilling expenses", expensesProcessed, expenseList.length);
   }
 
+  const { data: adjustmentSources, error: adjustmentSourcesError } = await filterByOrganizationId(
+    supabase
+      .from("product_stock_movements")
+      .select("source_id")
+      .eq("source_type", "adjustment")
+      .not("source_id", "is", null),
+    organizationId,
+    false
+  );
+  if (adjustmentSourcesError) result.errors.push(`Stock adjustments could not be loaded: ${adjustmentSourcesError.message}`);
+  const stockAdjustmentSourceIds = Array.from(
+    new Set(
+      ((adjustmentSources || []) as Array<{ source_id: string | null }>)
+        .map((row) => row.source_id)
+        .filter((id): id is string => !!id)
+    )
+  );
+  reportProgress("stock_adjustment", "Backfilling stock adjustments", 0, stockAdjustmentSourceIds.length);
+  let stockAdjustmentsProcessed = 0;
+  for (const sourceId of stockAdjustmentSourceIds) {
+    if (has("stock_adjustment", sourceId)) {
+      stockAdjustmentsProcessed += 1;
+      reportProgress("stock_adjustment", "Backfilling stock adjustments", stockAdjustmentsProcessed, stockAdjustmentSourceIds.length);
+      continue;
+    }
+    const jr = dryRun
+      ? ({ ok: true, journalId: `dryrun-${sourceId}` } as const)
+      : await createJournalForStockAdjustment(sourceId, backfillCreatedBy, { organizationId });
+    if (jr.ok) {
+      add("stock_adjustment", sourceId);
+      result.stock_adjustment++;
+    } else {
+      result.errors.push(`Stock adjustment ${sourceId}: ${jr.error}`);
+    }
+    stockAdjustmentsProcessed += 1;
+    reportProgress("stock_adjustment", "Backfilling stock adjustments", stockAdjustmentsProcessed, stockAdjustmentSourceIds.length);
+  }
+
   // POS (kitchen_orders): get orders with items and product prices to compute total
   const { data: orders, error: ordersError } = isManufacturing
     ? { data: [], error: null }
@@ -3116,26 +3440,10 @@ export async function backfillJournalEntries(options?: {
   const orderIds = (orders || []).map((o: { id: string }) => o.id);
   if (orderIds.length > 0) {
     reportProgress("pos", "Backfilling POS orders", 0, (orders || []).length);
-    const [{ data: items }, { data: posPayments }] = await Promise.all([
-      supabase
+    const { data: items } = await supabase
       .from("kitchen_order_items")
       .select("order_id, quantity, product_id")
-      .in("order_id", orderIds),
-      supabase
-        .from("payments")
-        .select("transaction_id,paid_at")
-        .eq("organization_id", organizationId)
-        .eq("payment_source", "pos_hotel")
-        .eq("payment_status", "completed")
-        .in("transaction_id", orderIds)
-        .order("paid_at", { ascending: false }),
-    ]);
-    const paidAtByOrder = new Map<string, string>();
-    ((posPayments || []) as Array<{ transaction_id: string | null; paid_at: string }>).forEach((payment) => {
-      if (payment.transaction_id && !paidAtByOrder.has(payment.transaction_id)) {
-        paidAtByOrder.set(payment.transaction_id, payment.paid_at);
-      }
-    });
+      .in("order_id", orderIds);
     const productIds = [...new Set((items || []).map((i: { product_id: string }) => i.product_id).filter(Boolean))];
     const { data: products } = await supabase.from("products").select("id, sales_price").in("id", productIds);
     const priceMap = Object.fromEntries(
@@ -3158,7 +3466,7 @@ export async function backfillJournalEntries(options?: {
             row.id,
             total,
             "POS order (backfill)",
-            toBusinessDateString(paidAtByOrder.get(row.id) || row.created_at || new Date().toISOString()),
+            toBusinessDateString(row.created_at || new Date().toISOString()),
             backfillCreatedBy
           );
       if (jr.ok) {

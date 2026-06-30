@@ -822,7 +822,8 @@ const approvedAt = new Date().toISOString();
           amt,
           "From Purchase Order",
           newBill.bill_date || billDate,
-          user?.id ?? null
+          user?.id ?? null,
+          order.id
         );
         if (!jr.ok) {
           alert(`GRN/Bill created but journal was not posted: ${jr.error}`);

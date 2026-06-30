@@ -1679,10 +1679,17 @@ export function POSPage({
         const deptNameById = new Map(departments.map((d) => [d.id, d.name]));
         const groupedSalesByDepartment = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();
         const groupedCogsByDepartment = new Map<string, { departmentId: string | null; departmentName: string | null; amount: number }>();
+        const menuTypeLabel = (menuType: PosMenuType | undefined) => {
+          if (menuType === "bar") return "Bar";
+          if (menuType === "room_service") return "Room service";
+          if (menuType === "breakfast") return "Kitchen";
+          if (menuType === "lunch") return "Kitchen";
+          return null;
+        };
         cart.forEach((item) => {
           const departmentId = item.product.department_id ?? null;
-          const departmentName = departmentId ? deptNameById.get(departmentId) ?? null : null;
-          const salesKey = departmentId ?? "__unassigned__";
+          const departmentName = departmentId ? deptNameById.get(departmentId) ?? menuTypeLabel(item.menuType) : menuTypeLabel(item.menuType);
+          const salesKey = departmentId ?? departmentName ?? "__unassigned__";
           const prevSale = groupedSalesByDepartment.get(salesKey);
           groupedSalesByDepartment.set(salesKey, {
             departmentId,

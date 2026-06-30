@@ -8,6 +8,7 @@ import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "./
 import { parseBulkImportFile } from "./saccoBulkImport";
 import { effectiveStockMovementInOut } from "./stockMovementEffective";
 import { businessDayRangeForDateString, businessTodayISO, toBusinessDateString } from "./timezone";
+import { createJournalForStockAdjustment } from "./journal";
 
 export { parseBulkImportFile };
 
@@ -28,6 +29,7 @@ export type StockAdjustmentPlan = {
   movementDate: string;
   reason: string;
   glAccountId: string | null;
+  stockGainLossGlAccountId: string | null;
 };
 
 type ProductMini = {
@@ -37,9 +39,10 @@ type ProductMini = {
   barcode: string | null;
   code: string | null;
   track_inventory: boolean | null;
+  cost_price: number | null;
 };
 
-type GlMini = { id: string; account_code: string; account_name: string };
+type GlMini = { id: string; account_code: string; account_name: string; account_type: string };
 
 type MovementMini = {
   product_id: string;
@@ -99,6 +102,7 @@ export type StockBulkImportContext = {
   closingDate: string | null;
   movements: MovementMini[];
   glByCode: Map<string, GlMini>;
+  allGlAccounts: GlMini[];
 };
 
 function stockOnHandAsAt(movements: MovementMini[], productId: string, dateOnly: string): number {
@@ -226,6 +230,7 @@ type ProductRow = {
   barcode?: string | null;
   code?: string | null;
   track_inventory?: boolean | null;
+  cost_price?: number | null;
 };
 
 async function fetchProductsForImport(
@@ -234,7 +239,7 @@ async function fetchProductsForImport(
 ): Promise<ProductRow[]> {
   // Core columns only — many tenants lack sku/barcode/code on products (PostgREST 400 if selected).
   const { data, error } = await filterByOrganizationId(
-    supabase.from("products").select("id, name, track_inventory").order("name"),
+    supabase.from("products").select("id, name, track_inventory, cost_price").order("name"),
     organizationId,
     isSuperAdmin
   );
@@ -288,6 +293,7 @@ export async function loadStockBulkImportContext(
       barcode: row.barcode ? String(row.barcode) : null,
       code: row.code ? String(row.code) : null,
       track_inventory: row.track_inventory as boolean | null,
+      cost_price: row.cost_price == null ? null : Number(row.cost_price) || 0,
     };
     allProducts.push(p);
     productsById.set(p.id, p);
@@ -315,11 +321,20 @@ export async function loadStockBulkImportContext(
   }
 
   const glByCode = new Map<string, GlMini>();
-  for (const row of normalizeGlAccountRows((glData ?? []) as unknown[]).filter((g) => g.account_type === "asset")) {
+  const allGlAccounts = normalizeGlAccountRows((glData ?? []) as unknown[])
+    .filter((g) => g.is_active)
+    .map((row) => ({
+      id: row.id,
+      account_code: row.account_code,
+      account_name: row.account_name,
+      account_type: row.account_type,
+    }));
+  for (const row of allGlAccounts.filter((g) => g.account_type === "asset")) {
     glByCode.set(keyLower(row.account_code), {
       id: row.id,
       account_code: row.account_code,
       account_name: row.account_name,
+      account_type: row.account_type,
     });
   }
 
@@ -335,6 +350,7 @@ export async function loadStockBulkImportContext(
     closingDate: asAt,
     movements: movementRows,
     glByCode,
+    allGlAccounts,
   };
 }
 
@@ -511,6 +527,7 @@ export function planStockAdjustmentImports(
     movementDate: string;
     reason: string;
     glAccountId: string | null;
+    stockGainLossGlAccountId: string | null;
   }
 ): { plans: StockAdjustmentPlan[]; preview: StockBulkImportPreviewRow[] } {
   const plans: StockAdjustmentPlan[] = [];
@@ -544,6 +561,10 @@ export function planStockAdjustmentImports(
     const glRes = resolveGlAccount(ctx, row, defaults.glAccountId);
     if ("error" in glRes) {
       preview.push({ line, status: "error", summary: glRes.error });
+      return;
+    }
+    if (!defaults.stockGainLossGlAccountId) {
+      preview.push({ line, status: "error", summary: "Select a P&L stock gain/loss account for the adjustment journal." });
       return;
     }
 
@@ -627,6 +648,7 @@ export function planStockAdjustmentImports(
       movementDate: closingDate,
       reason,
       glAccountId: glRes.glAccountId,
+      stockGainLossGlAccountId: defaults.stockGainLossGlAccountId,
     };
     plans.push(plan);
     preview.push({
@@ -653,7 +675,8 @@ function buildMovementNote(
   } else if (glPrefix) {
     note = glPrefix;
   }
-  return `${note}${plan.reason} [CLOSING_STOCK:${plan.newQty}]`;
+  const pl = ctx.allGlAccounts.find((g) => g.id === plan.stockGainLossGlAccountId);
+  return `${note}${plan.reason} [CLOSING_STOCK:${plan.newQty}] [INV_GL:${plan.glAccountId ?? ""}] [PL_GL:${plan.stockGainLossGlAccountId ?? ""}]${pl ? ` [PL:${pl.account_code} - ${pl.account_name}]` : ""}`;
 }
 
 function movementDateIso(dateOnly: string): string {
@@ -713,6 +736,24 @@ export async function applyStockAdjustmentPlans(
       sourceId,
     };
   }
+  if (plans.some((plan) => !plan.stockGainLossGlAccountId)) {
+    return {
+      updated: 0,
+      errors: plans.length,
+      messages: ["Every stock adjustment requires a P&L stock gain/loss account."],
+      sourceId,
+    };
+  }
+  const inventoryAccountIds = new Set(plans.map((plan) => plan.glAccountId).filter(Boolean));
+  const gainLossAccountIds = new Set(plans.map((plan) => plan.stockGainLossGlAccountId).filter(Boolean));
+  if (inventoryAccountIds.size > 1 || gainLossAccountIds.size > 1) {
+    return {
+      updated: 0,
+      errors: plans.length,
+      messages: ["Import one stock adjustment batch per inventory/P&L account pair so the journal can be repaired cleanly."],
+      sourceId,
+    };
+  }
 
   const orgId = options?.organizationId;
   if (!orgId) {
@@ -725,6 +766,10 @@ export async function applyStockAdjustmentPlans(
   }
 
   await ensureActiveOrganization(orgId);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const createdBy = user?.id ?? null;
 
   const payload = plans.map((plan) => {
     const delta = plan.delta;
@@ -767,6 +812,15 @@ export async function applyStockAdjustmentPlans(
     const verified = await countAdjustmentMovements(sourceId, orgId);
     if (verified === plans.length) {
       const closingErrors = await verifyClosingStockPlans(plans, orgId);
+      if (closingErrors.length === 0) {
+        const journal = await createJournalForStockAdjustment(sourceId, createdBy, {
+          organizationId: orgId,
+          inventoryGlAccountId: plans[0]?.glAccountId,
+          stockGainLossGlAccountId: plans[0]?.stockGainLossGlAccountId,
+          replaceExisting: true,
+        });
+        if (!journal.ok) closingErrors.push(`Journal was not posted: ${journal.error}`);
+      }
       return {
         updated: verified,
         errors: closingErrors.length,
@@ -805,6 +859,15 @@ export async function applyStockAdjustmentPlans(
   }
 
   const closingErrors = await verifyClosingStockPlans(plans, orgId);
+  if (closingErrors.length === 0) {
+    const journal = await createJournalForStockAdjustment(sourceId, createdBy, {
+      organizationId: orgId,
+      inventoryGlAccountId: plans[0]?.glAccountId,
+      stockGainLossGlAccountId: plans[0]?.stockGainLossGlAccountId,
+      replaceExisting: true,
+    });
+    if (!journal.ok) closingErrors.push(`Journal was not posted: ${journal.error}`);
+  }
   return {
     updated: verified,
     errors: closingErrors.length,

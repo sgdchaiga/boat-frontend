@@ -79,6 +79,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     ...(isHotelOrMixed
       ? [
           { name: "Room billing", page: "reports_room_billing" },
+          { name: "POS income reconciliation", page: "accounting_pos_income_reconciliation" },
           {
             name: "Debtors (invoice balances)",
             page: "retail_credit_invoices",

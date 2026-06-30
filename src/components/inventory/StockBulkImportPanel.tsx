@@ -29,7 +29,9 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
     return `Closing stock as at ${d}`;
   });
   const [glAccounts, setGlAccounts] = useState<Array<{ id: string; code: string; name: string }>>([]);
+  const [stockGainLossAccounts, setStockGainLossAccounts] = useState<Array<{ id: string; code: string; name: string }>>([]);
   const [defaultGlAccountId, setDefaultGlAccountId] = useState("");
+  const [defaultStockGainLossGlAccountId, setDefaultStockGainLossGlAccountId] = useState("");
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,13 +50,21 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
       .then((ctx) => {
         if (cancelled) return;
         setGlAccounts(
-          Array.from(ctx.glByCode.values())
+          ctx.allGlAccounts
+            .filter((account) => account.account_type === "asset")
+            .map((account) => ({ id: account.id, code: account.account_code, name: account.account_name }))
+            .sort((a, b) => a.code.localeCompare(b.code))
+        );
+        setStockGainLossAccounts(
+          ctx.allGlAccounts
+            .filter((account) => account.account_type === "expense" || account.account_type === "income")
             .map((account) => ({ id: account.id, code: account.account_code, name: account.account_name }))
             .sort((a, b) => a.code.localeCompare(b.code))
         );
       })
       .catch(() => {
         if (!cancelled) setGlAccounts([]);
+        if (!cancelled) setStockGainLossAccounts([]);
       });
     return () => {
       cancelled = true;
@@ -75,7 +85,14 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
       }
       const ctx = await loadStockBulkImportContext(orgId, superAdmin, defaultDate);
       setGlAccounts(
-        Array.from(ctx.glByCode.values())
+        ctx.allGlAccounts
+          .filter((account) => account.account_type === "asset")
+          .map((account) => ({ id: account.id, code: account.account_code, name: account.account_name }))
+          .sort((a, b) => a.code.localeCompare(b.code))
+      );
+      setStockGainLossAccounts(
+        ctx.allGlAccounts
+          .filter((account) => account.account_type === "expense" || account.account_type === "income")
           .map((account) => ({ id: account.id, code: account.account_code, name: account.account_name }))
           .sort((a, b) => a.code.localeCompare(b.code))
       );
@@ -91,6 +108,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
         movementDate: defaultDate,
         reason: defaultReason,
         glAccountId: defaultGlAccountId || null,
+        stockGainLossGlAccountId: defaultStockGainLossGlAccountId || null,
       });
       setPreview(pv);
       const ok = pv.filter((r) => r.status === "ok").length;
@@ -114,7 +132,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
     } finally {
       setLoading(false);
     }
-  }, [file, defaultDate, defaultReason, defaultGlAccountId, orgId, superAdmin]);
+  }, [file, defaultDate, defaultReason, defaultGlAccountId, defaultStockGainLossGlAccountId, orgId, superAdmin]);
 
   const runImport = async () => {
     if (!file || readOnly || running) return;
@@ -138,6 +156,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
         movementDate: defaultDate,
         reason: defaultReason.trim() || `Closing stock as at ${defaultDate}`,
         glAccountId: defaultGlAccountId || null,
+        stockGainLossGlAccountId: defaultStockGainLossGlAccountId || null,
       };
       const { plans, preview: freshPreview } = planStockAdjustmentImports(ctx, rows, defaults);
       const okCount = freshPreview.filter((r) => r.status === "ok").length;
@@ -189,8 +208,8 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
           movements through the end of that business day, then posts the exact difference so the day closes at the
           entered quantity. Use only one row per product. Match products by name, SKU, barcode, code, or product_id.
           Optional <strong>qty_adjustment</strong> for explicit +/- changes instead of a closing count.
-          A GL account is required, either from <strong>gl_account_code</strong> in each file row or the default selected
-          below.
+          An inventory stock account is required, either from <strong>gl_account_code</strong> in each file row or the
+          default selected below. A P&L stock gain/loss account is also required for the journal.
         </p>
       </PageNotes>
 
@@ -225,7 +244,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
             />
           </div>
           <div className="flex-1 min-w-[240px]">
-            <label className="block text-sm font-medium mb-1">Default GL account (required)</label>
+            <label className="block text-sm font-medium mb-1">Default inventory stock account (required)</label>
             <select
               className="border rounded-lg px-3 py-2 w-full"
               value={defaultGlAccountId}
@@ -237,6 +256,25 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
             >
               <option value="">Use gl_account_code from file</option>
               {glAccounts.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.code} - {account.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex-1 min-w-[240px]">
+            <label className="block text-sm font-medium mb-1">P&L stock gain/loss account (required)</label>
+            <select
+              className="border rounded-lg px-3 py-2 w-full"
+              value={defaultStockGainLossGlAccountId}
+              disabled={readOnly}
+              onChange={(e) => {
+                setDefaultStockGainLossGlAccountId(e.target.value);
+                resetPreview();
+              }}
+            >
+              <option value="">Select P&L account</option>
+              {stockGainLossAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.code} - {account.name}
                 </option>

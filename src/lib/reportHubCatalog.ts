@@ -13,7 +13,7 @@ const PURCHASES_PAGES = new Set([
   "reports_expenses",
 ]);
 const INVENTORY_PAGES = new Set(["reports_stock_summary", "reports_stock_movement", "reports_manufacturing_daily_production"]);
-const FINANCIAL_PAGES = new Set(["accounting_income", "accounting_balance", "accounting_cashflow"]);
+const FINANCIAL_PAGES = new Set(["accounting_income", "accounting_balance", "accounting_cashflow", "accounting_pos_income_reconciliation"]);
 const RECEIVABLES_PAGES = new Set(["retail_credit_invoices"]);
 
 function classifyReportLeaf(page: string): string | null {

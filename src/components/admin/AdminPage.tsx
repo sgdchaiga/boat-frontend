@@ -7,6 +7,7 @@ import {
   ChevronRight,
   ShieldCheck,
   BookOpen,
+  Scale,
 } from "lucide-react";
 import { AdminUsersPage } from "./AdminUsersPage";
 import { AdminHotelConfigPage } from "./AdminHotelConfigPage";
@@ -16,6 +17,7 @@ import { AdminJournalAccountsPage } from "./AdminJournalAccountsPage";
 import { AdminGenderTypesPage } from "./AdminGenderTypesPage";
 import { AdminRecipeManagementPage } from "./AdminRecipeManagementPage";
 import { AdminHotelPosControlsPage } from "./AdminHotelPosControlsPage";
+import { AdminPosCogsReconciliationPage } from "./AdminPosCogsReconciliationPage";
 import { AdminSyncQueuePage } from "./AdminSyncQueuePage";
 import { AdminLocalImportPage } from "./AdminLocalImportPage";
 import { AdminSubscriptionRenewalPage } from "./AdminSubscriptionRenewalPage";
@@ -31,6 +33,7 @@ export type AdminTab =
   | "recipes"
   | "approval"
   | "journal_accounts"
+  | "pos_cogs_reconciliation"
   | "gender_types"
   | "hotel_pos"
   | "sync_queue"
@@ -44,6 +47,7 @@ const ADMIN_TAB_IDS: AdminTab[] = [
   "recipes",
   "approval",
   "journal_accounts",
+  "pos_cogs_reconciliation",
   "gender_types",
   "hotel_pos",
   "sync_queue",
@@ -64,6 +68,7 @@ const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "recipes", label: "Recipe Management", icon: Package },
   { id: "approval", label: "Permissions & Page Access", icon: ShieldCheck },
   { id: "journal_accounts", label: "Journal account settings", icon: BookOpen },
+  { id: "pos_cogs_reconciliation", label: "POS COGS reconciliation", icon: Scale },
   { id: "gender_types", label: "Gender Types", icon: Users },
   { id: "hotel_pos", label: "Hotel POS Controls", icon: ShieldCheck },
   { id: "sync_queue", label: "Local backup & sync", icon: BookOpen },
@@ -90,6 +95,7 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
   const visibleTabs = TABS.filter((tab) => {
     if (!showRecipeManagement && tab.id === "recipes") return false;
     if (!showHotelPosControls && tab.id === "hotel_pos") return false;
+    if (!showHotelPosControls && tab.id === "pos_cogs_reconciliation") return false;
     return true;
   });
 
@@ -133,6 +139,8 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
         return <AdminApprovalRightsPage initialFocusStaffId={permissionsFocusStaffId ?? undefined} />;
       case "journal_accounts":
         return <AdminJournalAccountsPage />;
+      case "pos_cogs_reconciliation":
+        return <AdminPosCogsReconciliationPage />;
       case "gender_types":
         return <AdminGenderTypesPage />;
       case "hotel_pos":

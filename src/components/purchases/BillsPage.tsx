@@ -212,7 +212,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
           billAmt,
           bill.description || null,
           bill.bill_date || businessTodayISO(),
-          user?.id ?? null
+          user?.id ?? null,
+          bill.purchase_order_id ?? null
         );
         if (!jr.ok) {
           alert(`Bill approved but journal was not posted: ${jr.error}`);
@@ -785,7 +786,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
             Number(editingBill.amount || 0),
             editingBill.description || null,
             billDateVal,
-            user?.id ?? null
+            user?.id ?? null,
+            editingBill.purchase_order_id ?? null
           );
           if (!reposted.ok) {
             await supabase
@@ -797,7 +799,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               Number(editingBill.amount || 0),
               editingBill.description || null,
               editingBill.bill_date || businessTodayISO(),
-              user?.id ?? null
+              user?.id ?? null,
+              editingBill.purchase_order_id ?? null
             );
             throw new Error(`The bill date was restored because its payable journal could not be reposted: ${reposted.error}`);
           }

@@ -4,12 +4,14 @@ import {
   getReferenceTypeLabel,
   backfillJournalEntries,
   repairHotelPosOrderJournals,
+  repairStockAdjustmentJournals,
   reconcileInventoryLedgersToStockSummary,
   repairRoomChargeJournals,
   type BackfillProgress,
   type BackfillResult,
   type PosJournalRepairResult,
   type RoomJournalRepairResult,
+  type StockAdjustmentJournalRepairResult,
 } from "../../lib/journal";
 import { ChevronLeft, ChevronRight, RefreshCw, Pencil, Trash2, Save, X, Plus, Star } from "lucide-react";
 import { PageNotes } from "../common/PageNotes";
@@ -101,6 +103,7 @@ const REFERENCE_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "vendor_payment", label: "Vendor payment" },
   { value: "vendor_credit", label: "Vendor credit" },
   { value: "expense", label: "Expense" },
+  { value: "stock_adjustment", label: "Stock adjustment" },
   { value: "manual", label: "Manual" },
   { value: "fixed_asset_capitalization", label: "Fixed asset — capitalization" },
   { value: "fixed_asset_depreciation_run", label: "Fixed asset — depreciation" },
@@ -143,6 +146,9 @@ export function JournalEntriesPage() {
   const [posRepairFrom, setPosRepairFrom] = useState("");
   const [posRepairTo, setPosRepairTo] = useState("");
   const [repairingRooms, setRepairingRooms] = useState(false);
+  const [repairingStockAdjustments, setRepairingStockAdjustments] = useState(false);
+  const [stockAdjustmentRepairProgress, setStockAdjustmentRepairProgress] = useState({ processed: 0, total: 0 });
+  const [stockAdjustmentRepairResult, setStockAdjustmentRepairResult] = useState<StockAdjustmentJournalRepairResult | null>(null);
   const [reconcilingInventory, setReconcilingInventory] = useState(false);
   const [inventoryReconciliationMessage, setInventoryReconciliationMessage] = useState<string | null>(null);
   const [roomRepairProgress, setRoomRepairProgress] = useState({ processed: 0, total: 0 });
@@ -594,6 +600,7 @@ export function JournalEntriesPage() {
         vendor_credit: 0,
         expense: 0,
         manufacturing_costing: 0,
+        stock_adjustment: 0,
         errors: [e instanceof Error ? e.message : String(e)],
       });
     } finally {
@@ -651,6 +658,26 @@ export function JournalEntriesPage() {
       setRoomRepairResult({ repaired: 0, errors: [e instanceof Error ? e.message : String(e)] });
     } finally {
       setRepairingRooms(false);
+    }
+  };
+
+  const handleRepairStockAdjustmentJournals = async () => {
+    if (repairingStockAdjustments) return;
+    if (!confirm("Rebuild stock adjustment journals from saved stock movement batches? This will replace active stock-adjustment journals.")) return;
+    setRepairingStockAdjustments(true);
+    setStockAdjustmentRepairResult(null);
+    setStockAdjustmentRepairProgress({ processed: 0, total: 0 });
+    try {
+      const result = await repairStockAdjustmentJournals({
+        organizationId: orgId,
+        onProgress: (processed, total) => setStockAdjustmentRepairProgress({ processed, total }),
+      });
+      setStockAdjustmentRepairResult(result);
+      await fetchData();
+    } catch (e) {
+      setStockAdjustmentRepairResult({ repaired: 0, errors: [e instanceof Error ? e.message : String(e)] });
+    } finally {
+      setRepairingStockAdjustments(false);
     }
   };
 
@@ -751,6 +778,19 @@ export function JournalEntriesPage() {
       vendor_credit: "vendor_credits",
       expense: "expenses",
     };
+    if (entry.reference_type === "stock_adjustment") {
+      const { data } = await filterByOrganizationId(
+        supabase
+          .from("product_stock_movements")
+          .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name)")
+          .eq("source_type", "adjustment")
+          .eq("source_id", entry.reference_id),
+        orgId,
+        false
+      );
+      setDrillSourceData({ stock_movements: data || [] });
+      return;
+    }
     const table = tableByRef[entry.reference_type];
     if (!table) return;
     const { data } = await filterByOrganizationId(
@@ -908,7 +948,7 @@ export function JournalEntriesPage() {
           <button
             type="button"
             onClick={handleBackfill}
-            disabled={backfilling || repairingPos || repairingRooms}
+            disabled={backfilling || repairingPos || repairingRooms || repairingStockAdjustments}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Create missing journals for transactions belonging to the logged-in organization"
           >
@@ -948,6 +988,16 @@ export function JournalEntriesPage() {
               </button>
             </>
           ) : null}
+          <button
+            type="button"
+            onClick={handleRepairStockAdjustmentJournals}
+            disabled={repairingStockAdjustments || backfilling || repairingPos || repairingRooms}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Rebuild stock adjustment journals from stock movement batches"
+          >
+            <RefreshCw className={`w-4 h-4 ${repairingStockAdjustments ? "animate-spin" : ""}`} />
+            {repairingStockAdjustments ? "Repairing stock adjustments..." : "Repair stock adjustment journals"}
+          </button>
           {inventoryReconciliationMessage ? (
             <p className="text-sm text-slate-700">{inventoryReconciliationMessage}</p>
           ) : null}
@@ -1007,6 +1057,12 @@ export function JournalEntriesPage() {
         </div>
       )}
 
+      {repairingStockAdjustments && (
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+          Repairing stock adjustment journals: {stockAdjustmentRepairProgress.processed}/{stockAdjustmentRepairProgress.total}
+        </div>
+      )}
+
       {roomRepairResult && (
         <div className="mb-4 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">
           <p className="font-medium">Room journal repair complete: {roomRepairResult.repaired} rebuilt.</p>
@@ -1014,6 +1070,18 @@ export function JournalEntriesPage() {
             <ul className="mt-2 list-disc list-inside text-xs">
               {roomRepairResult.errors.slice(0, 10).map((error, index) => <li key={index}>{error}</li>)}
               {roomRepairResult.errors.length > 10 && <li>... and {roomRepairResult.errors.length - 10} more</li>}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {stockAdjustmentRepairResult && (
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
+          <p className="font-medium">Stock adjustment journal repair complete: {stockAdjustmentRepairResult.repaired} rebuilt.</p>
+          {stockAdjustmentRepairResult.errors.length > 0 && (
+            <ul className="mt-2 list-disc list-inside text-xs">
+              {stockAdjustmentRepairResult.errors.slice(0, 10).map((error, index) => <li key={index}>{error}</li>)}
+              {stockAdjustmentRepairResult.errors.length > 10 && <li>... and {stockAdjustmentRepairResult.errors.length - 10} more</li>}
             </ul>
           )}
         </div>
@@ -1058,6 +1126,7 @@ export function JournalEntriesPage() {
             {backfillResult.vendor_payment > 0 && <li>Vendor payments: {backfillResult.vendor_payment}</li>}
             {backfillResult.vendor_credit > 0 && <li>Vendor credits: {backfillResult.vendor_credit}</li>}
             {backfillResult.expense > 0 && <li>Expenses: {backfillResult.expense}</li>}
+            {backfillResult.stock_adjustment > 0 && <li>Stock adjustments: {backfillResult.stock_adjustment}</li>}
             {backfillResult.manufacturing_costing > 0 && <li>Manufacturing costing: {backfillResult.manufacturing_costing}</li>}
           </ul>
           {backfillResult.errors.length > 0 && (
@@ -1073,7 +1142,7 @@ export function JournalEntriesPage() {
               </ul>
             </div>
           )}
-          {[backfillResult.room_charge, backfillResult.payment, backfillResult.pos, backfillResult.bill, backfillResult.vendor_payment, backfillResult.vendor_credit, backfillResult.expense, backfillResult.manufacturing_costing].every((n) => n === 0) && backfillResult.errors.length === 0 && (
+          {[backfillResult.room_charge, backfillResult.payment, backfillResult.pos, backfillResult.bill, backfillResult.vendor_payment, backfillResult.vendor_credit, backfillResult.expense, backfillResult.stock_adjustment, backfillResult.manufacturing_costing].every((n) => n === 0) && backfillResult.errors.length === 0 && (
             <p className="text-slate-500">No new journal entries needed; all transactions already have entries.</p>
           )}
         </div>

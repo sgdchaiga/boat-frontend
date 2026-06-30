@@ -125,6 +125,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "reports_financial_payments_by_charge_type", label: "Payments by charge type", group: "Reports" },
   { page: "reports_sales_by_item", label: "Sales by item", group: "Reports" },
   { page: "reports_room_billing", label: "Room billing", group: "Reports" },
+  { page: "accounting_pos_income_reconciliation", label: "POS income reconciliation", group: "Reports" },
   { page: "reports_daily_purchases_summary", label: "Purchases summary", group: "Reports" },
   { page: "reports_purchases_by_item", label: "Purchases by item", group: "Reports" },
   { page: "reports_expenses", label: "Expenses report", group: "Reports" },

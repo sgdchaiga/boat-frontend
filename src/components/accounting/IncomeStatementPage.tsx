@@ -8,6 +8,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import type { BusinessType } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { syncRoomChargeJournal } from "../../lib/journal";
 import {
   type AccountTotal,
   type IncomeStatementMode,
@@ -99,6 +100,9 @@ export function IncomeStatementPage() {
   const [operationalRevenueRows, setOperationalRevenueRows] = useState<AccountTotal[]>([]);
   const [operationalRevenueDetails, setOperationalRevenueDetails] = useState<OperationalRevenueDetail[]>([]);
   const [showPosFigures, setShowPosFigures] = useState(false);
+  const [roomBillingJournalIssueIds, setRoomBillingJournalIssueIds] = useState<string[]>([]);
+  const [roomBillingRepairing, setRoomBillingRepairing] = useState(false);
+  const [roomBillingRepairMessage, setRoomBillingRepairMessage] = useState<string | null>(null);
   const [drillAccount, setDrillAccount] = useState<{ id: string; code: string; name: string; type: "income" | "expense"; source?: "gl" | "pos" } | null>(null);
   const [drillRows, setDrillRows] = useState<DrillLine[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
@@ -216,6 +220,61 @@ export function IncomeStatementPage() {
     setBarReconciliation(null);
     setOperationalRevenueRows([]);
     setOperationalRevenueDetails([]);
+    setRoomBillingJournalIssueIds([]);
+  };
+
+  const findRoomBillingJournalIssues = async (fromDate: string, toDateInclusive: string, businessType: BusinessType | null | undefined) => {
+    if (basis === "cash" || (businessType !== "hotel" && businessType !== "mixed")) return [];
+    const toExclusive = new Date(`${toDateInclusive}T00:00:00`);
+    toExclusive.setDate(toExclusive.getDate() + 1);
+    const billingByNight = await filterByOrganizationId(
+      supabase
+        .from("billing")
+        .select("id,stay_night_date,charged_at")
+        .eq("charge_type", "room")
+        .gte("stay_night_date", fromDate)
+        .lte("stay_night_date", toDateInclusive),
+      orgId,
+      superAdmin
+    );
+    const billingByChargedAt = await filterByOrganizationId(
+      supabase
+        .from("billing")
+        .select("id,stay_night_date,charged_at")
+        .eq("charge_type", "room")
+        .gte("charged_at", `${fromDate}T00:00:00`)
+        .lt("charged_at", toExclusive.toISOString()),
+      orgId,
+      superAdmin
+    );
+    if (billingByNight.error && billingByChargedAt.error) return [];
+    const billingRows = new Map<string, { id: string; stay_night_date?: string | null; charged_at?: string | null }>();
+    ((billingByNight.data || []) as Array<{ id: string; stay_night_date?: string | null; charged_at?: string | null }>).forEach((row) => billingRows.set(row.id, row));
+    ((billingByChargedAt.data || []) as Array<{ id: string; stay_night_date?: string | null; charged_at?: string | null }>).forEach((row) => billingRows.set(row.id, row));
+    const billingIds = Array.from(billingRows.keys());
+    if (billingIds.length === 0) return [];
+    const journalsRes = await filterByOrganizationId(
+      supabase
+        .from("journal_entries")
+        .select("reference_id,entry_date")
+        .eq("reference_type", "room_charge")
+        .eq("is_deleted", false)
+        .in("reference_id", billingIds),
+      orgId,
+      superAdmin
+    );
+    if (journalsRes.error) return [];
+    const journalByBillingId = new Map<string, string>();
+    ((journalsRes.data || []) as Array<{ reference_id: string | null; entry_date: string | null }>).forEach((journal) => {
+      if (journal.reference_id) journalByBillingId.set(journal.reference_id, String(journal.entry_date || ""));
+    });
+    return billingIds.filter((billingId) => {
+      const expectedDate =
+        billingRows.get(billingId)?.stay_night_date ||
+        toBusinessDateString(billingRows.get(billingId)?.charged_at || "");
+      const entryDate = journalByBillingId.get(billingId);
+      return !entryDate || (expectedDate && entryDate !== expectedDate);
+    });
   };
 
   const fetchData = async () => {
@@ -543,6 +602,8 @@ export function IncomeStatementPage() {
       setBarReconciliation(currentRes.barReconciliation);
       setOperationalRevenueRows(currentRes.operationalRevenueRows);
       setOperationalRevenueDetails(currentRes.operationalRevenueDetails);
+      setRoomBillingJournalIssueIds(await findRoomBillingJournalIssues(fromStr, toStrInclusive, bt));
+      setRoomBillingRepairMessage(null);
 
       if (compareRange === "none") {
         setPreviousTotalRevenue(0);
@@ -601,6 +662,32 @@ export function IncomeStatementPage() {
     } finally {
       if (requestSeq !== requestSeqRef.current) return;
       setLoading(false);
+    }
+  };
+
+  const repairRoomBillingJournalsForPeriod = async () => {
+    if (roomBillingJournalIssueIds.length === 0 || roomBillingRepairing) return;
+    setRoomBillingRepairing(true);
+    setRoomBillingRepairMessage(null);
+    try {
+      let repaired = 0;
+      const errors: string[] = [];
+      for (const billingId of roomBillingJournalIssueIds) {
+        const result = await syncRoomChargeJournal(billingId, orgId);
+        if (result.ok) repaired += 1;
+        else errors.push(`${billingId}: ${result.error}`);
+      }
+      totalsCacheRef.current.clear();
+      await fetchData();
+      setRoomBillingRepairMessage(
+        errors.length > 0
+          ? `Repaired ${repaired} room charge journal(s). ${errors.length} issue(s) remain.`
+          : `Repaired ${repaired} room charge journal(s).`
+      );
+    } catch (error) {
+      setRoomBillingRepairMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRoomBillingRepairing(false);
     }
   };
 
@@ -1039,6 +1126,32 @@ export function IncomeStatementPage() {
         </div>
         {!loading && !fetchError && <AccountingExportButtons onExcel={exportExcel} onPdf={exportPdf} />}
       </div>
+
+      {!loading && !fetchError && roomBillingJournalIssueIds.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="font-semibold">Room billing and income statement need reconciliation</p>
+              <p>
+                {roomBillingJournalIssueIds.length} accommodation billing entr{roomBillingJournalIssueIds.length === 1 ? "y has" : "ies have"} no matching room-charge journal, or the journal date does not match the room night.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={repairRoomBillingJournalsForPeriod}
+              disabled={roomBillingRepairing}
+              className="self-start rounded-lg border border-amber-300 bg-white px-3 py-2 font-medium text-amber-900 hover:bg-amber-100 disabled:opacity-60"
+            >
+              {roomBillingRepairing ? "Repairing..." : "Repair room journals"}
+            </button>
+          </div>
+        </div>
+      )}
+      {!loading && roomBillingRepairMessage && (
+        <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3 text-sm text-slate-700">
+          {roomBillingRepairMessage}
+        </div>
+      )}
 
       {initialLoading ? (
         <div className="space-y-4 max-w-2xl">

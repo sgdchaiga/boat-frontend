@@ -526,6 +526,7 @@ export function ReportsPage({ onNavigate }: { onNavigate?: (page: string) => voi
   const { user } = useAuth();
   const businessType = (user?.business_type || "").toLowerCase();
   const isSchool = businessType === "school";
+  const isHotelOrMixed = businessType === "hotel" || businessType === "mixed";
 
   if (isSchool) {
     return <SchoolReportsOverview onNavigate={onNavigate} />;
@@ -557,6 +558,15 @@ export function ReportsPage({ onNavigate }: { onNavigate?: (page: string) => voi
               >
                 Purchases by item
               </button>
+              {isHotelOrMixed && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate?.("accounting_pos_income_reconciliation")}
+                  className="border border-slate-300 rounded-lg px-3 py-2 text-sm hover:bg-slate-50"
+                >
+                  POS income reconciliation
+                </button>
+              )}
             </div>
           </div>
         </div>

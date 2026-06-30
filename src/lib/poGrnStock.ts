@@ -20,6 +20,7 @@ export async function postStockInFromPurchaseOrderForBill(
     description?: string | null;
     quantity?: number | null;
     cost_price?: number | null;
+    track_inventory?: boolean | null;
   }> = [];
 
   const withProduct = await supabase
@@ -49,10 +50,21 @@ export async function postStockInFromPurchaseOrderForBill(
     )
   );
   const productByName = new Map<string, string>();
+  const productTrackById = new Map<string, boolean | null>();
   if (missingDescriptions.length > 0) {
-    const { data: productsByName } = await supabase.from("products").select("id, name").in("name", missingDescriptions);
+    const { data: productsByName } = await supabase.from("products").select("id, name, track_inventory").in("name", missingDescriptions);
     (productsByName || []).forEach((p: { id?: string; name?: string }) => {
       if (p.id && p.name) productByName.set(String(p.name).trim().toLowerCase(), String(p.id));
+    });
+    (productsByName || []).forEach((p: { id?: string; track_inventory?: boolean | null }) => {
+      if (p.id) productTrackById.set(String(p.id), p.track_inventory ?? null);
+    });
+  }
+  const linkedProductIds = Array.from(new Set(poItems.map((it) => it.product_id).filter((id): id is string => !!id)));
+  if (linkedProductIds.length > 0) {
+    const { data: productsById } = await supabase.from("products").select("id, track_inventory").in("id", linkedProductIds);
+    (productsById || []).forEach((p: { id?: string; track_inventory?: boolean | null }) => {
+      if (p.id) productTrackById.set(String(p.id), p.track_inventory ?? null);
     });
   }
 
@@ -69,6 +81,7 @@ export async function postStockInFromPurchaseOrderForBill(
         if (normalizedDesc) unmatchedDescriptions.add(normalizedDesc);
         return null;
       }
+      if (productTrackById.get(productId) === false) return null;
       if (qty <= 0) return null;
       return {
         product_id: productId,

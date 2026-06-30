@@ -602,6 +602,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_purchases_by_item",
     "reports_sales_by_item",
     "reports_room_billing",
+    "accounting_pos_income_reconciliation",
     "reports_stock_movement",
     "reports_stock_summary",
     "reports_school_fee_collections",

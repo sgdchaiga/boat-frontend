@@ -11,6 +11,7 @@ import { StockBulkImportPanel } from "../inventory/StockBulkImportPanel";
 import { businessTodayISO, toBusinessDateString } from "../../lib/timezone";
 import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
 import { canApprove } from "../../lib/permissions";
+import { createJournalForStockAdjustment, deleteJournalEntryByReference } from "../../lib/journal";
 
 interface Product {
   id: string;
@@ -22,6 +23,7 @@ interface GLAccount {
   id: string;
   account_code: string;
   account_name: string;
+  account_type: string;
 }
 
 interface AdjustmentRow {
@@ -77,7 +79,8 @@ export function AdminStockAdjustmentsPage({
   const [date, setDate] = useState(businessTodayISO);
   const [reason, setReason] = useState("");
   const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
-  const [glAccountId, setGlAccountId] = useState("");
+  const [inventoryGlAccountId, setInventoryGlAccountId] = useState("");
+  const [stockGainLossGlAccountId, setStockGainLossGlAccountId] = useState("");
   const [rows, setRows] = useState<AdjustmentRow[]>([
     {
       id: randomUuid(),
@@ -215,11 +218,11 @@ export function AdminStockAdjustmentsPage({
         ]);
         setProducts((productsData || []) as Product[]);
         const normalizedGl = normalizeGlAccountRows((glData || []) as unknown[])
-          .filter((row) => row.account_type === "asset")
           .map((row) => ({
             id: row.id,
             account_code: row.account_code,
             account_name: row.account_name,
+            account_type: row.account_type,
           }));
         setGlAccounts(normalizedGl as GLAccount[]);
         const stock: Record<string, number> = {};
@@ -321,7 +324,12 @@ export function AdminStockAdjustmentsPage({
     setDate(effectiveDate);
     setReason(adjustmentReasonFromNote(rowsData[0].note));
     const glCode = /^GL\s+(.+?)\s+-\s+/.exec(String(rowsData[0].note || ""))?.[1]?.trim();
-    setGlAccountId(glCode ? glAccounts.find((account) => account.account_code === glCode)?.id ?? "" : "");
+    const inventoryGlFromNote = /\[INV_GL:([0-9a-f-]{32,36})\]/i.exec(String(rowsData[0].note || ""))?.[1] ?? null;
+    const plGlFromNote = /\[PL_GL:([0-9a-f-]{32,36})\]/i.exec(String(rowsData[0].note || ""))?.[1] ?? null;
+    setInventoryGlAccountId(
+      inventoryGlFromNote ?? (glCode ? glAccounts.find((account) => account.account_code === glCode)?.id ?? "" : "")
+    );
+    setStockGainLossGlAccountId(plGlFromNote ?? "");
     setRows(
       rowsData.map((row) => {
         const qtyDelta = Number(row.quantity_in || 0) - Number(row.quantity_out || 0);
@@ -367,6 +375,10 @@ export function AdminStockAdjustmentsPage({
       if (Number(deletedCount || 0) === 0) {
         throw new Error("No movements were deleted. Check your permission or whether this adjustment still exists.");
       }
+      const retiredJournal = await deleteJournalEntryByReference("stock_adjustment", adjustment.source_id, orgId);
+      if (!retiredJournal.ok) {
+        throw new Error(`Movements were deleted, but the stock adjustment journal could not be retired: ${retiredJournal.error}`);
+      }
       if (editingSourceId === adjustment.source_id) {
         setEditingSourceId(null);
         setSelectedSourceId(null);
@@ -389,8 +401,16 @@ export function AdminStockAdjustmentsPage({
       alert("Enter at least one valid adjustment row (product and non-zero amount).");
       return;
     }
-    if (!glAccountId) {
-      alert("Select the GL account affected before saving the adjustment.");
+    if (!inventoryGlAccountId) {
+      alert("Select the inventory stock GL account before saving the adjustment.");
+      return;
+    }
+    if (!stockGainLossGlAccountId) {
+      alert("Select the P&L stock gain/loss GL account before saving the adjustment.");
+      return;
+    }
+    if (inventoryGlAccountId === stockGainLossGlAccountId) {
+      alert("Inventory and P&L accounts must be different.");
       return;
     }
     setSaving(true);
@@ -401,6 +421,8 @@ export function AdminStockAdjustmentsPage({
       const payload = validRows.map((r) => {
         const delta = Number(r.qtyDelta);
         const closingStock = r.currentQty + delta;
+        const inventoryGl = glAccounts.find((g) => g.id === inventoryGlAccountId);
+        const gainLossGl = glAccounts.find((g) => g.id === stockGainLossGlAccountId);
         const row: Record<string, unknown> = {
           product_id: r.product_id,
           movement_date: movementDateIso,
@@ -410,11 +432,10 @@ export function AdminStockAdjustmentsPage({
           quantity_out: delta < 0 ? Math.abs(delta) : 0,
           unit_cost: null,
           note:
-            (glAccountId
-              ? `GL ${glAccounts.find((g) => g.id === glAccountId)?.account_code ?? ""} - ${
-                  glAccounts.find((g) => g.id === glAccountId)?.account_name ?? ""
-                } | `
-              : "") + `${reason.trim() || "Manual adjustment"} [CLOSING_STOCK:${closingStock}]`,
+            `GL ${inventoryGl?.account_code ?? ""} - ${inventoryGl?.account_name ?? ""} | ` +
+            `${reason.trim() || "Manual adjustment"} [CLOSING_STOCK:${closingStock}] ` +
+            `[INV_GL:${inventoryGlAccountId}] [PL_GL:${stockGainLossGlAccountId}]` +
+            (gainLossGl ? ` [PL:${gainLossGl.account_code} - ${gainLossGl.account_name}]` : ""),
         };
         if (orgId) row.organization_id = orgId;
         return row;
@@ -437,7 +458,17 @@ export function AdminStockAdjustmentsPage({
       if ((inserted?.length ?? 0) !== payload.length) {
         throw new Error(`Only ${inserted?.length ?? 0} of ${payload.length} movement(s) were saved.`);
       }
-      alert("Stock adjusted.");
+      const journal = await createJournalForStockAdjustment(sourceId, user?.id ?? null, {
+        organizationId: orgId,
+        inventoryGlAccountId,
+        stockGainLossGlAccountId,
+        replaceExisting: true,
+      });
+      if (!journal.ok) {
+        alert(`Stock adjusted, but the journal was not posted: ${journal.error}`);
+      } else {
+        alert("Stock adjusted and journal posted.");
+      }
       // Refresh current stock and reset rows
       await loadStockSnapshot();
       await loadAdjustmentHistory();
@@ -567,16 +598,31 @@ export function AdminStockAdjustmentsPage({
             />
           </div>
           <div className="min-w-[220px]">
-            <label className="block text-sm font-medium mb-1">GL account affected (required)</label>
+            <label className="block text-sm font-medium mb-1">Inventory stock account (required)</label>
             <select
               className="border rounded-lg px-3 py-2 w-full"
-              value={glAccountId}
-              onChange={(e) => setGlAccountId(e.target.value)}
+              value={inventoryGlAccountId}
+              onChange={(e) => setInventoryGlAccountId(e.target.value)}
             >
               <option value="">None</option>
-              {glAccounts.map((g) => (
+              {glAccounts.filter((g) => g.account_type === "asset").map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.account_code} – {g.account_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="min-w-[240px]">
+            <label className="block text-sm font-medium mb-1">P&L stock gain/loss account (required)</label>
+            <select
+              className="border rounded-lg px-3 py-2 w-full"
+              value={stockGainLossGlAccountId}
+              onChange={(e) => setStockGainLossGlAccountId(e.target.value)}
+            >
+              <option value="">None</option>
+              {glAccounts.filter((g) => g.account_type === "expense" || g.account_type === "income").map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.account_code} â€“ {g.account_name}
                 </option>
               ))}
             </select>
