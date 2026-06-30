@@ -607,7 +607,7 @@ export function AdminStockAdjustmentsPage({
               <option value="">None</option>
               {glAccounts.filter((g) => g.account_type === "asset").map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.account_code} – {g.account_name}
+                  {g.account_code} - {g.account_name}
                 </option>
               ))}
             </select>
@@ -622,7 +622,7 @@ export function AdminStockAdjustmentsPage({
               <option value="">None</option>
               {glAccounts.filter((g) => g.account_type === "expense" || g.account_type === "income").map((g) => (
                 <option key={g.id} value={g.id}>
-                  {g.account_code} â€“ {g.account_name}
+                  {g.account_code} - {g.account_name}
                 </option>
               ))}
             </select>
