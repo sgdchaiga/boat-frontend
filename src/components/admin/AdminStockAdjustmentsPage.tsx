@@ -406,11 +406,11 @@ export function AdminStockAdjustmentsPage({
       return;
     }
     if (!stockGainLossGlAccountId) {
-      alert("Select the P&L stock gain/loss GL account before saving the adjustment.");
+      alert("Select the purchases/COGS GL account before saving the adjustment.");
       return;
     }
     if (inventoryGlAccountId === stockGainLossGlAccountId) {
-      alert("Inventory and P&L accounts must be different.");
+      alert("Inventory and purchases/COGS accounts must be different.");
       return;
     }
     setSaving(true);
@@ -613,14 +613,14 @@ export function AdminStockAdjustmentsPage({
             </select>
           </div>
           <div className="min-w-[240px]">
-            <label className="block text-sm font-medium mb-1">P&L stock gain/loss account (required)</label>
+            <label className="block text-sm font-medium mb-1">Purchases / COGS account (required)</label>
             <select
               className="border rounded-lg px-3 py-2 w-full"
               value={stockGainLossGlAccountId}
               onChange={(e) => setStockGainLossGlAccountId(e.target.value)}
             >
               <option value="">None</option>
-              {glAccounts.filter((g) => g.account_type === "expense" || g.account_type === "income").map((g) => (
+              {glAccounts.filter((g) => g.account_type === "expense").map((g) => (
                 <option key={g.id} value={g.id}>
                   {g.account_code} - {g.account_name}
                 </option>

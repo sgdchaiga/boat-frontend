@@ -57,7 +57,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
         );
         setStockGainLossAccounts(
           ctx.allGlAccounts
-            .filter((account) => account.account_type === "expense" || account.account_type === "income")
+            .filter((account) => account.account_type === "expense")
             .map((account) => ({ id: account.id, code: account.account_code, name: account.account_name }))
             .sort((a, b) => a.code.localeCompare(b.code))
         );
@@ -92,7 +92,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
       );
       setStockGainLossAccounts(
         ctx.allGlAccounts
-          .filter((account) => account.account_type === "expense" || account.account_type === "income")
+          .filter((account) => account.account_type === "expense")
           .map((account) => ({ id: account.id, code: account.account_code, name: account.account_name }))
           .sort((a, b) => a.code.localeCompare(b.code))
       );
@@ -209,7 +209,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
           entered quantity. Use only one row per product. Match products by name, SKU, barcode, code, or product_id.
           Optional <strong>qty_adjustment</strong> for explicit +/- changes instead of a closing count.
           An inventory stock account is required, either from <strong>gl_account_code</strong> in each file row or the
-          default selected below. A P&L stock gain/loss account is also required for the journal.
+          default selected below. A purchases/COGS account is also required for the journal.
         </p>
       </PageNotes>
 
@@ -263,7 +263,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
             </select>
           </div>
           <div className="flex-1 min-w-[240px]">
-            <label className="block text-sm font-medium mb-1">P&L stock gain/loss account (required)</label>
+            <label className="block text-sm font-medium mb-1">Purchases / COGS account (required)</label>
             <select
               className="border rounded-lg px-3 py-2 w-full"
               value={defaultStockGainLossGlAccountId}
@@ -273,7 +273,7 @@ export function StockBulkImportPanel({ readOnly = false, onApplied }: StockBulkI
                 resetPreview();
               }}
             >
-              <option value="">Select P&L account</option>
+              <option value="">Select purchases/COGS account</option>
               {stockGainLossAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.code} - {account.name}

@@ -424,9 +424,9 @@ export async function createJournalForStockAdjustment(
     legacyInventoryGlCode: extractLegacyGlCodeFromStockNote(firstNote),
   });
   if (!accounts.inventoryGlAccountId) return { ok: false, error: "Select or configure an inventory stock GL account for stock adjustments." };
-  if (!accounts.stockGainLossGlAccountId) return { ok: false, error: "Select or configure a P&L stock gain/loss GL account for stock adjustments." };
+  if (!accounts.stockGainLossGlAccountId) return { ok: false, error: "Select or configure a purchases/COGS GL account for stock adjustments." };
   if (accounts.inventoryGlAccountId === accounts.stockGainLossGlAccountId) {
-    return { ok: false, error: "Stock adjustment inventory and P&L accounts must be different." };
+    return { ok: false, error: "Stock adjustment inventory and purchases/COGS accounts must be different." };
   }
 
   const lines: JournalLine[] = [];

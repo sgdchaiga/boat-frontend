@@ -564,7 +564,7 @@ export function planStockAdjustmentImports(
       return;
     }
     if (!defaults.stockGainLossGlAccountId) {
-      preview.push({ line, status: "error", summary: "Select a P&L stock gain/loss account for the adjustment journal." });
+      preview.push({ line, status: "error", summary: "Select a purchases/COGS account for the adjustment journal." });
       return;
     }
 
@@ -740,7 +740,7 @@ export async function applyStockAdjustmentPlans(
     return {
       updated: 0,
       errors: plans.length,
-      messages: ["Every stock adjustment requires a P&L stock gain/loss account."],
+      messages: ["Every stock adjustment requires a purchases/COGS account."],
       sourceId,
     };
   }
@@ -750,7 +750,7 @@ export async function applyStockAdjustmentPlans(
     return {
       updated: 0,
       errors: plans.length,
-      messages: ["Import one stock adjustment batch per inventory/P&L account pair so the journal can be repaired cleanly."],
+      messages: ["Import one stock adjustment batch per inventory and purchases/COGS account pair so the journal can be repaired cleanly."],
       sourceId,
     };
   }
