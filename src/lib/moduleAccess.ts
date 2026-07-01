@@ -499,6 +499,7 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  if (page === "image_document_converter") return true;
   if (page === "asset_verification") return true;
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
   if (CLINIC_PAGE_IDS.has(page)) {
@@ -558,6 +559,7 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
 
 export function pageToModuleId(page: string): ModuleId | null {
   if (page === "asset_verification") return "asset_verification";
+  if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
   if (page === "communications") return "communications";
   if (page === "agent_hub") return "agent";

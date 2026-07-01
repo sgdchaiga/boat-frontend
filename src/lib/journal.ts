@@ -89,6 +89,15 @@ let cachedAccounts: {
     posRevenueBar: string | null;
     posRevenueKitchen: string | null;
     posRevenueRoom: string | null;
+    stockAdjustmentInventoryVarianceExpense: string | null;
+    stockAdjustmentInventoryVarianceGain: string | null;
+    stockAdjustmentDamagedGoodsExpense: string | null;
+    stockAdjustmentInventoryShrinkageExpense: string | null;
+    stockAdjustmentExpiredStockExpense: string | null;
+    stockAdjustmentInternalConsumptionExpense: string | null;
+    stockAdjustmentWorkInProgress: string | null;
+    stockAdjustmentRawMaterialsInventory: string | null;
+    stockAdjustmentFinishedGoodsInventory: string | null;
   };
 } | null = null;
 
@@ -126,6 +135,15 @@ export async function getDefaultGlAccounts(): Promise<{
   posRevenueBar: string | null;
   posRevenueKitchen: string | null;
   posRevenueRoom: string | null;
+  stockAdjustmentInventoryVarianceExpense: string | null;
+  stockAdjustmentInventoryVarianceGain: string | null;
+  stockAdjustmentDamagedGoodsExpense: string | null;
+  stockAdjustmentInventoryShrinkageExpense: string | null;
+  stockAdjustmentExpiredStockExpense: string | null;
+  stockAdjustmentInternalConsumptionExpense: string | null;
+  stockAdjustmentWorkInProgress: string | null;
+  stockAdjustmentRawMaterialsInventory: string | null;
+  stockAdjustmentFinishedGoodsInventory: string | null;
 }> {
   const orgId = await resolveOrganizationId();
   const cacheKey = orgId ?? "no-org";
@@ -272,6 +290,15 @@ export async function getDefaultGlAccounts(): Promise<{
     posRevenueBar,
     posRevenueKitchen,
     posRevenueRoom,
+    stockAdjustmentInventoryVarianceExpense: settings.stock_adjustment_inventory_variance_expense_id,
+    stockAdjustmentInventoryVarianceGain: settings.stock_adjustment_inventory_variance_gain_id,
+    stockAdjustmentDamagedGoodsExpense: settings.stock_adjustment_damaged_goods_expense_id,
+    stockAdjustmentInventoryShrinkageExpense: settings.stock_adjustment_inventory_shrinkage_expense_id,
+    stockAdjustmentExpiredStockExpense: settings.stock_adjustment_expired_stock_expense_id,
+    stockAdjustmentInternalConsumptionExpense: settings.stock_adjustment_internal_consumption_expense_id,
+    stockAdjustmentWorkInProgress: settings.stock_adjustment_work_in_progress_id,
+    stockAdjustmentRawMaterialsInventory: settings.stock_adjustment_raw_materials_inventory_id,
+    stockAdjustmentFinishedGoodsInventory: settings.stock_adjustment_finished_goods_inventory_id,
   };
   cachedAccounts = { key: cacheKey, value };
   return value;
@@ -344,8 +371,18 @@ type StockAdjustmentMovementForJournal = {
   quantity_out: number | null;
   unit_cost: number | null;
   note: string | null;
-  products?: { name?: string | null; cost_price?: number | null } | null;
+  products?: { name?: string | null; cost_price?: number | null; department_id?: string | null } | null;
 };
+
+type StockAdjustmentReason =
+  | "physical_count_shortage"
+  | "physical_count_surplus"
+  | "damage"
+  | "theft"
+  | "expired"
+  | "internal_consumption"
+  | "production_issue"
+  | "production_receipt";
 
 function extractGlIdFromStockNote(note: string | null, key: "INV_GL" | "PL_GL"): string | null {
   const match = new RegExp(`\\[${key}:([0-9a-f-]{32,36})\\]`, "i").exec(String(note || ""));
@@ -354,6 +391,126 @@ function extractGlIdFromStockNote(note: string | null, key: "INV_GL" | "PL_GL"):
 
 function extractLegacyGlCodeFromStockNote(note: string | null): string | null {
   return /^GL\s+(.+?)\s+-\s+/.exec(String(note || ""))?.[1]?.trim() ?? null;
+}
+
+function stockAdjustmentReasonText(note: string | null): string {
+  return String(note || "")
+    .replace(/^GL .*?\| /, "")
+    .replace(/\s*\[[^\]]+\]\s*/g, " ")
+    .trim();
+}
+
+function classifyStockAdjustmentReason(note: string | null, deltaQty: number): StockAdjustmentReason | null {
+  const text = stockAdjustmentReasonText(note).toLowerCase();
+  if (/production\s+receipt|finished\s+goods?\s+receipt/.test(text)) return "production_receipt";
+  if (/production\s+issue|raw\s+materials?\s+issue|wip/.test(text)) return "production_issue";
+  if (/internal\s+consumption|staff\s+meal|consume/.test(text)) return "internal_consumption";
+  if (/expired|expiry|obsolete/.test(text)) return "expired";
+  if (/theft|stolen|shrinkage/.test(text)) return "theft";
+  if (/damage|damaged|breakage|spoil/.test(text)) return "damage";
+  if (/surplus|overage/.test(text)) return "physical_count_surplus";
+  if (/shortage|variance|physical\s+count|stock\s+count|closing\s+stock|count/.test(text)) {
+    return deltaQty > 0 ? "physical_count_surplus" : "physical_count_shortage";
+  }
+  return null;
+}
+
+async function loadStockAdjustmentGlContext(organizationId: string) {
+  const [defaults, deptGlMap, { data }] = await Promise.all([
+    getDefaultGlAccounts(),
+    loadPosDepartmentGlMap(organizationId),
+    filterByOrganizationId(
+      supabase
+        .from("gl_accounts")
+        .select("*")
+        .order("account_code"),
+      organizationId,
+      false
+    ),
+  ]);
+  const accounts = normalizeGlAccountRows((data || []) as unknown[]).filter((account) => account.is_active);
+  const findByName = (patterns: RegExp[], accountTypes?: string[]) =>
+    accounts.find((account) => {
+      if (accountTypes && !accountTypes.includes(account.account_type)) return false;
+      const label = `${account.account_code} ${account.account_name} ${account.category || ""}`;
+      return patterns.some((pattern) => pattern.test(label));
+    })?.id ?? null;
+  return { defaults, deptGlMap, findByName };
+}
+
+function resolveStockAdjustmentLineAccounts(args: {
+  reason: StockAdjustmentReason | null;
+  deltaQty: number;
+  departmentId: string | null;
+  context: Awaited<ReturnType<typeof loadStockAdjustmentGlContext>>;
+  legacyInventoryGlAccountId: string | null;
+  legacyPurchasesGlAccountId: string | null;
+}): { debitGlAccountId: string | null; creditGlAccountId: string | null; label: string } {
+  const { reason, deltaQty, departmentId, context, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
+  const departmentGl = departmentId ? context.deptGlMap.get(departmentId) : null;
+  const departmentStock = departmentGl?.stock ?? legacyInventoryGlAccountId ?? context.defaults.purchasesInventory ?? context.defaults.posInvKitchen ?? context.defaults.posInvBar ?? null;
+  const departmentExpense =
+    departmentGl?.purchases ??
+    legacyPurchasesGlAccountId ??
+    context.defaults.stockAdjustmentInternalConsumptionExpense ??
+    context.defaults.posCogsKitchen ??
+    context.defaults.expense ??
+    null;
+  const account = (patterns: RegExp[], types?: string[]) => context.findByName(patterns, types);
+  const inventoryVarianceExpense =
+    context.defaults.stockAdjustmentInventoryVarianceExpense ??
+    account([/inventory.*variance.*expense/i, /stock.*variance.*expense/i], ["expense"]) ??
+    context.defaults.expense;
+  const inventoryVarianceGain =
+    context.defaults.stockAdjustmentInventoryVarianceGain ??
+    account([/inventory.*variance.*gain/i, /stock.*variance.*gain/i, /inventory.*surplus/i], ["income"]);
+  const damagedGoodsExpense =
+    context.defaults.stockAdjustmentDamagedGoodsExpense ??
+    account([/damaged?\s+goods?.*expense/i, /damage.*expense/i], ["expense"]) ??
+    context.defaults.expense;
+  const shrinkageExpense =
+    context.defaults.stockAdjustmentInventoryShrinkageExpense ??
+    account([/inventory.*shrinkage/i, /stock.*shrinkage/i, /theft/i], ["expense"]) ??
+    context.defaults.expense;
+  const expiredStockExpense =
+    context.defaults.stockAdjustmentExpiredStockExpense ??
+    account([/expired.*stock/i, /expiry.*stock/i, /obsolete.*stock/i], ["expense"]) ??
+    context.defaults.expense;
+  const workInProgress =
+    context.defaults.stockAdjustmentWorkInProgress ??
+    account([/work\s+in\s+progress/i, /\bwip\b/i], ["asset"]);
+  const rawMaterialsInventory =
+    context.defaults.stockAdjustmentRawMaterialsInventory ??
+    account([/raw\s+materials?.*inventory/i, /raw\s+materials?.*stock/i], ["asset"]) ??
+    departmentStock;
+  const finishedGoodsInventory =
+    context.defaults.stockAdjustmentFinishedGoodsInventory ??
+    account([/finished\s+goods?.*inventory/i, /finished\s+goods?.*stock/i], ["asset"]) ??
+    departmentStock;
+
+  switch (reason) {
+    case "physical_count_shortage":
+      return { debitGlAccountId: inventoryVarianceExpense, creditGlAccountId: departmentStock, label: "Physical count shortage" };
+    case "physical_count_surplus":
+      return { debitGlAccountId: departmentStock, creditGlAccountId: inventoryVarianceGain ?? departmentExpense, label: "Physical count surplus" };
+    case "damage":
+      return { debitGlAccountId: damagedGoodsExpense, creditGlAccountId: departmentStock, label: "Damage" };
+    case "theft":
+      return { debitGlAccountId: shrinkageExpense, creditGlAccountId: departmentStock, label: "Theft" };
+    case "expired":
+      return { debitGlAccountId: expiredStockExpense, creditGlAccountId: departmentStock, label: "Expired stock" };
+    case "internal_consumption":
+      return { debitGlAccountId: departmentExpense, creditGlAccountId: departmentStock, label: "Internal consumption" };
+    case "production_issue":
+      return { debitGlAccountId: workInProgress, creditGlAccountId: rawMaterialsInventory, label: "Production issue" };
+    case "production_receipt":
+      return { debitGlAccountId: finishedGoodsInventory, creditGlAccountId: workInProgress, label: "Production receipt" };
+    default:
+      if (deltaQty > 0) {
+        return { debitGlAccountId: departmentStock, creditGlAccountId: legacyPurchasesGlAccountId ?? departmentExpense, label: "Stock adjustment surplus" };
+      }
+      return { debitGlAccountId: legacyPurchasesGlAccountId ?? departmentExpense, creditGlAccountId: departmentStock, label: "Stock adjustment shortage" };
+  }
 }
 
 async function resolveStockAdjustmentAccountIds(options: {
@@ -405,7 +562,7 @@ export async function createJournalForStockAdjustment(
   const { data: movements, error } = await filterByOrganizationId(
     supabase
       .from("product_stock_movements")
-      .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price)")
+      .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price,department_id)")
       .eq("source_type", "adjustment")
       .eq("source_id", sourceId)
       .order("movement_date", { ascending: true }),
@@ -423,11 +580,7 @@ export async function createJournalForStockAdjustment(
     stockGainLossGlAccountId: options?.stockGainLossGlAccountId ?? extractGlIdFromStockNote(firstNote, "PL_GL"),
     legacyInventoryGlCode: extractLegacyGlCodeFromStockNote(firstNote),
   });
-  if (!accounts.inventoryGlAccountId) return { ok: false, error: "Select or configure an inventory stock GL account for stock adjustments." };
-  if (!accounts.stockGainLossGlAccountId) return { ok: false, error: "Select or configure a purchases/COGS GL account for stock adjustments." };
-  if (accounts.inventoryGlAccountId === accounts.stockGainLossGlAccountId) {
-    return { ok: false, error: "Stock adjustment inventory and purchases/COGS accounts must be different." };
-  }
+  const glContext = await loadStockAdjustmentGlContext(organizationId);
 
   const lines: JournalLine[] = [];
   rows.forEach((movement) => {
@@ -438,18 +591,22 @@ export async function createJournalForStockAdjustment(
     const amount = roundMoney(Math.abs(deltaQty) * unitCost);
     if (amount <= 0) return;
     const productName = movement.products?.name || "Stock item";
-    const lineDescription = `${productName} stock adjustment`;
-    if (deltaQty > 0) {
-      lines.push({ gl_account_id: accounts.inventoryGlAccountId!, debit: amount, credit: 0, line_description: lineDescription });
-      lines.push({ gl_account_id: accounts.stockGainLossGlAccountId!, debit: 0, credit: amount, line_description: lineDescription });
-    } else {
-      lines.push({ gl_account_id: accounts.stockGainLossGlAccountId!, debit: amount, credit: 0, line_description: lineDescription });
-      lines.push({ gl_account_id: accounts.inventoryGlAccountId!, debit: 0, credit: amount, line_description: lineDescription });
-    }
+    const accountPair = resolveStockAdjustmentLineAccounts({
+      reason: classifyStockAdjustmentReason(movement.note, deltaQty),
+      deltaQty,
+      departmentId: movement.products?.department_id ? String(movement.products.department_id) : null,
+      context: glContext,
+      legacyInventoryGlAccountId: accounts.inventoryGlAccountId,
+      legacyPurchasesGlAccountId: accounts.stockGainLossGlAccountId,
+    });
+    if (!accountPair.debitGlAccountId || !accountPair.creditGlAccountId) return;
+    const lineDescription = `${productName} - ${accountPair.label}`;
+    lines.push({ gl_account_id: accountPair.debitGlAccountId, debit: amount, credit: 0, line_description: lineDescription });
+    lines.push({ gl_account_id: accountPair.creditGlAccountId, debit: 0, credit: amount, line_description: lineDescription });
   });
 
   if (lines.length === 0) {
-    return { ok: false, error: "Stock adjustment has no value to post. Add product cost prices or movement unit costs." };
+    return { ok: false, error: "Stock adjustment has no value or mapped accounts to post. Add product costs and configure stock adjustment GL accounts." };
   }
   if (options?.replaceExisting) {
     const retired = await deleteJournalEntryByReference("stock_adjustment", sourceId, organizationId);

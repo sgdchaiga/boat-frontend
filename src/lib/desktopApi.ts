@@ -16,6 +16,11 @@ export const desktopApi = {
     }
     return api.backup.createLocal();
   },
+  async readImageOcr(payload: { dataUrl: string; fileName?: string }) {
+    const api = getDesktopApi();
+    if (!api?.ocr) return { ok: false as const, text: "", message: "Desktop OCR bridge is unavailable." };
+    return api.ocr.readImage(payload);
+  },
   async health() {
     const api = getDesktopApi();
     if (!api) return { ok: false as const, sqlitePath: "" };

@@ -6,7 +6,6 @@ import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterStockMovementsByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { ensureActiveOrganization, loadStockBulkImportContext } from "../../lib/stockBulkImport";
 import { PageNotes } from "../common/PageNotes";
-import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import { StockBulkImportPanel } from "../inventory/StockBulkImportPanel";
 import { businessTodayISO, toBusinessDateString } from "../../lib/timezone";
 import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
@@ -17,13 +16,6 @@ interface Product {
   id: string;
   name: string;
   track_inventory?: boolean | null;
-}
-
-interface GLAccount {
-  id: string;
-  account_code: string;
-  account_name: string;
-  account_type: string;
 }
 
 interface AdjustmentRow {
@@ -47,6 +39,17 @@ interface AdjustmentHistoryRow {
 }
 
 type AdjustmentTab = "manual" | "import";
+
+const STOCK_ADJUSTMENT_REASONS = [
+  "Physical Count Shortage",
+  "Physical Count Surplus",
+  "Damage",
+  "Theft",
+  "Expired",
+  "Internal Consumption",
+  "Production Issue",
+  "Production Receipt",
+];
 
 function closingStockFromNote(note: string | null): number | null {
   const raw = /\[CLOSING_STOCK:([+-]?\d+(?:\.\d+)?)\]/.exec(String(note || ""))?.[1];
@@ -78,9 +81,6 @@ export function AdminStockAdjustmentsPage({
   const [currentStock, setCurrentStock] = useState<Record<string, number>>({});
   const [date, setDate] = useState(businessTodayISO);
   const [reason, setReason] = useState("");
-  const [glAccounts, setGlAccounts] = useState<GLAccount[]>([]);
-  const [inventoryGlAccountId, setInventoryGlAccountId] = useState("");
-  const [stockGainLossGlAccountId, setStockGainLossGlAccountId] = useState("");
   const [rows, setRows] = useState<AdjustmentRow[]>([
     {
       id: randomUuid(),
@@ -207,24 +207,15 @@ export function AdminStockAdjustmentsPage({
     const loadData = async () => {
       try {
         if (orgId) await ensureActiveOrganization(orgId);
-        const [{ data: productsData }, stockContext, { data: glData }] = await Promise.all([
+        const [{ data: productsData }, stockContext] = await Promise.all([
           filterByOrganizationId(
             supabase.from("products").select("id, name, track_inventory").order("name"),
             orgId,
             superAdmin
           ),
           loadStockBulkImportContext(orgId, superAdmin, date),
-          supabase.from("gl_accounts").select("*").order("account_code"),
         ]);
         setProducts((productsData || []) as Product[]);
-        const normalizedGl = normalizeGlAccountRows((glData || []) as unknown[])
-          .map((row) => ({
-            id: row.id,
-            account_code: row.account_code,
-            account_name: row.account_name,
-            account_type: row.account_type,
-          }));
-        setGlAccounts(normalizedGl as GLAccount[]);
         const stock: Record<string, number> = {};
         Object.assign(stock, stockContext.currentStock);
         setCurrentStock(stock);
@@ -323,13 +314,6 @@ export function AdminStockAdjustmentsPage({
     setEditingSourceId(sourceId);
     setDate(effectiveDate);
     setReason(adjustmentReasonFromNote(rowsData[0].note));
-    const glCode = /^GL\s+(.+?)\s+-\s+/.exec(String(rowsData[0].note || ""))?.[1]?.trim();
-    const inventoryGlFromNote = /\[INV_GL:([0-9a-f-]{32,36})\]/i.exec(String(rowsData[0].note || ""))?.[1] ?? null;
-    const plGlFromNote = /\[PL_GL:([0-9a-f-]{32,36})\]/i.exec(String(rowsData[0].note || ""))?.[1] ?? null;
-    setInventoryGlAccountId(
-      inventoryGlFromNote ?? (glCode ? glAccounts.find((account) => account.account_code === glCode)?.id ?? "" : "")
-    );
-    setStockGainLossGlAccountId(plGlFromNote ?? "");
     setRows(
       rowsData.map((row) => {
         const qtyDelta = Number(row.quantity_in || 0) - Number(row.quantity_out || 0);
@@ -401,18 +385,6 @@ export function AdminStockAdjustmentsPage({
       alert("Enter at least one valid adjustment row (product and non-zero amount).");
       return;
     }
-    if (!inventoryGlAccountId) {
-      alert("Select the inventory stock GL account before saving the adjustment.");
-      return;
-    }
-    if (!stockGainLossGlAccountId) {
-      alert("Select the purchases/COGS GL account before saving the adjustment.");
-      return;
-    }
-    if (inventoryGlAccountId === stockGainLossGlAccountId) {
-      alert("Inventory and purchases/COGS accounts must be different.");
-      return;
-    }
     setSaving(true);
     try {
       if (orgId) await ensureActiveOrganization(orgId);
@@ -421,8 +393,6 @@ export function AdminStockAdjustmentsPage({
       const payload = validRows.map((r) => {
         const delta = Number(r.qtyDelta);
         const closingStock = r.currentQty + delta;
-        const inventoryGl = glAccounts.find((g) => g.id === inventoryGlAccountId);
-        const gainLossGl = glAccounts.find((g) => g.id === stockGainLossGlAccountId);
         const row: Record<string, unknown> = {
           product_id: r.product_id,
           movement_date: movementDateIso,
@@ -431,11 +401,7 @@ export function AdminStockAdjustmentsPage({
           quantity_in: delta > 0 ? delta : 0,
           quantity_out: delta < 0 ? Math.abs(delta) : 0,
           unit_cost: null,
-          note:
-            `GL ${inventoryGl?.account_code ?? ""} - ${inventoryGl?.account_name ?? ""} | ` +
-            `${reason.trim() || "Manual adjustment"} [CLOSING_STOCK:${closingStock}] ` +
-            `[INV_GL:${inventoryGlAccountId}] [PL_GL:${stockGainLossGlAccountId}]` +
-            (gainLossGl ? ` [PL:${gainLossGl.account_code} - ${gainLossGl.account_name}]` : ""),
+          note: `${reason.trim() || "Physical Count Shortage"} [CLOSING_STOCK:${closingStock}]`,
         };
         if (orgId) row.organization_id = orgId;
         return row;
@@ -460,8 +426,6 @@ export function AdminStockAdjustmentsPage({
       }
       const journal = await createJournalForStockAdjustment(sourceId, user?.id ?? null, {
         organizationId: orgId,
-        inventoryGlAccountId,
-        stockGainLossGlAccountId,
         replaceExisting: true,
       });
       if (!journal.ok) {
@@ -591,41 +555,17 @@ export function AdminStockAdjustmentsPage({
           <div className="flex-1 min-w-[200px]">
             <label className="block text-sm font-medium mb-1">Reason</label>
             <input
+              list="stock-adjustment-reasons"
               className="border rounded-lg px-3 py-2 w-full"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. Stock count adjustment"
+              placeholder="e.g. Physical Count Shortage"
             />
-          </div>
-          <div className="min-w-[220px]">
-            <label className="block text-sm font-medium mb-1">Inventory stock account (required)</label>
-            <select
-              className="border rounded-lg px-3 py-2 w-full"
-              value={inventoryGlAccountId}
-              onChange={(e) => setInventoryGlAccountId(e.target.value)}
-            >
-              <option value="">None</option>
-              {glAccounts.filter((g) => g.account_type === "asset").map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.account_code} - {g.account_name}
-                </option>
+            <datalist id="stock-adjustment-reasons">
+              {STOCK_ADJUSTMENT_REASONS.map((value) => (
+                <option key={value} value={value} />
               ))}
-            </select>
-          </div>
-          <div className="min-w-[240px]">
-            <label className="block text-sm font-medium mb-1">Purchases / COGS account (required)</label>
-            <select
-              className="border rounded-lg px-3 py-2 w-full"
-              value={stockGainLossGlAccountId}
-              onChange={(e) => setStockGainLossGlAccountId(e.target.value)}
-            >
-              <option value="">None</option>
-              {glAccounts.filter((g) => g.account_type === "expense").map((g) => (
-                <option key={g.id} value={g.id}>
-                  {g.account_code} - {g.account_name}
-                </option>
-              ))}
-            </select>
+            </datalist>
           </div>
         </div>
 

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, Save } from "lucide-react";
+import { BookOpen, PlusCircle, Save } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
@@ -112,6 +112,7 @@ export function AdminJournalAccountsPage() {
   const [categoryGl, setCategoryGl] = useState<Record<string, CategoryGlDraft>>({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [seedingStockAccounts, setSeedingStockAccounts] = useState(false);
 
   const faCategoryById = useMemo(() => new Map(faCategories.map((c) => [c.id, c])), [faCategories]);
 
@@ -339,6 +340,38 @@ export function AdminJournalAccountsPage() {
     }
   };
 
+  const handleSeedStockAdjustmentAccounts = async () => {
+    if (!orgId) {
+      alert("Your user is not linked to an organization.");
+      return;
+    }
+    setSeedingStockAccounts(true);
+    try {
+      const { data, error } = await (supabase as any).rpc("ensure_stock_adjustment_gl_accounts", {
+        p_organization_id: orgId,
+      });
+      if (error) throw error;
+      clearJournalAccountCache();
+      await loadAccounts();
+      const inserted = typeof data === "number" ? data : Number(data ?? 0);
+      alert(
+        inserted > 0
+          ? `Added ${inserted} stock adjustment account${inserted === 1 ? "" : "s"} to this organization's chart.`
+          : "Stock adjustment accounts already exist for this organization."
+      );
+    } catch (e) {
+      const msg =
+        e && typeof e === "object" && "message" in e
+          ? String((e as { message?: string }).message)
+          : e instanceof Error
+            ? e.message
+            : String(e);
+      alert(`Failed to add stock adjustment accounts: ${msg}`);
+      console.error("Stock adjustment account seed error:", e);
+    } finally {
+      setSeedingStockAccounts(false);
+    }
+  };
   if (loading) return <div className="text-slate-500 py-8">Loading…</div>;
 
   return (
@@ -407,14 +440,25 @@ export function AdminJournalAccountsPage() {
             </div>
           </PageNotes>
         </div>
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800 disabled:opacity-50"
-        >
-          <Save className="w-4 h-4" />
-          {saving ? "Saving…" : "Save"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSeedStockAdjustmentAccounts}
+            disabled={seedingStockAccounts || !orgId}
+            className="flex items-center gap-2 border border-slate-300 bg-white text-slate-700 px-4 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50"
+          >
+            <PlusCircle className="w-4 h-4" />
+            {seedingStockAccounts ? "Adding..." : "Add stock adjustment accounts"}
+          </button>
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg hover:bg-brand-800 disabled:opacity-50"
+          >
+            <Save className="w-4 h-4" />
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
       </div>
 
       {isSacco ? (

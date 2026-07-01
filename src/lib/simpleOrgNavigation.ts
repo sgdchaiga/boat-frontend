@@ -174,6 +174,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   const settings: NavChild[] = [
     { name: "Users", page: "staff" },
     { name: "System settings", page: "admin" },
+    { name: "Image to Excel / Word", page: "image_document_converter" },
     ...(allowCommunications ? [{ name: "Communications", page: "communications" }] : []),
     { name: "Chart of accounts", page: "gl_accounts" },
     { name: "Journal entries", page: "accounting_journal" },

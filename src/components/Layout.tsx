@@ -309,6 +309,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
+      { name: 'Image to Excel / Word', icon: FileText, page: 'image_document_converter' },
       {
         name: '👥 Members',
         icon: UsersRound,
@@ -478,6 +479,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
+      { name: 'Image to Excel / Word', icon: FileText, page: 'image_document_converter' },
       {
         name: 'School catalog',
         icon: BookOpen,
@@ -720,8 +722,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const practiceNavigation: NavItem[] = [
     { name: 'Clients', icon: UsersRound, page: 'practice_clients' },
     { name: 'Engagements', icon: Briefcase, page: 'practice_engagements' },
-    { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
-    { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
+      { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
+      { name: 'Image to Excel / Word', icon: FileText, page: 'image_document_converter' },
+      { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
     { name: 'Stock Take', icon: PackageCheck, page: 'practice_stock_take' },
     { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' },
     { name: 'Housekeeping Audit', icon: FileText, page: 'practice_housekeeping_audit' },

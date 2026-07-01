@@ -4,6 +4,7 @@ type ApiOptions = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
   body?: unknown;
   headers?: Record<string, string>;
+  timeoutMs?: number;
 };
 
 export function isDesktopApiDataMode(): boolean {
@@ -28,14 +29,27 @@ export async function boatApiFetch<T>(path: string, options: ApiOptions = {}): P
   if (!baseUrl) {
     throw new Error("BOAT API server URL is not configured.");
   }
-  const res = await fetch(`${baseUrl}${path.startsWith("/") ? path : `/${path}`}`, {
-    method: options.method || "GET",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options.headers || {}),
-    },
-    body: options.body == null ? undefined : JSON.stringify(options.body),
-  });
+  const controller = options.timeoutMs ? new AbortController() : null;
+  const timer = controller ? window.setTimeout(() => controller.abort(), options.timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(`${baseUrl}${path.startsWith("/") ? path : `/${path}`}`, {
+      method: options.method || "GET",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {}),
+      },
+      body: options.body == null ? undefined : JSON.stringify(options.body),
+      signal: controller?.signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error("BOAT API request timed out. Check the server connection and try again.");
+    }
+    throw error;
+  } finally {
+    if (timer) window.clearTimeout(timer);
+  }
   const text = await res.text();
   const payload = text ? JSON.parse(text) : null;
   if (!res.ok) {
@@ -47,6 +61,27 @@ export async function boatApiFetch<T>(path: string, options: ApiOptions = {}): P
 export const boatApi = {
   health: () => boatApiFetch<{ ok: boolean; service: string; time: string }>("/health"),
   ready: () => boatApiFetch<{ ok: boolean; db: string }>("/ready"),
+  ocr: {
+    imageDocument(body: { data_url: string; file_name?: string }, timeoutMs?: number) {
+      return boatApiFetch<{
+        ok: boolean;
+        text: string;
+        provider?: string;
+        model?: string;
+        confidence?: number | null;
+        preprocessing?: string | null;
+        fallback_from?: string | null;
+        fallback_reason?: string | null;
+      }>(
+        "/api/v1/ocr/image-document",
+        {
+          method: "POST",
+          body,
+          timeoutMs,
+        }
+      );
+    },
+  },
   school: {
     list<T = unknown>(resource: string, organizationId: string) {
       const qp = new URLSearchParams({ organization_id: organizationId });

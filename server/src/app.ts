@@ -11,6 +11,7 @@ import { notificationRoutes } from "./routes/notifications.js";
 import { messagingWebhookRoutes } from "./routes/messaging-webhooks.js";
 import { clearingRoutes } from "./routes/clearing.js";
 import { schoolRoutes } from "./routes/school.js";
+import { ocrRoutes } from "./routes/ocr.js";
 
 export async function buildApp() {
   const app = Fastify({
@@ -74,6 +75,7 @@ export async function buildApp() {
       ready: "/ready",
       organizations: "/api/v1/organizations",
       notifications: "/api/v1/notifications/send",
+      ocr: "/api/v1/ocr/image-document",
       webhooks: {
         twilio: "/api/v1/webhooks/twilio",
         metaWhatsapp: "/api/v1/webhooks/meta/whatsapp",
@@ -101,6 +103,7 @@ export async function buildApp() {
   await app.register(organizationRoutes, { prefix: "/api/v1" });
   await app.register(notificationRoutes, { prefix: "/api/v1" });
   await app.register(messagingWebhookRoutes, { prefix: "/api/v1" });
+  await app.register(ocrRoutes, { prefix: "/api/v1" });
   await app.register(schoolRoutes, { prefix: "/api/v1" });
 
   return app;

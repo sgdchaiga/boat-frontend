@@ -5,6 +5,9 @@ contextBridge.exposeInMainWorld("boatDesktop", {
   backup: {
     createLocal: () => ipcRenderer.invoke("boat:backup:create-local"),
   },
+  ocr: {
+    readImage: (payload) => ipcRenderer.invoke("boat:ocr:read-image", payload),
+  },
   settings: {
     get: () => ipcRenderer.invoke("boat:settings:get"),
     update: (payload) => ipcRenderer.invoke("boat:settings:update", payload),

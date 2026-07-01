@@ -28,8 +28,6 @@ export type StockAdjustmentPlan = {
   newQty: number;
   movementDate: string;
   reason: string;
-  glAccountId: string | null;
-  stockGainLossGlAccountId: string | null;
 };
 
 type ProductMini = {
@@ -451,23 +449,6 @@ function resolveProduct(
   return resolveByName(ctx, name);
 }
 
-function resolveGlAccount(
-  ctx: StockBulkImportContext,
-  row: Record<string, string>,
-  defaultGlAccountId: string | null
-): { glAccountId: string | null } | { error: string } {
-  const code = asText(row.gl_account_code || row.gl_code || row.account_code);
-  if (!code) {
-    if (!defaultGlAccountId) {
-      return { error: "GL account is required. Provide gl_account_code in the file or select a default GL account." };
-    }
-    return { glAccountId: defaultGlAccountId };
-  }
-  const gl = ctx.glByCode.get(keyLower(code));
-  if (!gl) return { error: `Unknown GL account code "${code}"` };
-  return { glAccountId: gl.id };
-}
-
 function parseMovementDate(row: Record<string, string>, defaultDate: string): string | null {
   const raw = asText(
     row.movement_date ||
@@ -526,8 +507,6 @@ export function planStockAdjustmentImports(
     closingDate: string;
     movementDate: string;
     reason: string;
-    glAccountId: string | null;
-    stockGainLossGlAccountId: string | null;
   }
 ): { plans: StockAdjustmentPlan[]; preview: StockBulkImportPreviewRow[] } {
   const plans: StockAdjustmentPlan[] = [];
@@ -555,16 +534,6 @@ export function planStockAdjustmentImports(
 
     if (product.track_inventory === false) {
       preview.push({ line, status: "skip", summary: `${product.name}: inventory tracking disabled` });
-      return;
-    }
-
-    const glRes = resolveGlAccount(ctx, row, defaults.glAccountId);
-    if ("error" in glRes) {
-      preview.push({ line, status: "error", summary: glRes.error });
-      return;
-    }
-    if (!defaults.stockGainLossGlAccountId) {
-      preview.push({ line, status: "error", summary: "Select a purchases/COGS account for the adjustment journal." });
       return;
     }
 
@@ -647,8 +616,6 @@ export function planStockAdjustmentImports(
       newQty: closingQty,
       movementDate: closingDate,
       reason,
-      glAccountId: glRes.glAccountId,
-      stockGainLossGlAccountId: defaults.stockGainLossGlAccountId,
     };
     plans.push(plan);
     preview.push({
@@ -667,16 +634,10 @@ function buildMovementNote(
   glPrefix?: string
 ): string {
   let note = "";
-  if (plan.glAccountId) {
-    const gl = [...ctx.glByCode.values()].find((g) => g.id === plan.glAccountId);
-    if (gl) {
-      note = `GL ${gl.account_code} - ${gl.account_name} | `;
-    }
-  } else if (glPrefix) {
+  if (glPrefix) {
     note = glPrefix;
   }
-  const pl = ctx.allGlAccounts.find((g) => g.id === plan.stockGainLossGlAccountId);
-  return `${note}${plan.reason} [CLOSING_STOCK:${plan.newQty}] [INV_GL:${plan.glAccountId ?? ""}] [PL_GL:${plan.stockGainLossGlAccountId ?? ""}]${pl ? ` [PL:${pl.account_code} - ${pl.account_name}]` : ""}`;
+  return `${note}${plan.reason} [CLOSING_STOCK:${plan.newQty}]`;
 }
 
 function movementDateIso(dateOnly: string): string {
@@ -728,33 +689,6 @@ export async function applyStockAdjustmentPlans(
   if (plans.length === 0) {
     return { updated: 0, errors: 0, messages: [], sourceId };
   }
-  if (plans.some((plan) => !plan.glAccountId)) {
-    return {
-      updated: 0,
-      errors: plans.length,
-      messages: ["Every stock adjustment requires a GL account."],
-      sourceId,
-    };
-  }
-  if (plans.some((plan) => !plan.stockGainLossGlAccountId)) {
-    return {
-      updated: 0,
-      errors: plans.length,
-      messages: ["Every stock adjustment requires a purchases/COGS account."],
-      sourceId,
-    };
-  }
-  const inventoryAccountIds = new Set(plans.map((plan) => plan.glAccountId).filter(Boolean));
-  const gainLossAccountIds = new Set(plans.map((plan) => plan.stockGainLossGlAccountId).filter(Boolean));
-  if (inventoryAccountIds.size > 1 || gainLossAccountIds.size > 1) {
-    return {
-      updated: 0,
-      errors: plans.length,
-      messages: ["Import one stock adjustment batch per inventory and purchases/COGS account pair so the journal can be repaired cleanly."],
-      sourceId,
-    };
-  }
-
   const orgId = options?.organizationId;
   if (!orgId) {
     return {
@@ -815,8 +749,6 @@ export async function applyStockAdjustmentPlans(
       if (closingErrors.length === 0) {
         const journal = await createJournalForStockAdjustment(sourceId, createdBy, {
           organizationId: orgId,
-          inventoryGlAccountId: plans[0]?.glAccountId,
-          stockGainLossGlAccountId: plans[0]?.stockGainLossGlAccountId,
           replaceExisting: true,
         });
         if (!journal.ok) closingErrors.push(`Journal was not posted: ${journal.error}`);
@@ -862,8 +794,6 @@ export async function applyStockAdjustmentPlans(
   if (closingErrors.length === 0) {
     const journal = await createJournalForStockAdjustment(sourceId, createdBy, {
       organizationId: orgId,
-      inventoryGlAccountId: plans[0]?.glAccountId,
-      stockGainLossGlAccountId: plans[0]?.stockGainLossGlAccountId,
       replaceExisting: true,
     });
     if (!journal.ok) closingErrors.push(`Journal was not posted: ${journal.error}`);

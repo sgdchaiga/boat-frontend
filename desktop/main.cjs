@@ -2,6 +2,7 @@ const path = require("node:path");
 const fs = require("node:fs");
 const os = require("node:os");
 const crypto = require("node:crypto");
+const { spawn } = require("node:child_process");
 const { app, BrowserWindow, ipcMain } = require("electron");
 const settingsApi = require("./settings.cjs");
 
@@ -158,6 +159,77 @@ async function checkBoatApiHealth(baseUrl) {
   }
 }
 
+function imageExtFromMime(mime) {
+  if (mime === "image/png") return ".png";
+  if (mime === "image/webp") return ".webp";
+  if (mime === "image/bmp") return ".bmp";
+  if (mime === "image/tiff") return ".tif";
+  return ".jpg";
+}
+
+function runWindowsOcr(imagePath) {
+  const ps = `
+$ErrorActionPreference = "Stop"
+Add-Type -AssemblyName System.Runtime.WindowsRuntime
+$path = ${JSON.stringify(imagePath)}
+$fileOp = [Windows.Storage.StorageFile]::GetFileFromPathAsync($path)
+$file = [System.WindowsRuntimeSystemExtensions]::AsTask($fileOp).Result
+$streamOp = $file.OpenAsync([Windows.Storage.FileAccessMode]::Read)
+$stream = [System.WindowsRuntimeSystemExtensions]::AsTask($streamOp).Result
+$decoderOp = [Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($stream)
+$decoder = [System.WindowsRuntimeSystemExtensions]::AsTask($decoderOp).Result
+$bitmapOp = $decoder.GetSoftwareBitmapAsync()
+$bitmap = [System.WindowsRuntimeSystemExtensions]::AsTask($bitmapOp).Result
+$engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages()
+if ($null -eq $engine) { throw "Windows OCR is not available for the current user language." }
+$resultOp = $engine.RecognizeAsync($bitmap)
+$result = [System.WindowsRuntimeSystemExtensions]::AsTask($resultOp).Result
+$result.Text
+`;
+  return new Promise((resolve, reject) => {
+    const child = spawn("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], {
+      windowsHide: true,
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk.toString("utf8");
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve(stdout.trim());
+      else reject(new Error((stderr || stdout || `Windows OCR failed with exit code ${code}.`).trim()));
+    });
+  });
+}
+
+async function readImageOcr(payload) {
+  const dataUrl = String(payload?.dataUrl || "");
+  const match = dataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+  if (!match) throw new Error("OCR expects an image data URL.");
+  const [, mime, base64] = match;
+  const bytes = Buffer.from(base64, "base64");
+  if (!bytes.length) throw new Error("OCR image is empty.");
+  if (bytes.length > 15 * 1024 * 1024) throw new Error("OCR image is too large. Use an image under 15 MB.");
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "boat-ocr-"));
+  const imagePath = path.join(dir, `source${imageExtFromMime(mime)}`);
+  try {
+    fs.writeFileSync(imagePath, bytes);
+    const text = await runWindowsOcr(imagePath);
+    return { ok: true, text };
+  } finally {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (err) {
+      console.warn("[BOAT] Failed to clean OCR temp files:", err);
+    }
+  }
+}
+
 function registerIpc() {
   ipcMain.handle("boat:health", () => {
     return {
@@ -198,6 +270,10 @@ function registerIpc() {
 
   ipcMain.handle("boat:backup:create-local", async () => {
     return createLocalBackup();
+  });
+
+  ipcMain.handle("boat:ocr:read-image", async (_event, payload) => {
+    return readImageOcr(payload || {});
   });
 
   ipcMain.handle("boat:pos:list-products", () => {

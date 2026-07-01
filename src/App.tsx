@@ -193,6 +193,7 @@ import { AgentHubPage } from './components/agent/AgentHubPage';
 import { HotelAssessmentDashboardPage } from './components/hotel-assessment/HotelAssessmentDashboardPage';
 import { HotelAssessmentWizardPage } from './components/hotel-assessment/HotelAssessmentWizardPage';
 import { IntegrationsHubPage } from './components/system/IntegrationsHubPage';
+import { ImageDocumentConverterPage } from './components/tools/ImageDocumentConverterPage';
 import { loadPermissionSnapshot } from './lib/permissions';
 import { DesktopServerConnectionPage } from './components/system/DesktopServerConnectionPage';
 import { desktopApi } from './lib/desktopApi';
@@ -1372,6 +1373,8 @@ function AppContent() {
         );
       case 'system_integrations':
         return <IntegrationsHubPage onNavigate={navigate} />;
+      case 'image_document_converter':
+        return <ImageDocumentConverterPage />;
       case 'gl_accounts':
         return <GLAccountsPage />;
       case 'purchases_vendors':

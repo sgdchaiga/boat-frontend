@@ -1,4 +1,4 @@
-const CACHE = 'boat-app-shell-v2';
+const CACHE = 'boat-app-shell-v3';
 const APP_SHELL = ['/', '/?page=housekeeping', '/?page=sacco_client_dashboard', '/?memberApp=1', '/manifest.webmanifest', '/member-app.webmanifest', '/boat-logo-square.svg'];
 
 self.addEventListener('install', (event) => {
@@ -24,18 +24,13 @@ self.addEventListener('fetch', (event) => {
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return;
+  if (request.headers.has('range')) return;
 
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).then((response) => {
-      const copy = response.clone();
-      caches.open(CACHE).then((cache) => cache.put('/', copy));
-      return response;
-    }).catch(async () => (await caches.match(request)) || (await caches.match('/'))));
+    event.respondWith(fetch(request).catch(async () => (await caches.match(request)) || (await caches.match('/'))));
     return;
   }
 
-  event.respondWith(caches.match(request).then((cached) => cached || fetch(request).then((response) => {
-    if (response.ok) caches.open(CACHE).then((cache) => cache.put(request, response.clone()));
-    return response;
-  })));
+  event.respondWith(caches.match(request).then((cached) => cached || fetch(request)));
 });

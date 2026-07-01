@@ -40,7 +40,16 @@ export type JournalAccountRole =
   | "manufacturing_consumables_expense"
   | "manufacturing_scrap_inventory"
   | "pos_agent_commission_expense"
-  | "pos_transport_expense";
+  | "pos_transport_expense"
+  | "stock_adjustment_inventory_variance_expense"
+  | "stock_adjustment_inventory_variance_gain"
+  | "stock_adjustment_damaged_goods_expense"
+  | "stock_adjustment_inventory_shrinkage_expense"
+  | "stock_adjustment_expired_stock_expense"
+  | "stock_adjustment_internal_consumption_expense"
+  | "stock_adjustment_work_in_progress"
+  | "stock_adjustment_raw_materials_inventory"
+  | "stock_adjustment_finished_goods_inventory";
 
 export interface JournalAccountSettings {
   revenue_id: string | null;
@@ -101,6 +110,24 @@ export interface JournalAccountSettings {
   pos_agent_commission_expense_id: string | null;
   /** Manufacturing POS rider transport expense. */
   pos_transport_expense_id: string | null;
+  /** Stock adjustment: debit for physical-count shortages. */
+  stock_adjustment_inventory_variance_expense_id: string | null;
+  /** Stock adjustment: credit for physical-count surplus. */
+  stock_adjustment_inventory_variance_gain_id: string | null;
+  /** Stock adjustment: debit for damaged stock. */
+  stock_adjustment_damaged_goods_expense_id: string | null;
+  /** Stock adjustment: debit for theft/shrinkage. */
+  stock_adjustment_inventory_shrinkage_expense_id: string | null;
+  /** Stock adjustment: debit for expired stock. */
+  stock_adjustment_expired_stock_expense_id: string | null;
+  /** Stock adjustment: internal-consumption expense fallback when department expense is blank. */
+  stock_adjustment_internal_consumption_expense_id: string | null;
+  /** Stock adjustment: debit on production issue, credit on production receipt. */
+  stock_adjustment_work_in_progress_id: string | null;
+  /** Stock adjustment: credit on production issue. */
+  stock_adjustment_raw_materials_inventory_id: string | null;
+  /** Stock adjustment: debit on production receipt. */
+  stock_adjustment_finished_goods_inventory_id: string | null;
 }
 
 const DEFAULT_SETTINGS: JournalAccountSettings = {
@@ -143,6 +170,15 @@ const DEFAULT_SETTINGS: JournalAccountSettings = {
   manufacturing_scrap_inventory_id: null,
   pos_agent_commission_expense_id: null,
   pos_transport_expense_id: null,
+  stock_adjustment_inventory_variance_expense_id: null,
+  stock_adjustment_inventory_variance_gain_id: null,
+  stock_adjustment_damaged_goods_expense_id: null,
+  stock_adjustment_inventory_shrinkage_expense_id: null,
+  stock_adjustment_expired_stock_expense_id: null,
+  stock_adjustment_internal_consumption_expense_id: null,
+  stock_adjustment_work_in_progress_id: null,
+  stock_adjustment_raw_materials_inventory_id: null,
+  stock_adjustment_finished_goods_inventory_id: null,
 };
 
 export function loadJournalAccountSettings(): JournalAccountSettings {
@@ -254,6 +290,9 @@ const JOURNAL_GL_SELECT_WITH_WALLET = `${JOURNAL_GL_SELECT_WITH_TELLER}, wallet_
 
 const JOURNAL_GL_SELECT_WITH_WALLET_SCHOOL_MFG = `${JOURNAL_GL_SELECT_WITH_WALLET}, school_accounting_basis, manufacturing_finished_goods_gl_account_id, manufacturing_wip_gl_account_id, manufacturing_consumables_expense_gl_account_id, manufacturing_scrap_inventory_gl_account_id`;
 
+const STOCK_ADJUSTMENT_GL_SELECT =
+  "stock_adjustment_inventory_variance_expense_gl_account_id,stock_adjustment_inventory_variance_gain_gl_account_id,stock_adjustment_damaged_goods_expense_gl_account_id,stock_adjustment_inventory_shrinkage_expense_gl_account_id,stock_adjustment_expired_stock_expense_gl_account_id,stock_adjustment_internal_consumption_expense_gl_account_id,stock_adjustment_work_in_progress_gl_account_id,stock_adjustment_raw_materials_inventory_gl_account_id,stock_adjustment_finished_goods_inventory_gl_account_id";
+
 function mapJournalGlRowToSettings(d: {
   revenue_gl_account_id: string | null;
   cash_gl_account_id: string | null;
@@ -292,6 +331,15 @@ function mapJournalGlRowToSettings(d: {
   manufacturing_wip_gl_account_id?: string | null;
   manufacturing_consumables_expense_gl_account_id?: string | null;
   manufacturing_scrap_inventory_gl_account_id?: string | null;
+  stock_adjustment_inventory_variance_expense_gl_account_id?: string | null;
+  stock_adjustment_inventory_variance_gain_gl_account_id?: string | null;
+  stock_adjustment_damaged_goods_expense_gl_account_id?: string | null;
+  stock_adjustment_inventory_shrinkage_expense_gl_account_id?: string | null;
+  stock_adjustment_expired_stock_expense_gl_account_id?: string | null;
+  stock_adjustment_internal_consumption_expense_gl_account_id?: string | null;
+  stock_adjustment_work_in_progress_gl_account_id?: string | null;
+  stock_adjustment_raw_materials_inventory_gl_account_id?: string | null;
+  stock_adjustment_finished_goods_inventory_gl_account_id?: string | null;
 }): JournalAccountSettings {
   const dv = d.default_vat_percent;
   const defaultVatPct =
@@ -340,6 +388,15 @@ function mapJournalGlRowToSettings(d: {
     manufacturing_scrap_inventory_id: d.manufacturing_scrap_inventory_gl_account_id ?? null,
     pos_agent_commission_expense_id: null,
     pos_transport_expense_id: null,
+    stock_adjustment_inventory_variance_expense_id: d.stock_adjustment_inventory_variance_expense_gl_account_id ?? null,
+    stock_adjustment_inventory_variance_gain_id: d.stock_adjustment_inventory_variance_gain_gl_account_id ?? null,
+    stock_adjustment_damaged_goods_expense_id: d.stock_adjustment_damaged_goods_expense_gl_account_id ?? null,
+    stock_adjustment_inventory_shrinkage_expense_id: d.stock_adjustment_inventory_shrinkage_expense_gl_account_id ?? null,
+    stock_adjustment_expired_stock_expense_id: d.stock_adjustment_expired_stock_expense_gl_account_id ?? null,
+    stock_adjustment_internal_consumption_expense_id: d.stock_adjustment_internal_consumption_expense_gl_account_id ?? null,
+    stock_adjustment_work_in_progress_id: d.stock_adjustment_work_in_progress_gl_account_id ?? null,
+    stock_adjustment_raw_materials_inventory_id: d.stock_adjustment_raw_materials_inventory_gl_account_id ?? null,
+    stock_adjustment_finished_goods_inventory_id: d.stock_adjustment_finished_goods_inventory_gl_account_id ?? null,
   };
 }
 
@@ -375,6 +432,29 @@ function isLikelyMissingManufacturingProductionAccountCols(err: {
     c === "PGRST204" ||
     m.includes("manufacturing_consumables_expense_gl_account_id") ||
     m.includes("manufacturing_scrap_inventory_gl_account_id")
+  );
+}
+
+function isLikelyMissingStockAdjustmentAccountCols(err: {
+  message?: string;
+  details?: string;
+  hint?: string;
+  code?: string;
+} | null): boolean {
+  if (!err) return false;
+  const m = postgrestErrorText(err);
+  const c = String(err.code || "");
+  return (
+    c === "PGRST204" ||
+    m.includes("stock_adjustment_inventory_variance_expense_gl_account_id") ||
+    m.includes("stock_adjustment_inventory_variance_gain_gl_account_id") ||
+    m.includes("stock_adjustment_damaged_goods_expense_gl_account_id") ||
+    m.includes("stock_adjustment_inventory_shrinkage_expense_gl_account_id") ||
+    m.includes("stock_adjustment_expired_stock_expense_gl_account_id") ||
+    m.includes("stock_adjustment_internal_consumption_expense_gl_account_id") ||
+    m.includes("stock_adjustment_work_in_progress_gl_account_id") ||
+    m.includes("stock_adjustment_raw_materials_inventory_gl_account_id") ||
+    m.includes("stock_adjustment_finished_goods_inventory_gl_account_id")
   );
 }
 
@@ -525,6 +605,45 @@ export async function fetchJournalGlSettings(organizationId: string): Promise<Jo
     const local = loadJournalAccountSettings();
     settings.pos_agent_commission_expense_id = local.pos_agent_commission_expense_id;
     settings.pos_transport_expense_id = local.pos_transport_expense_id;
+  }
+
+  const { data: stockAdjustmentData, error: stockAdjustmentError } = await supabase
+    .from("journal_gl_settings")
+    .select(STOCK_ADJUSTMENT_GL_SELECT)
+    .eq("organization_id", organizationId)
+    .maybeSingle();
+  if (!stockAdjustmentError && stockAdjustmentData) {
+    const row = stockAdjustmentData as {
+      stock_adjustment_inventory_variance_expense_gl_account_id?: string | null;
+      stock_adjustment_inventory_variance_gain_gl_account_id?: string | null;
+      stock_adjustment_damaged_goods_expense_gl_account_id?: string | null;
+      stock_adjustment_inventory_shrinkage_expense_gl_account_id?: string | null;
+      stock_adjustment_expired_stock_expense_gl_account_id?: string | null;
+      stock_adjustment_internal_consumption_expense_gl_account_id?: string | null;
+      stock_adjustment_work_in_progress_gl_account_id?: string | null;
+      stock_adjustment_raw_materials_inventory_gl_account_id?: string | null;
+      stock_adjustment_finished_goods_inventory_gl_account_id?: string | null;
+    };
+    settings.stock_adjustment_inventory_variance_expense_id = row.stock_adjustment_inventory_variance_expense_gl_account_id ?? null;
+    settings.stock_adjustment_inventory_variance_gain_id = row.stock_adjustment_inventory_variance_gain_gl_account_id ?? null;
+    settings.stock_adjustment_damaged_goods_expense_id = row.stock_adjustment_damaged_goods_expense_gl_account_id ?? null;
+    settings.stock_adjustment_inventory_shrinkage_expense_id = row.stock_adjustment_inventory_shrinkage_expense_gl_account_id ?? null;
+    settings.stock_adjustment_expired_stock_expense_id = row.stock_adjustment_expired_stock_expense_gl_account_id ?? null;
+    settings.stock_adjustment_internal_consumption_expense_id = row.stock_adjustment_internal_consumption_expense_gl_account_id ?? null;
+    settings.stock_adjustment_work_in_progress_id = row.stock_adjustment_work_in_progress_gl_account_id ?? null;
+    settings.stock_adjustment_raw_materials_inventory_id = row.stock_adjustment_raw_materials_inventory_gl_account_id ?? null;
+    settings.stock_adjustment_finished_goods_inventory_id = row.stock_adjustment_finished_goods_inventory_gl_account_id ?? null;
+  } else if (stockAdjustmentError) {
+    const local = loadJournalAccountSettings();
+    settings.stock_adjustment_inventory_variance_expense_id = local.stock_adjustment_inventory_variance_expense_id;
+    settings.stock_adjustment_inventory_variance_gain_id = local.stock_adjustment_inventory_variance_gain_id;
+    settings.stock_adjustment_damaged_goods_expense_id = local.stock_adjustment_damaged_goods_expense_id;
+    settings.stock_adjustment_inventory_shrinkage_expense_id = local.stock_adjustment_inventory_shrinkage_expense_id;
+    settings.stock_adjustment_expired_stock_expense_id = local.stock_adjustment_expired_stock_expense_id;
+    settings.stock_adjustment_internal_consumption_expense_id = local.stock_adjustment_internal_consumption_expense_id;
+    settings.stock_adjustment_work_in_progress_id = local.stock_adjustment_work_in_progress_id;
+    settings.stock_adjustment_raw_materials_inventory_id = local.stock_adjustment_raw_materials_inventory_id;
+    settings.stock_adjustment_finished_goods_inventory_id = local.stock_adjustment_finished_goods_inventory_id;
   }
 
   return settings;
@@ -736,6 +855,30 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
     })
     .eq("organization_id", organizationId);
   if (posDeductionError) throw posDeductionError;
+
+  const { error: stockAdjustmentError } = await supabase
+    .from("journal_gl_settings")
+    .update({
+      stock_adjustment_inventory_variance_expense_gl_account_id: settings.stock_adjustment_inventory_variance_expense_id,
+      stock_adjustment_inventory_variance_gain_gl_account_id: settings.stock_adjustment_inventory_variance_gain_id,
+      stock_adjustment_damaged_goods_expense_gl_account_id: settings.stock_adjustment_damaged_goods_expense_id,
+      stock_adjustment_inventory_shrinkage_expense_gl_account_id: settings.stock_adjustment_inventory_shrinkage_expense_id,
+      stock_adjustment_expired_stock_expense_gl_account_id: settings.stock_adjustment_expired_stock_expense_id,
+      stock_adjustment_internal_consumption_expense_gl_account_id: settings.stock_adjustment_internal_consumption_expense_id,
+      stock_adjustment_work_in_progress_gl_account_id: settings.stock_adjustment_work_in_progress_id,
+      stock_adjustment_raw_materials_inventory_gl_account_id: settings.stock_adjustment_raw_materials_inventory_id,
+      stock_adjustment_finished_goods_inventory_gl_account_id: settings.stock_adjustment_finished_goods_inventory_id,
+      updated_at: updatedAt,
+    })
+    .eq("organization_id", organizationId);
+  if (stockAdjustmentError && !isLikelyMissingStockAdjustmentAccountCols(stockAdjustmentError)) {
+    throw stockAdjustmentError;
+  }
+  if (stockAdjustmentError) {
+    console.warn(
+      "[journal_gl_settings] Stock adjustment reason mappings are stored locally until migration 20260702120000_stock_adjustment_reason_account_settings.sql is applied."
+    );
+  }
 }
 
 /** DB row if present, otherwise localStorage defaults. */
@@ -815,6 +958,51 @@ export const JOURNAL_ACCOUNT_ROLES: { id: JournalAccountRole; label: string; acc
     label: "Manufacturing POS — Rider transport expense",
     accountType: "expense",
   },
+  {
+    id: "stock_adjustment_inventory_variance_expense",
+    label: "Stock adjustment - Inventory variance expense",
+    accountType: "expense",
+  },
+  {
+    id: "stock_adjustment_inventory_variance_gain",
+    label: "Stock adjustment - Inventory variance gain",
+    accountType: "income",
+  },
+  {
+    id: "stock_adjustment_damaged_goods_expense",
+    label: "Stock adjustment - Damaged goods expense",
+    accountType: "expense",
+  },
+  {
+    id: "stock_adjustment_inventory_shrinkage_expense",
+    label: "Stock adjustment - Inventory shrinkage / theft expense",
+    accountType: "expense",
+  },
+  {
+    id: "stock_adjustment_expired_stock_expense",
+    label: "Stock adjustment - Expired stock expense",
+    accountType: "expense",
+  },
+  {
+    id: "stock_adjustment_internal_consumption_expense",
+    label: "Stock adjustment - Internal consumption expense fallback",
+    accountType: "expense",
+  },
+  {
+    id: "stock_adjustment_work_in_progress",
+    label: "Stock adjustment - Work in progress",
+    accountType: "asset",
+  },
+  {
+    id: "stock_adjustment_raw_materials_inventory",
+    label: "Stock adjustment - Raw materials inventory",
+    accountType: "asset",
+  },
+  {
+    id: "stock_adjustment_finished_goods_inventory",
+    label: "Stock adjustment - Finished goods inventory",
+    accountType: "asset",
+  },
 ];
 
 /** Row for admin UI — may omit hotel-only POS buckets for retail. */
@@ -839,6 +1027,13 @@ const WALLET_JOURNAL_ROLE_ROWS: JournalAccountRoleRow[] = [
     group: "Wallet",
   },
 ];
+
+const STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS: JournalAccountRoleRow[] = JOURNAL_ACCOUNT_ROLES.filter((r) =>
+  r.id.startsWith("stock_adjustment_")
+).map((r) => ({
+  ...r,
+  group: "Stock adjustments",
+}));
 
 /**
  * Labels and grouping for Admin → Journal account settings.
@@ -878,7 +1073,7 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
       };
       return { ...r, label: labelOverrides[r.id] ?? r.label, group: "SACCO · journal account mapping" };
     });
-    return [...saccoCore, ...fixedAssetGroup, ...WALLET_JOURNAL_ROLE_ROWS];
+    return [...saccoCore, ...fixedAssetGroup, ...STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS, ...WALLET_JOURNAL_ROLE_ROWS];
   }
 
   /** VSLA: lean core mapping without hotel/retail POS buckets. */
@@ -895,7 +1090,7 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
       ...r,
       group: "VSLA core accounting",
     }));
-    return [...vslaRows, ...fixedAssetGroup, ...WALLET_JOURNAL_ROLE_ROWS];
+    return [...vslaRows, ...fixedAssetGroup, ...STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS, ...WALLET_JOURNAL_ROLE_ROWS];
   }
 
   /** School: core AP/AR and GRN; no POS product buckets. */
@@ -914,7 +1109,7 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
       if (r.id === "purchases_inventory") group = "Purchases / GRN";
       return { ...r, group };
     });
-    return [...schoolRows, ...fixedAssetGroup, ...WALLET_JOURNAL_ROLE_ROWS];
+    return [...schoolRows, ...fixedAssetGroup, ...STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS, ...WALLET_JOURNAL_ROLE_ROWS];
   }
 
   /** Manufacturing: core + inventory/COGS, no hotel POS department buckets. */
@@ -957,7 +1152,7 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
             : r.label;
       return { ...r, label, group };
     });
-    return [...mfgRows, ...fixedAssetGroup, ...WALLET_JOURNAL_ROLE_ROWS];
+    return [...mfgRows, ...fixedAssetGroup, ...STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS, ...WALLET_JOURNAL_ROLE_ROWS];
   }
 
   if (isRetail) {
@@ -1009,7 +1204,15 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
         group: "Retail POS — Cost of goods & inventory",
       },
     ];
-    return [...retailCore, ...retailPurchasesGrn, ...retailPosReceipts, ...retailCogs, ...fixedAssetGroup, ...WALLET_JOURNAL_ROLE_ROWS];
+    return [
+      ...retailCore,
+      ...retailPurchasesGrn,
+      ...retailPosReceipts,
+      ...retailCogs,
+      ...fixedAssetGroup,
+      ...STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS,
+      ...WALLET_JOURNAL_ROLE_ROWS,
+    ];
   }
 
   /** Hotel / mixed / restaurant: each POS sale uses four account families (+ VAT when applicable). */
@@ -1051,5 +1254,11 @@ export function getJournalAccountRolesForBusinessType(businessType: string | nul
     return { ...base, group };
   });
 
-  return [...hotelPosSalesRows, ...hotelCoreRows, ...fixedAssetGroup, ...WALLET_JOURNAL_ROLE_ROWS];
+  return [
+    ...hotelPosSalesRows,
+    ...hotelCoreRows,
+    ...fixedAssetGroup,
+    ...STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS,
+    ...WALLET_JOURNAL_ROLE_ROWS,
+  ];
 }

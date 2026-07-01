@@ -82,6 +82,9 @@ export type BoatDesktopApi = {
   backup: {
     createLocal: () => Promise<{ ok: boolean; backupPath: string; backupFileName: string; createdAt: string }>;
   };
+  ocr?: {
+    readImage: (payload: { dataUrl: string; fileName?: string }) => Promise<{ ok: boolean; text: string }>;
+  };
   license: {
     getDeviceId: () => Promise<{ deviceId: string }>;
   };
