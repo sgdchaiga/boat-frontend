@@ -13,6 +13,7 @@ import {
   Landmark,
 } from "lucide-react";
 import type { BusinessType } from "@/contexts/AuthContext";
+import { HOTEL_PAGE } from "@/lib/hotelPages";
 import { PAYROLL_PAGE } from "@/lib/payrollPages";
 import { getSimpleOrgDefaultReportRoute } from "@/lib/reportHubCatalog";
 
@@ -174,6 +175,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   const settings: NavChild[] = [
     { name: "Users", page: "staff" },
     { name: "System settings", page: "admin" },
+    ...(isHotelOrMixed ? [{ name: "Rooms setup", page: HOTEL_PAGE.roomsSetup }] : []),
     { name: "Image to Excel / Word", page: "image_document_converter" },
     ...(allowCommunications ? [{ name: "Communications", page: "communications" }] : []),
     { name: "Chart of accounts", page: "gl_accounts" },
