@@ -208,7 +208,7 @@ export async function loadPermissionSnapshot(input: {
   const staffId = input.staffId ?? null;
   const role = (input.role || "").toLowerCase();
   if (!orgId || !staffId) return {};
-  if (input.isSuperAdmin) {
+  if (input.isSuperAdmin || role === "super_admin") {
     const grants = Object.fromEntries([
       ...PERMISSION_KEYS.map((k) => [k, true] as const),
       ...PAGE_ACCESS_DEFS.map((p) => [pagePermissionKey(p.page), true] as const),
@@ -266,6 +266,7 @@ function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean 
 
 export function canApprove(permission: PermissionKey, role?: string | null): boolean {
   const rl = String(role || "").toLowerCase();
+  if (rl === "super_admin") return true;
   const snapshot = readPermissionSnapshot();
   if (snapshot?.grants && Object.prototype.hasOwnProperty.call(snapshot.grants, permission)) {
     return !!snapshot.grants[permission];
@@ -280,6 +281,7 @@ export function hasConfiguredPageAccess(): boolean {
 
 export function pageAccessDecision(page: string): boolean | null {
   const snapshot = readPermissionSnapshot();
+  if (snapshot?.role === "super_admin") return true;
   const grants = snapshot?.grants ?? {};
   const key = pagePermissionKey(page);
   if (Object.prototype.hasOwnProperty.call(grants, key)) return !!grants[key];

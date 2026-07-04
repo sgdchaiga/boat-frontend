@@ -81,12 +81,14 @@ export function RetailPosOrdersPage() {
     Array<{ product_id: string; description: string; quantity: number; unit_price: number; department_id: string }>
   >([]);
   const role = (user?.role || "").toLowerCase();
-  const [canEditPosOrdersByRole, setCanEditPosOrdersByRole] = useState<boolean>(!!user?.isSuperAdmin);
+  const [canEditPosOrdersByRole, setCanEditPosOrdersByRole] = useState<boolean>(
+    !!user?.isSuperAdmin || role === "super_admin"
+  );
   const canReverse = canEditPosOrdersByRole;
 
   useEffect(() => {
     const loadRolePermission = async () => {
-      if (superAdmin) {
+      if (superAdmin || role === "super_admin") {
         setCanEditPosOrdersByRole(true);
         return;
       }

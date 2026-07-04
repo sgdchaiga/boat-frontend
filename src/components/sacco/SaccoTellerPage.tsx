@@ -208,9 +208,9 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
   const staffId = tellerCtx?.staffId ?? user?.id ?? undefined;
   const staffLinkMissing = Boolean(user?.id && !tellerCtxLoading && !tellerCtx);
   const showAdminControls =
-    Boolean(isSuperAdmin) || ["admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase());
+    Boolean(isSuperAdmin) || ["super_admin", "admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase());
   const canEditTransactions = canEditSaccoTransactions(user?.role, {
-    isSuperAdmin: Boolean(isSuperAdmin),
+    isSuperAdmin: Boolean(isSuperAdmin) || user?.role === "super_admin",
     localAuthEnabled: isLocalAuthEnvEnabled(),
   });
 

@@ -86,7 +86,9 @@ export function CashReceiptsPage({
   const [departmentOptions, setDepartmentOptions] = useState<string[]>([]);
   const [productOptions, setProductOptions] = useState<string[]>([]);
   const role = (user?.role || "").toLowerCase();
-  const [canEditCashReceiptsByRole, setCanEditCashReceiptsByRole] = useState<boolean>(!!user?.isSuperAdmin);
+  const [canEditCashReceiptsByRole, setCanEditCashReceiptsByRole] = useState<boolean>(
+    !!user?.isSuperAdmin || role === "super_admin"
+  );
   const canReverse = canEditCashReceiptsByRole;
 
   const isHotelCheckout = String(pageState?.crSource ?? "") === "hotel_checkout";
@@ -182,7 +184,7 @@ export function CashReceiptsPage({
 
   useEffect(() => {
     const loadRolePermission = async () => {
-      if (superAdmin) {
+      if (superAdmin || role === "super_admin") {
         setCanEditCashReceiptsByRole(true);
         return;
       }

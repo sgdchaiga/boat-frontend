@@ -119,7 +119,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
   const [savingDate, setSavingDate] = useState(false);
   const dateCorrectionInFlightRef = useRef(false);
   const role = (user?.role || "").toLowerCase();
-  const canCorrectDates = superAdmin || ["admin", "manager", "accountant", "supervisor"].includes(role);
+  const canCorrectDates = superAdmin || ["super_admin", "admin", "manager", "accountant", "supervisor"].includes(role);
 
   useEffect(() => {
     fetchTransactions();

@@ -271,7 +271,7 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
 
   const smartRoomChargesOn = user?.hotel_enable_smart_room_charges !== false;
   const role = (user?.role || "").toLowerCase();
-  const canEditBillingByRole = superAdmin || ["admin", "manager", "accountant", "supervisor"].includes(role);
+  const canEditBillingByRole = superAdmin || ["super_admin", "admin", "manager", "accountant", "supervisor"].includes(role);
   const canEditBilling = !readOnly && canEditBillingByRole;
   const permissionDeniedMessage = "You are not authorized to perform this action.";
 

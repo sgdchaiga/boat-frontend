@@ -20,7 +20,8 @@ export function AdminHotelPosControlsPage() {
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
   const role = (user?.role || "").toLowerCase();
-  const canManage = role === "manager" || role === "supervisor" || role === "admin" || role === "accountant";
+  const canManage =
+    superAdmin || role === "super_admin" || role === "manager" || role === "supervisor" || role === "admin" || role === "accountant";
 
   const [pinA, setPinA] = useState("");
   const [pinB, setPinB] = useState("");
@@ -367,4 +368,3 @@ export function AdminHotelPosControlsPage() {
     </div>
   );
 }
-

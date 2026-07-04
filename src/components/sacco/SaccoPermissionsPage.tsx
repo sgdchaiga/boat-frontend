@@ -13,7 +13,7 @@ type SaccoPermissionsPageProps = {
 export function SaccoPermissionsPage({ readOnly: subscriptionReadOnly = false, focusStaffId }: SaccoPermissionsPageProps) {
   const { user } = useAuth();
   const roleKey = String(user?.role ?? "").toLowerCase();
-  const canManage = Boolean(user?.isSuperAdmin || roleKey === "admin");
+  const canManage = Boolean(user?.isSuperAdmin || roleKey === "super_admin" || roleKey === "admin");
   const readOnly = subscriptionReadOnly || !canManage;
 
   return (

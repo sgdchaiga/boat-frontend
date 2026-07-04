@@ -340,5 +340,6 @@ export function canBulkImportSaccoLoanProducts(
   opts?: { isSuperAdmin?: boolean }
 ): boolean {
   if (opts?.isSuperAdmin) return true;
-  return String(staffRole ?? "").trim().toLowerCase() === "admin";
+  const role = String(staffRole ?? "").trim().toLowerCase();
+  return role === "super_admin" || role === "admin";
 }

@@ -71,6 +71,83 @@ function normalizedBillStatus(b: Bill): string {
   return (b.status || "").toLowerCase();
 }
 
+function resolveNumericExpression(value: string): number | null {
+  const source = value.trim().replace(/,/g, "").replace(/=/g, "");
+  if (!source) return null;
+  if (!/^[\d+\-*/().\s]+$/.test(source)) return null;
+
+  let index = 0;
+  const skip = () => {
+    while (/\s/.test(source[index] || "")) index += 1;
+  };
+  const parseExpression = (): number | null => {
+    let left = parseTerm();
+    if (left == null) return null;
+    while (true) {
+      skip();
+      const op = source[index];
+      if (op !== "+" && op !== "-") break;
+      index += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      left = op === "+" ? left + right : left - right;
+    }
+    return left;
+  };
+  const parseTerm = (): number | null => {
+    let left = parseFactor();
+    if (left == null) return null;
+    while (true) {
+      skip();
+      const op = source[index];
+      if (op !== "*" && op !== "/") break;
+      index += 1;
+      const right = parseFactor();
+      if (right == null || (op === "/" && right === 0)) return null;
+      left = op === "*" ? left * right : left / right;
+    }
+    return left;
+  };
+  const parseFactor = (): number | null => {
+    skip();
+    const op = source[index];
+    if (op === "+" || op === "-") {
+      index += 1;
+      const value = parseFactor();
+      return value == null ? null : op === "-" ? -value : value;
+    }
+    if (source[index] === "(") {
+      index += 1;
+      const value = parseExpression();
+      skip();
+      if (source[index] !== ")") return null;
+      index += 1;
+      return value;
+    }
+    const start = index;
+    while (/[\d.]/.test(source[index] || "")) index += 1;
+    if (start === index) return null;
+    const raw = source.slice(start, index);
+    if ((raw.match(/\./g) || []).length > 1) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const result = parseExpression();
+  skip();
+  return result != null && index === source.length && Number.isFinite(result) ? result : null;
+}
+
+function parseNumericInput(value: string): number {
+  return resolveNumericExpression(value) ?? 0;
+}
+
+function normalizeNumericInput(value: string): string {
+  const parsed = resolveNumericExpression(value);
+  if (parsed == null) return value;
+  return Number(parsed.toFixed(6)).toString();
+}
+
 export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: BillsPageProps = {}) {
   const { user } = useAuth();
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
@@ -534,7 +611,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     try {
       const nextItems = itemDrafts.map((item) => {
         const quantity = Number(item.quantity);
-        const costPrice = Number(item.cost_price);
+        const costPrice = parseNumericInput(item.cost_price);
         if (!item.description.trim()) throw new Error("Every item needs a description.");
         if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Every item quantity must be greater than zero.");
         if (!Number.isFinite(costPrice) || costPrice < 0) throw new Error("Item unit prices cannot be negative.");
@@ -1511,7 +1588,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                 <tbody>
                   {itemDrafts.map((item) => {
                     const qty = Number(item.quantity || 0);
-                    const unit = Number(item.cost_price || 0);
+                    const unit = parseNumericInput(item.cost_price);
                     return (
                       <tr key={item.id} className="border-t border-slate-100">
                         <td className="p-2">
@@ -1533,11 +1610,13 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                         </td>
                         <td className="p-2">
                           <input
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             min="0"
-                            step="0.01"
+                            step="1"
                             value={item.cost_price}
                             onChange={(e) => updateItemDraft(item.id, "cost_price", e.target.value)}
+                            onBlur={(e) => updateItemDraft(item.id, "cost_price", normalizeNumericInput(e.target.value))}
                             className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-right"
                           />
                         </td>
@@ -1555,7 +1634,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               <p className="text-sm font-semibold text-slate-900">
                 New total:{" "}
                 {itemDrafts
-                  .reduce((sum, item) => sum + (Number(item.quantity || 0) || 0) * (Number(item.cost_price || 0) || 0), 0)
+                  .reduce((sum, item) => sum + (Number(item.quantity || 0) || 0) * parseNumericInput(item.cost_price), 0)
                   .toFixed(2)}
               </p>
               <div className="flex gap-2">

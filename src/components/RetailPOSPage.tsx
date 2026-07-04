@@ -443,7 +443,7 @@ export function RetailPOSPage({
   const toggleDiscountSetting = async () => {
     if (!orgId) return;
     const role = String(user?.role || "").toLowerCase();
-    if (!user?.isSuperAdmin && !["admin", "manager", "supervisor"].includes(role)) {
+    if (!user?.isSuperAdmin && !["super_admin", "admin", "manager", "supervisor"].includes(role)) {
       alert("Only a manager can change the POS discount setting.");
       return;
     }
@@ -474,7 +474,7 @@ export function RetailPOSPage({
   const toggleAgentCommissionSetting = async () => {
     if (!orgId) return;
     const role = String(user?.role || "").toLowerCase();
-    if (!user?.isSuperAdmin && !["admin", "manager", "supervisor"].includes(role)) {
+    if (!user?.isSuperAdmin && !["super_admin", "admin", "manager", "supervisor"].includes(role)) {
       alert("Only a manager can change the agent commission setting.");
       return;
     }
@@ -516,7 +516,7 @@ export function RetailPOSPage({
   const setPricingSource = async (usePriceList: boolean) => {
     if (!orgId || usePriceList === useManufacturingPriceList) return;
     const role = String(user?.role || "").toLowerCase();
-    if (!user?.isSuperAdmin && !["admin", "manager", "supervisor"].includes(role)) {
+    if (!user?.isSuperAdmin && !["super_admin", "admin", "manager", "supervisor"].includes(role)) {
       alert("Only a manager can change the POS pricing source.");
       return;
     }
@@ -1016,7 +1016,7 @@ export function RetailPOSPage({
   const saleType: "cash" | "credit" | "mixed" =
     amountPaid <= 0 ? "credit" : amountPaid < netSaleAmount ? "mixed" : "cash";
   const canUseAdvancedPayments =
-    advancedModeEnabled && (useDesktopLocalMode || posMode === "manager" || Boolean(user?.isSuperAdmin));
+    advancedModeEnabled && (useDesktopLocalMode || posMode === "manager" || user?.role === "super_admin" || Boolean(user?.isSuperAdmin));
   const stkPushEnabled = receiptOrgHeader?.stkPushEnabled === true;
 
   const posVatBreakdown = useMemo(() => {

@@ -186,7 +186,7 @@ export function AdminApprovalRightsPage({
     setSaving(true);
     try {
       const editablePageKeys = PAGE_ACCESS_DEFS
-        .filter((page) => user?.isSuperAdmin || !isSuperAdminControlledReportPage(page))
+        .filter((page) => canManageSensitiveRights || !isSuperAdminControlledReportPage(page))
         .map((page) => pagePermissionKey(page.page));
       const editableSensitiveKeys = canManageSensitiveRights ? PERMISSIONS.map((permission) => permission.key) : [];
       const editableOverrideKeys = [...editableSensitiveKeys, ...editablePageKeys];
@@ -269,7 +269,7 @@ export function AdminApprovalRightsPage({
         organizationId: user?.organization_id,
         staffId: user?.id,
         role: user?.role,
-        isSuperAdmin: user?.isSuperAdmin,
+        isSuperAdmin: canManageSensitiveRights,
       });
       alert("Permissions saved.");
     } catch (e) {
@@ -390,7 +390,7 @@ export function AdminApprovalRightsPage({
                 <section key={group} className="rounded-lg border border-slate-200 p-3">
                   <div className="mb-2 flex items-center justify-between gap-2">
                     <h4 className="text-sm font-semibold text-slate-800">{group}</h4>
-                    {group === "Reports" && !user?.isSuperAdmin ? (
+                    {group === "Reports" && !canManageSensitiveRights ? (
                       <span className="text-[11px] font-medium text-amber-700">Super admin controls reports</span>
                     ) : null}
                   </div>
@@ -400,7 +400,7 @@ export function AdminApprovalRightsPage({
                       const configured = staffOverrides?.[selectedStaff.id]?.[key] ?? null;
                       const allowed = configured !== false;
                       const reportLocked =
-                        !user?.isSuperAdmin && isSuperAdminControlledReportPage(page);
+                        !canManageSensitiveRights && isSuperAdminControlledReportPage(page);
                       return (
                         <label
                           key={page.page}
