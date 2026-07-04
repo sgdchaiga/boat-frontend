@@ -77,7 +77,7 @@ export function VendorPaymentsPage({
 }: VendorPaymentsPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
-  const isAdmin = user?.role === "admin" || user?.isSuperAdmin === true;
+  const isAdmin = user?.role === "admin" || user?.role === "super_admin" || user?.isSuperAdmin === true;
   const [payments, setPayments] = useState<VendorPayment[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
