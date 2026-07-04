@@ -24,8 +24,10 @@ function normalizeRoleKey(raw: string): string {
 }
 
 /** Options for role dropdowns: org role types plus current key if missing (legacy row). */
-function roleSelectOptions(roleTypes: OrgRoleType[], memberRole: string): { role_key: string; display_name: string }[] {
-  const base = roleTypes.map((rt) => ({ role_key: rt.role_key, display_name: rt.display_name }));
+function roleSelectOptions(roleTypes: OrgRoleType[], memberRole: string, canAssignSuperAdmin = false): { role_key: string; display_name: string }[] {
+  const base = roleTypes
+    .filter((rt) => canAssignSuperAdmin || rt.role_key !== "super_admin" || memberRole === "super_admin")
+    .map((rt) => ({ role_key: rt.role_key, display_name: rt.display_name }));
   if (memberRole && !base.some((o) => o.role_key === memberRole)) {
     base.push({ role_key: memberRole, display_name: `${memberRole} (legacy)` });
   }
@@ -40,6 +42,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
+  const canAssignSuperAdminRole = superAdmin || user?.role === "super_admin";
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const apiDataMode = isDesktopApiDataMode();
   const useLocalDesktopNewStaff = localAuthEnabled && desktopApi.isAvailable();
@@ -155,11 +158,12 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   };
 
   const openCreateStaff = () => {
+    const assignableRoles = roleTypes.filter((rt) => canAssignSuperAdminRole || rt.role_key !== "super_admin");
     setEditingStaff(null);
     setFullName("");
     setEmail("");
     setPhone("");
-    setRole(roleTypes[0]?.role_key ?? "receptionist");
+    setRole(assignableRoles[0]?.role_key ?? "receptionist");
     setIsActive(true);
     setPassword("");
     setConfirmPassword("");
@@ -232,6 +236,10 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     const validKeys = new Set(roleTypes.map((r) => r.role_key));
     if (!validKeys.has(role)) {
       alert("Choose a role from your organization's role types.");
+      return;
+    }
+    if ((role === "super_admin" || editingStaff?.role === "super_admin") && !canAssignSuperAdminRole) {
+      alert("Only a super admin can assign or remove the Super Admin role.");
       return;
     }
     if (editingStaff) {
@@ -456,6 +464,10 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       alert("Choose a role from your organization's role types.");
       return;
     }
+    if ((newRole === "super_admin" || member.role === "super_admin") && !canAssignSuperAdminRole) {
+      alert("Only a super admin can assign or remove the Super Admin role.");
+      return;
+    }
     if (member.role === "admin" && newRole !== "admin") {
       const adminCount = staff.filter((s) => s.role === "admin").length;
       if (adminCount <= 1) {
@@ -519,8 +531,12 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
             organization_id: orgId,
             display_name: editDisplayName.trim(),
             sort_order: so,
-            can_edit_pos_orders: editCanEditPosOrders,
-            can_edit_cash_receipts: editCanEditCashReceipts,
+            ...(canAssignSuperAdminRole
+              ? {
+                  can_edit_pos_orders: editCanEditPosOrders,
+                  can_edit_cash_receipts: editCanEditCashReceipts,
+                }
+              : {}),
           });
         } catch (error) {
           alert(error instanceof Error ? error.message : "Failed to update role type.");
@@ -536,8 +552,12 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         .update({
           display_name: editDisplayName.trim(),
           sort_order: so,
-          can_edit_pos_orders: editCanEditPosOrders,
-          can_edit_cash_receipts: editCanEditCashReceipts,
+          ...(canAssignSuperAdminRole
+            ? {
+                can_edit_pos_orders: editCanEditPosOrders,
+                can_edit_cash_receipts: editCanEditCashReceipts,
+              }
+            : {}),
         })
         .eq("id", editingRoleType.id);
       if (error) {
@@ -554,6 +574,10 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         alert("Enter a display name.");
         return;
       }
+      if (key === "super_admin") {
+        alert("Super Admin is a protected role created automatically for each organization.");
+        return;
+      }
       if (!orgId && !superAdmin) {
         alert("No organization context.");
         return;
@@ -565,8 +589,8 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
             role_key: key,
             display_name: newDisplayName.trim(),
             sort_order: roleTypes.length,
-            can_edit_pos_orders: newCanEditPosOrders || key === "admin",
-            can_edit_cash_receipts: newCanEditCashReceipts || key === "admin",
+            can_edit_pos_orders: canAssignSuperAdminRole && (newCanEditPosOrders || key === "admin"),
+            can_edit_cash_receipts: canAssignSuperAdminRole && (newCanEditCashReceipts || key === "admin"),
           });
         } catch (error) {
           alert(error instanceof Error ? error.message : "Failed to create role type.");
@@ -582,8 +606,8 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         role_key: key,
         display_name: newDisplayName.trim(),
         sort_order: roleTypes.length,
-        can_edit_pos_orders: newCanEditPosOrders || key === "admin",
-        can_edit_cash_receipts: newCanEditCashReceipts || key === "admin",
+        can_edit_pos_orders: canAssignSuperAdminRole && (newCanEditPosOrders || key === "admin"),
+        can_edit_cash_receipts: canAssignSuperAdminRole && (newCanEditCashReceipts || key === "admin"),
       });
       if (error) {
         alert(error.message);
@@ -596,8 +620,8 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
   };
 
   const deleteRoleType = async (rt: OrgRoleType) => {
-    if (rt.role_key === "admin") {
-      alert("The admin role cannot be removed.");
+    if (rt.role_key === "admin" || rt.role_key === "super_admin") {
+      alert("The admin and super admin roles cannot be removed.");
       return;
     }
     if (apiDataMode && orgId) {
@@ -661,7 +685,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         </div>
         <p className="text-sm text-slate-600">
           Define role keys for your organization, then assign them to staff below. Keys are fixed (lowercase, underscores);
-          you can change display names and order anytime.
+          you can change display names and order anytime. Super Admin is created automatically and only a super admin can assign it.
         </p>
         <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
           <table className="w-full text-sm">
@@ -697,7 +721,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                       onClick={() => void deleteRoleType(rt)}
                       className="p-1.5 text-slate-500 hover:text-red-700 inline-flex disabled:opacity-30"
                       title="Delete"
-                      disabled={rt.role_key === "admin"}
+                      disabled={rt.role_key === "admin" || rt.role_key === "super_admin"}
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -717,7 +741,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
           <div>
             <h2 className="text-lg font-semibold text-slate-900">Staff</h2>
             <p className="text-sm text-slate-600 mt-1">
-              Change a user&apos;s <strong>role type</strong> from the dropdown on their card or in Edit. Requires administrator or manager access.
+              Change a user&apos;s <strong>role type</strong> from the dropdown on their card or in Edit. Only a super admin can assign Super Admin.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -756,11 +780,11 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                     <label className="text-xs font-medium text-slate-600">Role type</label>
                     <select
                       value={member.role}
-                      disabled={roleTypes.length === 0 || updatingRoleId === member.id}
+                      disabled={roleTypes.length === 0 || updatingRoleId === member.id || (!canAssignSuperAdminRole && member.role === "super_admin")}
                       onChange={(e) => void updateStaffRole(member, e.target.value)}
                       className="w-full max-w-[220px] text-sm border border-slate-300 rounded-lg px-2 py-1.5 bg-white disabled:opacity-60"
                     >
-                      {roleSelectOptions(roleTypes, member.role).map((o) => (
+                      {roleSelectOptions(roleTypes, member.role, canAssignSuperAdminRole).map((o) => (
                         <option key={o.role_key} value={o.role_key}>
                           {o.display_name}
                         </option>
@@ -853,9 +877,10 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                 <select
                   value={role}
                   onChange={(e) => setRole(e.target.value)}
+                  disabled={Boolean(editingStaff?.role === "super_admin" && !canAssignSuperAdminRole)}
                   className="border border-slate-300 rounded-lg px-3 py-2 w-full"
                 >
-                  {roleSelectOptions(roleTypes, editingStaff?.role ?? role).map((o) => (
+                  {roleSelectOptions(roleTypes, editingStaff?.role ?? role, canAssignSuperAdminRole).map((o) => (
                     <option key={o.role_key} value={o.role_key}>
                       {o.display_name} ({o.role_key})
                     </option>
@@ -994,6 +1019,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                     <input
                       type="checkbox"
                       checked={editCanEditPosOrders}
+                      disabled={!canAssignSuperAdminRole}
                       onChange={(e) => setEditCanEditPosOrders(e.target.checked)}
                     />
                     Can edit POS orders
@@ -1002,6 +1028,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                     <input
                       type="checkbox"
                       checked={editCanEditCashReceipts}
+                      disabled={!canAssignSuperAdminRole}
                       onChange={(e) => setEditCanEditCashReceipts(e.target.checked)}
                     />
                     Can edit cash receipts
@@ -1034,6 +1061,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                     <input
                       type="checkbox"
                       checked={newCanEditPosOrders}
+                      disabled={!canAssignSuperAdminRole}
                       onChange={(e) => setNewCanEditPosOrders(e.target.checked)}
                     />
                     Can edit POS orders
@@ -1042,6 +1070,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
                     <input
                       type="checkbox"
                       checked={newCanEditCashReceipts}
+                      disabled={!canAssignSuperAdminRole}
                       onChange={(e) => setNewCanEditCashReceipts(e.target.checked)}
                     />
                     Can edit cash receipts

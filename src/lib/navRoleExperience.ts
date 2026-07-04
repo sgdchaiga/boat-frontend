@@ -56,7 +56,7 @@ export function getNavRoleExperience(roleKey: string | undefined | null): NavRol
 
   const r = normalizeNavRoleKey(roleKey);
 
-  if (!r || r === "admin") return "full";
+  if (!r || r === "admin" || r === "super_admin") return "full";
 
   if (r === "waitress") return "waitress";
 

@@ -37,6 +37,7 @@ export function AdminApprovalRightsPage({
 }: AdminApprovalRightsPageProps = {}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
+  const canManageSensitiveRights = user?.isSuperAdmin === true || user?.role === "super_admin";
   const [roles, setRoles] = useState<RoleTypeRow[]>([]);
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [rolePerms, setRolePerms] = useState<Record<string, Record<string, boolean>>>({});
@@ -149,7 +150,7 @@ export function AdminApprovalRightsPage({
   }, []);
 
   const toggleRolePermission = (roleKey: string, key: PermissionKey) => {
-    if (readOnly) return;
+    if (readOnly || !canManageSensitiveRights) return;
     setRolePerms((prev) => ({
       ...prev,
       [roleKey]: {
@@ -160,7 +161,7 @@ export function AdminApprovalRightsPage({
   };
 
   const cycleStaffOverride = (staffId: string, key: PermissionKey) => {
-    if (readOnly) return;
+    if (readOnly || !canManageSensitiveRights) return;
     setStaffOverrides((prev) => {
       const cur = prev?.[staffId]?.[key] ?? null;
       const next = cur === null ? true : cur === true ? false : null;
@@ -187,15 +188,18 @@ export function AdminApprovalRightsPage({
       const editablePageKeys = PAGE_ACCESS_DEFS
         .filter((page) => user?.isSuperAdmin || !isSuperAdminControlledReportPage(page))
         .map((page) => pagePermissionKey(page.page));
-      const editableOverrideKeys = [...PERMISSIONS.map((permission) => permission.key), ...editablePageKeys];
-      const roleUpserts = roles.flatMap((r) =>
-        PERMISSIONS.map((p) => ({
-          organization_id: orgId,
-          role_key: r.role_key,
-          permission_key: p.key,
-          allowed: !!rolePerms?.[r.role_key]?.[p.key],
-        }))
-      );
+      const editableSensitiveKeys = canManageSensitiveRights ? PERMISSIONS.map((permission) => permission.key) : [];
+      const editableOverrideKeys = [...editableSensitiveKeys, ...editablePageKeys];
+      const roleUpserts = canManageSensitiveRights
+        ? roles.flatMap((r) =>
+            PERMISSIONS.map((p) => ({
+              organization_id: orgId,
+              role_key: r.role_key,
+              permission_key: p.key,
+              allowed: !!rolePerms?.[r.role_key]?.[p.key],
+            }))
+          )
+        : [];
       const roleOverrides = Object.entries(staffOverrides).flatMap(([staffId, perms]) =>
         Object.entries(perms || {})
           .filter(([permissionKey, v]) => v !== null && editableOverrideKeys.includes(permissionKey as PermissionKey))
@@ -207,9 +211,11 @@ export function AdminApprovalRightsPage({
           }))
       );
       const [roleSave, deleteOv, ovSave] = await Promise.all([
-        supabase
-          .from("organization_permissions")
-          .upsert(roleUpserts, { onConflict: "organization_id,role_key,permission_key" }),
+        roleUpserts.length > 0
+          ? supabase
+              .from("organization_permissions")
+              .upsert(roleUpserts, { onConflict: "organization_id,role_key,permission_key" })
+          : Promise.resolve({ error: null as any }),
         supabase
           .from("staff_permission_overrides")
           .delete()
@@ -228,22 +234,24 @@ export function AdminApprovalRightsPage({
         throw ovSave.error;
       }
 
-      const roleTypePatch = roles.map((r) => ({
-        organization_id: orgId,
-        role_key: r.role_key,
-        can_edit_pos_orders: !!rolePerms?.[r.role_key]?.pos_orders_edit,
-        can_edit_cash_receipts: !!rolePerms?.[r.role_key]?.cash_receipts_edit,
-      }));
-      for (const row of roleTypePatch) {
-        const { error } = await supabase
-          .from("organization_role_types")
-          .update({
-            can_edit_pos_orders: row.can_edit_pos_orders,
-            can_edit_cash_receipts: row.can_edit_cash_receipts,
-          })
-          .eq("organization_id", row.organization_id)
-          .eq("role_key", row.role_key);
-        if (error) throw error;
+      if (canManageSensitiveRights) {
+        const roleTypePatch = roles.map((r) => ({
+          organization_id: orgId,
+          role_key: r.role_key,
+          can_edit_pos_orders: !!rolePerms?.[r.role_key]?.pos_orders_edit,
+          can_edit_cash_receipts: !!rolePerms?.[r.role_key]?.cash_receipts_edit,
+        }));
+        for (const row of roleTypePatch) {
+          const { error } = await supabase
+            .from("organization_role_types")
+            .update({
+              can_edit_pos_orders: row.can_edit_pos_orders,
+              can_edit_cash_receipts: row.can_edit_cash_receipts,
+            })
+            .eq("organization_id", row.organization_id)
+            .eq("role_key", row.role_key);
+          if (error) throw error;
+        }
       }
 
       const approvalConfig: ApprovalRightsConfig = {
@@ -256,7 +264,7 @@ export function AdminApprovalRightsPage({
         payroll_approve: roles.filter((r) => rolePerms?.[r.role_key]?.payroll_approve).map((r) => r.role_key),
         payroll_post: roles.filter((r) => rolePerms?.[r.role_key]?.payroll_post).map((r) => r.role_key),
       };
-      saveApprovalRights(approvalConfig);
+      if (canManageSensitiveRights) saveApprovalRights(approvalConfig);
       await loadPermissionSnapshot({
         organizationId: user?.organization_id,
         staffId: user?.id,
@@ -286,7 +294,7 @@ export function AdminApprovalRightsPage({
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-lg font-semibold text-slate-900">Permissions</h2>
             <PageNotes ariaLabel="Permissions help">
-              <p>Operational permissions may follow roles. Page visibility is selected per user and defaults to visible.</p>
+              <p>Operational permissions may follow roles. Page visibility is selected per user and defaults to visible. Sensitive rights are controlled by Super Admin.</p>
             </PageNotes>
           </div>
           <button
@@ -339,7 +347,7 @@ export function AdminApprovalRightsPage({
                         type="checkbox"
                         checked={!!rolePerms?.[r.role_key]?.[p.key]}
                         onChange={() => toggleRolePermission(r.role_key, p.key)}
-                        disabled={readOnly}
+                        disabled={readOnly || !canManageSensitiveRights}
                       />
                       <span className="text-xs text-slate-600">Allow</span>
                     </label>
@@ -469,7 +477,7 @@ export function AdminApprovalRightsPage({
                         <button
                           type="button"
                           onClick={() => cycleStaffOverride(s.id, p.key)}
-                          disabled={readOnly}
+                          disabled={readOnly || !canManageSensitiveRights}
                           className={`rounded px-2 py-1 text-xs font-medium disabled:opacity-50 ${cls}`}
                         >
                           {label}

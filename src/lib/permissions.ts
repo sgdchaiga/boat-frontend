@@ -247,6 +247,7 @@ export async function loadPermissionSnapshot(input: {
 }
 
 function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean {
+  if (roleKey === "super_admin") return true;
   if (permission === "purchase_orders") return roleKey === "admin" || roleKey === "manager";
   if (permission === "bills") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
   if (permission === "vendor_credits") return roleKey === "admin" || roleKey === "manager";

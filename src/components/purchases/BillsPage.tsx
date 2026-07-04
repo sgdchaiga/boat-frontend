@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
+import { Copy, FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 import { loadHotelConfig } from "../../lib/hotelConfig";
@@ -68,7 +68,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const { user } = useAuth();
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const canApproveBills = canApprove("bills", user?.role);
-  const isAdmin = user?.role === "admin" || user?.isSuperAdmin === true;
+  const isOrgSuperAdmin = user?.role === "super_admin" || user?.isSuperAdmin === true;
+  const isAdmin = user?.role === "admin" || isOrgSuperAdmin;
   const [bills, setBills] = useState<Bill[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
@@ -346,7 +347,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   };
 
   const handleReverse = async (bill: Bill) => {
-    if (readOnly || !isAdmin || !isBillApproved(bill)) return;
+    if (readOnly || !isOrgSuperAdmin || !isBillApproved(bill)) return;
     const orgId = user?.organization_id;
     if (!orgId) {
       alert("Your account is not linked to an organization.");
@@ -405,6 +406,19 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setDueDate(bill.due_date || bDate);
     setAmount(String(bill.amount ?? ""));
     setDescription(bill.description || "");
+    setShowModal(true);
+  };
+
+  const openClone = (bill: Bill) => {
+    if (readOnly || !isAdmin) return;
+    setEditingBill(null);
+    setVendorId(bill.vendor_id || "");
+    const bDate = bill.bill_date || new Date().toISOString().slice(0, 10);
+    setBillDate(bDate);
+    setDueDate(bill.due_date || bDate);
+    setAmount(String(bill.amount ?? ""));
+    setDescription(bill.description || "");
+    setDetailBill(null);
     setShowModal(true);
   };
 
@@ -765,26 +779,34 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
       };
       if (editingBill) {
         const approvedEdit = isBillApproved(editingBill);
-        if (approvedEdit && !isAdmin) throw new Error("Only an administrator can edit dates on an approved bill.");
+        if (approvedEdit && !isOrgSuperAdmin) throw new Error("Only a Super Admin can edit an approved bill directly.");
         if (normalizedBillStatus(editingBill) === "reversed") throw new Error("A reversed bill cannot be edited.");
-        const editPayload = approvedEdit
-          ? { bill_date: billDateVal, due_date: dueDate || billDateVal }
-          : payload;
-        const { error } = await supabase.from("bills").update(editPayload).eq("id", editingBill.id);
+        const { error } = await supabase.from("bills").update(payload).eq("id", editingBill.id);
         if (error) throw error;
-        if (approvedEdit && billDateVal !== editingBill.bill_date) {
+        const approvedJournalChanged =
+          approvedEdit &&
+          (billDateVal !== editingBill.bill_date ||
+            amt !== Number(editingBill.amount || 0) ||
+            (description.trim() || null) !== (editingBill.description || null));
+        if (approvedJournalChanged) {
           const retired = await deleteJournalEntryByReference("bill", editingBill.id, user?.organization_id);
           if (!retired.ok) {
             await supabase
               .from("bills")
-              .update({ bill_date: editingBill.bill_date, due_date: editingBill.due_date })
+              .update({
+                vendor_id: editingBill.vendor_id ?? null,
+                bill_date: editingBill.bill_date,
+                due_date: editingBill.due_date,
+                amount: editingBill.amount ?? null,
+                description: editingBill.description ?? null,
+              })
               .eq("id", editingBill.id);
-            throw new Error(`The bill date was not changed because its payable journal could not be redated: ${retired.error}`);
+            throw new Error(`The approved bill was restored because its payable journal could not be retired: ${retired.error}`);
           }
           const reposted = await createJournalForBill(
             editingBill.id,
-            Number(editingBill.amount || 0),
-            editingBill.description || null,
+            amt,
+            description.trim() || null,
             billDateVal,
             user?.id ?? null,
             editingBill.purchase_order_id ?? null
@@ -792,7 +814,13 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
           if (!reposted.ok) {
             await supabase
               .from("bills")
-              .update({ bill_date: editingBill.bill_date, due_date: editingBill.due_date })
+              .update({
+                vendor_id: editingBill.vendor_id ?? null,
+                bill_date: editingBill.bill_date,
+                due_date: editingBill.due_date,
+                amount: editingBill.amount ?? null,
+                description: editingBill.description ?? null,
+              })
               .eq("id", editingBill.id);
             await createJournalForBill(
               editingBill.id,
@@ -802,7 +830,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               user?.id ?? null,
               editingBill.purchase_order_id ?? null
             );
-            throw new Error(`The bill date was restored because its payable journal could not be reposted: ${reposted.error}`);
+            throw new Error(`The approved bill was restored because its payable journal could not be reposted: ${reposted.error}`);
           }
         }
       } else {
@@ -940,15 +968,25 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                   </td>
                   <td className="p-3 text-right">
                     <span className="inline-flex items-center gap-1 flex-wrap justify-end">
-                      {((!isBillApproved(b) && !isRejectedBill(b)) || (isAdmin && !["rejected", "reversed"].includes(normalizedBillStatus(b)))) && (
+                      {((!isBillApproved(b) && !isRejectedBill(b)) || (isOrgSuperAdmin && !["rejected", "reversed"].includes(normalizedBillStatus(b)))) && (
                         <button
                           type="button"
                           onClick={() => openEdit(b)}
                           disabled={readOnly}
                           className="p-1.5 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100"
-                          title={isBillApproved(b) ? "Edit bill dates (admin)" : "Edit GRN/Bill"}
+                          title={isBillApproved(b) ? "Edit approved GRN/Bill (Super Admin)" : "Edit GRN/Bill"}
                         >
                           <Pencil className="w-4 h-4" />
+                        </button>
+                      )}
+                      {isAdmin && !readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => openClone(b)}
+                          className="p-1.5 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+                          title="Clone GRN/Bill as a pending copy"
+                        >
+                          <Copy className="w-4 h-4" />
                         </button>
                       )}
                       {!isBillApproved(b) && !isRejectedBill(b) && normalizedBillStatus(b) !== "reversed" ? (
@@ -990,7 +1028,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                           <Trash2 className="w-4 h-4" />
                         </button>
                       )}
-                      {isAdmin && isBillApproved(b) && !readOnly && (
+                      {isOrgSuperAdmin && isBillApproved(b) && !readOnly && (
                         <button
                           type="button"
                           onClick={() => void handleReverse(b)}
@@ -1022,19 +1060,19 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
             <div className="space-y-4">
               {editingBill && isBillApproved(editingBill) && (
                 <p className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                  Approved bill: only the bill date and due date can be changed. Changing the bill date also redates the payable journal.
+                  Approved bill: Super Admin changes update the bill and repost the payable journal.
                 </p>
               )}
               <div>
                 <label className="block text-sm font-medium mb-1">Vendor *</label>
-                <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill))} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100">
+                <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100">
                   <option value="">Select vendor</option>
                   {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
                 </select>
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Amount *</label>
-                <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill))} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="0.00" />
+                <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="0.00" />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">GRN/Bill Date</label>
@@ -1046,7 +1084,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Description</label>
-                <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill))} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="e.g. Invoice #1234" />
+                <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="e.g. Invoice #1234" />
               </div>
             </div>
             <div className="flex gap-2 mt-6">
@@ -1107,7 +1145,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               {isBillApproved(detailBill) && (detailBill.approved_at || detailBill.approved_by) && (
                 <p><span className="font-medium text-slate-500">Approved by:</span> {detailBill.approver?.full_name || staff.find((s) => s.id === detailBill.approved_by)?.full_name || "—"} {detailBill.approved_at ? `on ${new Date(detailBill.approved_at).toLocaleDateString()}` : ""}</p>
               )}
-              {isAdmin && !readOnly && !["rejected", "reversed"].includes(normalizedBillStatus(detailBill)) && (
+              {isOrgSuperAdmin && !readOnly && !["rejected", "reversed"].includes(normalizedBillStatus(detailBill)) && (
                 <div className="pt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
@@ -1117,7 +1155,14 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                     }}
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
-                    <Pencil className="h-4 w-4" /> {isBillApproved(detailBill) ? "Edit dates" : "Edit bill"}
+                    <Pencil className="h-4 w-4" /> {isBillApproved(detailBill) ? "Edit approved bill" : "Edit bill"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => openClone(detailBill)}
+                    className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Copy className="h-4 w-4" /> Clone bill
                   </button>
                   {isBillApproved(detailBill) && (
                     <button

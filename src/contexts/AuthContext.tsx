@@ -36,6 +36,7 @@ import {
 export type { OrganizationMembership };
 
 export type UserRole =
+  | "super_admin"
   | "admin"
   | "manager"
   | "receptionist"
@@ -60,6 +61,7 @@ export type BusinessType =
 export type SubscriptionStatus = "trial" | "active" | "past_due" | "cancelled" | "expired" | "none";
 
 export const ROLE_LABELS: Record<UserRole, string> = {
+  super_admin: "Super Admin",
   admin: "Administrator",
   manager: "Manager",
   receptionist: "Receptionist",

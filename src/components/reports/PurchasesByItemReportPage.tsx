@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import * as XLSX from "xlsx";
@@ -73,6 +73,8 @@ export function PurchasesByItemReportPage() {
       try {
         setExpenseSourceWarning(null);
         const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
+        const fromDate = toBusinessDateString(from);
+        const toDateExclusive = toBusinessDateString(to);
         const [
           billsRes,
           poItemsRes,
@@ -124,8 +126,8 @@ export function PurchasesByItemReportPage() {
             supabase
               .from("journal_entry_lines")
               .select("debit,credit,gl_account_id,journal_entries!inner(entry_date,reference_type,is_posted)")
-              .gte("journal_entries.entry_date", from.toISOString().slice(0, 10))
-              .lt("journal_entries.entry_date", to.toISOString().slice(0, 10))
+              .gte("journal_entries.entry_date", fromDate)
+              .lt("journal_entries.entry_date", toDateExclusive)
               .eq("journal_entries.is_posted", true)
               .eq("journal_entries.is_deleted", false),
             orgId,
@@ -406,7 +408,7 @@ export function PurchasesByItemReportPage() {
     purchaseLines
       .filter((l) => l.itemName === breakdownItem)
       .forEach((l) => {
-        const dateKey = new Date(l.purchaseDate).toISOString().slice(0, 10);
+        const dateKey = toBusinessDateString(l.purchaseDate);
         const prev = grouped.get(dateKey) || { date: dateKey, quantity: 0, amount: 0 };
         prev.quantity += l.quantity;
         prev.amount += l.amount;
