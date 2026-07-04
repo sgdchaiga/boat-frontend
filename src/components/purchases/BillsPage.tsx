@@ -20,6 +20,7 @@ import { createJournalForBill, deleteJournalEntryByReference, reverseJournalEntr
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
+import { randomUuid } from "../../lib/randomUuid";
 
 interface Bill {
   id: string;
@@ -39,9 +40,18 @@ interface Bill {
 
 type BillItem = {
   id: string;
+  product_id?: string | null;
   description: string;
   cost_price: number;
   quantity: number;
+};
+
+type BillItemDraft = {
+  id: string;
+  product_id?: string | null;
+  description: string;
+  quantity: string;
+  cost_price: string;
 };
 
 interface BillsPageProps {
@@ -163,7 +173,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
   const [detailItems, setDetailItems] = useState<BillItem[]>([]);
   const [itemEditorBill, setItemEditorBill] = useState<Bill | null>(null);
-  const [itemDrafts, setItemDrafts] = useState<Array<{ id: string; description: string; quantity: string; cost_price: string }>>([]);
+  const [itemDrafts, setItemDrafts] = useState<BillItemDraft[]>([]);
+  const [cloneItemDrafts, setCloneItemDrafts] = useState<BillItemDraft[]>([]);
   const [savingItems, setSavingItems] = useState(false);
   const [detailPayments, setDetailPayments] = useState<
     { id: string; amount: number; payment_date: string; bulk?: boolean }[]
@@ -570,7 +581,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setShowModal(true);
   };
 
-  const openClone = (bill: Bill) => {
+  const openClone = async (bill: Bill) => {
     if (readOnly || !isAdmin) return;
     setEditingBill(null);
     setVendorId(bill.vendor_id || "");
@@ -579,6 +590,29 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setDueDate(bill.due_date || bDate);
     setAmount(String(bill.amount ?? ""));
     setDescription(bill.description || "");
+    setCloneItemDrafts([]);
+    if (bill.purchase_order_id) {
+      const { data, error } = await supabase
+        .from("purchase_order_items")
+        .select("product_id, description, cost_price, quantity")
+        .eq("purchase_order_id", bill.purchase_order_id)
+        .order("id");
+      if (error) {
+        alert(`Could not load items for cloning: ${error.message}`);
+        return;
+      }
+      setCloneItemDrafts(
+        ((data || []) as Array<{ product_id?: string | null; description?: string | null; cost_price?: number | null; quantity?: number | null }>).map(
+          (item) => ({
+            id: randomUuid(),
+            product_id: item.product_id ?? null,
+            description: item.description || "",
+            quantity: String(item.quantity ?? ""),
+            cost_price: String(item.cost_price ?? ""),
+          })
+        )
+      );
+    }
     setDetailBill(null);
     setShowModal(true);
   };
@@ -589,6 +623,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setItemDrafts(
       detailItems.map((item) => ({
         id: item.id,
+        product_id: item.product_id ?? null,
         description: item.description || "",
         quantity: String(item.quantity ?? ""),
         cost_price: String(item.cost_price ?? ""),
@@ -602,6 +637,10 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     value: string
   ) => {
     setItemDrafts((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  };
+
+  const removeItemDraft = (id: string) => {
+    setItemDrafts((prev) => (prev.length <= 1 ? prev : prev.filter((item) => item.id !== id)));
   };
 
   const saveItemEdits = async () => {
@@ -622,9 +661,19 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
           cost_price: costPrice,
         };
       });
-      const nextAmount = nextItems.reduce((sum, item) => sum + item.quantity * item.cost_price, 0);
       const previousItems = detailItems;
+      const removedItems = previousItems.filter((item) => !nextItems.some((next) => next.id === item.id));
+      const nextAmount = nextItems.reduce((sum, item) => sum + item.quantity * item.cost_price, 0);
       const previousAmount = Number(itemEditorBill.amount || 0);
+
+      for (const item of removedItems) {
+        const { error } = await supabase
+          .from("purchase_order_items")
+          .delete()
+          .eq("id", item.id)
+          .eq("purchase_order_id", itemEditorBill.purchase_order_id);
+        if (error) throw error;
+      }
 
       for (const item of nextItems) {
         const { error } = await supabase
@@ -653,17 +702,18 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
           description: itemEditorBill.description || null,
         });
       } catch (repostError) {
-        for (const item of previousItems) {
-          await supabase
-            .from("purchase_order_items")
-            .update({
+        await supabase
+          .from("purchase_order_items")
+          .upsert(
+            previousItems.map((item) => ({
+              id: item.id,
+              purchase_order_id: itemEditorBill.purchase_order_id,
+              product_id: item.product_id ?? null,
               description: item.description,
               quantity: item.quantity,
               cost_price: item.cost_price,
-            })
-            .eq("id", item.id)
-            .eq("purchase_order_id", itemEditorBill.purchase_order_id);
-        }
+            }))
+          );
         await supabase.from("bills").update({ amount: previousAmount }).eq("id", itemEditorBill.id);
         throw repostError;
       }
@@ -768,7 +818,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         Promise.resolve(
           supabase
             .from("purchase_order_items")
-            .select("id, description, cost_price, quantity")
+            .select("id, product_id, description, cost_price, quantity")
             .eq("purchase_order_id", bill.purchase_order_id)
             .order("id")
         )
@@ -1007,6 +1057,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const closeModal = () => {
     setShowModal(false);
     setEditingBill(null);
+    setCloneItemDrafts([]);
     const today = new Date().toISOString().slice(0, 10);
     setVendorId("");
     setBillDate(today);
@@ -1069,8 +1120,56 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
           }
         }
       } else {
-        const { error } = await supabase.from("bills").insert({ ...payload, status: "pending_approval" });
-        if (error) throw error;
+        let clonedPurchaseOrderId: string | null = null;
+        if (cloneItemDrafts.length > 0) {
+          const cloneItems = cloneItemDrafts.map((item) => {
+            const quantity = Number(item.quantity);
+            const costPrice = parseNumericInput(item.cost_price);
+            if (!item.description.trim()) throw new Error("Every cloned item needs a description.");
+            if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Every cloned item quantity must be greater than zero.");
+            if (!Number.isFinite(costPrice) || costPrice < 0) throw new Error("Cloned item unit prices cannot be negative.");
+            return {
+              product_id: item.product_id || null,
+              description: item.description.trim(),
+              quantity,
+              cost_price: costPrice,
+            };
+          });
+          const cloneTotal = cloneItems.reduce((sum, item) => sum + item.quantity * item.cost_price, 0);
+          const poPayload: Record<string, unknown> = {
+            vendor_id: vendorId,
+            order_date: billDateVal,
+            status: "pending",
+            total_amount: cloneTotal,
+          };
+          if (user?.organization_id) poPayload.organization_id = user.organization_id;
+          const { data: poData, error: poError } = await supabase
+            .from("purchase_orders")
+            .insert(poPayload)
+            .select("id")
+            .single();
+          if (poError || !poData?.id) throw poError || new Error("Failed to create cloned purchase order.");
+          clonedPurchaseOrderId = poData.id;
+          const { error: itemError } = await supabase.from("purchase_order_items").insert(
+            cloneItems.map((item) => ({
+              purchase_order_id: clonedPurchaseOrderId,
+              product_id: item.product_id,
+              description: item.description,
+              quantity: item.quantity,
+              cost_price: item.cost_price,
+            }))
+          );
+          if (itemError) throw itemError;
+        }
+        const insertPayload = clonedPurchaseOrderId ? { ...payload, purchase_order_id: clonedPurchaseOrderId } : payload;
+        const { error } = await supabase.from("bills").insert({ ...insertPayload, status: "pending_approval" });
+        if (error) {
+          if (clonedPurchaseOrderId) {
+            await supabase.from("purchase_order_items").delete().eq("purchase_order_id", clonedPurchaseOrderId);
+            await supabase.from("purchase_orders").delete().eq("id", clonedPurchaseOrderId);
+          }
+          throw error;
+        }
         // Pending bills do not affect the ledger. Approval posts the bill journal.
       }
       closeModal();
@@ -1217,7 +1316,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                       {isAdmin && !readOnly && (
                         <button
                           type="button"
-                          onClick={() => openClone(b)}
+                          onClick={() => void openClone(b)}
                           className="p-1.5 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100"
                           title="Clone GRN/Bill as a pending copy"
                         >
@@ -1394,7 +1493,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                   </button>
                   <button
                     type="button"
-                    onClick={() => openClone(detailBill)}
+                    onClick={() => void openClone(detailBill)}
                     className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
                   >
                     <Copy className="h-4 w-4" /> Clone bill
@@ -1583,6 +1682,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                     <th className="w-28 p-2 text-right font-medium">Qty</th>
                     <th className="w-36 p-2 text-right font-medium">Unit price</th>
                     <th className="w-36 p-2 text-right font-medium">Amount</th>
+                    <th className="w-12 p-2" />
                   </tr>
                 </thead>
                 <tbody>
@@ -1622,6 +1722,17 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                         </td>
                         <td className="p-2 text-right tabular-nums">
                           {(Number.isFinite(qty) && Number.isFinite(unit) ? qty * unit : 0).toFixed(2)}
+                        </td>
+                        <td className="p-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => removeItemDraft(item.id)}
+                            disabled={savingItems || itemDrafts.length <= 1}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-700 disabled:cursor-not-allowed disabled:opacity-40"
+                            title={itemDrafts.length <= 1 ? "A bill must keep at least one item" : "Remove item line"}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
                         </td>
                       </tr>
                     );
