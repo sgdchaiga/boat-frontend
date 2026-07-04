@@ -37,6 +37,13 @@ interface Bill {
   approver?: { full_name: string } | null;
 }
 
+type BillItem = {
+  id: string;
+  description: string;
+  cost_price: number;
+  quantity: number;
+};
+
 interface BillsPageProps {
   highlightBillId?: string;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
@@ -77,7 +84,10 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const [showModal, setShowModal] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
   const [detailBill, setDetailBill] = useState<Bill | null>(null);
-  const [detailItems, setDetailItems] = useState<{ description: string; cost_price: number; quantity: number }[]>([]);
+  const [detailItems, setDetailItems] = useState<BillItem[]>([]);
+  const [itemEditorBill, setItemEditorBill] = useState<Bill | null>(null);
+  const [itemDrafts, setItemDrafts] = useState<Array<{ id: string; description: string; quantity: string; cost_price: string }>>([]);
+  const [savingItems, setSavingItems] = useState(false);
   const [detailPayments, setDetailPayments] = useState<
     { id: string; amount: number; payment_date: string; bulk?: boolean }[]
   >([]);
@@ -398,6 +408,80 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     }
   };
 
+  const repostApprovedBillEffects = async (
+    bill: Bill,
+    next: { amount: number; billDate: string; description: string | null }
+  ) => {
+    const retired = await deleteJournalEntryByReference("bill", bill.id, user?.organization_id);
+    if (!retired.ok) {
+      throw new Error(`The approved bill could not be changed because its payable journal could not be retired: ${retired.error}`);
+    }
+
+    const reposted = await createJournalForBill(
+      bill.id,
+      next.amount,
+      next.description,
+      next.billDate,
+      user?.id ?? null,
+      bill.purchase_order_id ?? null
+    );
+    if (!reposted.ok) {
+      await createJournalForBill(
+        bill.id,
+        Number(bill.amount || 0),
+        bill.description || null,
+        bill.bill_date || businessTodayISO(),
+        user?.id ?? null,
+        bill.purchase_order_id ?? null
+      );
+      throw new Error(`The approved bill could not be changed because its payable journal could not be reposted: ${reposted.error}`);
+    }
+
+    if (bill.purchase_order_id) {
+      const { data: previousStockRows } = await supabase
+        .from("product_stock_movements")
+        .select("product_id,organization_id,movement_date,source_type,source_id,quantity_in,quantity_out,unit_cost,location,note")
+        .eq("source_type", "bill")
+        .eq("source_id", bill.id);
+      await supabase.from("product_stock_movements").delete().eq("source_type", "bill").eq("source_id", bill.id);
+      try {
+        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(bill.id, bill.purchase_order_id);
+        if (unmatchedDescriptions.length > 0) {
+          alert(
+            `Bill saved, but some item descriptions were not matched to products for stock-in posting:\n- ${unmatchedDescriptions.join("\n- ")}`
+          );
+        }
+      } catch (stockError) {
+        await supabase.from("product_stock_movements").delete().eq("source_type", "bill").eq("source_id", bill.id);
+        if ((previousStockRows || []).length > 0) {
+          await supabase.from("product_stock_movements").insert(previousStockRows || []);
+        }
+        await deleteJournalEntryByReference("bill", bill.id, user?.organization_id);
+        await createJournalForBill(
+          bill.id,
+          Number(bill.amount || 0),
+          bill.description || null,
+          bill.bill_date || businessTodayISO(),
+          user?.id ?? null,
+          bill.purchase_order_id ?? null
+        );
+        throw stockError;
+      }
+    }
+
+    if (user?.organization_id) {
+      await supabase
+        .from("treasury_requests")
+        .update({
+          amount: next.amount,
+          purpose: next.description || "Approved supplier bill",
+        })
+        .eq("source_type", "bill")
+        .eq("source_id", bill.id)
+        .eq("organization_id", user.organization_id);
+    }
+  };
+
   const openEdit = (bill: Bill) => {
     setEditingBill(bill);
     setVendorId(bill.vendor_id || "");
@@ -420,6 +504,104 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setDescription(bill.description || "");
     setDetailBill(null);
     setShowModal(true);
+  };
+
+  const openItemEditor = (bill: Bill) => {
+    if (readOnly || !isOrgSuperAdmin || !bill.purchase_order_id || normalizedBillStatus(bill) === "reversed") return;
+    setItemEditorBill(bill);
+    setItemDrafts(
+      detailItems.map((item) => ({
+        id: item.id,
+        description: item.description || "",
+        quantity: String(item.quantity ?? ""),
+        cost_price: String(item.cost_price ?? ""),
+      }))
+    );
+  };
+
+  const updateItemDraft = (
+    id: string,
+    field: "description" | "quantity" | "cost_price",
+    value: string
+  ) => {
+    setItemDrafts((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  };
+
+  const saveItemEdits = async () => {
+    if (!itemEditorBill || readOnly || !isOrgSuperAdmin || !itemEditorBill.purchase_order_id) return;
+    if (itemDrafts.length === 0) return;
+    setSavingItems(true);
+    try {
+      const nextItems = itemDrafts.map((item) => {
+        const quantity = Number(item.quantity);
+        const costPrice = Number(item.cost_price);
+        if (!item.description.trim()) throw new Error("Every item needs a description.");
+        if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Every item quantity must be greater than zero.");
+        if (!Number.isFinite(costPrice) || costPrice < 0) throw new Error("Item unit prices cannot be negative.");
+        return {
+          id: item.id,
+          description: item.description.trim(),
+          quantity,
+          cost_price: costPrice,
+        };
+      });
+      const nextAmount = nextItems.reduce((sum, item) => sum + item.quantity * item.cost_price, 0);
+      const previousItems = detailItems;
+      const previousAmount = Number(itemEditorBill.amount || 0);
+
+      for (const item of nextItems) {
+        const { error } = await supabase
+          .from("purchase_order_items")
+          .update({
+            description: item.description,
+            quantity: item.quantity,
+            cost_price: item.cost_price,
+          })
+          .eq("id", item.id)
+          .eq("purchase_order_id", itemEditorBill.purchase_order_id);
+        if (error) throw error;
+      }
+
+      const billPatch = {
+        amount: nextAmount,
+        description: itemEditorBill.description || "Approved supplier bill",
+      };
+      const { error: billError } = await supabase.from("bills").update(billPatch).eq("id", itemEditorBill.id);
+      if (billError) throw billError;
+
+      try {
+        await repostApprovedBillEffects(itemEditorBill, {
+          amount: nextAmount,
+          billDate: itemEditorBill.bill_date || businessTodayISO(),
+          description: itemEditorBill.description || null,
+        });
+      } catch (repostError) {
+        for (const item of previousItems) {
+          await supabase
+            .from("purchase_order_items")
+            .update({
+              description: item.description,
+              quantity: item.quantity,
+              cost_price: item.cost_price,
+            })
+            .eq("id", item.id)
+            .eq("purchase_order_id", itemEditorBill.purchase_order_id);
+        }
+        await supabase.from("bills").update({ amount: previousAmount }).eq("id", itemEditorBill.id);
+        throw repostError;
+      }
+
+      const updatedBill: Bill = { ...itemEditorBill, amount: nextAmount };
+      setDetailBill(updatedBill);
+      setDetailItems(nextItems);
+      setItemEditorBill(null);
+      setItemDrafts([]);
+      await fetchData();
+    } catch (e) {
+      alert("Failed to save bill items: " + (e instanceof Error ? e.message : String(e)));
+    } finally {
+      setSavingItems(false);
+    }
   };
 
   const openDetail = async (bill: Bill) => {
@@ -509,7 +691,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         Promise.resolve(
           supabase
             .from("purchase_order_items")
-            .select("description, cost_price, quantity")
+            .select("id, description, cost_price, quantity")
             .eq("purchase_order_id", bill.purchase_order_id)
             .order("id")
         )
@@ -521,7 +703,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     setDetailPayments(payRes.data || []);
     setDetailCredits(credRes.data || []);
     if (bill.purchase_order_id && results[2]) {
-      const itemsRes = results[2] as { data?: { description: string; cost_price: number; quantity: number }[] };
+      const itemsRes = results[2] as { data?: BillItem[] };
       setDetailItems(itemsRes.data || []);
     }
   };
@@ -789,8 +971,13 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
             amt !== Number(editingBill.amount || 0) ||
             (description.trim() || null) !== (editingBill.description || null));
         if (approvedJournalChanged) {
-          const retired = await deleteJournalEntryByReference("bill", editingBill.id, user?.organization_id);
-          if (!retired.ok) {
+          try {
+            await repostApprovedBillEffects(editingBill, {
+              amount: amt,
+              billDate: billDateVal,
+              description: description.trim() || null,
+            });
+          } catch (repostError) {
             await supabase
               .from("bills")
               .update({
@@ -801,36 +988,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                 description: editingBill.description ?? null,
               })
               .eq("id", editingBill.id);
-            throw new Error(`The approved bill was restored because its payable journal could not be retired: ${retired.error}`);
-          }
-          const reposted = await createJournalForBill(
-            editingBill.id,
-            amt,
-            description.trim() || null,
-            billDateVal,
-            user?.id ?? null,
-            editingBill.purchase_order_id ?? null
-          );
-          if (!reposted.ok) {
-            await supabase
-              .from("bills")
-              .update({
-                vendor_id: editingBill.vendor_id ?? null,
-                bill_date: editingBill.bill_date,
-                due_date: editingBill.due_date,
-                amount: editingBill.amount ?? null,
-                description: editingBill.description ?? null,
-              })
-              .eq("id", editingBill.id);
-            await createJournalForBill(
-              editingBill.id,
-              Number(editingBill.amount || 0),
-              editingBill.description || null,
-              editingBill.bill_date || businessTodayISO(),
-              user?.id ?? null,
-              editingBill.purchase_order_id ?? null
-            );
-            throw new Error(`The approved bill was restored because its payable journal could not be reposted: ${reposted.error}`);
+            throw repostError;
           }
         }
       } else {
@@ -1226,7 +1384,18 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               </div>
             </div>
             <div className="border-t pt-4 mb-4">
-              <h3 className="font-semibold text-slate-700 mb-2">Items on GRN/Bill</h3>
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-slate-700">Items on GRN/Bill</h3>
+                {isOrgSuperAdmin && !readOnly && detailBill.purchase_order_id && isBillApproved(detailBill) && normalizedBillStatus(detailBill) !== "reversed" && detailItems.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => openItemEditor(detailBill)}
+                    className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                  >
+                    <Pencil className="h-4 w-4" /> Edit items
+                  </button>
+                ) : null}
+              </div>
               <div className="rounded-lg border overflow-hidden">
                 <table className="min-w-full text-sm">
                   <thead className="bg-slate-50">
@@ -1309,6 +1478,104 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
                   <ExternalLink className="w-4 h-4" /> Vendor credits ({detailCredits.length})
                 </button>
               </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {itemEditorBill && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => !savingItems && setItemEditorBill(null)}>
+          <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Edit approved bill items</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  Saving updates item lines, bill total, stock-in movements, Treasury amount, and the payable journal.
+                </p>
+              </div>
+              <button type="button" onClick={() => !savingItems && setItemEditorBill(null)} className="rounded p-1 hover:bg-slate-100">
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-slate-700">
+                  <tr>
+                    <th className="p-2 text-left font-medium">Description</th>
+                    <th className="w-28 p-2 text-right font-medium">Qty</th>
+                    <th className="w-36 p-2 text-right font-medium">Unit price</th>
+                    <th className="w-36 p-2 text-right font-medium">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {itemDrafts.map((item) => {
+                    const qty = Number(item.quantity || 0);
+                    const unit = Number(item.cost_price || 0);
+                    return (
+                      <tr key={item.id} className="border-t border-slate-100">
+                        <td className="p-2">
+                          <input
+                            value={item.description}
+                            onChange={(e) => updateItemDraft(item.id, "description", e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-1.5"
+                          />
+                        </td>
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            min="0.0001"
+                            step="0.0001"
+                            value={item.quantity}
+                            onChange={(e) => updateItemDraft(item.id, "quantity", e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-right"
+                          />
+                        </td>
+                        <td className="p-2">
+                          <input
+                            type="number"
+                            min="0"
+                            step="0.01"
+                            value={item.cost_price}
+                            onChange={(e) => updateItemDraft(item.id, "cost_price", e.target.value)}
+                            className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-right"
+                          />
+                        </td>
+                        <td className="p-2 text-right tabular-nums">
+                          {(Number.isFinite(qty) && Number.isFinite(unit) ? qty * unit : 0).toFixed(2)}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-slate-900">
+                New total:{" "}
+                {itemDrafts
+                  .reduce((sum, item) => sum + (Number(item.quantity || 0) || 0) * (Number(item.cost_price || 0) || 0), 0)
+                  .toFixed(2)}
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setItemEditorBill(null)}
+                  disabled={savingItems}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void saveItemEdits()}
+                  disabled={savingItems}
+                  className="rounded-lg bg-brand-700 px-4 py-2 font-medium text-white hover:bg-brand-800 disabled:opacity-50"
+                >
+                  {savingItems ? "Saving..." : "Save item changes"}
+                </button>
+              </div>
             </div>
           </div>
         </div>
