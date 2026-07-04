@@ -20,6 +20,11 @@ interface StaffRow {
   organization_id?: string | null;
 }
 
+const ADMIN_ROLES = [
+  { role_key: "super_admin", display_name: "Super Admin" },
+  { role_key: "admin", display_name: "Administrator" },
+] as const;
+
 export function PlatformBusinessAdminsPage() {
   const [orgs, setOrgs] = useState<OrgRow[]>([]);
   const [staff, setStaff] = useState<StaffRow[]>([]);
@@ -31,12 +36,14 @@ export function PlatformBusinessAdminsPage() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
+  const [role, setRole] = useState<"super_admin" | "admin">("super_admin");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [editingAdmin, setEditingAdmin] = useState<StaffRow | null>(null);
   const [editOrgId, setEditOrgId] = useState("");
   const [editFullName, setEditFullName] = useState("");
   const [editPhone, setEditPhone] = useState("");
+  const [editRole, setEditRole] = useState<"super_admin" | "admin">("admin");
   const [editIsActive, setEditIsActive] = useState(true);
   const [editPassword, setEditPassword] = useState("");
   const [editConfirmPassword, setEditConfirmPassword] = useState("");
@@ -50,17 +57,19 @@ export function PlatformBusinessAdminsPage() {
 
       const orgData = (orgRes.data || []) as OrgRow[];
       setOrgs(orgData);
-      const rows = await fetchOrganizationMembers({ role: "admin" });
+      const rows = await fetchOrganizationMembers();
       setStaff(
-        rows.map((row) => ({
-          id: row.user_id,
-          full_name: row.full_name,
-          email: row.email,
-          phone: row.phone,
-          role: row.role,
-          is_active: row.is_active,
-          organization_id: row.organization_id,
-        }))
+        rows
+          .filter((row) => row.role === "admin" || row.role === "super_admin")
+          .map((row) => ({
+            id: row.user_id,
+            full_name: row.full_name,
+            email: row.email,
+            phone: row.phone,
+            role: row.role,
+            is_active: row.is_active,
+            organization_id: row.organization_id,
+          }))
       );
       if (!selectedOrgId && orgData[0]?.id) setSelectedOrgId(orgData[0].id);
     } catch (e: unknown) {
@@ -113,11 +122,11 @@ export function PlatformBusinessAdminsPage() {
         email: email.trim(),
         password,
         options: {
-          data: {
-            full_name: fullName.trim(),
-            role: "admin",
-            phone: phone.trim() || "",
-          },
+            data: {
+              full_name: fullName.trim(),
+              role,
+              phone: phone.trim() || "",
+            },
         },
       });
       if (signUpErr) {
@@ -128,7 +137,7 @@ export function PlatformBusinessAdminsPage() {
           const { error: inviteErr } = await supabase.rpc("invite_organization_member", {
             p_email: email.trim(),
             p_organization_id: selectedOrgId,
-            p_role: "admin",
+            p_role: role,
             p_full_name: fullName.trim(),
             p_phone: phone.trim() || null,
           });
@@ -145,7 +154,7 @@ export function PlatformBusinessAdminsPage() {
           full_name: fullName.trim(),
           email: email.trim(),
           phone: phone.trim() || null,
-          role: "admin",
+          role,
           is_active: true,
           organization_id: selectedOrgId,
         };
@@ -156,6 +165,7 @@ export function PlatformBusinessAdminsPage() {
       setFullName("");
       setEmail("");
       setPhone("");
+      setRole("super_admin");
       setPassword("");
       setConfirmPassword("");
       await load();
@@ -171,6 +181,7 @@ export function PlatformBusinessAdminsPage() {
     setEditOrgId(admin.organization_id || "");
     setEditFullName(admin.full_name || "");
     setEditPhone(admin.phone || "");
+    setEditRole(admin.role === "super_admin" ? "super_admin" : "admin");
     setEditIsActive(!!admin.is_active);
     setEditPassword("");
     setEditConfirmPassword("");
@@ -215,7 +226,7 @@ export function PlatformBusinessAdminsPage() {
           options: {
             data: {
               full_name: editFullName.trim(),
-              role: "admin",
+              role: editRole,
               phone: editPhone.trim() || "",
             },
           },
@@ -243,7 +254,7 @@ export function PlatformBusinessAdminsPage() {
         const { error: linkErr } = await supabase.rpc("invite_organization_member", {
           p_email: editingAdmin.email.trim(),
           p_organization_id: editOrgId,
-          p_role: "admin",
+          p_role: editRole,
           p_full_name: editFullName.trim(),
           p_phone: editPhone.trim() || null,
         });
@@ -254,6 +265,7 @@ export function PlatformBusinessAdminsPage() {
           .update({
             full_name: editFullName.trim(),
             phone: editPhone.trim() || null,
+            role: editRole,
             is_active: editIsActive,
           })
           .eq("user_id", editingAdmin.id)
@@ -268,6 +280,7 @@ export function PlatformBusinessAdminsPage() {
           organization_id: editOrgId,
           full_name: editFullName.trim(),
           phone: editPhone.trim() || null,
+          role: editRole,
           is_active: editIsActive,
         })
         .eq("id", editingAdmin.id);
@@ -288,9 +301,9 @@ export function PlatformBusinessAdminsPage() {
   return (
     <div className="p-6 lg:p-8 max-w-5xl mx-auto">
       <div className="mb-6 flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-bold text-slate-900">Business Admins</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Business Admins & Super Admins</h1>
         <PageNotes ariaLabel="Business admins help">
-          <p>Create and view organization-level admin users.</p>
+          <p>Create and view organization-level Super Admin and Administrator users.</p>
         </PageNotes>
       </div>
 
@@ -346,6 +359,20 @@ export function PlatformBusinessAdminsPage() {
             />
           </div>
           <div>
+            <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
+            <select
+              className="w-full border border-slate-300 rounded-lg px-3 py-2"
+              value={role}
+              onChange={(e) => setRole(e.target.value as "super_admin" | "admin")}
+            >
+              {ADMIN_ROLES.map((r) => (
+                <option key={r.role_key} value={r.role_key}>
+                  {r.display_name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
             <input
               type="password"
@@ -375,7 +402,7 @@ export function PlatformBusinessAdminsPage() {
               className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-brand-800 text-white rounded-lg hover:bg-brand-900 disabled:opacity-50"
             >
               <Plus className="w-4 h-4" />
-              {saving ? "Saving..." : "Add business admin"}
+              {saving ? "Saving..." : role === "super_admin" ? "Add organization super admin" : "Add business admin"}
             </button>
           </div>
         </div>
@@ -384,10 +411,10 @@ export function PlatformBusinessAdminsPage() {
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="px-4 py-3 border-b border-slate-200 flex items-center gap-2">
           <Users className="w-4 h-4 text-slate-700" />
-          <h2 className="font-semibold text-slate-900">Admins in selected organization</h2>
+          <h2 className="font-semibold text-slate-900">Admins & Super Admins in selected organization</h2>
         </div>
         {adminsForOrg.length === 0 ? (
-          <p className="p-4 text-sm text-slate-500">No admins found for this organization.</p>
+          <p className="p-4 text-sm text-slate-500">No admins or super admins found for this organization.</p>
         ) : (
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
@@ -473,6 +500,19 @@ export function PlatformBusinessAdminsPage() {
               onChange={(e) => setEditPhone(e.target.value)}
               placeholder="+256..."
             />
+
+            <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
+            <select
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+              value={editRole}
+              onChange={(e) => setEditRole(e.target.value as "super_admin" | "admin")}
+            >
+              {ADMIN_ROLES.map((r) => (
+                <option key={r.role_key} value={r.role_key}>
+                  {r.display_name}
+                </option>
+              ))}
+            </select>
 
             <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-5">
               <input

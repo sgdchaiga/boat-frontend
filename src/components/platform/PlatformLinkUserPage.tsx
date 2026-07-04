@@ -16,6 +16,7 @@ interface RoleTypeRow {
 }
 
 const FALLBACK_ROLES: RoleTypeRow[] = [
+  { role_key: "super_admin", display_name: "Super Admin" },
   { role_key: "admin", display_name: "Administrator" },
   { role_key: "manager", display_name: "Manager" },
   { role_key: "accountant", display_name: "Accountant" },
@@ -66,8 +67,12 @@ export function PlatformLinkUserPage() {
       return;
     }
     const rows = (data || []) as RoleTypeRow[];
-    setRoleTypes(rows.length > 0 ? rows : FALLBACK_ROLES);
-    setRole((prev) => (rows.some((r) => r.role_key === prev) ? prev : rows[0]?.role_key ?? "receptionist"));
+    const merged = [...rows];
+    for (const fallback of FALLBACK_ROLES) {
+      if (!merged.some((r) => r.role_key === fallback.role_key)) merged.push(fallback);
+    }
+    setRoleTypes(merged);
+    setRole((prev) => (merged.some((r) => r.role_key === prev) ? prev : merged[0]?.role_key ?? "super_admin"));
   }, []);
 
   const loadMembers = useCallback(async (orgId: string) => {
