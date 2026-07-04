@@ -82,7 +82,7 @@ interface LineItem {
   id?: string;
   product_id: string;
   description: string;
-  cost_price: number;
+  cost_price: number | string;
   quantity: number;
 }
 
@@ -130,6 +130,85 @@ function formatMoney(amount: number, currencyCode: string): string {
   } catch {
     return `${code} ${amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   }
+}
+
+function resolveNumericExpression(value: string | number): number | null {
+  if (typeof value === "number") return Number.isFinite(value) ? value : null;
+  const source = value.trim().replace(/,/g, "").replace(/=/g, "");
+  if (!source) return null;
+  if (!/^[\d+\-*/().\s]+$/.test(source)) return null;
+
+  let index = 0;
+  const skip = () => {
+    while (/\s/.test(source[index] || "")) index += 1;
+  };
+  const parseExpression = (): number | null => {
+    let left = parseTerm();
+    if (left == null) return null;
+    while (true) {
+      skip();
+      const op = source[index];
+      if (op !== "+" && op !== "-") break;
+      index += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      left = op === "+" ? left + right : left - right;
+    }
+    return left;
+  };
+  const parseTerm = (): number | null => {
+    let left = parseFactor();
+    if (left == null) return null;
+    while (true) {
+      skip();
+      const op = source[index];
+      if (op !== "*" && op !== "/") break;
+      index += 1;
+      const right = parseFactor();
+      if (right == null || (op === "/" && right === 0)) return null;
+      left = op === "*" ? left * right : left / right;
+    }
+    return left;
+  };
+  const parseFactor = (): number | null => {
+    skip();
+    const op = source[index];
+    if (op === "+" || op === "-") {
+      index += 1;
+      const value = parseFactor();
+      return value == null ? null : op === "-" ? -value : value;
+    }
+    if (source[index] === "(") {
+      index += 1;
+      const value = parseExpression();
+      skip();
+      if (source[index] !== ")") return null;
+      index += 1;
+      return value;
+    }
+    const start = index;
+    while (/[\d.]/.test(source[index] || "")) index += 1;
+    if (start === index) return null;
+    const raw = source.slice(start, index);
+    if ((raw.match(/\./g) || []).length > 1) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const result = parseExpression();
+  skip();
+  return result != null && index === source.length && Number.isFinite(result) ? result : null;
+}
+
+function parseNumericInput(value: string | number): number {
+  return resolveNumericExpression(value) ?? 0;
+}
+
+function normalizeNumericInput(value: string | number): string | number {
+  if (typeof value === "number") return value;
+  const parsed = resolveNumericExpression(value);
+  if (parsed == null) return value;
+  return Number(parsed.toFixed(6)).toString();
 }
 
 export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrdersPageProps = {}) {
@@ -339,7 +418,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     }
   };
 
-  const lineTotal = (item: LineItem) => Number(item.cost_price || 0) * Number(item.quantity || 0);
+  const lineTotal = (item: LineItem) => parseNumericInput(item.cost_price) * Number(item.quantity || 0);
   const grandTotal = lineItems.reduce((sum, i) => sum + lineTotal(i), 0);
 
   const findProductByName = (name: string) => {
@@ -559,7 +638,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           purchase_order_id: targetPoId,
           product_id: i.product_id,
           description: i.description,
-          cost_price: i.cost_price,
+          cost_price: parseNumericInput(i.cost_price),
           quantity: i.quantity,
           organization_id: effectiveOrg,
         }));
@@ -588,7 +667,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           purchase_order_id: editingOrder.id,
           product_id: i.product_id,
           description: i.description,
-          cost_price: i.cost_price,
+          cost_price: parseNumericInput(i.cost_price),
           quantity: i.quantity,
         }));
         await insertPurchaseOrderItems(itemRows);
@@ -609,7 +688,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
           purchase_order_id: poData.id,
           product_id: i.product_id,
           description: i.description,
-          cost_price: i.cost_price,
+          cost_price: parseNumericInput(i.cost_price),
           quantity: i.quantity,
         }));
         await insertPurchaseOrderItems(newItemRows);
@@ -1238,11 +1317,13 @@ const approvedAt = new Date().toISOString();
                         <div>
                           <label className="block text-xs font-medium text-slate-600 mb-1">Price (each)</label>
                           <input
-                            type="number"
-                            step="0.01"
+                            type="text"
+                            inputMode="decimal"
+                            step="1"
                             min="0"
                             value={item.cost_price || ""}
-                            onChange={(e) => updateLineItem(idx, "cost_price", parseFloat(e.target.value) || 0)}
+                            onChange={(e) => updateLineItem(idx, "cost_price", e.target.value)}
+                            onBlur={(e) => updateLineItem(idx, "cost_price", normalizeNumericInput(e.target.value))}
                             className="w-full border rounded-lg px-3 py-2 text-base text-right"
                           />
                         </div>

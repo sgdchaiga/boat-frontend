@@ -426,9 +426,81 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100;
 }
 
+function resolveNumericExpression(value: string): number | null {
+  const source = value.trim().replace(/,/g, "").replace(/=/g, "");
+  if (!source) return null;
+  if (!/^[\d+\-*/().\s]+$/.test(source)) return null;
+
+  let index = 0;
+  const skip = () => {
+    while (/\s/.test(source[index] || "")) index += 1;
+  };
+  const parseExpression = (): number | null => {
+    let left = parseTerm();
+    if (left == null) return null;
+    while (true) {
+      skip();
+      const op = source[index];
+      if (op !== "+" && op !== "-") break;
+      index += 1;
+      const right = parseTerm();
+      if (right == null) return null;
+      left = op === "+" ? left + right : left - right;
+    }
+    return left;
+  };
+  const parseTerm = (): number | null => {
+    let left = parseFactor();
+    if (left == null) return null;
+    while (true) {
+      skip();
+      const op = source[index];
+      if (op !== "*" && op !== "/") break;
+      index += 1;
+      const right = parseFactor();
+      if (right == null || (op === "/" && right === 0)) return null;
+      left = op === "*" ? left * right : left / right;
+    }
+    return left;
+  };
+  const parseFactor = (): number | null => {
+    skip();
+    const op = source[index];
+    if (op === "+" || op === "-") {
+      index += 1;
+      const value = parseFactor();
+      return value == null ? null : op === "-" ? -value : value;
+    }
+    if (source[index] === "(") {
+      index += 1;
+      const value = parseExpression();
+      skip();
+      if (source[index] !== ")") return null;
+      index += 1;
+      return value;
+    }
+    const start = index;
+    while (/[\d.]/.test(source[index] || "")) index += 1;
+    if (start === index) return null;
+    const raw = source.slice(start, index);
+    if ((raw.match(/\./g) || []).length > 1) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const result = parseExpression();
+  skip();
+  return result != null && index === source.length && Number.isFinite(result) ? result : null;
+}
+
 function parseNum(s: string): number {
-  const n = parseFloat(s);
-  return Number.isFinite(n) ? n : 0;
+  return resolveNumericExpression(s) ?? 0;
+}
+
+function normalizeNumericInput(value: string): string {
+  const parsed = resolveNumericExpression(value);
+  if (parsed == null) return value;
+  return Number(parsed.toFixed(6)).toString();
 }
 
 /** Calendar date in local timezone (date inputs must not use UTC-only ISO). */
@@ -1722,8 +1794,8 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                 <label className="block text-xs font-medium text-slate-600 mb-1">Quantity purchased</label>
                                 <input
                                   type="number"
-                                  step="0.001"
-                                  min="0.001"
+                                  step="1"
+                                  min="1"
                                   value={row.quantity}
                                   onChange={(e) => updateSimpleLine(row.key, { quantity: e.target.value })}
                                   onMouseDown={(e) => e.stopPropagation()}
@@ -1733,11 +1805,13 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                               <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Total amount spent</label>
                               <input
-                                type="number"
-                                step="0.01"
+                                type="text"
+                                inputMode="decimal"
+                                step="1"
                                 min="0"
                                 value={row.amount}
                                 onChange={(e) => updateSimpleLine(row.key, { amount: e.target.value })}
+                                onBlur={(e) => updateSimpleLine(row.key, { amount: normalizeNumericInput(e.target.value) })}
                                 onMouseDown={(e) => e.stopPropagation()}
                                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm text-right tabular-nums max-w-xs"
                                 placeholder="0"
@@ -1991,8 +2065,8 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                   <td className="p-2 align-top">
                                     <input
                                       type="number"
-                                      step="0.001"
-                                      min="0.001"
+                                      step="1"
+                                      min="1"
                                       value={row.quantity}
                                       onChange={(e) => updateLine(row.key, { quantity: e.target.value })}
                                       onMouseDown={(e) => e.stopPropagation()}
@@ -2028,11 +2102,13 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                   </td>
                                   <td className="p-2">
                                     <input
-                                      type="number"
-                                      step="0.01"
+                                      type="text"
+                                      inputMode="decimal"
+                                      step="1"
                                       min="0"
                                       value={row.amount}
                                       onChange={(e) => updateLine(row.key, { amount: e.target.value })}
+                                      onBlur={(e) => updateLine(row.key, { amount: normalizeNumericInput(e.target.value) })}
                                       onMouseDown={(e) => e.stopPropagation()}
                                       className="w-full border border-slate-300 rounded px-2 py-1.5 text-sm text-right"
                                       placeholder="0"
