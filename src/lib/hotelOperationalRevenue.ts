@@ -96,7 +96,7 @@ export async function fetchHotelOperationalRevenue(
     sauna: config.pos_sauna_department_id?.trim() || null,
   };
 
-  const [departmentsRes, productsRes, ordersRes, billingRes, posJournalLinesRes] = await Promise.all([
+  const [departmentsRes, productsRes, ordersRes, billingRes, posJournalLinesRes, roomJournalLinesRes] = await Promise.all([
     filterByOrganizationId(supabase.from("departments").select("id,name"), organizationId, isSuperAdmin),
     filterByOrganizationId(supabase.from("products").select("id,name,department_id,sales_price"), organizationId, isSuperAdmin),
     filterByOrganizationId(
@@ -130,9 +130,23 @@ export async function fetchHotelOperationalRevenue(
       organizationId,
       isSuperAdmin
     ),
+    filterJournalLinesByOrganizationId(
+      supabase
+        .from("journal_entry_lines")
+        .select(
+          "debit,credit,line_description,gl_accounts!inner(account_type),journal_entries!inner(id,entry_date,reference_type,reference_id,description,is_posted)"
+        )
+        .eq("journal_entries.reference_type", "room_charge")
+        .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false)
+        .gte("journal_entries.entry_date", fromDate)
+        .lte("journal_entries.entry_date", toDateInclusive),
+      organizationId,
+      isSuperAdmin
+    ),
   ]);
 
-  for (const result of [departmentsRes, productsRes, ordersRes, billingRes, posJournalLinesRes]) {
+  for (const result of [departmentsRes, productsRes, ordersRes, billingRes, posJournalLinesRes, roomJournalLinesRes]) {
     if (result.error) throw new Error(result.error.message);
   }
 
@@ -203,6 +217,38 @@ export async function fetchHotelOperationalRevenue(
       amount,
     });
   });
+
+  if (Math.abs(totals.rooms) <= 0.0001) {
+    ((roomJournalLinesRes.data || []) as Array<{
+      debit: number | null;
+      credit: number | null;
+      line_description: string | null;
+      gl_accounts?: { account_type?: string | null } | null;
+      journal_entries?: {
+        id: string;
+        entry_date: string;
+        reference_id: string | null;
+        description: string | null;
+      } | null;
+    }>).forEach((line) => {
+      const accountType = String(line.gl_accounts?.account_type || "").toLowerCase();
+      if (accountType !== "income" && accountType !== "revenue") return;
+      const amount = (Number(line.credit) || 0) - (Number(line.debit) || 0);
+      if (Math.abs(amount) <= 0.0001) return;
+      const entryDate = line.journal_entries?.entry_date || fromDate;
+      const period = entryDate.slice(0, 7);
+      totals.rooms += amount;
+      monthly[period] = (monthly[period] || 0) + amount;
+      details.push({
+        id: line.journal_entries?.id || `room-journal-${details.length}`,
+        accountId: REVENUE_ROWS.rooms.account_id,
+        date: entryDate,
+        description: line.line_description || line.journal_entries?.description || "Room charge journal",
+        reference: line.journal_entries?.reference_id || line.journal_entries?.id || "",
+        amount,
+      });
+    });
+  }
 
   const rows = (Object.keys(REVENUE_ROWS) as Array<RevenueBucket | "rooms">).map((key) => ({
     ...REVENUE_ROWS[key],
