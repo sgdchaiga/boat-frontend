@@ -445,7 +445,7 @@ function resolveStockAdjustmentLineAccounts(args: {
   context: Awaited<ReturnType<typeof loadStockAdjustmentGlContext>>;
   legacyInventoryGlAccountId: string | null;
   legacyPurchasesGlAccountId: string | null;
-}): { debitGlAccountId: string | null; creditGlAccountId: string | null; label: string } {
+}): { debitGlAccountId: string | null; creditGlAccountId: string | null; label: string; missingAccountMessage?: string } {
   const { reason, deltaQty, departmentId, context, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
   const departmentGl = departmentId ? context.deptGlMap.get(departmentId) : null;
   const departmentStock = departmentGl?.stock ?? legacyInventoryGlAccountId ?? context.defaults.purchasesInventory ?? context.defaults.posInvKitchen ?? context.defaults.posInvBar ?? null;
@@ -500,6 +500,15 @@ function resolveStockAdjustmentLineAccounts(args: {
     case "expired":
       return { debitGlAccountId: expiredStockExpense, creditGlAccountId: departmentStock, label: "Expired stock" };
     case "internal_consumption":
+      if (departmentId && (!departmentGl?.purchases || !departmentGl?.stock)) {
+        return {
+          debitGlAccountId: null,
+          creditGlAccountId: null,
+          label: "Internal consumption",
+          missingAccountMessage:
+            "Internal consumption stock reductions require the product department to have both COGS/purchases and stock GL accounts mapped.",
+        };
+      }
       return { debitGlAccountId: departmentExpense, creditGlAccountId: departmentStock, label: "Internal consumption" };
     case "production_issue":
       return { debitGlAccountId: workInProgress, creditGlAccountId: rawMaterialsInventory, label: "Production issue" };
@@ -583,6 +592,7 @@ export async function createJournalForStockAdjustment(
   const glContext = await loadStockAdjustmentGlContext(organizationId);
 
   const lines: JournalLine[] = [];
+  const missingAccountMessages = new Set<string>();
   rows.forEach((movement) => {
     const { inQty, outQty } = effectiveStockMovementInOut(movement);
     const deltaQty = inQty - outQty;
@@ -599,11 +609,19 @@ export async function createJournalForStockAdjustment(
       legacyInventoryGlAccountId: accounts.inventoryGlAccountId,
       legacyPurchasesGlAccountId: accounts.stockGainLossGlAccountId,
     });
-    if (!accountPair.debitGlAccountId || !accountPair.creditGlAccountId) return;
+    if (!accountPair.debitGlAccountId || !accountPair.creditGlAccountId) {
+      if (accountPair.missingAccountMessage) missingAccountMessages.add(accountPair.missingAccountMessage);
+      return;
+    }
     const lineDescription = `${productName} - ${accountPair.label}`;
-    lines.push({ gl_account_id: accountPair.debitGlAccountId, debit: amount, credit: 0, line_description: lineDescription });
-    lines.push({ gl_account_id: accountPair.creditGlAccountId, debit: 0, credit: amount, line_description: lineDescription });
+    const dimensions = movement.products?.department_id ? { department_id: movement.products.department_id } : null;
+    lines.push({ gl_account_id: accountPair.debitGlAccountId, debit: amount, credit: 0, line_description: lineDescription, dimensions });
+    lines.push({ gl_account_id: accountPair.creditGlAccountId, debit: 0, credit: amount, line_description: lineDescription, dimensions });
   });
+
+  if (missingAccountMessages.size > 0) {
+    return { ok: false, error: Array.from(missingAccountMessages).join(" ") };
+  }
 
   if (lines.length === 0) {
     return { ok: false, error: "Stock adjustment has no value or mapped accounts to post. Add product costs and configure stock adjustment GL accounts." };

@@ -52,6 +52,7 @@ import { RetailSalesInsightsPage } from './components/reports/RetailSalesInsight
 import { PurchasesByItemReportPage } from './components/reports/PurchasesByItemReportPage';
 import { SalesByItemReportPage } from './components/reports/SalesByItemReportPage';
 import { RoomBillingReportPage } from './components/reports/RoomBillingReportPage';
+import { StockAdjustmentsReportPage } from './components/reports/StockAdjustmentsReportPage';
 import { StaffPage } from './components/StaffPage';
 import { GLAccountsPage } from './components/GLAccountsPage';
 import { VendorsPage } from './components/purchases/VendorsPage';
@@ -1303,6 +1304,8 @@ function AppContent() {
         return <StockMovementReportPage />;
       case 'reports_stock_summary':
         return <StockSummaryReportPage />;
+      case 'reports_stock_adjustments':
+        return <StockAdjustmentsReportPage />;
       case 'reports_purchases_by_item':
         return <PurchasesByItemReportPage />;
       case 'reports_sales_by_item':

@@ -549,6 +549,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             items: [
               { name: 'Stock Summary', page: 'reports_stock_summary' },
               { name: 'Stock Movement', page: 'reports_stock_movement' },
+              { name: 'Stock Adjustments', page: 'reports_stock_adjustments' },
             ],
           },
           {

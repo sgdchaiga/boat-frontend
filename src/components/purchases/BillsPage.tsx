@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { Copy, FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
+import { Copy, Download, FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 import { loadHotelConfig } from "../../lib/hotelConfig";
@@ -54,6 +54,14 @@ type BillItemDraft = {
   cost_price: string;
 };
 
+type PaymentStatusFilter =
+  | "all"
+  | "fully_paid"
+  | "unpaid"
+  | "partially_paid"
+  | "date_unavailable"
+  | "not_fully_paid_or_date_unavailable";
+
 interface BillsPageProps {
   highlightBillId?: string;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
@@ -73,12 +81,42 @@ function formatBillStatusLabel(status: string | null | undefined): string {
   return status || "—";
 }
 
+function formatPaymentFilterLabel(status: PaymentStatusFilter): string {
+  if (status === "fully_paid") return "Fully paid with identified date";
+  if (status === "unpaid") return "Unpaid";
+  if (status === "partially_paid") return "Partially paid";
+  if (status === "date_unavailable") return "Fully paid, date unavailable";
+  if (status === "not_fully_paid_or_date_unavailable") return "Not fully paid / date unavailable";
+  return "All payment statuses";
+}
+
 function isRejectedBill(b: Bill): boolean {
   return (b.status || "").toLowerCase() === "rejected";
 }
 
 function normalizedBillStatus(b: Bill): string {
   return (b.status || "").toLowerCase();
+}
+
+function csvCell(value: string | number | null | undefined): string {
+  const text = String(value ?? "");
+  if (text.includes(",") || text.includes('"') || text.includes("\n")) {
+    return `"${text.replace(/"/g, '""')}"`;
+  }
+  return text;
+}
+
+function downloadCsv(filename: string, rows: (string | number | null | undefined)[][]): void {
+  const csv = rows.map((line) => line.map(csvCell).join(",")).join("\n");
+  const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename.endsWith(".csv") ? filename : `${filename}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function resolveNumericExpression(value: string): number | null {
@@ -191,6 +229,10 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reversingId, setReversingId] = useState<string | null>(null);
   const [paymentReconciliation, setPaymentReconciliation] = useState<Map<string, BillPaymentReconciliation>>(new Map());
+  const [billDateFromFilter, setBillDateFromFilter] = useState("");
+  const [billDateToFilter, setBillDateToFilter] = useState("");
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatusFilter>("all");
+  const [showPaymentGapDrilldown, setShowPaymentGapDrilldown] = useState(false);
 
   const detailPaidTotal = useMemo(() => {
     if (!detailBill) return 0;
@@ -243,10 +285,82 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
     }
   }, [user?.organization_id]);
 
-  const paidOffCount = useMemo(
-    () => bills.filter((bill) => paymentReconciliation.get(bill.id)?.paidOffDate).length,
-    [bills, paymentReconciliation]
+  const classifyPaymentStatus = useCallback(
+    (bill: Bill): Exclude<PaymentStatusFilter, "all" | "not_fully_paid_or_date_unavailable"> => {
+      const reconciliation = paymentReconciliation.get(bill.id);
+      const paidTotal = Number(reconciliation?.paidTotal || 0);
+      const amountDue = Number(bill.amount || 0);
+      if (reconciliation?.paidOffDate) return "fully_paid";
+      if (paidTotal >= amountDue - 0.001 && amountDue > 0) return "date_unavailable";
+      if (paidTotal > 0.001) return "partially_paid";
+      return "unpaid";
+    },
+    [paymentReconciliation]
   );
+
+  const billMatchesDateFilter = useCallback(
+    (bill: Bill) => {
+      const date = bill.bill_date || "";
+      if (billDateFromFilter && (!date || date < billDateFromFilter)) return false;
+      if (billDateToFilter && (!date || date > billDateToFilter)) return false;
+      return true;
+    },
+    [billDateFromFilter, billDateToFilter]
+  );
+
+  const billMatchesPaymentFilter = useCallback(
+    (bill: Bill) => {
+      if (paymentStatusFilter === "all") return true;
+      const status = classifyPaymentStatus(bill);
+      if (paymentStatusFilter === "not_fully_paid_or_date_unavailable") return status !== "fully_paid";
+      return status === paymentStatusFilter;
+    },
+    [classifyPaymentStatus, paymentStatusFilter]
+  );
+
+  const filteredBills = useMemo(
+    () => bills.filter((bill) => billMatchesDateFilter(bill) && billMatchesPaymentFilter(bill)),
+    [bills, billMatchesDateFilter, billMatchesPaymentFilter]
+  );
+
+  const paidOffCount = useMemo(
+    () => filteredBills.filter((bill) => paymentReconciliation.get(bill.id)?.paidOffDate).length,
+    [filteredBills, paymentReconciliation]
+  );
+
+  const paymentGapBills = useMemo(
+    () => filteredBills.filter((bill) => !paymentReconciliation.get(bill.id)?.paidOffDate),
+    [filteredBills, paymentReconciliation]
+  );
+
+  const filteredAmountTotal = useMemo(
+    () => filteredBills.reduce((sum, bill) => sum + Number(bill.amount || 0), 0),
+    [filteredBills]
+  );
+
+  const exportPaymentGapBills = () => {
+    downloadCsv("receive_stock_not_fully_paid_or_date_unavailable.csv", [
+      ["Date", "Vendor", "Description", "Due date", "Workflow status", "Payment status", "Amount", "Paid total", "Balance", "Paid off date"],
+      ...paymentGapBills.map((bill) => {
+        const reconciliation = paymentReconciliation.get(bill.id);
+        const amountDue = Number(bill.amount || 0);
+        const paidTotal = Number(reconciliation?.paidTotal || 0);
+        const paymentStatus = formatPaymentFilterLabel(classifyPaymentStatus(bill));
+        return [
+          bill.bill_date || "",
+          bill.vendors?.name || "",
+          bill.description || "",
+          bill.due_date || "",
+          formatBillStatusLabel(bill.status),
+          paymentStatus,
+          amountDue.toFixed(2),
+          paidTotal.toFixed(2),
+          (amountDue - paidTotal).toFixed(2),
+          reconciliation?.paidOffDate || "",
+        ];
+      }),
+    ]);
+  };
 
   useEffect(() => {
     fetchData();
@@ -1216,10 +1330,71 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         </button>
         </div>
       </div>
+      <div className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-[1fr_1fr_1fr_auto]">
+        <label className="text-sm font-medium text-slate-700">
+          Date from
+          <input
+            type="date"
+            value={billDateFromFilter}
+            onChange={(e) => setBillDateFromFilter(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Date to
+          <input
+            type="date"
+            value={billDateToFilter}
+            onChange={(e) => setBillDateToFilter(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+        <label className="text-sm font-medium text-slate-700">
+          Payment status
+          <select
+            value={paymentStatusFilter}
+            onChange={(e) => setPaymentStatusFilter(e.target.value as PaymentStatusFilter)}
+            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          >
+            <option value="all">All payment statuses</option>
+            <option value="fully_paid">Fully paid with identified date</option>
+            <option value="not_fully_paid_or_date_unavailable">Not fully paid / date unavailable</option>
+            <option value="unpaid">Unpaid</option>
+            <option value="partially_paid">Partially paid</option>
+            <option value="date_unavailable">Fully paid, date unavailable</option>
+          </select>
+        </label>
+        <div className="flex items-end">
+          <button
+            type="button"
+            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 md:w-auto"
+            onClick={() => {
+              setBillDateFromFilter("");
+              setBillDateToFilter("");
+              setPaymentStatusFilter("all");
+            }}
+          >
+            Reset
+          </button>
+        </div>
+      </div>
+
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
-        <div className="rounded-xl border border-slate-200 bg-white p-4"><p className="text-xs text-slate-500">Bills reviewed</p><p className="text-xl font-bold text-slate-900">{bills.length}</p></div>
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+          <p className="text-xs text-slate-500">Bills reviewed</p>
+          <p className="text-xl font-bold text-slate-900">{filteredBills.length}</p>
+          <p className="text-xs text-slate-500">{filteredAmountTotal.toFixed(2)} total value</p>
+        </div>
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-xs text-emerald-700">Fully paid with identified date</p><p className="text-xl font-bold text-emerald-900">{paidOffCount}</p></div>
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><p className="text-xs text-amber-700">Not fully paid / date unavailable</p><p className="text-xl font-bold text-amber-900">{Math.max(0, bills.length - paidOffCount)}</p></div>
+        <button
+          type="button"
+          onClick={() => setShowPaymentGapDrilldown(true)}
+          className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-left transition hover:border-amber-300 hover:bg-amber-100"
+        >
+          <p className="text-xs text-amber-700">Not fully paid / date unavailable</p>
+          <p className="text-xl font-bold text-amber-900">{paymentGapBills.length}</p>
+          <p className="text-xs font-medium text-amber-800">Open drill-down</p>
+        </button>
       </div>
 
       {loading ? (
@@ -1241,7 +1416,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               </tr>
             </thead>
             <tbody>
-              {bills.map((b) => (
+              {filteredBills.map((b) => (
                 <tr
                   key={b.id}
                   ref={b.id === highlightBillId ? highlightRef : undefined}
@@ -1380,7 +1555,88 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
               ))}
             </tbody>
           </table>
-          {bills.length === 0 && <p className="p-8 text-center text-slate-500">No GRN/Bills yet.</p>}
+          {filteredBills.length === 0 && <p className="p-8 text-center text-slate-500">No GRN/Bills match these filters.</p>}
+        </div>
+      )}
+
+      {showPaymentGapDrilldown && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setShowPaymentGapDrilldown(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-5xl w-full p-6 max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+            <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-xl font-bold text-slate-900">Not fully paid / date unavailable</h2>
+                <p className="mt-1 text-sm text-slate-500">
+                  {paymentGapBills.length.toLocaleString()} GRN/Bill(s) in the current date and payment-status filters.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={exportPaymentGapBills}
+                  disabled={paymentGapBills.length === 0}
+                  className="app-btn-secondary disabled:opacity-50"
+                >
+                  <Download className="h-4 w-4" /> Export
+                </button>
+                <button type="button" onClick={() => setShowPaymentGapDrilldown(false)} className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-50">
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-slate-200">
+              <table className="min-w-[900px] w-full text-sm">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                  <tr>
+                    <th className="p-3 text-left">Date</th>
+                    <th className="p-3 text-left">Vendor</th>
+                    <th className="p-3 text-left">Description</th>
+                    <th className="p-3 text-left">Due date</th>
+                    <th className="p-3 text-left">Payment status</th>
+                    <th className="p-3 text-right">Amount</th>
+                    <th className="p-3 text-right">Paid</th>
+                    <th className="p-3 text-right">Balance</th>
+                    <th className="p-3 text-right">Action</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {paymentGapBills.length === 0 ? (
+                    <tr>
+                      <td colSpan={9} className="p-6 text-center text-slate-500">
+                        No matching GRN/Bills.
+                      </td>
+                    </tr>
+                  ) : (
+                    paymentGapBills.map((bill) => {
+                      const reconciliation = paymentReconciliation.get(bill.id);
+                      const amountDue = Number(bill.amount || 0);
+                      const paidTotal = Number(reconciliation?.paidTotal || 0);
+                      return (
+                        <tr key={bill.id} className="hover:bg-slate-50">
+                          <td className="p-3">{bill.bill_date ? new Date(bill.bill_date).toLocaleDateString() : "â€”"}</td>
+                          <td className="p-3">{bill.vendors?.name || "â€”"}</td>
+                          <td className="p-3">{bill.description || "â€”"}</td>
+                          <td className="p-3">{bill.due_date ? new Date(bill.due_date).toLocaleDateString() : "â€”"}</td>
+                          <td className="p-3">{formatPaymentFilterLabel(classifyPaymentStatus(bill))}</td>
+                          <td className="p-3 text-right tabular-nums">{amountDue.toFixed(2)}</td>
+                          <td className="p-3 text-right tabular-nums">{paidTotal.toFixed(2)}</td>
+                          <td className="p-3 text-right tabular-nums">{(amountDue - paidTotal).toFixed(2)}</td>
+                          <td className="p-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => openDetail(bill)}
+                              className="font-medium text-blue-600 hover:text-blue-800 hover:underline"
+                            >
+                              Open
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
         </div>
       )}
 

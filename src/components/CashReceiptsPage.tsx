@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Banknote, ArrowUp, ArrowDown, ArrowUpDown, Plus, ShoppingCart, UtensilsCrossed } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
-import { createJournalForPayment } from "../lib/journal";
+import { createJournalForPayment, reverseJournalEntriesByReference } from "../lib/journal";
 import {
   formatPaymentMethodLabel,
   insertPaymentWithMethodCompat,
@@ -454,6 +454,44 @@ export function CashReceiptsPage({
         })
         .eq("id", payment.id);
       if (error) throw error;
+      const saleOrOrderId = baseSaleOrOrderId(payment.transaction_id);
+      if (isPosCashReceipt(payment) && saleOrOrderId) {
+        const remaining = await filterByOrganizationId(
+          supabase
+            .from("payments")
+            .select("id")
+            .ilike("transaction_id", `${saleOrOrderId}%`)
+            .eq("payment_status", "completed")
+            .neq("id", payment.id),
+          orgId ?? undefined,
+          superAdmin
+        );
+        if (remaining.error) throw remaining.error;
+        if ((remaining.data || []).length === 0) {
+          const journalReversal = await reverseJournalEntriesByReference(
+            "pos",
+            saleOrOrderId,
+            user?.id ?? null,
+            `POS cash receipt ${payment.id.slice(0, 8)} reversed`
+          );
+          if (!journalReversal.ok) throw new Error(journalReversal.error);
+          const saleUpdate = await filterByOrganizationId(
+            supabase
+              .from("retail_sales")
+              .update({
+                payment_status: "refunded",
+                sale_status: "refunded",
+                amount_paid: 0,
+                amount_due: 0,
+                change_amount: 0,
+              })
+              .eq("id", saleOrOrderId),
+            orgId ?? undefined,
+            superAdmin
+          );
+          if (saleUpdate.error) throw saleUpdate.error;
+        }
+      }
       await fetchData();
     } catch (e) {
       const msg = formatSupabaseError(e);

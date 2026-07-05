@@ -78,7 +78,7 @@ export function RetailPosOrdersPage() {
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderDate, setEditingOrderDate] = useState("");
   const [editingOrderLines, setEditingOrderLines] = useState<
-    Array<{ product_id: string; description: string; quantity: number; unit_price: number; department_id: string }>
+    Array<{ id?: string; product_id: string; description: string; quantity: number; unit_price: number; department_id: string }>
   >([]);
   const role = (user?.role || "").toLowerCase();
   const [canEditPosOrdersByRole, setCanEditPosOrdersByRole] = useState<boolean>(
@@ -285,6 +285,7 @@ export function RetailPosOrdersPage() {
     setEditingOrderDate(new Date(order.sale_at).toISOString().slice(0, 16));
     setEditingOrderLines(
       (order.retail_sale_lines || []).map((line) => ({
+        id: line.id,
         product_id: line.product_id || "",
         description: line.description || "",
         quantity: Number(line.quantity || 1),
@@ -331,11 +332,13 @@ export function RetailPosOrdersPage() {
         })
         .eq("id", editingOrderId);
       if (saleErr) throw saleErr;
-      const { error: delErr } = await supabase.from("retail_sale_lines").delete().eq("sale_id", editingOrderId);
-      if (delErr) throw delErr;
-
       const { error: insErr } = await supabase.from("retail_sale_lines").insert(nextLines);
       if (insErr) throw insErr;
+      const oldLineIds = editingOrderLines.map((line) => line.id).filter(Boolean) as string[];
+      if (oldLineIds.length > 0) {
+        const { error: delErr } = await supabase.from("retail_sale_lines").delete().in("id", oldLineIds);
+        if (delErr) throw delErr;
+      }
       const sync = await syncRetailPosOrderAfterEdit(editingOrderId, saleAt, user?.id ?? null, orgId);
       if (!sync.ok) throw new Error(`Order saved, but accounting synchronization failed: ${sync.error}`);
       setEditingOrderId(null);
