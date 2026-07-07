@@ -3,7 +3,7 @@ import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
 
 type RoomBillingRow = {
@@ -44,7 +44,7 @@ export function RoomBillingReportPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
-  const [dateRange, setDateRange] = useState<DateRangeKey>("this_month");
+  const [dateRange, setDateRange] = useState<DateRangeKey>("this_year");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [loading, setLoading] = useState(true);
@@ -62,21 +62,40 @@ export function RoomBillingReportPage() {
         return;
       }
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-      const result = await filterByOrganizationId(
-        supabase
-          .from("billing")
-          .select(
-            "id, stay_id, description, amount, charged_at, stay_night_date, auto_charge_source, stays(rooms(room_number), hotel_customers(first_name, last_name))"
-          )
-          .eq("charge_type", "room")
-          .gte("charged_at", from.toISOString())
-          .lt("charged_at", to.toISOString())
-          .order("charged_at", { ascending: false }),
-        orgId,
-        superAdmin
-      );
-      if (result.error) throw result.error;
-      setRows((result.data || []) as unknown as RoomBillingRow[]);
+      const fromDate = toBusinessDateString(from);
+      const toInclusiveDate = toBusinessDateString(new Date(to.getTime() - 1));
+      const select =
+        "id, stay_id, description, amount, charged_at, stay_night_date, auto_charge_source, stays(rooms(room_number), hotel_customers(first_name, last_name))";
+      const [byChargeDate, byFolioNight] = await Promise.all([
+        filterByOrganizationId(
+          supabase
+            .from("billing")
+            .select(select)
+            .eq("charge_type", "room")
+            .gte("charged_at", from.toISOString())
+            .lt("charged_at", to.toISOString())
+            .order("charged_at", { ascending: false }),
+          orgId,
+          superAdmin
+        ),
+        filterByOrganizationId(
+          supabase
+            .from("billing")
+            .select(select)
+            .eq("charge_type", "room")
+            .gte("stay_night_date", fromDate)
+            .lte("stay_night_date", toInclusiveDate)
+            .order("stay_night_date", { ascending: false }),
+          orgId,
+          superAdmin
+        ),
+      ]);
+      if (byChargeDate.error && byFolioNight.error) throw byChargeDate.error;
+      const rowMap = new Map<string, RoomBillingRow>();
+      ([...(byChargeDate.data || []), ...(byFolioNight.data || [])] as unknown as RoomBillingRow[]).forEach((row) => {
+        rowMap.set(row.id, row);
+      });
+      setRows(Array.from(rowMap.values()));
     } catch (e) {
       console.error("[Room billing report]", e);
       setRows([]);
