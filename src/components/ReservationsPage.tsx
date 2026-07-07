@@ -9,6 +9,8 @@ import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
   hotel_customers: { id: string; first_name: string; last_name: string } | null;
   rooms: { id: string; room_number: string } | null;
+  room_discount_amount?: number | null;
+  room_discount_reason?: string | null;
 };
 
 type PropertyCustomer = {
@@ -43,7 +45,9 @@ export function ReservationsPage() {
     room_id: "",
     check_in_date: "",
     check_out_date: "",
-    status: "confirmed"
+    status: "confirmed",
+    room_discount_amount: "",
+    room_discount_reason: "",
   });
 
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -73,6 +77,8 @@ export function ReservationsPage() {
         check_in_date,
         check_out_date,
         status,
+        room_discount_amount,
+        room_discount_reason,
         created_at,
         hotel_customers(id, first_name, last_name),
         rooms(id, room_number)
@@ -152,6 +158,8 @@ export function ReservationsPage() {
         check_in_date,
         check_out_date,
         status,
+        room_discount_amount,
+        room_discount_reason,
         created_at,
         hotel_customers(id, first_name, last_name),
         rooms(id, room_number)
@@ -221,7 +229,9 @@ export function ReservationsPage() {
       room_id: "",
       check_in_date: "",
       check_out_date: "",
-      status: "confirmed"
+      status: "confirmed",
+      room_discount_amount: "",
+      room_discount_reason: "",
     });
 
     setShowForm(true);
@@ -240,7 +250,9 @@ export function ReservationsPage() {
       room_id: reservation.room_id ?? "",
       check_in_date: reservation.check_in_date,
       check_out_date: reservation.check_out_date,
-      status: reservation.status
+      status: reservation.status,
+      room_discount_amount: reservation.room_discount_amount ? String(reservation.room_discount_amount) : "",
+      room_discount_reason: reservation.room_discount_reason ?? "",
     });
 
     setShowForm(true);
@@ -261,11 +273,22 @@ export function ReservationsPage() {
     setSavingReservation(true);
     try {
 
+      const discountAmount = Math.max(0, Number(form.room_discount_amount || 0) || 0);
+      const payload = {
+        property_customer_id: form.property_customer_id,
+        room_id: form.room_id,
+        check_in_date: form.check_in_date,
+        check_out_date: form.check_out_date,
+        status: form.status,
+        room_discount_amount: discountAmount,
+        room_discount_reason: form.room_discount_reason.trim() || null,
+      };
+
       if (editingReservation) {
         await filterByOrganizationId(
           supabase
             .from("reservations")
-            .update(form)
+            .update(payload)
             .eq("id", editingReservation.id),
           orgId,
           superAdmin
@@ -274,7 +297,7 @@ export function ReservationsPage() {
         await supabase
           .from("reservations")
           .insert({
-            ...form,
+            ...payload,
             organization_id: orgId ?? null,
           });
       }
@@ -313,6 +336,8 @@ export function ReservationsPage() {
         property_customer_id: reservation.property_customer_id,
         room_id: reservation.room_id,
         check_in_time: new Date().toISOString(),
+        room_discount_amount: Math.max(0, Number(reservation.room_discount_amount || 0) || 0),
+        room_discount_reason: reservation.room_discount_reason ?? null,
         organization_id: orgId ?? null,
       };
       const { data: staffRow } = await supabase
@@ -427,6 +452,13 @@ export function ReservationsPage() {
                 Status: {reservation.status}
               </p>
 
+              {Number(reservation.room_discount_amount || 0) > 0 ? (
+                <p className="text-sm text-emerald-700">
+                  Room discount/night: {Number(reservation.room_discount_amount || 0).toFixed(2)}
+                  {reservation.room_discount_reason ? ` - ${reservation.room_discount_reason}` : ""}
+                </p>
+              ) : null}
+
             </div>
 
             <div className="flex gap-3">
@@ -524,6 +556,24 @@ export function ReservationsPage() {
               onChange={(e) =>
                 setForm({ ...form, check_out_date: e.target.value })
               }
+              className="w-full border p-2 rounded"
+            />
+
+            <input
+              type="number"
+              min="0"
+              step="0.01"
+              value={form.room_discount_amount}
+              onChange={(e) => setForm({ ...form, room_discount_amount: e.target.value })}
+              placeholder="Room discount per night"
+              className="w-full border p-2 rounded"
+            />
+
+            <input
+              type="text"
+              value={form.room_discount_reason}
+              onChange={(e) => setForm({ ...form, room_discount_reason: e.target.value })}
+              placeholder="Discount reason"
               className="w-full border p-2 rounded"
             />
 

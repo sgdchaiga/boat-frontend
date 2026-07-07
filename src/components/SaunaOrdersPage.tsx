@@ -20,6 +20,7 @@ type Department = Database["public"]["Tables"]["departments"]["Row"];
 
 interface SaunaOrderItem {
   quantity: number;
+  unit_price?: number | null;
   notes?: string | null;
   products: { name: string; department_id: string | null; sales_price?: number | null };
 }
@@ -56,7 +57,7 @@ export function SaunaOrdersPage() {
   const [loading, setLoading] = useState(true);
   const [saunaDepartment, setSaunaDepartment] = useState<Department | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
-  const [productOptions, setProductOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [productOptions, setProductOptions] = useState<Array<{ id: string; name: string; sales_price?: number | null }>>([]);
   const [payingOrder, setPayingOrder] = useState<SaunaOrder | null>(null);
   const [payAmount, setPayAmount] = useState("");
   const [payMethod, setPayMethod] = useState<PaymentMethodCode>("cash");
@@ -64,7 +65,7 @@ export function SaunaOrdersPage() {
   const [savingPayment, setSavingPayment] = useState(false);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderDate, setEditingOrderDate] = useState("");
-  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
+  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; unit_price?: number | null; notes: string }>>([]);
   const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">("all");
 
   const [dateRange, setDateRange] = useState<DateRangeKey>("last_30_days");
@@ -111,7 +112,7 @@ export function SaunaOrdersPage() {
             customer_name,
             created_at,
             created_by,
-            kitchen_order_items(quantity, notes, product_id)
+            kitchen_order_items(quantity, unit_price, notes, product_id)
           `
             )
             .gte("created_at", fromIso)
@@ -142,14 +143,14 @@ export function SaunaOrdersPage() {
       }[];
       const productMap = Object.fromEntries(productRows.map((p) => [p.id, p]));
       const productChoices = saunaDept ? productRows.filter((p) => p.department_id === saunaDept.id) : productRows;
-      setProductOptions(productChoices.map((p) => ({ id: p.id, name: p.name })));
+      setProductOptions(productChoices.map((p) => ({ id: p.id, name: p.name, sales_price: p.sales_price })));
       const rawOrders = (ordersRes.data || []) as any[];
       const data = rawOrders.map((o) => ({
         ...o,
         kitchen_order_items: (o.kitchen_order_items || []).map((i: any) => ({
           ...i,
           products: i.product_id && productMap[i.product_id]
-            ? { name: productMap[i.product_id].name, department_id: productMap[i.product_id].department_id, sales_price: productMap[i.product_id].sales_price }
+            ? { name: productMap[i.product_id].name, department_id: productMap[i.product_id].department_id, sales_price: i.unit_price ?? productMap[i.product_id].sales_price }
             : { name: "Item", department_id: null, sales_price: 0 },
         })),
       })) as SaunaOrder[];
@@ -254,6 +255,7 @@ export function SaunaOrdersPage() {
       (order.kitchen_order_items || []).map((item) => ({
         product_id: String((item as any).product_id || ""),
         quantity: Number(item.quantity || 1),
+        unit_price: item.unit_price ?? item.products?.sales_price ?? null,
         notes: String(item.notes || ""),
       }))
     );
@@ -261,7 +263,8 @@ export function SaunaOrdersPage() {
 
   const addEditingOrderItem = () => {
     const fallbackProductId = productOptions[0]?.id || "";
-    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, notes: "" }]);
+    const fallbackProduct = productOptions.find((product) => product.id === fallbackProductId);
+    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, unit_price: fallbackProduct?.sales_price ?? null, notes: "" }]);
   };
 
   const saveEditedOrder = async () => {
@@ -278,6 +281,7 @@ export function SaunaOrdersPage() {
           order_id: editingOrderId,
           product_id: item.product_id,
           quantity: Number(item.quantity),
+          unit_price: item.unit_price ?? productOptions.find((product) => product.id === item.product_id)?.sales_price ?? 0,
           notes: item.notes.trim() || null,
         }));
       if (nextItems.length > 0) {
@@ -491,7 +495,11 @@ export function SaunaOrdersPage() {
                   value={item.product_id}
                   onChange={(e) =>
                     setEditingOrderItems((prev) =>
-                      prev.map((row, i) => (i === index ? { ...row, product_id: e.target.value } : row))
+                      prev.map((row, i) => {
+                        if (i !== index) return row;
+                        const nextProduct = productOptions.find((product) => product.id === e.target.value);
+                        return { ...row, product_id: e.target.value, unit_price: nextProduct?.sales_price ?? null };
+                      })
                     )
                   }
                   className="border border-slate-300 rounded-lg px-3 py-2 text-sm"

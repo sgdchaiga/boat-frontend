@@ -712,7 +712,7 @@ export function JournalEntriesPage() {
       const referenceId = entry.reference_id;
       const [hotelOrderRes, retailSaleRes, paymentsRes, stockMovesRes] = await Promise.all([
         filterByOrganizationId(
-          supabase.from("kitchen_orders").select("*, kitchen_order_items(quantity,product_id,notes)").eq("id", referenceId).maybeSingle(),
+          supabase.from("kitchen_orders").select("*, kitchen_order_items(quantity,unit_price,product_id,notes)").eq("id", referenceId).maybeSingle(),
           orgId,
           false
         ),

@@ -167,7 +167,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
             id,
             customer_name,
             created_at,
-            kitchen_order_items(quantity, notes, product_id)
+            kitchen_order_items(quantity, unit_price, notes, product_id)
           `
             )
             .gte("created_at", fromStr)
@@ -340,7 +340,7 @@ export function TransactionsPage({ highlightTransactionId }: { highlightTransact
           const product = item.product_id ? productMap[item.product_id] : null;
           const depId = product?.department_id ?? null;
           const departmentName = depId ? depMap[depId] || "Unassigned" : "Unassigned";
-          const price = Number(product?.sales_price ?? 0);
+          const price = Number(item.unit_price ?? product?.sales_price ?? 0);
           const qty = Number(item.quantity ?? 0);
           transactionRows.push({
             date: new Date(rowDateIso).toLocaleDateString(),

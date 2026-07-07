@@ -2162,7 +2162,7 @@ export async function syncHotelPosOrderJournal(
     { data: payments, error: paymentError },
     { data: rawStockMovements, error: stockMovementsError },
   ] = await Promise.all([
-    (supabase as any).from("kitchen_order_items").select("quantity,product_id,notes").eq("order_id", orderId),
+    (supabase as any).from("kitchen_order_items").select("quantity,unit_price,product_id,notes").eq("order_id", orderId),
     (supabase as any)
       .from("payments")
       .select("amount,payment_method,payment_status,paid_at")
@@ -2224,7 +2224,7 @@ export async function syncHotelPosOrderJournal(
       return {
         quantity: Number(item.quantity || 0),
         name: String(product?.name || "Item"),
-        salesPrice: Number(product?.sales_price || 0),
+        salesPrice: Number(item.unit_price ?? product?.sales_price ?? 0),
         costPrice: Number(product?.cost_price || 0),
         departmentId: product?.department_id ? String(product.department_id) : null,
         departmentNameFallback: noteBucketName,
@@ -3617,7 +3617,7 @@ export async function backfillJournalEntries(options?: {
     reportProgress("pos", "Backfilling POS orders", 0, (orders || []).length);
     const { data: items } = await supabase
       .from("kitchen_order_items")
-      .select("order_id, quantity, product_id")
+      .select("order_id, quantity, unit_price, product_id")
       .in("order_id", orderIds);
     const productIds = [...new Set((items || []).map((i: { product_id: string }) => i.product_id).filter(Boolean))];
     const { data: products } = await supabase.from("products").select("id, sales_price").in("id", productIds);
@@ -3625,9 +3625,9 @@ export async function backfillJournalEntries(options?: {
       ((products || []) as { id: string; sales_price: number | null }[]).map((p) => [p.id, Number(p.sales_price) || 0])
     );
     const totalByOrder: Record<string, number> = {};
-    (items || []).forEach((i: { order_id: string; quantity: number; product_id: string }) => {
+    (items || []).forEach((i: { order_id: string; quantity: number; unit_price: number | null; product_id: string }) => {
       if (!totalByOrder[i.order_id]) totalByOrder[i.order_id] = 0;
-      totalByOrder[i.order_id] += (i.quantity || 0) * (priceMap[i.product_id] ?? 0);
+      totalByOrder[i.order_id] += (i.quantity || 0) * Number(i.unit_price ?? priceMap[i.product_id] ?? 0);
     });
     let posProcessed = 0;
     for (const o of orders || []) {

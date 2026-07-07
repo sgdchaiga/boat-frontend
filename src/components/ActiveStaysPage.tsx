@@ -33,6 +33,9 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
   const [billStay, setBillStay] = useState<Stay | null>(null);
   const [editStay, setEditStay] = useState<Stay | null>(null);
   const [editCustomerId, setEditCustomerId] = useState("");
+  const [discountStay, setDiscountStay] = useState<Stay | null>(null);
+  const [discountAmount, setDiscountAmount] = useState("");
+  const [discountReason, setDiscountReason] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
 
   useEffect(() => {
@@ -100,6 +103,48 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
   const openEditCustomer = (stay: Stay) => {
     setEditStay(stay);
     setEditCustomerId(stay.property_customer_id ?? "");
+  };
+
+  const openDiscountEdit = (stay: Stay) => {
+    setDiscountStay(stay);
+    setDiscountAmount(stay.room_discount_amount ? String(stay.room_discount_amount) : "");
+    setDiscountReason(stay.room_discount_reason ?? "");
+  };
+
+  const saveRoomDiscount = async () => {
+    if (!discountStay || savingEdit) return;
+    setSavingEdit(true);
+    try {
+      const nextAmount = Math.max(0, Number(discountAmount || 0) || 0);
+      const patch = {
+        room_discount_amount: nextAmount,
+        room_discount_reason: discountReason.trim() || null,
+      };
+      const { error } = await filterByOrganizationId(
+        supabase.from("stays").update(patch).eq("id", discountStay.id),
+        orgId,
+        superAdmin
+      );
+      if (error) throw error;
+      if (discountStay.reservation_id) {
+        await filterByOrganizationId(
+          supabase.from("reservations").update(patch).eq("id", discountStay.reservation_id),
+          orgId,
+          superAdmin
+        );
+      }
+      setDiscountStay(null);
+      setDiscountAmount("");
+      setDiscountReason("");
+      await fetchActiveStays();
+    } catch (error: unknown) {
+      const msg = error && typeof error === "object" && "message" in error
+        ? String((error as { message?: string }).message)
+        : "Failed to update room discount";
+      alert(msg);
+    } finally {
+      setSavingEdit(false);
+    }
   };
 
   const saveCustomerCorrection = async () => {
@@ -273,9 +318,28 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                     <p className="text-slate-500">Status</p>
                     <p className="font-medium text-green-600">Active</p>
                   </div>
+                  <div>
+                    <p className="text-slate-500">Room discount/night</p>
+                    <p className="font-medium text-slate-900">
+                      {Number(stay.room_discount_amount || 0) > 0
+                        ? Number(stay.room_discount_amount || 0).toFixed(2)
+                        : "None"}
+                    </p>
+                  </div>
                 </div>
+                {Number(stay.room_discount_amount || 0) > 0 && stay.room_discount_reason ? (
+                  <p className="mt-3 text-sm text-emerald-700">{stay.room_discount_reason}</p>
+                ) : null}
               </div>
               <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => openDiscountEdit(stay)}
+                  className="flex items-center gap-2 px-4 py-3 border border-slate-300 rounded-lg hover:bg-slate-50 transition whitespace-nowrap"
+                >
+                  <Edit className="w-5 h-5" />
+                  Discount
+                </button>
                 <button
                   onClick={() => setBillStay(stay)}
                   className="flex items-center gap-2 px-4 py-3 border border-slate-300 rounded-lg hover:bg-slate-50 transition whitespace-nowrap"
@@ -374,6 +438,53 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                 type="button"
                 onClick={() => void saveCustomerCorrection()}
                 disabled={savingEdit || !editCustomerId}
+                className="px-4 py-2 bg-brand-700 text-white rounded-lg disabled:opacity-50"
+              >
+                {savingEdit ? "Saving..." : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {discountStay && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl p-6 w-full max-w-md">
+            <h3 className="text-lg font-semibold mb-3">Room discount</h3>
+            <p className="text-sm text-slate-600 mb-3">Set a per-night discount for future automatic room charges on this stay.</p>
+            <div className="space-y-3">
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                value={discountAmount}
+                onChange={(e) => setDiscountAmount(e.target.value)}
+                placeholder="Discount per night"
+                disabled={savingEdit}
+              />
+              <input
+                type="text"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                value={discountReason}
+                onChange={(e) => setDiscountReason(e.target.value)}
+                placeholder="Reason"
+                disabled={savingEdit}
+              />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => !savingEdit && setDiscountStay(null)}
+                className="px-4 py-2 border border-slate-300 rounded-lg"
+                disabled={savingEdit}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveRoomDiscount()}
+                disabled={savingEdit}
                 className="px-4 py-2 bg-brand-700 text-white rounded-lg disabled:opacity-50"
               >
                 {savingEdit ? "Saving..." : "Save"}

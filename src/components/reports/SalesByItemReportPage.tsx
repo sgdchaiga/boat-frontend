@@ -51,7 +51,7 @@ export function SalesByItemReportPage() {
           filterByOrganizationId(
             supabase
               .from("kitchen_orders")
-              .select("id, customer_name, created_at, kitchen_order_items(quantity, product_id, notes)")
+              .select("id, customer_name, created_at, kitchen_order_items(quantity, unit_price, product_id, notes)")
               .gte("created_at", from.toISOString())
               .lt("created_at", to.toISOString()),
             orgId,
@@ -101,7 +101,7 @@ export function SalesByItemReportPage() {
         const kitchenOrders = (kitchenRes.data || []) as Array<{
           id: string;
           customer_name: string | null;
-          kitchen_order_items: Array<{ quantity: number | null; product_id: string | null; notes: string | null }>;
+          kitchen_order_items: Array<{ quantity: number | null; unit_price: number | null; product_id: string | null; notes: string | null }>;
         }>;
         const billings = (billingRes.data || []) as Array<{
           amount: number | null;
@@ -163,7 +163,7 @@ export function SalesByItemReportPage() {
             const itemName = p?.name || "POS item";
             const department = p?.department_id ? deptById.get(p.department_id) || "Unassigned" : "POS";
             const qty = Number(it.quantity || 0);
-            const amount = qty * Number(p?.sales_price || 0);
+            const amount = qty * Number(it.unit_price ?? p?.sales_price ?? 0);
             addRow({
               itemName,
               department,

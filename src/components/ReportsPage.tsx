@@ -102,7 +102,7 @@ function HotelRetailReportsPage() {
         filterByOrganizationId(
           supabase
             .from('kitchen_orders')
-            .select('created_at, kitchen_order_items(quantity, product_id)')
+            .select('created_at, kitchen_order_items(quantity, unit_price, product_id)')
             .gte('created_at', fromIso)
             .lt('created_at', toIso),
           orgId,
@@ -161,7 +161,7 @@ function HotelRetailReportsPage() {
           (order.kitchen_order_items || []).forEach((item: any) => {
             const prod = item.product_id ? productMap[item.product_id] : null;
             const depId = prod?.department_id ?? null;
-            const price = prod?.sales_price ?? 0;
+            const price = item.unit_price ?? prod?.sales_price ?? 0;
             const amount = Number(item.quantity) * Number(price);
             const key = depId ?? 'unknown';
             deptTotals[key] = (deptTotals[key] || 0) + amount;

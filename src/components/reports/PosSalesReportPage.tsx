@@ -124,7 +124,7 @@ export function PosSalesReportPage() {
       let hotelQuery = filterByOrganizationId(
         supabase
           .from("kitchen_orders")
-          .select("id,created_at,customer_name,table_number,order_status,kitchen_order_items(quantity,product_id)")
+          .select("id,created_at,customer_name,table_number,order_status,kitchen_order_items(quantity,unit_price,product_id)")
           .not("order_status", "in", '("cancelled","canceled","reversed","void","voided")'),
         orgId,
         superAdmin
@@ -190,7 +190,7 @@ export function PosSalesReportPage() {
         created_at: string;
         customer_name: string | null;
         table_number: string | null;
-        kitchen_order_items: Array<{ quantity: number | null; product_id: string | null }> | null;
+        kitchen_order_items: Array<{ quantity: number | null; unit_price: number | null; product_id: string | null }> | null;
       }>) {
         const transaction: TransactionSummary = {
           occurredAt: order.created_at,
@@ -202,7 +202,7 @@ export function PosSalesReportPage() {
           addDepartmentAmount(
             transaction,
             product?.department_id || null,
-            Number(item.quantity || 0) * Number(product?.sales_price || 0)
+            Number(item.quantity || 0) * Number(item.unit_price ?? product?.sales_price ?? 0)
           );
         }
         transactions.set(order.id, transaction);

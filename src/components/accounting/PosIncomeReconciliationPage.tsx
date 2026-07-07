@@ -21,7 +21,7 @@ type PosOrderRow = {
   customer_name: string | null;
   table_number: string | null;
   order_status: string | null;
-  kitchen_order_items: Array<{ quantity: number | null; product_id: string | null }> | null;
+  kitchen_order_items: Array<{ quantity: number | null; unit_price: number | null; product_id: string | null }> | null;
 };
 type PosReconRow = {
   orderId: string;
@@ -97,7 +97,7 @@ export function PosIncomeReconciliationPage() {
         filterByOrganizationId(
           supabase
             .from("kitchen_orders")
-            .select("id,created_at,customer_name,table_number,order_status,kitchen_order_items(quantity,product_id)")
+            .select("id,created_at,customer_name,table_number,order_status,kitchen_order_items(quantity,unit_price,product_id)")
             .gte("created_at", `${fromDate}T00:00:00`)
             .lte("created_at", `${toDate}T23:59:59`)
             .order("created_at", { ascending: false }),
@@ -166,7 +166,7 @@ export function PosIncomeReconciliationPage() {
         ? await filterByOrganizationId(
             supabase
               .from("kitchen_orders")
-              .select("id,created_at,customer_name,table_number,order_status,kitchen_order_items(quantity,product_id)")
+              .select("id,created_at,customer_name,table_number,order_status,kitchen_order_items(quantity,unit_price,product_id)")
               .in("id", missingReferenceIds),
             orgId,
             superAdmin
@@ -230,7 +230,7 @@ export function PosIncomeReconciliationPage() {
           if (departmentId && rowDepartmentId !== departmentId) return;
           departmentTotals.set(
             rowDepartmentId,
-            roundMoney((departmentTotals.get(rowDepartmentId) || 0) + Number(item.quantity || 0) * Number(product.sales_price || 0))
+            roundMoney((departmentTotals.get(rowDepartmentId) || 0) + Number(item.quantity || 0) * Number(item.unit_price ?? product.sales_price ?? 0))
           );
         });
         if (departmentTotals.size === 0) return;

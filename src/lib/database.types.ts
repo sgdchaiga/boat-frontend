@@ -239,6 +239,8 @@ export interface Database {
           status: 'pending' | 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled'
           number_of_guests: number
           special_requests: string | null
+          room_discount_amount: number
+          room_discount_reason: string | null
           created_by: string | null
           created_at: string
         }
@@ -251,6 +253,8 @@ export interface Database {
           status?: 'pending' | 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled'
           number_of_guests?: number
           special_requests?: string | null
+          room_discount_amount?: number
+          room_discount_reason?: string | null
           created_by?: string | null
           created_at?: string
         }
@@ -263,6 +267,8 @@ export interface Database {
           status?: 'pending' | 'confirmed' | 'checked_in' | 'checked_out' | 'cancelled'
           number_of_guests?: number
           special_requests?: string | null
+          room_discount_amount?: number
+          room_discount_reason?: string | null
           created_by?: string | null
           created_at?: string
         }
@@ -278,6 +284,8 @@ export interface Database {
           actual_check_out: string | null
           checked_in_by: string | null
           checked_out_by: string | null
+          room_discount_amount: number
+          room_discount_reason: string | null
           created_at: string
         }
         Insert: {
@@ -289,6 +297,8 @@ export interface Database {
           actual_check_out?: string | null
           checked_in_by?: string | null
           checked_out_by?: string | null
+          room_discount_amount?: number
+          room_discount_reason?: string | null
           created_at?: string
         }
         Update: {
@@ -300,6 +310,8 @@ export interface Database {
           actual_check_out?: string | null
           checked_in_by?: string | null
           checked_out_by?: string | null
+          room_discount_amount?: number
+          room_discount_reason?: string | null
           created_at?: string
         }
       }

@@ -51,7 +51,7 @@ export function FinancialRevenueByChargeTypePage() {
         filterByOrganizationId(
           supabase
             .from("kitchen_orders")
-            .select("id, created_at, kitchen_order_items(quantity, product_id)")
+            .select("id, created_at, kitchen_order_items(quantity, unit_price, product_id)")
             .gte("created_at", fromStr)
             .lt("created_at", toStr),
           orgId,
@@ -90,7 +90,7 @@ export function FinancialRevenueByChargeTypePage() {
       orders.forEach((o: any) => {
         (o.kitchen_order_items || []).forEach((item: any) => {
           const qty = Number(item.quantity || 0);
-          const price = Number((item.product_id && productMap[item.product_id]?.sales_price) ?? 0);
+          const price = Number(item.unit_price ?? (item.product_id && productMap[item.product_id]?.sales_price) ?? 0);
           hotelPosTotal += qty * price;
         });
       });

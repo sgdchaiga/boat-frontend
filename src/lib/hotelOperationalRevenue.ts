@@ -102,7 +102,7 @@ export async function fetchHotelOperationalRevenue(
     filterByOrganizationId(
       supabase
         .from("kitchen_orders")
-        .select("id,created_at,customer_name,order_status,kitchen_order_items(quantity,product_id)")
+        .select("id,created_at,customer_name,order_status,kitchen_order_items(quantity,unit_price,product_id)")
         .gte("created_at", fromIso)
         .lt("created_at", toIso),
       organizationId,
@@ -180,7 +180,7 @@ export async function fetchHotelOperationalRevenue(
     created_at: string;
     customer_name: string | null;
     order_status: string | null;
-    kitchen_order_items: Array<{ quantity: number | null; product_id: string | null }> | null;
+    kitchen_order_items: Array<{ quantity: number | null; unit_price: number | null; product_id: string | null }> | null;
   }>).forEach((order) => {
     if (["cancelled", "canceled", "reversed", "void", "voided"].includes((order.order_status || "").toLowerCase())) return;
     const period = toBusinessDateString(order.created_at).slice(0, 7);
@@ -189,7 +189,7 @@ export async function fetchHotelOperationalRevenue(
       if (!product) return;
       const bucket = classifyDepartment(product.department_id, departmentNameById[product.department_id || ""] || null, configured);
       if (!bucket) return;
-      const amount = (Number(item.quantity) || 0) * (Number(product.sales_price) || 0);
+      const amount = (Number(item.quantity) || 0) * Number(item.unit_price ?? product.sales_price ?? 0);
       totals[bucket] += amount;
       monthly[period] = (monthly[period] || 0) + amount;
       details.push({

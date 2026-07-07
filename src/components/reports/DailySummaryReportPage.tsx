@@ -240,7 +240,7 @@ export function DailySummaryReportPage() {
             `
           id,
           created_at,
-          kitchen_order_items(quantity, product_id)
+          kitchen_order_items(quantity, unit_price, product_id)
         `
           )
           .gte("created_at", fromStr)
@@ -329,7 +329,7 @@ export function DailySummaryReportPage() {
         const items = o.kitchen_order_items || [];
         for (const it of items) {
           const pr = it.product_id ? pmap[it.product_id] : null;
-          const price = Number(pr?.sales_price ?? 0);
+          const price = Number(it.unit_price ?? pr?.sales_price ?? 0);
           const qty = Number(it.quantity ?? 0);
           kTotal += qty * price;
         }

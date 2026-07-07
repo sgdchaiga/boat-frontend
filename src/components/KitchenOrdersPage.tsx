@@ -20,6 +20,7 @@ type Department = Database["public"]["Tables"]["departments"]["Row"];
 
 interface KitchenItem {
   quantity: number;
+  unit_price?: number | null;
   notes?: string;
   products: { name: string; department_id: string | null; sales_price?: number | null };
 }
@@ -71,10 +72,10 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
   const [payMethod, setPayMethod] = useState<PaymentMethodCode>("cash");
   const [payDate, setPayDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [savingPayment, setSavingPayment] = useState(false);
-  const [productOptions, setProductOptions] = useState<Array<{ id: string; name: string }>>([]);
+  const [productOptions, setProductOptions] = useState<Array<{ id: string; name: string; sales_price?: number | null }>>([]);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderDate, setEditingOrderDate] = useState("");
-  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
+  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; unit_price?: number | null; notes: string }>>([]);
   const [paymentFilter, setPaymentFilter] = useState<"all" | "outstanding" | "partially_paid" | "paid" | "unpaid">("all");
   const [sourceTransactionSearch, setSourceTransactionSearch] = useState("");
 
@@ -122,7 +123,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
             customer_name,
             order_status,
             created_at,
-            kitchen_order_items(quantity, notes, product_id)
+            kitchen_order_items(quantity, unit_price, notes, product_id)
           `
                 )
                 .order("created_at", { ascending: true });
@@ -176,7 +177,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
       const productChoices = forcedKitchenDeptId
         ? productRows.filter((p) => p.department_id === forcedKitchenDeptId)
         : productRows;
-      setProductOptions(productChoices.map((p) => ({ id: p.id, name: p.name })));
+      setProductOptions(productChoices.map((p) => ({ id: p.id, name: p.name, sales_price: p.sales_price })));
 
       const rawOrders = (ordersRes.data || []) as any[];
       const data = (rawOrders
@@ -197,7 +198,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
               products: {
                 name: prod.name,
                 department_id: prod.department_id,
-                sales_price: prod.sales_price,
+                sales_price: i.unit_price ?? prod.sales_price,
               },
               _deptName: deptName,
               _deptMode: deptMode,
@@ -310,6 +311,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
       (order.kitchen_order_items || []).map((item) => ({
         product_id: String((item as any).product_id || ""),
         quantity: Number(item.quantity || 1),
+        unit_price: item.unit_price ?? item.products?.sales_price ?? null,
         notes: String(item.notes || ""),
       }))
     );
@@ -317,7 +319,8 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
 
   const addEditingOrderItem = () => {
     const fallbackProductId = productOptions[0]?.id || "";
-    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, notes: "" }]);
+    const fallbackProduct = productOptions.find((product) => product.id === fallbackProductId);
+    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, unit_price: fallbackProduct?.sales_price ?? null, notes: "" }]);
   };
 
   const saveEditedOrder = async () => {
@@ -343,6 +346,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
           order_id: editingOrderId,
           product_id: item.product_id,
           quantity: Number(item.quantity),
+          unit_price: item.unit_price ?? productOptions.find((product) => product.id === item.product_id)?.sales_price ?? 0,
           notes: item.notes.trim() || null,
         }));
       if (nextItems.length > 0) {
@@ -608,7 +612,11 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
                   value={item.product_id}
                   onChange={(e) =>
                     setEditingOrderItems((prev) =>
-                      prev.map((row, i) => (i === index ? { ...row, product_id: e.target.value } : row))
+                      prev.map((row, i) => {
+                        if (i !== index) return row;
+                        const nextProduct = productOptions.find((product) => product.id === e.target.value);
+                        return { ...row, product_id: e.target.value, unit_price: nextProduct?.sales_price ?? null };
+                      })
                     )
                   }
                   className="border border-slate-300 rounded-lg px-3 py-2 text-sm"

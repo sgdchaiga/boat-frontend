@@ -83,7 +83,7 @@ interface QueuedOrder {
   customer_name: string | null;
   order_status: string;
   created_at: string;
-  kitchen_order_items?: { id?: string; product_id?: string; quantity: number; notes?: string; products?: { name: string; sales_price?: number | null } }[];
+  kitchen_order_items?: { id?: string; product_id?: string; quantity: number; unit_price?: number | null; notes?: string; products?: { name: string; sales_price?: number | null } }[];
   payments_total?: number;
 }
 
@@ -271,7 +271,7 @@ export function POSPage({
   const [savingPostedTransactionId, setSavingPostedTransactionId] = useState<string | null>(null);
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editingOrderDate, setEditingOrderDate] = useState("");
-  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; notes: string }>>([]);
+  const [editingOrderItems, setEditingOrderItems] = useState<Array<{ product_id: string; quantity: number; unit_price?: number | null; notes: string }>>([]);
   const [showPrintBill, setShowPrintBill] = useState(false);
   const printRef = useRef<HTMLDivElement | null>(null);
   const isWaiterCompact = compactMode === "waiter";
@@ -480,7 +480,7 @@ export function POSPage({
 
       let ordersQuery = supabase
         .from("kitchen_orders")
-        .select("id,room_id,table_number,customer_name,order_status,created_at,kitchen_order_items(id,quantity,notes,product_id)")
+        .select("id,room_id,table_number,customer_name,order_status,created_at,kitchen_order_items(id,quantity,unit_price,notes,product_id)")
         .gte("created_at", from.toISOString())
         .lt("created_at", to.toISOString())
         .order("created_at", { ascending: false });
@@ -546,7 +546,7 @@ export function POSPage({
           })(),
           products:
             i.product_id && productMap[i.product_id]
-              ? { name: productMap[i.product_id].name, sales_price: productMap[i.product_id].sales_price ?? 0 }
+              ? { name: productMap[i.product_id].name, sales_price: i.unit_price ?? productMap[i.product_id].sales_price ?? 0 }
               : { name: "Item", sales_price: 0 },
         })),
       }));
@@ -1204,6 +1204,7 @@ export function POSPage({
       (order.kitchen_order_items || []).map((item) => ({
         product_id: String(item.product_id || ""),
         quantity: Number(item.quantity || 1),
+        unit_price: item.unit_price ?? item.products?.sales_price ?? null,
         notes: String(item.notes || ""),
       }))
     );
@@ -1211,7 +1212,8 @@ export function POSPage({
 
   const addEditingOrderItem = () => {
     const fallbackProductId = filteredProducts[0]?.id || products[0]?.id || "";
-    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, notes: "" }]);
+    const fallbackProduct = products.find((product) => product.id === fallbackProductId);
+    setEditingOrderItems((prev) => [...prev, { product_id: fallbackProductId, quantity: 1, unit_price: fallbackProduct ? getUnitPrice(fallbackProduct) : null, notes: "" }]);
   };
 
   const saveEditedOrder = async () => {
@@ -1231,6 +1233,9 @@ export function POSPage({
           order_id: editingOrderId,
           product_id: item.product_id,
           quantity: Number(item.quantity),
+          unit_price:
+            item.unit_price ??
+            (products.find((product) => product.id === item.product_id) ? getUnitPrice(products.find((product) => product.id === item.product_id)!) : 0),
           notes: item.notes.trim() || null,
         }));
       if (nextItems.length > 0) {
@@ -1605,6 +1610,7 @@ export function POSPage({
         order_id: orderData!.id,
         product_id: item.product.id,
         quantity: item.quantity,
+        unit_price: Math.round((item.total / Math.max(1, item.quantity)) * 100) / 100,
         notes: `${item.menuType && item.menuType !== "all" ? `[${item.menuType}] ` : ""}${item.courseType ? `[COURSE:${item.courseType}] ` : ""}${item.fireTiming ? `[FIRE:${item.fireTiming}] ` : ""}${item.note || ""}`.trim() || null,
       }));
       const { error: itemsErr } = await supabase.from("kitchen_order_items").insert(items);
@@ -2812,7 +2818,11 @@ export function POSPage({
                   value={item.product_id}
                   onChange={(e) =>
                     setEditingOrderItems((prev) =>
-                      prev.map((row, i) => (i === index ? { ...row, product_id: e.target.value } : row))
+                      prev.map((row, i) => {
+                        if (i !== index) return row;
+                        const nextProduct = products.find((product) => product.id === e.target.value);
+                        return { ...row, product_id: e.target.value, unit_price: nextProduct ? getUnitPrice(nextProduct) : null };
+                      })
                     )
                   }
                   className="border border-slate-300 rounded-lg px-3 py-2 text-sm"

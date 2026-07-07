@@ -8,6 +8,8 @@ import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
   hotel_customers: { id: string; first_name: string; last_name: string } | null;
   rooms: { id: string; room_number: string } | null;
+  room_discount_amount?: number | null;
+  room_discount_reason?: string | null;
 };
 
 export function CheckInPage() {
@@ -49,6 +51,8 @@ export function CheckInPage() {
           check_in_date,
           check_out_date,
           status,
+          room_discount_amount,
+          room_discount_reason,
           created_at,
           hotel_customers(id, first_name, last_name),
           rooms(id, room_number)
@@ -122,6 +126,8 @@ export function CheckInPage() {
           room_id: reservation.room_id,
           actual_check_in: new Date().toISOString(),
           checked_in_by: user.id,
+          room_discount_amount: Math.max(0, Number(reservation.room_discount_amount || 0) || 0),
+          room_discount_reason: reservation.room_discount_reason ?? null,
           organization_id: orgId ?? null,
         })
         .select("id")
@@ -247,6 +253,13 @@ export function CheckInPage() {
               <p className="text-sm text-slate-500">
                 Arrival {new Date(reservation.check_in_date).toLocaleDateString()}
               </p>
+
+              {Number(reservation.room_discount_amount || 0) > 0 ? (
+                <p className="text-sm text-emerald-700">
+                  Room discount/night: {Number(reservation.room_discount_amount || 0).toFixed(2)}
+                  {reservation.room_discount_reason ? ` - ${reservation.room_discount_reason}` : ""}
+                </p>
+              ) : null}
 
             </div>
 
