@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
 import { formatDrCrCell } from "../../lib/accountingReportExport";
 import { useAuth } from "../../contexts/AuthContext";
@@ -43,8 +43,8 @@ export function GeneralLedgerPage() {
     setLoading(true);
     setFetchError(null);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-    const fromStr = from.toISOString().slice(0, 10);
-    const toStr = to.toISOString().slice(0, 10);
+    const fromStr = toBusinessDateString(from);
+    const toStr = toBusinessDateString(new Date(to.getTime() - 1));
 
     if (!orgId && !superAdmin) {
       setFetchError("Missing organization on your staff profile. Contact admin to link your account.");

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { getDefaultGlAccounts } from "../../lib/journal";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
@@ -132,8 +132,8 @@ export function CashflowPage() {
     setLoading(true);
     setQueryError(null);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-    const fromStr = from.toISOString().slice(0, 10);
-    const toStr = to.toISOString().slice(0, 10);
+    const fromStr = toBusinessDateString(from);
+    const toStr = toBusinessDateString(new Date(to.getTime() - 1));
 
     const { data: entriesBefore, error: eBefore } = await filterByOrganizationId(
       supabase
@@ -292,8 +292,8 @@ export function CashflowPage() {
     setLoading(true);
     setQueryError(null);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-    const fromStr = from.toISOString().slice(0, 10);
-    const toStr = to.toISOString().slice(0, 10);
+    const fromStr = toBusinessDateString(from);
+    const toStr = toBusinessDateString(new Date(to.getTime() - 1));
 
     const { data: accData, error: eAcc } = await filterByOrganizationId(
       supabase
@@ -499,8 +499,8 @@ export function CashflowPage() {
         }
 
         const previous = await computeStatementForRange(
-          prevFrom.toISOString().slice(0, 10),
-          prevTo.toISOString().slice(0, 10)
+          toBusinessDateString(prevFrom),
+          toBusinessDateString(prevTo)
         );
         setPreviousCashBegin(previous.cashBegin);
         setPreviousCashEnd(previous.cashEnd);
@@ -535,10 +535,13 @@ export function CashflowPage() {
 
   const periodLabel = useMemo(() => {
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-    return `${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)}`;
+    return `${toBusinessDateString(from)} to ${toBusinessDateString(new Date(to.getTime() - 1))}`;
   }, [dateRange, customFrom, customTo]);
 
-  const fileStamp = useMemo(() => computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10), [dateRange, customFrom, customTo]);
+  const fileStamp = useMemo(() => {
+    const { to } = computeRangeInTimezone(dateRange, customFrom, customTo);
+    return toBusinessDateString(new Date(to.getTime() - 1));
+  }, [dateRange, customFrom, customTo]);
   const ledgerPageCount = Math.max(1, Math.ceil(movements.length / LEDGER_PAGE_SIZE));
   const safeLedgerPage = Math.min(ledgerPage, ledgerPageCount - 1);
   const pagedMovements = movements.slice(safeLedgerPage * LEDGER_PAGE_SIZE, safeLedgerPage * LEDGER_PAGE_SIZE + LEDGER_PAGE_SIZE);

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { businessTodayISO, computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { businessTodayISO, computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { downloadCsv, exportAccountingPdf, formatDrCrCell, isNonZeroGlAmount } from "../../lib/accountingReportExport";
 import { AccountingExportButtons } from "./AccountingExportButtons";
 import { PageNotes } from "../common/PageNotes";
@@ -39,8 +39,9 @@ export function TrialBalancePage() {
   const fetchData = async () => {
     setLoading(true);
     setFetchError(null);
-    const toDate = useAsOf ? asOfDate : computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10);
-    const fromDate = useAsOf ? "1970-01-01" : computeRangeInTimezone(dateRange, customFrom, customTo).from.toISOString().slice(0, 10);
+    const range = computeRangeInTimezone(dateRange, customFrom, customTo);
+    const toDate = useAsOf ? asOfDate : toBusinessDateString(new Date(range.to.getTime() - 1));
+    const fromDate = useAsOf ? "1970-01-01" : toBusinessDateString(range.from);
 
     if (!orgId && !superAdmin) {
       setFetchError("Missing organization on your staff profile. Contact admin to link your account.");
@@ -147,12 +148,13 @@ export function TrialBalancePage() {
   const periodLabel = useMemo(() => {
     if (useAsOf) return `As of ${asOfDate}`;
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-    return `${from.toISOString().slice(0, 10)} to ${to.toISOString().slice(0, 10)}`;
+    return `${toBusinessDateString(from)} to ${toBusinessDateString(new Date(to.getTime() - 1))}`;
   }, [useAsOf, asOfDate, dateRange, customFrom, customTo]);
 
   const fileStamp = useMemo(() => {
     if (useAsOf) return asOfDate;
-    return computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10);
+    const { to } = computeRangeInTimezone(dateRange, customFrom, customTo);
+    return toBusinessDateString(new Date(to.getTime() - 1));
   }, [useAsOf, asOfDate, dateRange, customFrom, customTo]);
 
   const exportExcel = () => {

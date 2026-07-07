@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import * as XLSX from "xlsx";
@@ -75,8 +75,8 @@ export function SalesByItemReportPage() {
             supabase
               .from("retail_invoices")
               .select("id, customer_name, issue_date")
-              .gte("issue_date", from.toISOString().slice(0, 10))
-              .lt("issue_date", to.toISOString().slice(0, 10)),
+              .gte("issue_date", toBusinessDateString(from))
+              .lt("issue_date", toBusinessDateString(to)),
             orgId,
             superAdmin
           ),

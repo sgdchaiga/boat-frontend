@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
-import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { normalizeGlAccountRows, type NormalizedGlAccount } from "../../lib/glAccountNormalize";
 import {
   resolveExpenseCategoryLabel,
@@ -86,8 +86,8 @@ export function ExpensesReportPage() {
       }
 
       const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
-      const fromDate = from.toISOString().slice(0, 10);
-      const toExclusiveDate = to.toISOString().slice(0, 10);
+      const fromDate = toBusinessDateString(from);
+      const toExclusiveDate = toBusinessDateString(to);
 
       let expQ = filterByOrganizationId(
         supabase

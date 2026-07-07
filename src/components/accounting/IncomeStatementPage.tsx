@@ -752,7 +752,10 @@ export function IncomeStatementPage() {
     return `${toBusinessDateString(from)} to ${endInclusive} (${basisLabel})`;
   }, [dateRange, customFrom, customTo, basis]);
 
-  const fileStamp = useMemo(() => computeRangeInTimezone(dateRange, customFrom, customTo).to.toISOString().slice(0, 10), [dateRange, customFrom, customTo]);
+  const fileStamp = useMemo(() => {
+    const { to } = computeRangeInTimezone(dateRange, customFrom, customTo);
+    return toBusinessDateString(new Date(to.getTime() - 1));
+  }, [dateRange, customFrom, customTo]);
   const pieColors = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#14b8a6", "#6366f1", "#84cc16", "#ec4899", "#22c55e", "#f97316", "#64748b"];
 
   const openDrilldown = async (account: { id: string; code: string; name: string; type: "income" | "expense" }) => {
