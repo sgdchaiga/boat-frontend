@@ -132,10 +132,12 @@ export function PosSalesReportPage() {
       if (basis === "cash") {
         if (cashTransactionIds.length === 0) {
           setRows([]);
-          return;
+          retailQuery = retailQuery.eq("id", "00000000-0000-0000-0000-000000000000");
+          hotelQuery = hotelQuery.eq("id", "00000000-0000-0000-0000-000000000000");
+        } else {
+          retailQuery = retailQuery.in("id", cashTransactionIds);
+          hotelQuery = hotelQuery.in("id", cashTransactionIds);
         }
-        retailQuery = retailQuery.in("id", cashTransactionIds);
-        hotelQuery = hotelQuery.in("id", cashTransactionIds);
       } else {
         retailQuery = retailQuery.gte("sale_at", fromIso).lt("sale_at", toIso);
         hotelQuery = hotelQuery.gte("created_at", fromIso).lt("created_at", toIso);
@@ -285,7 +287,11 @@ export function PosSalesReportPage() {
       row.basisDetail,
       row.amount.toFixed(2),
     ]);
-    const csv = [header, ...detail, ["", "", "", "", "Total", total.toFixed(2)]]
+    const csv = [
+      header,
+      ...detail,
+      ["", "", "", "", "Total", total.toFixed(2)],
+    ]
       .map((line) => line.map(csvCell).join(","))
       .join("\n");
     const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
@@ -374,6 +380,7 @@ export function PosSalesReportPage() {
             <div className="app-card p-4"><p className="text-xs text-slate-500">POS transactions</p><p className="text-2xl font-bold text-slate-900">{transactionCount}</p></div>
             <div className="app-card p-4"><p className="text-xs text-slate-500">Basis</p><p className="text-2xl font-bold capitalize text-slate-900">{basis}</p></div>
           </div>
+
           <div className="app-card overflow-x-auto">
             <table className="w-full min-w-[850px] text-sm">
               <thead className="bg-slate-50"><tr>{sortHeader("occurredAt", "Date/time")}{sortHeader("reference", "Reference")}{sortHeader("customer", "Customer")}{sortHeader("department", "Department")}{sortHeader("basisDetail", basis === "cash" ? "Payment method" : "Basis")}{sortHeader("amount", "Amount", "right")}</tr></thead>

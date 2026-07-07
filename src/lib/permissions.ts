@@ -117,6 +117,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "inventory_store_requisitions", label: "Store requisitions", group: "Inventory" },
   { page: "reports", label: "Reports hub", group: "Reports" },
   { page: "reports_daily_sales", label: "Daily sales", group: "Reports" },
+  { page: "reports_pos_cash_collections", label: "POS cash collections", group: "Reports" },
   { page: "reports_daily_summary", label: "Daily summary", group: "Reports" },
   { page: "reports_retail_shift_variance", label: "Shift variance", group: "Reports" },
   { page: "reports_retail_sales_insights", label: "Sales insights", group: "Reports" },

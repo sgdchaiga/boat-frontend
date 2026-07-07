@@ -35,6 +35,7 @@ export type ModuleId =
   | "wallet"
   | "treasury"
   | "communications"
+  | "boat_connect"
   | "agent"
   | "hotel_assessment";
 
@@ -96,6 +97,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   wallet: "both",
   treasury: "both",
   communications: "both",
+  boat_connect: "both",
   agent: "both",
   hotel_assessment: "hotel",
 };
@@ -133,6 +135,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   wallet: true,
   treasury: true,
   communications: false,
+  boat_connect: true,
   agent: false,
   hotel_assessment: false,
 };
@@ -196,6 +199,8 @@ export function getModuleAccess(input: {
   enableTreasury?: boolean;
   /** Platform: Agent hub toggle. */
   enableAgent?: boolean;
+  /** Platform: BOAT Connect data integration and reporting layer toggle. */
+  enableBoatConnect?: boolean;
   /** Platform: Hotel assessment & onboarding. */
   enableHotelAssessment?: boolean;
   /** Platform: Manufacturing module. */
@@ -225,6 +230,7 @@ export function getModuleAccess(input: {
     enableBudget,
     enableTreasury,
     enableAgent,
+    enableBoatConnect,
     enableHotelAssessment,
     enableManufacturing,
     enableReports,
@@ -389,6 +395,14 @@ export function getModuleAccess(input: {
     };
   }
 
+  if (moduleId === "boat_connect" && enableBoatConnect !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "BOAT Connect is not enabled for this organization.",
+    };
+  }
+
   if (moduleId === "hotel_assessment" && enableHotelAssessment !== true) {
     return {
       visible: false,
@@ -500,6 +514,7 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
   if (page === "image_document_converter") return true;
+  if (page === "boat_connect") return true;
   if (page === "asset_verification") return true;
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
   if (CLINIC_PAGE_IDS.has(page)) {
@@ -562,6 +577,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
   if (page === "communications") return "communications";
+  if (page === "boat_connect") return "boat_connect";
   if (page === "agent_hub") return "agent";
   if (page === "hotel_assessment" || page === "hotel_assessment_run") return "hotel_assessment";
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
@@ -594,6 +610,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if ([
     "reports",
     "reports_daily_sales",
+    "reports_pos_cash_collections",
     "reports_daily_summary",
     "reports_retail_sales_insights",
     "reports_financial_revenue_by_type",

@@ -45,8 +45,36 @@ export default defineConfig(({ mode }) => {
       },
     },
 
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (!id.includes("node_modules")) return undefined;
+            if (id.includes("pdfjs-dist") || id.includes("jspdf") || id.includes("html2canvas") || id.includes("dompurify")) {
+              return "vendor-pdf";
+            }
+            if (id.includes("xlsx")) return "vendor-xlsx";
+            if (id.includes("recharts") || id.includes("d3-")) return "vendor-charts";
+            if (id.includes("@supabase")) return "vendor-supabase";
+            if (id.includes("lucide-react")) return "vendor-icons";
+            return "vendor";
+          },
+        },
+      },
+    },
+
     optimizeDeps: {
-      exclude: ["lucide-react"],
+      include: [
+        "@supabase/supabase-js",
+        "jspdf",
+        "jspdf-autotable",
+        "lucide-react",
+        "react",
+        "react-dom",
+        "react-hot-toast",
+        "recharts",
+        "xlsx",
+      ],
     },
   };
 });

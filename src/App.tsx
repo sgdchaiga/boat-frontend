@@ -1,128 +1,11 @@
-import { useState, useEffect } from 'react';
+import { Suspense, lazy, useState, useEffect, type ComponentType, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginPage } from "@/components/LoginPage";
 import { OrganizationPickerPage } from "@/components/OrganizationPickerPage";
 import { Layout } from './components/Layout';
-import { Dashboard } from './components/Dashboard';
-import { RetailDashboard } from './components/RetailDashboard';
-import { RoomsPage } from './components/RoomsPage';
-import { ReservationsPage } from './components/ReservationsPage';
-import { CheckInPage } from './components/CheckInPage';
-import { CustomersPage } from './components/CustomersPage';
-import { ActiveStaysPage } from './components/ActiveStaysPage';
-import { POSPage } from './components/POSPage';
-import { HotelPosKitchenBarPage } from './components/HotelPosKitchenBarPage';
-import { HotelPosSupervisorPage } from './components/HotelPosSupervisorPage';
-import { HotelPosReportsPage } from './components/HotelPosReportsPage';
-import { POSDashboardPage } from './components/POSDashboard';
-import { RetailPOSPage } from './components/RetailPOSPage';
-import { ClinicPOSPage } from './components/clinic/ClinicPOSPage';
-import { RetailPosOrdersPage } from './components/RetailPosOrdersPage';
-import { RetailInvoicesPage } from './components/RetailInvoicesPage';
-import { RetailCustomersPage } from './components/RetailCustomersPage';
-import { RetailCreditSalesReportPage } from './components/RetailCreditSalesReportPage';
-import { ClinicDashboardPage } from './components/clinic/ClinicDashboardPage';
-import { ClinicPatientsPage } from './components/clinic/ClinicPatientsPage';
-import { ClinicConsultationPage } from './components/clinic/ClinicConsultationPage';
-import { ClinicLaboratoryPage } from './components/clinic/ClinicLaboratoryPage';
-import { BarOrdersPage } from './components/BarOrdersPage';
-import { KitchenOrdersPage } from './components/KitchenOrdersPage';
-import { KitchenMenuPage } from './components/KitchenMenuPage';
-import { BillingPage } from './components/BillingPage';
-import { PaymentsPage } from './components/PaymentsPage';
-import { CashReceiptsPage } from './components/CashReceiptsPage';
-import { TransactionsPage } from './components/TransactionsPage';
-import { KitchenDisplayPage } from './components/KitchenDisplayPage';
-import { HousekeepingPage } from './components/HousekeepingPage';
-import ProductsPage from './components/ProductsPage';
-import { InventoryBarcodesPage } from './components/InventoryBarcodesPage';
-import { ReportsPage } from './components/ReportsPage';
-import { DailySalesReportPage } from './components/DailySalesReportPage';
-import { StockMovementReportPage } from './components/reports/StockMovementReportPage';
-import { StockSummaryReportPage } from './components/reports/StockSummaryReportPage';
-import { FinancialRevenueByChargeTypePage } from './components/reports/FinancialRevenueByChargeTypePage';
-import { FinancialPaymentsByMethodPage } from './components/reports/FinancialPaymentsByMethodPage';
-import { FinancialPaymentsByChargeTypePage } from './components/reports/FinancialPaymentsByChargeTypePage';
-import { DailyPurchasesSummaryPage } from './components/reports/DailyPurchasesSummaryPage';
-import { ExpensesReportPage } from './components/reports/ExpensesReportPage';
-import { ManufacturingDailyProductionReportPage } from './components/reports/ManufacturingDailyProductionReportPage';
-import { DailySummaryReportPage } from './components/reports/DailySummaryReportPage';
-import { RetailShiftVarianceReportPage } from './components/reports/RetailShiftVarianceReportPage';
-import { RetailSalesInsightsPage } from './components/reports/RetailSalesInsightsPage';
-import { PurchasesByItemReportPage } from './components/reports/PurchasesByItemReportPage';
-import { SalesByItemReportPage } from './components/reports/SalesByItemReportPage';
-import { RoomBillingReportPage } from './components/reports/RoomBillingReportPage';
-import { StockAdjustmentsReportPage } from './components/reports/StockAdjustmentsReportPage';
-import { StaffPage } from './components/StaffPage';
-import { GLAccountsPage } from './components/GLAccountsPage';
-import { VendorsPage } from './components/purchases/VendorsPage';
-import { ExpensesPage } from './components/purchases/ExpensesPage';
-import { PurchaseOrdersPage } from './components/purchases/PurchaseOrdersPage';
-import { BillsPage } from './components/purchases/BillsPage';
-import { VendorPaymentsPage } from './components/purchases/VendorPaymentsPage';
-import { VendorCreditsPage } from './components/purchases/VendorCreditsPage';
-import { CashOutReconciliationPage } from './components/purchases/CashOutReconciliationPage';
-import { AdminPage, parseAdminTabParam } from './components/admin/AdminPage';
-import { JournalEntriesPage } from './components/accounting/JournalEntriesPage';
-import { ManualJournalsPage } from './components/accounting/ManualJournalsPage';
-import { GeneralLedgerPage } from './components/accounting/GeneralLedgerPage';
-import { BankReconciliationPage } from './components/accounting/BankReconciliationPage';
-import { PracticeWorkspacePage } from './components/accounting-practice/PracticeWorkspacePage';
-import { PracticeStockTakePage } from './components/accounting-practice/PracticeStockTakePage';
-import { PracticeHousekeepingAuditPage } from './components/accounting-practice/PracticeHousekeepingAuditPage';
-import { AssetVerificationPage } from './components/accounting-practice/AssetVerificationPage';
-import { TrialBalancePage } from './components/accounting/TrialBalancePage';
-import { IncomeStatementPage } from './components/accounting/IncomeStatementPage';
-import { PosIncomeReconciliationPage } from './components/accounting/PosIncomeReconciliationPage';
-import { BalanceSheetPage } from './components/accounting/BalanceSheetPage';
-import { CashflowPage } from './components/accounting/CashflowPage';
-import { BudgetingPage } from './components/accounting/BudgetingPage';
-import { BudgetVarianceReportPage } from './components/accounting/BudgetVarianceReportPage';
-import { FixedAssetsPage } from './components/fixedAssets/FixedAssetsPage';
-import { AdminStockAdjustmentsPage } from './components/admin/AdminStockAdjustmentsPage';
-import { StoreRequisitionsPage } from './components/inventory/StoreRequisitionsPage';
-import { StockBalancesPage } from './components/inventory/StockBalancesPage';
-import { ManufacturingPage } from './components/manufacturing/ManufacturingPage';
-import { ManufacturingBomPage } from './components/manufacturing/ManufacturingBomPage';
-import { ManufacturingWorkOrdersPage } from './components/manufacturing/ManufacturingWorkOrdersPage';
-import { ManufacturingProductionEntriesPage } from './components/manufacturing/ManufacturingProductionEntriesPage';
-import { ManufacturingCostingPage } from './components/manufacturing/ManufacturingCostingPage';
-import { ManufacturingPriceListsPage } from './components/manufacturing/ManufacturingPriceListsPage';
-import { PlatformOverviewPage } from './components/platform/PlatformOverviewPage';
-import { PlatformOrganizationsPage } from './components/platform/PlatformOrganizationsPage';
-import { PlatformBusinessAdminsPage } from './components/platform/PlatformBusinessAdminsPage';
-import { PlatformBusinessTypesPage } from './components/platform/PlatformBusinessTypesPage';
-import { PlatformPlansPage } from './components/platform/PlatformPlansPage';
-import { PlatformSuperUsersPage } from './components/platform/PlatformSuperUsersPage';
-import { PlatformLinkUserPage } from './components/platform/PlatformLinkUserPage';
 import { AppProvider } from './contexts/AppContext';
-import SaccoDashboard from './components/sacco/SaccoDashboard';
-import { SaccoOverviewPage } from './components/sacco/SaccoOverviewPage';
-import { SaccoMembersPage } from './components/sacco/SaccoMembersPage';
-import { SaccoSavingsAccountOpenPage } from './components/sacco/SaccoSavingsAccountOpenPage';
-import { SaccoSavingsAccountsListPage } from './components/sacco/SaccoSavingsAccountsListPage';
-import { SaccoMembersSavingsSettingsPage } from './components/sacco/SaccoMembersSavingsSettingsPage';
-import { SaccoBulkImportPage } from './components/sacco/SaccoBulkImportPage';
-import { SaccoPermissionsPage } from './components/sacco/SaccoPermissionsPage';
-import { SaccoLoansPage } from './components/sacco/SaccoLoansPage';
-import { SaccoCashbookPage } from './components/sacco/SaccoCashbookPage';
-import { SaccoTellerPage } from './components/sacco/SaccoTellerPage';
-import SaccoLoanList from './components/sacco/SaccoLoanList';
-import SacoLoanInput from './components/sacco/SacoLoanInput';
-import SaccoLoanApproval from './components/sacco/SaccoLoanApproval';
-import SaccoLoanDashboard from './components/sacco/SaccoLoanDashboard';
-import SaccoLoanReports, { type LoanReportTabId } from './components/sacco/SaccoLoanReports';
-import SaccoLoanRecovery from './components/sacco/SaccoLoanRecovery';
-import SaccoLoanSettings from './components/sacco/SaccoLoanSettings';
-import SaccoLoanInterestCalc from './components/sacco/SaccoLoanInterestCalc';
-import SaccoPerformanceDashboardPage from './components/sacco/SaccoPerformanceDashboardPage';
-import SaccoLoanServicingPage from './components/sacco/SaccoLoanServicingPage';
-import SaccoMemberProfilePage from './components/sacco/SaccoMemberProfilePage';
 import SaccoSavingsStatementsPage from './components/sacco/SaccoSavingsStatementsPage';
-import SaccoFinancialSummariesPage from './components/sacco/SaccoFinancialSummariesPage';
-import SaccoSavingsInterest from './components/sacco/SaccoSavingsInterest';
-import SaccoClientDashboard from './components/sacco/SaccoClientDashboard';
-import { SaccoMemberLoanApplication } from './components/sacco/SaccoMemberLoanApplication';
+import type { LoanReportTabId } from './components/sacco/SaccoLoanReports';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from './lib/moduleAccess';
 import {
   defaultLandingPageForNavRole,
@@ -135,70 +18,221 @@ import { SCHOOL_HOME_PAGE, SCHOOL_PAGE } from './lib/schoolPages';
 import { VSLA_HOME_PAGE, VSLA_PAGE } from './lib/vslaPages';
 import { PAYROLL_PAGE } from './lib/payrollPages';
 import { HOTEL_ASSESSMENT_PAGE, HOTEL_PAGE } from './lib/hotelPages';
-import { AdminRoomsPage } from './components/admin/AdminRoomsPage';
-import { PayrollHubPage } from './components/payroll/PayrollHubPage';
-import { PayrollStaffPage } from './components/payroll/PayrollStaffPage';
-import { PayrollSettingsPage } from './components/payroll/PayrollSettingsPage';
-import { PayrollLoansPage } from './components/payroll/PayrollLoansPage';
-import { PayrollPeriodsPage } from './components/payroll/PayrollPeriodsPage';
-import { PayrollRunPage } from './components/payroll/PayrollRunPage';
-import { PayrollPayslipPage } from './components/payroll/PayrollPayslipPage';
-import { PayrollAuditPage } from './components/payroll/PayrollAuditPage';
-import { WalletPage } from './components/wallet/WalletPage';
-import { TreasuryPage } from './components/treasury/TreasuryPage';
-import { SchoolDashboard } from './components/school/SchoolDashboard';
-import { SchoolClassesPage } from './components/school/SchoolClassesPage';
-import { SchoolStreamsPage } from './components/school/SchoolStreamsPage';
-import { SchoolSubjectsPage } from './components/school/SchoolSubjectsPage';
-import { SchoolTeachersPage } from './components/school/SchoolTeachersPage';
-import { SchoolStudentsBioPage } from './components/school/SchoolStudentsBioPage';
-import { StudentsListPage } from './components/school/SchoolStudentsListPage';
-import { StudentsHealthPage } from './components/school/SchoolStudentsHealthPage';
-import { SchoolParentsPage } from './components/school/SchoolParentsPage';
-import { SchoolFeeStructuresPage } from './components/school/SchoolFeeStructuresPage';
-import { SchoolSpecialFeeStructuresPage } from './components/school/SchoolSpecialFeeStructuresPage';
-import { SchoolBursaryPage } from './components/school/SchoolBursaryPage';
-import { SchoolStudentInvoicesPage } from './components/school/SchoolStudentInvoicesPage';
-import { SchoolFeePaymentsPage } from './components/school/SchoolFeePaymentsPage';
-import { SchoolOtherRevenuePage } from './components/school/SchoolOtherRevenuePage';
-import { SchoolCollectionsSummaryPage } from './components/school/SchoolCollectionsSummaryPage';
-import { SchoolFixedDepositPage } from './components/school/SchoolFixedDepositPage';
-import { SchoolFeeCollectionsReportPage } from './components/school/reports/SchoolFeeCollectionsReportPage';
-import { SchoolOutstandingBalancesReportPage } from './components/school/reports/SchoolOutstandingBalancesReportPage';
-import { SchoolEnrollmentByClassReportPage } from './components/school/reports/SchoolEnrollmentByClassReportPage';
-import { SchoolDailyCashReportPage } from './components/school/reports/SchoolDailyCashReportPage';
-import { SchoolIncomeExpenditureReportPage } from './components/school/reports/SchoolIncomeExpenditureReportPage';
-import { SchoolFeePaymentTrendsReportPage } from './components/school/reports/SchoolFeePaymentTrendsReportPage';
-import { SchoolTopDefaultersReportPage } from './components/school/reports/SchoolTopDefaultersReportPage';
-import { SchoolTermPerformanceReportPage } from './components/school/reports/SchoolTermPerformanceReportPage';
 import { AccessDeniedNotice } from './components/common/AccessDeniedNotice';
 import { PageNotes } from './components/common/PageNotes';
-import { VslaDashboardPage } from './components/vsla/VslaDashboardPage';
-import { VslaMembersPage } from './components/vsla/VslaMembersPage';
-import { VslaSavingsPage } from './components/vsla/VslaSavingsPage';
-import { VslaMeetingsPage } from './components/vsla/VslaMeetingsPage';
-import { VslaLoansPage } from './components/vsla/VslaLoansPage';
-import { VslaRepaymentsPage } from './components/vsla/VslaRepaymentsPage';
-import { VslaFundsPage } from './components/vsla/VslaFundsPage';
-import { VslaCashboxPage } from './components/vsla/VslaCashboxPage';
-import { VslaShareOutPage } from './components/vsla/VslaShareOutPage';
-import { VslaReportsPage } from './components/vsla/VslaReportsPage';
-import { VslaControlsPage } from './components/vsla/VslaControlsPage';
-import { VslaMeetingMinutesPage } from './components/vsla/VslaMeetingMinutesPage';
-import { VslaMemberStatementPage } from './components/vsla/VslaMemberStatementPage';
-import { CommunicationsPage } from './components/communications/CommunicationsPage';
 import type { CommunicationsTabId } from './components/communications/CommunicationsPage';
-import { canRunLocalSyncWorker, pushPendingLocalSyncQueue } from './lib/localSyncPush';
-import { canRunLocalBackup, runLocalBackupNow } from './lib/localBackup';
-import { AgentHubPage } from './components/agent/AgentHubPage';
-import { HotelAssessmentDashboardPage } from './components/hotel-assessment/HotelAssessmentDashboardPage';
-import { HotelAssessmentWizardPage } from './components/hotel-assessment/HotelAssessmentWizardPage';
-import { IntegrationsHubPage } from './components/system/IntegrationsHubPage';
-import { ImageDocumentConverterPage } from './components/tools/ImageDocumentConverterPage';
-import { loadPermissionSnapshot } from './lib/permissions';
 import { DesktopServerConnectionPage } from './components/system/DesktopServerConnectionPage';
 import { desktopApi } from './lib/desktopApi';
 import { isDesktopApiDataMode } from './lib/boatApi';
+import { parseAdminTabParam } from './lib/adminTabs';
+
+const lazyNamed = (
+  loader: () => Promise<Record<string, ComponentType<any>>>,
+  exportName: string
+) =>
+  lazy(async () => {
+    const mod = await loader();
+    return { default: mod[exportName] };
+  });
+
+const Dashboard = lazyNamed(() => import('./components/Dashboard'), 'Dashboard');
+const RetailDashboard = lazyNamed(() => import('./components/RetailDashboard'), 'RetailDashboard');
+const RoomsPage = lazyNamed(() => import('./components/RoomsPage'), 'RoomsPage');
+const ReservationsPage = lazyNamed(() => import('./components/ReservationsPage'), 'ReservationsPage');
+const CheckInPage = lazyNamed(() => import('./components/CheckInPage'), 'CheckInPage');
+const CustomersPage = lazyNamed(() => import('./components/CustomersPage'), 'CustomersPage');
+const ActiveStaysPage = lazyNamed(() => import('./components/ActiveStaysPage'), 'ActiveStaysPage');
+const POSPage = lazyNamed(() => import('./components/POSPage'), 'POSPage');
+const HotelPosKitchenBarPage = lazyNamed(() => import('./components/HotelPosKitchenBarPage'), 'HotelPosKitchenBarPage');
+const HotelPosSupervisorPage = lazyNamed(() => import('./components/HotelPosSupervisorPage'), 'HotelPosSupervisorPage');
+const HotelPosReportsPage = lazyNamed(() => import('./components/HotelPosReportsPage'), 'HotelPosReportsPage');
+const POSDashboardPage = lazyNamed(() => import('./components/POSDashboard'), 'POSDashboardPage');
+const RetailPOSPage = lazyNamed(() => import('./components/RetailPOSPage'), 'RetailPOSPage');
+const ClinicPOSPage = lazyNamed(() => import('./components/clinic/ClinicPOSPage'), 'ClinicPOSPage');
+const RetailPosOrdersPage = lazyNamed(() => import('./components/RetailPosOrdersPage'), 'RetailPosOrdersPage');
+const RetailInvoicesPage = lazyNamed(() => import('./components/RetailInvoicesPage'), 'RetailInvoicesPage');
+const RetailCustomersPage = lazyNamed(() => import('./components/RetailCustomersPage'), 'RetailCustomersPage');
+const RetailCreditSalesReportPage = lazyNamed(() => import('./components/RetailCreditSalesReportPage'), 'RetailCreditSalesReportPage');
+const ClinicDashboardPage = lazyNamed(() => import('./components/clinic/ClinicDashboardPage'), 'ClinicDashboardPage');
+const ClinicPatientsPage = lazyNamed(() => import('./components/clinic/ClinicPatientsPage'), 'ClinicPatientsPage');
+const ClinicConsultationPage = lazyNamed(() => import('./components/clinic/ClinicConsultationPage'), 'ClinicConsultationPage');
+const ClinicLaboratoryPage = lazyNamed(() => import('./components/clinic/ClinicLaboratoryPage'), 'ClinicLaboratoryPage');
+const BarOrdersPage = lazyNamed(() => import('./components/BarOrdersPage'), 'BarOrdersPage');
+const KitchenOrdersPage = lazyNamed(() => import('./components/KitchenOrdersPage'), 'KitchenOrdersPage');
+const KitchenMenuPage = lazyNamed(() => import('./components/KitchenMenuPage'), 'KitchenMenuPage');
+const BillingPage = lazyNamed(() => import('./components/BillingPage'), 'BillingPage');
+const PaymentsPage = lazyNamed(() => import('./components/PaymentsPage'), 'PaymentsPage');
+const CashReceiptsPage = lazyNamed(() => import('./components/CashReceiptsPage'), 'CashReceiptsPage');
+const TransactionsPage = lazyNamed(() => import('./components/TransactionsPage'), 'TransactionsPage');
+const KitchenDisplayPage = lazyNamed(() => import('./components/KitchenDisplayPage'), 'KitchenDisplayPage');
+const HousekeepingPage = lazyNamed(() => import('./components/HousekeepingPage'), 'HousekeepingPage');
+const ProductsPage = lazy(() => import('./components/ProductsPage'));
+const InventoryBarcodesPage = lazyNamed(() => import('./components/InventoryBarcodesPage'), 'InventoryBarcodesPage');
+const ReportsPage = lazyNamed(() => import('./components/ReportsPage'), 'ReportsPage');
+const DailySalesReportPage = lazyNamed(() => import('./components/DailySalesReportPage'), 'DailySalesReportPage');
+const StockMovementReportPage = lazyNamed(() => import('./components/reports/StockMovementReportPage'), 'StockMovementReportPage');
+const StockSummaryReportPage = lazyNamed(() => import('./components/reports/StockSummaryReportPage'), 'StockSummaryReportPage');
+const FinancialRevenueByChargeTypePage = lazyNamed(() => import('./components/reports/FinancialRevenueByChargeTypePage'), 'FinancialRevenueByChargeTypePage');
+const FinancialPaymentsByMethodPage = lazyNamed(() => import('./components/reports/FinancialPaymentsByMethodPage'), 'FinancialPaymentsByMethodPage');
+const FinancialPaymentsByChargeTypePage = lazyNamed(() => import('./components/reports/FinancialPaymentsByChargeTypePage'), 'FinancialPaymentsByChargeTypePage');
+const DailyPurchasesSummaryPage = lazyNamed(() => import('./components/reports/DailyPurchasesSummaryPage'), 'DailyPurchasesSummaryPage');
+const ExpensesReportPage = lazyNamed(() => import('./components/reports/ExpensesReportPage'), 'ExpensesReportPage');
+const ManufacturingDailyProductionReportPage = lazyNamed(() => import('./components/reports/ManufacturingDailyProductionReportPage'), 'ManufacturingDailyProductionReportPage');
+const DailySummaryReportPage = lazyNamed(() => import('./components/reports/DailySummaryReportPage'), 'DailySummaryReportPage');
+const RetailShiftVarianceReportPage = lazyNamed(() => import('./components/reports/RetailShiftVarianceReportPage'), 'RetailShiftVarianceReportPage');
+const RetailSalesInsightsPage = lazyNamed(() => import('./components/reports/RetailSalesInsightsPage'), 'RetailSalesInsightsPage');
+const PurchasesByItemReportPage = lazyNamed(() => import('./components/reports/PurchasesByItemReportPage'), 'PurchasesByItemReportPage');
+const SalesByItemReportPage = lazyNamed(() => import('./components/reports/SalesByItemReportPage'), 'SalesByItemReportPage');
+const PosCashCollectionsReportPage = lazyNamed(() => import('./components/reports/PosCashCollectionsReportPage'), 'PosCashCollectionsReportPage');
+const RoomBillingReportPage = lazyNamed(() => import('./components/reports/RoomBillingReportPage'), 'RoomBillingReportPage');
+const StockAdjustmentsReportPage = lazyNamed(() => import('./components/reports/StockAdjustmentsReportPage'), 'StockAdjustmentsReportPage');
+const StaffPage = lazyNamed(() => import('./components/StaffPage'), 'StaffPage');
+const GLAccountsPage = lazyNamed(() => import('./components/GLAccountsPage'), 'GLAccountsPage');
+const VendorsPage = lazyNamed(() => import('./components/purchases/VendorsPage'), 'VendorsPage');
+const ExpensesPage = lazyNamed(() => import('./components/purchases/ExpensesPage'), 'ExpensesPage');
+const PurchaseOrdersPage = lazyNamed(() => import('./components/purchases/PurchaseOrdersPage'), 'PurchaseOrdersPage');
+const BillsPage = lazyNamed(() => import('./components/purchases/BillsPage'), 'BillsPage');
+const VendorPaymentsPage = lazyNamed(() => import('./components/purchases/VendorPaymentsPage'), 'VendorPaymentsPage');
+const VendorCreditsPage = lazyNamed(() => import('./components/purchases/VendorCreditsPage'), 'VendorCreditsPage');
+const CashOutReconciliationPage = lazyNamed(() => import('./components/purchases/CashOutReconciliationPage'), 'CashOutReconciliationPage');
+const AdminPage = lazyNamed(() => import('./components/admin/AdminPage'), 'AdminPage');
+const JournalEntriesPage = lazyNamed(() => import('./components/accounting/JournalEntriesPage'), 'JournalEntriesPage');
+const ManualJournalsPage = lazyNamed(() => import('./components/accounting/ManualJournalsPage'), 'ManualJournalsPage');
+const GeneralLedgerPage = lazyNamed(() => import('./components/accounting/GeneralLedgerPage'), 'GeneralLedgerPage');
+const BankReconciliationPage = lazyNamed(() => import('./components/accounting/BankReconciliationPage'), 'BankReconciliationPage');
+const PracticeWorkspacePage = lazyNamed(() => import('./components/accounting-practice/PracticeWorkspacePage'), 'PracticeWorkspacePage');
+const PracticeStockTakePage = lazyNamed(() => import('./components/accounting-practice/PracticeStockTakePage'), 'PracticeStockTakePage');
+const PracticeHousekeepingAuditPage = lazyNamed(() => import('./components/accounting-practice/PracticeHousekeepingAuditPage'), 'PracticeHousekeepingAuditPage');
+const AssetVerificationPage = lazyNamed(() => import('./components/accounting-practice/AssetVerificationPage'), 'AssetVerificationPage');
+const TrialBalancePage = lazyNamed(() => import('./components/accounting/TrialBalancePage'), 'TrialBalancePage');
+const IncomeStatementPage = lazyNamed(() => import('./components/accounting/IncomeStatementPage'), 'IncomeStatementPage');
+const PosIncomeReconciliationPage = lazyNamed(() => import('./components/accounting/PosIncomeReconciliationPage'), 'PosIncomeReconciliationPage');
+const BalanceSheetPage = lazyNamed(() => import('./components/accounting/BalanceSheetPage'), 'BalanceSheetPage');
+const CashflowPage = lazyNamed(() => import('./components/accounting/CashflowPage'), 'CashflowPage');
+const BudgetingPage = lazyNamed(() => import('./components/accounting/BudgetingPage'), 'BudgetingPage');
+const BudgetVarianceReportPage = lazyNamed(() => import('./components/accounting/BudgetVarianceReportPage'), 'BudgetVarianceReportPage');
+const FixedAssetsPage = lazyNamed(() => import('./components/fixedAssets/FixedAssetsPage'), 'FixedAssetsPage');
+const AdminStockAdjustmentsPage = lazyNamed(() => import('./components/admin/AdminStockAdjustmentsPage'), 'AdminStockAdjustmentsPage');
+const StoreRequisitionsPage = lazyNamed(() => import('./components/inventory/StoreRequisitionsPage'), 'StoreRequisitionsPage');
+const StockBalancesPage = lazyNamed(() => import('./components/inventory/StockBalancesPage'), 'StockBalancesPage');
+const ManufacturingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingPage'), 'ManufacturingPage');
+const ManufacturingBomPage = lazyNamed(() => import('./components/manufacturing/ManufacturingBomPage'), 'ManufacturingBomPage');
+const ManufacturingWorkOrdersPage = lazyNamed(() => import('./components/manufacturing/ManufacturingWorkOrdersPage'), 'ManufacturingWorkOrdersPage');
+const ManufacturingProductionEntriesPage = lazyNamed(() => import('./components/manufacturing/ManufacturingProductionEntriesPage'), 'ManufacturingProductionEntriesPage');
+const ManufacturingCostingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingCostingPage'), 'ManufacturingCostingPage');
+const ManufacturingPriceListsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingPriceListsPage'), 'ManufacturingPriceListsPage');
+const PlatformOverviewPage = lazyNamed(() => import('./components/platform/PlatformOverviewPage'), 'PlatformOverviewPage');
+const PlatformOrganizationsPage = lazyNamed(() => import('./components/platform/PlatformOrganizationsPage'), 'PlatformOrganizationsPage');
+const PlatformBusinessAdminsPage = lazyNamed(() => import('./components/platform/PlatformBusinessAdminsPage'), 'PlatformBusinessAdminsPage');
+const PlatformBusinessTypesPage = lazyNamed(() => import('./components/platform/PlatformBusinessTypesPage'), 'PlatformBusinessTypesPage');
+const PlatformPlansPage = lazyNamed(() => import('./components/platform/PlatformPlansPage'), 'PlatformPlansPage');
+const PlatformSuperUsersPage = lazyNamed(() => import('./components/platform/PlatformSuperUsersPage'), 'PlatformSuperUsersPage');
+const PlatformLinkUserPage = lazyNamed(() => import('./components/platform/PlatformLinkUserPage'), 'PlatformLinkUserPage');
+const SaccoDashboard = lazy(() => import('./components/sacco/SaccoDashboard'));
+const SaccoOverviewPage = lazyNamed(() => import('./components/sacco/SaccoOverviewPage'), 'SaccoOverviewPage');
+const SaccoMembersPage = lazyNamed(() => import('./components/sacco/SaccoMembersPage'), 'SaccoMembersPage');
+const SaccoSavingsAccountOpenPage = lazyNamed(() => import('./components/sacco/SaccoSavingsAccountOpenPage'), 'SaccoSavingsAccountOpenPage');
+const SaccoSavingsAccountsListPage = lazyNamed(() => import('./components/sacco/SaccoSavingsAccountsListPage'), 'SaccoSavingsAccountsListPage');
+const SaccoMembersSavingsSettingsPage = lazyNamed(() => import('./components/sacco/SaccoMembersSavingsSettingsPage'), 'SaccoMembersSavingsSettingsPage');
+const SaccoBulkImportPage = lazyNamed(() => import('./components/sacco/SaccoBulkImportPage'), 'SaccoBulkImportPage');
+const SaccoPermissionsPage = lazyNamed(() => import('./components/sacco/SaccoPermissionsPage'), 'SaccoPermissionsPage');
+const SaccoLoansPage = lazyNamed(() => import('./components/sacco/SaccoLoansPage'), 'SaccoLoansPage');
+const SaccoCashbookPage = lazyNamed(() => import('./components/sacco/SaccoCashbookPage'), 'SaccoCashbookPage');
+const SaccoTellerPage = lazyNamed(() => import('./components/sacco/SaccoTellerPage'), 'SaccoTellerPage');
+const SaccoLoanList = lazy(() => import('./components/sacco/SaccoLoanList'));
+const SacoLoanInput = lazy(() => import('./components/sacco/SacoLoanInput'));
+const SaccoLoanApproval = lazy(() => import('./components/sacco/SaccoLoanApproval'));
+const SaccoLoanDashboard = lazy(() => import('./components/sacco/SaccoLoanDashboard'));
+const SaccoLoanReports = lazy(() => import('./components/sacco/SaccoLoanReports'));
+const SaccoLoanRecovery = lazy(() => import('./components/sacco/SaccoLoanRecovery'));
+const SaccoLoanSettings = lazy(() => import('./components/sacco/SaccoLoanSettings'));
+const SaccoLoanInterestCalc = lazy(() => import('./components/sacco/SaccoLoanInterestCalc'));
+const SaccoPerformanceDashboardPage = lazy(() => import('./components/sacco/SaccoPerformanceDashboardPage'));
+const SaccoLoanServicingPage = lazy(() => import('./components/sacco/SaccoLoanServicingPage'));
+const SaccoMemberProfilePage = lazy(() => import('./components/sacco/SaccoMemberProfilePage'));
+const SaccoFinancialSummariesPage = lazy(() => import('./components/sacco/SaccoFinancialSummariesPage'));
+const SaccoSavingsInterest = lazy(() => import('./components/sacco/SaccoSavingsInterest'));
+const SaccoClientDashboard = lazy(() => import('./components/sacco/SaccoClientDashboard'));
+const SaccoMemberLoanApplication = lazyNamed(() => import('./components/sacco/SaccoMemberLoanApplication'), 'SaccoMemberLoanApplication');
+const AdminRoomsPage = lazyNamed(() => import('./components/admin/AdminRoomsPage'), 'AdminRoomsPage');
+const PayrollHubPage = lazyNamed(() => import('./components/payroll/PayrollHubPage'), 'PayrollHubPage');
+const PayrollStaffPage = lazyNamed(() => import('./components/payroll/PayrollStaffPage'), 'PayrollStaffPage');
+const PayrollSettingsPage = lazyNamed(() => import('./components/payroll/PayrollSettingsPage'), 'PayrollSettingsPage');
+const PayrollLoansPage = lazyNamed(() => import('./components/payroll/PayrollLoansPage'), 'PayrollLoansPage');
+const PayrollPeriodsPage = lazyNamed(() => import('./components/payroll/PayrollPeriodsPage'), 'PayrollPeriodsPage');
+const PayrollRunPage = lazyNamed(() => import('./components/payroll/PayrollRunPage'), 'PayrollRunPage');
+const PayrollPayslipPage = lazyNamed(() => import('./components/payroll/PayrollPayslipPage'), 'PayrollPayslipPage');
+const PayrollAuditPage = lazyNamed(() => import('./components/payroll/PayrollAuditPage'), 'PayrollAuditPage');
+const WalletPage = lazyNamed(() => import('./components/wallet/WalletPage'), 'WalletPage');
+const TreasuryPage = lazyNamed(() => import('./components/treasury/TreasuryPage'), 'TreasuryPage');
+const SchoolDashboard = lazyNamed(() => import('./components/school/SchoolDashboard'), 'SchoolDashboard');
+const SchoolClassesPage = lazyNamed(() => import('./components/school/SchoolClassesPage'), 'SchoolClassesPage');
+const SchoolStreamsPage = lazyNamed(() => import('./components/school/SchoolStreamsPage'), 'SchoolStreamsPage');
+const SchoolSubjectsPage = lazyNamed(() => import('./components/school/SchoolSubjectsPage'), 'SchoolSubjectsPage');
+const SchoolTeachersPage = lazyNamed(() => import('./components/school/SchoolTeachersPage'), 'SchoolTeachersPage');
+const SchoolStudentsBioPage = lazyNamed(() => import('./components/school/SchoolStudentsBioPage'), 'SchoolStudentsBioPage');
+const StudentsListPage = lazyNamed(() => import('./components/school/SchoolStudentsListPage'), 'StudentsListPage');
+const StudentsHealthPage = lazyNamed(() => import('./components/school/SchoolStudentsHealthPage'), 'StudentsHealthPage');
+const SchoolParentsPage = lazyNamed(() => import('./components/school/SchoolParentsPage'), 'SchoolParentsPage');
+const SchoolFeeStructuresPage = lazyNamed(() => import('./components/school/SchoolFeeStructuresPage'), 'SchoolFeeStructuresPage');
+const SchoolSpecialFeeStructuresPage = lazyNamed(() => import('./components/school/SchoolSpecialFeeStructuresPage'), 'SchoolSpecialFeeStructuresPage');
+const SchoolBursaryPage = lazyNamed(() => import('./components/school/SchoolBursaryPage'), 'SchoolBursaryPage');
+const SchoolStudentInvoicesPage = lazyNamed(() => import('./components/school/SchoolStudentInvoicesPage'), 'SchoolStudentInvoicesPage');
+const SchoolFeePaymentsPage = lazyNamed(() => import('./components/school/SchoolFeePaymentsPage'), 'SchoolFeePaymentsPage');
+const SchoolOtherRevenuePage = lazyNamed(() => import('./components/school/SchoolOtherRevenuePage'), 'SchoolOtherRevenuePage');
+const SchoolCollectionsSummaryPage = lazyNamed(() => import('./components/school/SchoolCollectionsSummaryPage'), 'SchoolCollectionsSummaryPage');
+const SchoolFixedDepositPage = lazyNamed(() => import('./components/school/SchoolFixedDepositPage'), 'SchoolFixedDepositPage');
+const SchoolFeeCollectionsReportPage = lazyNamed(() => import('./components/school/reports/SchoolFeeCollectionsReportPage'), 'SchoolFeeCollectionsReportPage');
+const SchoolOutstandingBalancesReportPage = lazyNamed(() => import('./components/school/reports/SchoolOutstandingBalancesReportPage'), 'SchoolOutstandingBalancesReportPage');
+const SchoolEnrollmentByClassReportPage = lazyNamed(() => import('./components/school/reports/SchoolEnrollmentByClassReportPage'), 'SchoolEnrollmentByClassReportPage');
+const SchoolDailyCashReportPage = lazyNamed(() => import('./components/school/reports/SchoolDailyCashReportPage'), 'SchoolDailyCashReportPage');
+const SchoolIncomeExpenditureReportPage = lazyNamed(() => import('./components/school/reports/SchoolIncomeExpenditureReportPage'), 'SchoolIncomeExpenditureReportPage');
+const SchoolFeePaymentTrendsReportPage = lazyNamed(() => import('./components/school/reports/SchoolFeePaymentTrendsReportPage'), 'SchoolFeePaymentTrendsReportPage');
+const SchoolTopDefaultersReportPage = lazyNamed(() => import('./components/school/reports/SchoolTopDefaultersReportPage'), 'SchoolTopDefaultersReportPage');
+const SchoolTermPerformanceReportPage = lazyNamed(() => import('./components/school/reports/SchoolTermPerformanceReportPage'), 'SchoolTermPerformanceReportPage');
+const VslaDashboardPage = lazyNamed(() => import('./components/vsla/VslaDashboardPage'), 'VslaDashboardPage');
+const VslaMembersPage = lazyNamed(() => import('./components/vsla/VslaMembersPage'), 'VslaMembersPage');
+const VslaSavingsPage = lazyNamed(() => import('./components/vsla/VslaSavingsPage'), 'VslaSavingsPage');
+const VslaMeetingsPage = lazyNamed(() => import('./components/vsla/VslaMeetingsPage'), 'VslaMeetingsPage');
+const VslaLoansPage = lazyNamed(() => import('./components/vsla/VslaLoansPage'), 'VslaLoansPage');
+const VslaRepaymentsPage = lazyNamed(() => import('./components/vsla/VslaRepaymentsPage'), 'VslaRepaymentsPage');
+const VslaFundsPage = lazyNamed(() => import('./components/vsla/VslaFundsPage'), 'VslaFundsPage');
+const VslaCashboxPage = lazyNamed(() => import('./components/vsla/VslaCashboxPage'), 'VslaCashboxPage');
+const VslaShareOutPage = lazyNamed(() => import('./components/vsla/VslaShareOutPage'), 'VslaShareOutPage');
+const VslaReportsPage = lazyNamed(() => import('./components/vsla/VslaReportsPage'), 'VslaReportsPage');
+const VslaControlsPage = lazyNamed(() => import('./components/vsla/VslaControlsPage'), 'VslaControlsPage');
+const VslaMeetingMinutesPage = lazyNamed(() => import('./components/vsla/VslaMeetingMinutesPage'), 'VslaMeetingMinutesPage');
+const VslaMemberStatementPage = lazyNamed(() => import('./components/vsla/VslaMemberStatementPage'), 'VslaMemberStatementPage');
+const CommunicationsPage = lazyNamed(() => import('./components/communications/CommunicationsPage'), 'CommunicationsPage');
+const AgentHubPage = lazyNamed(() => import('./components/agent/AgentHubPage'), 'AgentHubPage');
+const HotelAssessmentDashboardPage = lazyNamed(() => import('./components/hotel-assessment/HotelAssessmentDashboardPage'), 'HotelAssessmentDashboardPage');
+const HotelAssessmentWizardPage = lazyNamed(() => import('./components/hotel-assessment/HotelAssessmentWizardPage'), 'HotelAssessmentWizardPage');
+const IntegrationsHubPage = lazyNamed(() => import('./components/system/IntegrationsHubPage'), 'IntegrationsHubPage');
+const BoatConnectPage = lazyNamed(() => import('./components/system/BoatConnectPage'), 'BoatConnectPage');
+const ImageDocumentConverterPage = lazyNamed(() => import('./components/tools/ImageDocumentConverterPage'), 'ImageDocumentConverterPage');
+
+function PageLoadingFallback() {
+  return (
+    <div className="min-h-[18rem] flex items-center justify-center p-6 text-sm text-slate-500">
+      Loading workspace...
+    </div>
+  );
+}
+
+function pageSuspense(children: ReactNode) {
+  return <Suspense fallback={<PageLoadingFallback />}>{children}</Suspense>;
+}
+
+function runWhenIdle(task: () => void, timeout = 2000) {
+  if (typeof window === "undefined") return () => undefined;
+  const idleCallback = window.requestIdleCallback;
+  if (idleCallback) {
+    const id = idleCallback(task, { timeout });
+    return () => window.cancelIdleCallback?.(id);
+  }
+  const id = window.setTimeout(task, Math.min(timeout, 1000));
+  return () => window.clearTimeout(id);
+}
 
 /** Old bookmarks / links: Financial Summary was removed; land on Revenue by Charge Type. */
 function normalizeLegacyPage(page: string): string {
@@ -592,13 +626,16 @@ function AppContent() {
 
   useEffect(() => {
     if (!user?.id) return;
-    if (!canRunLocalSyncWorker()) return;
+    if (!desktopApi.isAvailable()) return;
     let inFlight = false;
+    let cancelled = false;
     const run = async () => {
       if (inFlight) return;
       if (typeof navigator !== "undefined" && !navigator.onLine) return;
       inFlight = true;
       try {
+        const { canRunLocalSyncWorker, pushPendingLocalSyncQueue } = await import("./lib/localSyncPush");
+        if (cancelled || !canRunLocalSyncWorker()) return;
         await pushPendingLocalSyncQueue();
       } catch (err) {
         console.warn("[BOAT] Background sync failed", err);
@@ -606,7 +643,9 @@ function AppContent() {
         inFlight = false;
       }
     };
-    void run();
+    const cancelInitialRun = runWhenIdle(() => {
+      void run();
+    }, 5000);
     const timer = window.setInterval(() => {
       void run();
     }, 60_000);
@@ -615,6 +654,8 @@ function AppContent() {
     };
     window.addEventListener("online", onOnline);
     return () => {
+      cancelled = true;
+      cancelInitialRun();
       window.clearInterval(timer);
       window.removeEventListener("online", onOnline);
     };
@@ -622,24 +663,33 @@ function AppContent() {
 
   useEffect(() => {
     if (!user?.id) return;
-    void loadPermissionSnapshot({
-      organizationId: user.organization_id,
-      staffId: user.id,
-      role: user.role,
-      isSuperAdmin: user.isSuperAdmin,
-    }).catch((e) => {
-      console.warn("Permission snapshot refresh failed", e);
-    });
+    return runWhenIdle(() => {
+      void import("./lib/permissions")
+        .then(({ loadPermissionSnapshot }) =>
+          loadPermissionSnapshot({
+            organizationId: user.organization_id,
+            staffId: user.id,
+            role: user.role,
+            isSuperAdmin: user.isSuperAdmin,
+          })
+        )
+        .catch((e) => {
+          console.warn("Permission snapshot refresh failed", e);
+        });
+    }, 3500);
   }, [user?.id, user?.organization_id, user?.role, user?.isSuperAdmin]);
 
   useEffect(() => {
     if (!user?.id) return;
-    if (!canRunLocalBackup()) return;
+    if (!desktopApi.isAvailable()) return;
     let inFlight = false;
+    let cancelled = false;
     const run = async () => {
       if (inFlight) return;
       inFlight = true;
       try {
+        const { canRunLocalBackup, runLocalBackupNow } = await import("./lib/localBackup");
+        if (cancelled || !canRunLocalBackup()) return;
         await runLocalBackupNow();
       } catch (err) {
         console.warn("[BOAT] Scheduled local backup failed", err);
@@ -647,11 +697,15 @@ function AppContent() {
         inFlight = false;
       }
     };
-    void run();
+    const cancelInitialRun = runWhenIdle(() => {
+      void run();
+    }, 8000);
     const timer = window.setInterval(() => {
       void run();
     }, 6 * 60 * 60 * 1000);
     return () => {
+      cancelled = true;
+      cancelInitialRun();
       window.clearInterval(timer);
     };
   }, [user?.id]);
@@ -727,12 +781,12 @@ function AppContent() {
       );
     }
     if (currentPage === SACCOPRO_PAGE.loanInput) {
-      return <SaccoMemberLoanApplication memberId={user.sacco_member_id} onBack={() => navigate(SACCOPRO_PAGE.clientDashboard)} />;
+      return pageSuspense(<SaccoMemberLoanApplication memberId={user.sacco_member_id} onBack={() => navigate(SACCOPRO_PAGE.clientDashboard)} />);
     }
     if (currentPage === SACCOPRO_PAGE.savingsStatements) {
       return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">← Back to member app</button><SaccoSavingsStatementsPage memberIdFromNav={user.sacco_member_id} navigate={navigate} /></div>;
     }
-    return <SaccoClientDashboard memberIdFromAuth={user.sacco_member_id} memberMode navigate={navigate} />;
+    return pageSuspense(<SaccoClientDashboard memberIdFromAuth={user.sacco_member_id} memberMode navigate={navigate} />);
   }
 
   const renderPage = () => {
@@ -778,6 +832,7 @@ function AppContent() {
           enableTreasury: user?.enable_treasury !== false,
           enableReconciliation: user?.enable_reconciliation !== false,
           enableAgent: user?.business_type !== "retail" && user?.business_type !== "clinic" && user?.enable_agent !== false,
+          enableBoatConnect: user?.enable_boat_connect !== false,
           enableHotelAssessment:
             (user?.business_type === "hotel" || user?.business_type === "mixed") &&
             user?.enable_hotel_assessment !== false,
@@ -1310,6 +1365,8 @@ function AppContent() {
         return <PurchasesByItemReportPage />;
       case 'reports_sales_by_item':
         return <SalesByItemReportPage />;
+      case 'reports_pos_cash_collections':
+        return <PosCashCollectionsReportPage />;
       case 'reports_room_billing':
         return <RoomBillingReportPage />;
       case 'reports_manufacturing_daily_production':
@@ -1376,6 +1433,8 @@ function AppContent() {
         );
       case 'system_integrations':
         return <IntegrationsHubPage onNavigate={navigate} />;
+      case 'boat_connect':
+        return <BoatConnectPage readOnly={access.readOnly} />;
       case 'image_document_converter':
         return <ImageDocumentConverterPage />;
       case 'gl_accounts':
@@ -1458,14 +1517,14 @@ function AppContent() {
 
   return (
     <AppProvider navigate={(p, state) => navigate(normalizeLegacyPage(p), state)}>
-      {user.isSaccoMember ? renderMemberPage() : <Layout
+      {user.isSaccoMember ? pageSuspense(renderMemberPage()) : <Layout
         currentPage={currentPage}
         pageState={pageState}
         onNavigate={(page, state) => navigate(page, state)}
         onBack={navigateBack}
         canGoBack={pageHistory.length > 0}
       >
-        {renderPage()}
+        {pageSuspense(renderPage())}
       </Layout>}
     </AppProvider>
   );

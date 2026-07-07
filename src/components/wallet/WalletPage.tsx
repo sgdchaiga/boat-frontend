@@ -40,6 +40,17 @@ type TxRow = {
 type HotelCust = { id: string; first_name: string; last_name: string; email: string | null };
 type RetailCust = { id: string; name: string; email: string | null };
 type StudentRow = { id: string; first_name: string; last_name: string; admission_number: string; class_name: string };
+type InvoiceRow = {
+  id: string;
+  invoice_number: string;
+  total: number;
+  status: string;
+  due_date: string | null;
+  customer_id: string | null;
+  property_customer_id: string | null;
+  paid: number;
+  balance: number;
+};
 
 type PendingTx = {
   txKind: "deposit" | "withdrawal" | "transfer";
@@ -96,9 +107,12 @@ export function WalletPage({ readOnly }: Props) {
   const [hotelCustomers, setHotelCustomers] = useState<HotelCust[]>([]);
   const [retailCustomers, setRetailCustomers] = useState<RetailCust[]>([]);
   const [students, setStudents] = useState<StudentRow[]>([]);
+  const [openInvoices, setOpenInvoices] = useState<InvoiceRow[]>([]);
   const [err, setErr] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [mobileMoneyBusy, setMobileMoneyBusy] = useState(false);
   const [ctx, setCtx] = useState<{ customer_kind: WalletCustomerKind; customer_id: string }>({
     customer_kind: "retail",
     customer_id: "",
@@ -108,6 +122,14 @@ export function WalletPage({ readOnly }: Props) {
     amount: "",
     to_recipient: "",
     narration: "",
+  });
+  const [billForm, setBillForm] = useState({ invoice_id: "", amount: "" });
+  const [mobileMoneyForm, setMobileMoneyForm] = useState({
+    action: "wallet_topup" as "wallet_topup" | "wallet_bill_payment",
+    network: "mtn" as "mtn" | "airtel",
+    phone: "",
+    amount: "",
+    invoice_id: "",
   });
 
   const walletRefNote =
@@ -203,6 +225,71 @@ export function WalletPage({ readOnly }: Props) {
     [user?.organization_id]
   );
 
+  const loadWalletInvoices = useCallback(
+    async (w: WalletRow | null) => {
+      const orgId = user?.organization_id;
+      if (!orgId || !w || w.customer_kind === "student") {
+        setOpenInvoices([]);
+        return;
+      }
+
+      let query = supabase
+        .from("retail_invoices")
+        .select("id,invoice_number,total,status,due_date,customer_id,property_customer_id")
+        .eq("organization_id", orgId)
+        .neq("status", "void")
+        .order("due_date", { ascending: true });
+      query =
+        w.customer_kind === "retail"
+          ? query.eq("customer_id", w.retail_customer_id)
+          : query.eq("property_customer_id", w.hotel_customer_id);
+
+      const [invoiceRes, paymentRes] = await Promise.all([
+        query,
+        supabase
+          .from("payments")
+          .select("payment_status,invoice_allocations")
+          .eq("organization_id", orgId)
+          .eq("payment_status", "completed"),
+      ]);
+
+      if (invoiceRes.error) {
+        setOpenInvoices([]);
+        setErr(invoiceRes.error.message);
+        return;
+      }
+
+      const paidByInvoice = new Map<string, number>();
+      for (const payment of paymentRes.data || []) {
+        const allocations = Array.isArray(payment.invoice_allocations) ? payment.invoice_allocations : [];
+        for (const allocation of allocations) {
+          const invoiceId = String((allocation as { invoice_id?: unknown }).invoice_id || "");
+          const amount = Number((allocation as { amount?: unknown }).amount || 0);
+          if (invoiceId && Number.isFinite(amount)) paidByInvoice.set(invoiceId, (paidByInvoice.get(invoiceId) || 0) + amount);
+        }
+      }
+
+      const rows = ((invoiceRes.data || []) as Array<Omit<InvoiceRow, "paid" | "balance">>)
+        .map((invoice) => {
+          const paid = paidByInvoice.get(invoice.id) || 0;
+          const total = Number(invoice.total || 0);
+          return { ...invoice, total, paid, balance: Math.max(0, total - paid) };
+        })
+        .filter((invoice) => invoice.balance > 0.001 && invoice.status !== "paid");
+
+      setOpenInvoices(rows);
+      setBillForm((current) => {
+        const invoiceOk = rows.some((invoice) => invoice.id === current.invoice_id);
+        return invoiceOk ? current : { invoice_id: rows[0]?.id ?? "", amount: rows[0]?.balance ? String(rows[0].balance) : "" };
+      });
+      setMobileMoneyForm((current) => {
+        const invoiceOk = rows.some((invoice) => invoice.id === current.invoice_id);
+        return invoiceOk ? current : { ...current, invoice_id: rows[0]?.id ?? "" };
+      });
+    },
+    [user?.organization_id]
+  );
+
   const load = useCallback(async () => {
     setLoading(true);
     const orgId = user?.organization_id;
@@ -238,6 +325,7 @@ export function WalletPage({ readOnly }: Props) {
         setBalance(0);
         setLimits(null);
         setTx([]);
+        setOpenInvoices([]);
         setLoading(false);
         return;
       }
@@ -246,6 +334,7 @@ export function WalletPage({ readOnly }: Props) {
       if (ensured.error || !ensured.data) {
         setErr(listErr ?? ensured.error);
         setWallet(null);
+        setOpenInvoices([]);
         setLoading(false);
         return;
       }
@@ -269,6 +358,7 @@ export function WalletPage({ readOnly }: Props) {
       setBalance(Number((bRes.data as BalanceRow | null)?.current_balance ?? 0));
       setLimits((lRes.data as LimitRow | null) ?? null);
       setTx((tRes.data as TxRow[]) || []);
+      void loadWalletInvoices(w);
       setLoading(false);
       return;
     }
@@ -305,6 +395,7 @@ export function WalletPage({ readOnly }: Props) {
         setBalance(0);
         setLimits(null);
         setTx([]);
+        setOpenInvoices([]);
         setLoading(false);
         return;
       }
@@ -318,6 +409,7 @@ export function WalletPage({ readOnly }: Props) {
     if (ensured.error || !ensured.data) {
       setErr(listErr ?? ensured.error);
       setWallet(null);
+      setOpenInvoices([]);
       setLoading(false);
       return;
     }
@@ -341,8 +433,9 @@ export function WalletPage({ readOnly }: Props) {
     setBalance(Number((bRes.data as BalanceRow | null)?.current_balance ?? 0));
     setLimits((lRes.data as LimitRow | null) ?? null);
     setTx((tRes.data as TxRow[]) || []);
+    void loadWalletInvoices(w);
     setLoading(false);
-  }, [user?.organization_id, user?.id, user?.business_type, isSuperAdmin, ctx.customer_id, ctx.customer_kind, ensureWallet]);
+  }, [user?.organization_id, user?.id, user?.business_type, isSuperAdmin, ctx.customer_id, ctx.customer_kind, ensureWallet, loadWalletInvoices]);
 
   useEffect(() => {
     void load();
@@ -427,7 +520,83 @@ export function WalletPage({ readOnly }: Props) {
       setErr(`${res.message} Saved offline; will sync later.`);
       return;
     }
+    setNotice("Wallet transaction posted.");
     setForm({ txKind: "deposit", amount: "", to_recipient: "", narration: "" });
+    void load();
+  };
+
+  const selectedBillInvoice = openInvoices.find((invoice) => invoice.id === billForm.invoice_id) ?? null;
+  const selectedMobileMoneyInvoice = openInvoices.find((invoice) => invoice.id === mobileMoneyForm.invoice_id) ?? null;
+
+  const payInvoiceFromWallet = async () => {
+    if (readOnly || !wallet || !selectedBillInvoice || !user?.id) return;
+    const amount = Number(billForm.amount || selectedBillInvoice.balance);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setErr("Enter a valid bill payment amount.");
+      return;
+    }
+    setErr(null);
+    setNotice(null);
+    const reference = `wallet-bill-${selectedBillInvoice.invoice_number}-${Date.now()}`;
+    const { error } = await supabase.rpc("wallet_pay_retail_invoice", {
+      p_wallet_id: wallet.id,
+      p_invoice_id: selectedBillInvoice.id,
+      p_amount: amount,
+      p_reference: reference,
+      p_created_by: user.id,
+    });
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+    setNotice(`Bill paid from wallet. Ref ${reference}.`);
+    setBillForm({ invoice_id: "", amount: "" });
+    void load();
+  };
+
+  const startMobileMoney = async () => {
+    if (readOnly || !wallet) return;
+    const amount = Number(mobileMoneyForm.amount || selectedMobileMoneyInvoice?.balance || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setErr("Enter a valid mobile money amount.");
+      return;
+    }
+    if (!mobileMoneyForm.phone.trim()) {
+      setErr("Enter the customer mobile money phone number.");
+      return;
+    }
+    if (mobileMoneyForm.action === "wallet_bill_payment" && !selectedMobileMoneyInvoice) {
+      setErr("Select the invoice to pay by mobile money.");
+      return;
+    }
+    setMobileMoneyBusy(true);
+    setErr(null);
+    setNotice(null);
+    const { data, error } = await supabase.functions.invoke("customer-wallet-mobile-money", {
+      body: {
+        action: mobileMoneyForm.action,
+        wallet_id: wallet.id,
+        amount,
+        network: mobileMoneyForm.network,
+        phone_number: mobileMoneyForm.phone,
+        retail_invoice_id: mobileMoneyForm.action === "wallet_bill_payment" ? selectedMobileMoneyInvoice?.id : null,
+        customer_name: customerDisplayName,
+        customer_email: selectedRetail?.email || selectedHotel?.email || undefined,
+        timeout_seconds: 60,
+      },
+    });
+    setMobileMoneyBusy(false);
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+    const result = data as { ok?: boolean; tx_ref?: string; gateway_result?: { message?: string; status?: string } };
+    if (!result?.ok) {
+      setErr(result?.gateway_result?.message || "Mobile money request was not completed.");
+      return;
+    }
+    setNotice(`Mobile money confirmed. Ref ${result.tx_ref || "pending"}.`);
+    setMobileMoneyForm((current) => ({ ...current, amount: "" }));
     void load();
   };
 
@@ -518,6 +687,7 @@ export function WalletPage({ readOnly }: Props) {
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
+      {notice && <p className="text-emerald-700 text-sm">{notice}</p>}
       <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
         {isSchool ? (
           <select
@@ -663,6 +833,116 @@ export function WalletPage({ readOnly }: Props) {
               {limits?.monthly_limit?.toLocaleString() ?? "—"} · max balance {limits?.max_balance?.toLocaleString() ?? "—"}
             </p>
           </div>
+
+          {!isSchool && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">Pay customer bill from wallet</p>
+                  <p className="text-xs text-slate-500">Debits this wallet and records a completed debtor payment against the invoice.</p>
+                </div>
+                <select
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  value={billForm.invoice_id}
+                  onChange={(e) => {
+                    const invoice = openInvoices.find((row) => row.id === e.target.value);
+                    setBillForm({ invoice_id: e.target.value, amount: invoice ? String(invoice.balance) : "" });
+                  }}
+                >
+                  <option value="">Select open invoice</option>
+                  {openInvoices.map((invoice) => (
+                    <option key={invoice.id} value={invoice.id}>
+                      {invoice.invoice_number} · due {invoice.balance.toLocaleString()}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="number"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Amount"
+                  value={billForm.amount}
+                  onChange={(e) => setBillForm((current) => ({ ...current, amount: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => void payInvoiceFromWallet()}
+                  className="px-4 py-2 bg-emerald-600 text-white rounded-lg text-sm disabled:opacity-60"
+                  disabled={readOnly || !selectedBillInvoice}
+                >
+                  Pay bill from wallet
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-semibold text-slate-800">MTN/Airtel mobile money</p>
+                  <p className="text-xs text-slate-500">Send an STK prompt to top up the wallet or pay a selected invoice directly.</p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <select
+                    className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                    value={mobileMoneyForm.action}
+                    onChange={(e) =>
+                      setMobileMoneyForm((current) => ({ ...current, action: e.target.value as "wallet_topup" | "wallet_bill_payment" }))
+                    }
+                  >
+                    <option value="wallet_topup">Top up wallet</option>
+                    <option value="wallet_bill_payment">Pay invoice</option>
+                  </select>
+                  <select
+                    className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                    value={mobileMoneyForm.network}
+                    onChange={(e) => setMobileMoneyForm((current) => ({ ...current, network: e.target.value as "mtn" | "airtel" }))}
+                  >
+                    <option value="mtn">MTN MoMo</option>
+                    <option value="airtel">Airtel Money</option>
+                  </select>
+                </div>
+                {mobileMoneyForm.action === "wallet_bill_payment" && (
+                  <select
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                    value={mobileMoneyForm.invoice_id}
+                    onChange={(e) => {
+                      const invoice = openInvoices.find((row) => row.id === e.target.value);
+                      setMobileMoneyForm((current) => ({
+                        ...current,
+                        invoice_id: e.target.value,
+                        amount: invoice ? String(invoice.balance) : current.amount,
+                      }));
+                    }}
+                  >
+                    <option value="">Select open invoice</option>
+                    {openInvoices.map((invoice) => (
+                      <option key={invoice.id} value={invoice.id}>
+                        {invoice.invoice_number} · due {invoice.balance.toLocaleString()}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <input
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Customer phone e.g. 07XXXXXXXX"
+                  value={mobileMoneyForm.phone}
+                  onChange={(e) => setMobileMoneyForm((current) => ({ ...current, phone: e.target.value }))}
+                />
+                <input
+                  type="number"
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                  placeholder="Amount"
+                  value={mobileMoneyForm.amount}
+                  onChange={(e) => setMobileMoneyForm((current) => ({ ...current, amount: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => void startMobileMoney()}
+                  className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm disabled:opacity-60"
+                  disabled={readOnly || mobileMoneyBusy}
+                >
+                  {mobileMoneyBusy ? "Waiting for confirmation..." : "Send mobile money prompt"}
+                </button>
+              </div>
+            </div>
+          )}
 
           <div className="rounded-xl border border-slate-200 bg-white overflow-x-auto">
             <table className="w-full text-sm">

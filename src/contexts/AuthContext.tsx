@@ -113,6 +113,8 @@ interface AuthUser {
   enable_reconciliation?: boolean;
   /** Platform: Agent Hub module toggle. */
   enable_agent?: boolean;
+  /** Platform: BOAT Connect data integration and reporting layer toggle. */
+  enable_boat_connect?: boolean;
   /** Platform: Assessment & onboarding module (prospect hotels). */
   enable_hotel_assessment?: boolean;
   /** Platform: Manufacturing module (BOM, work orders, costing). */
@@ -277,6 +279,7 @@ type TenantProfile = {
   enable_treasury: boolean;
   enable_reconciliation: boolean;
   enable_agent: boolean;
+  enable_boat_connect: boolean;
   enable_hotel_assessment: boolean;
   enable_manufacturing: boolean;
   enable_reports: boolean;
@@ -364,6 +367,7 @@ function localTenantDefaults(): TenantProfile {
     enable_treasury: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_TREASURY, true),
     enable_reconciliation: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_RECONCILIATION, true),
     enable_agent: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_AGENT, true),
+    enable_boat_connect: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BOAT_CONNECT, true),
     enable_hotel_assessment: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_HOTEL_ASSESSMENT, true),
     enable_manufacturing: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_MANUFACTURING, true),
     enable_reports: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_REPORTS, true),
@@ -525,6 +529,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     enable_treasury: true,
     enable_reconciliation: true,
     enable_agent: true,
+    enable_boat_connect: true,
     enable_hotel_assessment: true,
     enable_manufacturing: true,
     enable_reports: true,
@@ -566,7 +571,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -601,6 +606,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_treasury?: boolean | null;
       enable_reconciliation?: boolean | null;
       enable_agent?: boolean | null;
+      enable_boat_connect?: boolean | null;
       enable_hotel_assessment?: boolean | null;
       enable_manufacturing?: boolean | null;
       enable_reports?: boolean | null;
@@ -646,6 +652,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_treasury: org?.enable_treasury !== false,
       enable_reconciliation: org?.enable_reconciliation !== false,
       enable_agent: org?.enable_agent !== false,
+      enable_boat_connect: org?.enable_boat_connect !== false,
       enable_hotel_assessment: org?.enable_hotel_assessment !== false,
       enable_manufacturing: org?.enable_manufacturing !== false,
       enable_reports: org?.enable_reports !== false,
@@ -908,6 +915,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           enable_treasury: true,
           enable_reconciliation: true,
           enable_agent: true,
+          enable_boat_connect: true,
           enable_hotel_assessment: true,
           enable_manufacturing: true,
           enable_reports: true,

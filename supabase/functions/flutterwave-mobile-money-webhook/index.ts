@@ -91,5 +91,8 @@ Deno.serve(async (req) => {
   const { error: reconcileError } = await serviceClient.rpc("reconcile_mobile_money_attempt", { p_tx_ref: txRef });
   if (reconcileError) return json({ ok: false, error: reconcileError.message }, 500);
 
+  const { error: walletFinalizeError } = await serviceClient.rpc("customer_wallet_mobile_money_finalize", { p_tx_ref: txRef });
+  if (walletFinalizeError) return json({ ok: false, error: walletFinalizeError.message }, 500);
+
   return json({ ok: true });
 });

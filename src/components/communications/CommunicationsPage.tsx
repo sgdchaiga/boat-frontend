@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { Inbox, MessageSquare, MessagesSquare, Smartphone, Users } from "lucide-react";
+import { Inbox, Loader2, MessageSquare, MessagesSquare, RefreshCw, Smartphone, Users } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
-import { getBoatApiBase, getBoatApiRoot } from "@/lib/communicationsApi";
+import { getBoatApiBase, getBoatApiRoot, listBoatMessages, type BoatMessageRecord } from "@/lib/communicationsApi";
 import { MessagingComposerDialog } from "./MessagingComposerDialog";
 
 export type CommunicationsTabId = "inbox" | "sms" | "whatsapp" | "internal";
@@ -22,9 +23,13 @@ export function CommunicationsPage({
   contextNote?: string;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
 }) {
+  const { user } = useAuth();
   const [tab, setTab] = useState<CommunicationsTabId>(initialTab ?? "inbox");
   const [smsOpen, setSmsOpen] = useState(false);
   const [waOpen, setWaOpen] = useState(false);
+  const [messages, setMessages] = useState<BoatMessageRecord[]>([]);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+  const [messagesError, setMessagesError] = useState<string | null>(null);
 
   useEffect(() => {
     if (initialTab && TABS.some((t) => t.id === initialTab)) {
@@ -34,6 +39,32 @@ export function CommunicationsPage({
 
   const apiRoot = getBoatApiRoot();
   const apiEnv = getBoatApiBase();
+
+  const loadMessages = async () => {
+    setMessagesLoading(true);
+    setMessagesError(null);
+    const result = await listBoatMessages({ organizationId: user?.organization_id ?? undefined, limit: 50 });
+    if (result.ok) {
+      setMessages(result.data || []);
+    } else {
+      setMessages([]);
+      setMessagesError(result.error || "Could not load messages.");
+    }
+    setMessagesLoading(false);
+  };
+
+  useEffect(() => {
+    if (tab === "inbox" && apiRoot) {
+      void loadMessages();
+    }
+  }, [tab, apiRoot, user?.organization_id]);
+
+  const statusClass = (status: BoatMessageRecord["status"]) => {
+    if (status === "delivered" || status === "read") return "bg-emerald-100 text-emerald-800";
+    if (status === "failed") return "bg-rose-100 text-rose-800";
+    if (status === "sent") return "bg-sky-100 text-sky-800";
+    return "bg-slate-100 text-slate-700";
+  };
 
   return (
     <div className="p-6 md:p-8 max-w-6xl mx-auto space-y-6">
@@ -83,14 +114,19 @@ export function CommunicationsPage({
 
       {tab === "inbox" && (
         <div className="app-card p-6 space-y-3">
-          <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
-            <Inbox className="w-5 h-5 text-brand-600" />
-            All messages
-          </h2>
-          <p className="text-sm text-slate-600">
-            Unified inbox will list SMS, WhatsApp, and internal threads. Connect boat-server and extend the API to load
-            <code className="mx-1 text-xs">notification_messages</code> here.
-          </p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold text-slate-900 flex items-center gap-2">
+                <Inbox className="w-5 h-5 text-brand-600" />
+                All messages
+              </h2>
+              <p className="text-sm text-slate-600">Recent SMS and WhatsApp delivery status from boat-server.</p>
+            </div>
+            <button type="button" className="app-btn-secondary text-sm" onClick={() => void loadMessages()} disabled={!apiRoot || messagesLoading}>
+              {messagesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+              Refresh
+            </button>
+          </div>
           {!apiRoot ? (
             <p className="text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-3">
               Set <code className="text-xs">VITE_BOAT_API_URL</code> for production. In dev, the app uses the <code className="text-xs">/boat-api</code> proxy if the env is unset.
@@ -98,11 +134,45 @@ export function CommunicationsPage({
           ) : (
             <p className="text-sm text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-lg p-3">
               API base: <code className="text-xs">{apiEnv || (import.meta.env.DEV ? "/boat-api (Vite proxy)" : "")}</code>
-              . Next step: add a list endpoint and bind rows here.
             </p>
           )}
-          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50/80 p-8 text-center text-slate-500 text-sm">
-            No messages yet (placeholder)
+          {messagesError ? <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">{messagesError}</p> : null}
+          <div className="overflow-x-auto rounded-lg border border-slate-200">
+            <table className="min-w-[760px] w-full text-sm">
+              <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+                <tr>
+                  <th className="p-3 text-left">Sent at</th>
+                  <th className="p-3 text-left">Channel</th>
+                  <th className="p-3 text-left">To</th>
+                  <th className="p-3 text-left">Message</th>
+                  <th className="p-3 text-left">Provider</th>
+                  <th className="p-3 text-left">Status</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {messagesLoading ? (
+                  <tr><td colSpan={6} className="p-6 text-center text-slate-500">Loading messages...</td></tr>
+                ) : messages.length === 0 ? (
+                  <tr><td colSpan={6} className="p-6 text-center text-slate-500">No messages yet.</td></tr>
+                ) : (
+                  messages.map((message) => (
+                    <tr key={message.id} className="hover:bg-slate-50">
+                      <td className="p-3 whitespace-nowrap text-xs text-slate-600">{new Date(message.createdAt).toLocaleString()}</td>
+                      <td className="p-3 capitalize">{message.channel}</td>
+                      <td className="p-3 font-mono text-xs">{message.to}</td>
+                      <td className="p-3 max-w-[280px] truncate">{message.text || message.templateId || "Template message"}</td>
+                      <td className="p-3">{message.provider}</td>
+                      <td className="p-3">
+                        <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClass(message.status)}`}>
+                          {message.status}
+                        </span>
+                        {message.error ? <p className="mt-1 max-w-[220px] truncate text-xs text-rose-600">{message.error}</p> : null}
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

@@ -192,6 +192,24 @@ export class NotificationService {
     return row ? toMessageRecord(row) : null;
   }
 
+  public async list(options?: {
+    organizationId?: string;
+    channel?: MessageChannel;
+    limit?: number;
+  }): Promise<MessageRecord[]> {
+    const orgId = organizationIdForPrisma(options?.organizationId);
+    const limit = Math.max(1, Math.min(100, Number(options?.limit || 50)));
+    const rows = await this.prisma.notificationMessage.findMany({
+      where: {
+        ...(orgId ? { organizationId: orgId } : {}),
+        ...(options?.channel ? { channel: options.channel } : {}),
+      },
+      orderBy: { createdAt: "desc" },
+      take: limit,
+    });
+    return rows.map(toMessageRecord);
+  }
+
   public async updateStatusByProviderMessageId(
     providerMessageId: string,
     status: MessageStatus,

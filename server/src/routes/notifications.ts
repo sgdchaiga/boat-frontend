@@ -131,4 +131,28 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
     }
     return { data: record };
   });
+
+  app.get<{
+    Querystring: { organizationId?: string; channel?: string; limit?: string };
+  }>("/notifications", async (req, reply) => {
+    const channel = req.query.channel;
+    if (channel && channel !== "sms" && channel !== "whatsapp") {
+      return reply.status(400).send({ error: "channel must be sms or whatsapp" });
+    }
+    try {
+      const records = await service.list({
+        organizationId: req.query.organizationId,
+        channel: channel as SendMessageRequest["channel"] | undefined,
+        limit: req.query.limit ? Number(req.query.limit) : undefined,
+      });
+      return { data: records };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not load notifications";
+      if (message.includes("notification_messages") || message.includes("Database table")) {
+        return reply.status(503).send({ error: message });
+      }
+      req.log.error({ err: error }, "notifications list failed");
+      return reply.status(500).send({ error: message });
+    }
+  });
 };

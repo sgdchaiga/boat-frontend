@@ -25,41 +25,7 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { FeatureFlagsSummary } from "../common/FeatureFlagsSummary";
-
-export type AdminTab =
-  | "users"
-  | "business"
-  | "products"
-  | "recipes"
-  | "approval"
-  | "journal_accounts"
-  | "pos_cogs_reconciliation"
-  | "gender_types"
-  | "hotel_pos"
-  | "sync_queue"
-  | "local_import"
-  | "subscription_renewal";
-
-const ADMIN_TAB_IDS: AdminTab[] = [
-  "users",
-  "business",
-  "products",
-  "recipes",
-  "approval",
-  "journal_accounts",
-  "pos_cogs_reconciliation",
-  "gender_types",
-  "hotel_pos",
-  "sync_queue",
-  "local_import",
-  "subscription_renewal",
-];
-
-/** Validated query param for `?adminTab=` deep links (e.g. from Hotel POS). */
-export function parseAdminTabParam(raw: string | null | undefined): AdminTab | undefined {
-  if (!raw || typeof raw !== "string") return undefined;
-  return ADMIN_TAB_IDS.includes(raw as AdminTab) ? (raw as AdminTab) : undefined;
-}
+import { ADMIN_TAB_IDS, type AdminTab } from "../../lib/adminTabs";
 
 const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "users", label: "User & Role Management", icon: Users },

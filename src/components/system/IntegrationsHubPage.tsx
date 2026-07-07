@@ -1,7 +1,19 @@
-import { MessageSquare, Settings, Smartphone, Wallet } from "lucide-react";
+import { Link2, MessageSquare, Settings, Smartphone, Wallet } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
 
 export function IntegrationsHubPage({ onNavigate }: { onNavigate: (page: string) => void }) {
+  const { user } = useAuth();
   const links = [
+    ...(user?.enable_boat_connect === false
+      ? []
+      : [
+          {
+            title: "BOAT Connect",
+            desc: "Universal imports, field mapping, validation, synchronization, warehouse, and reporting layer.",
+            page: "boat_connect",
+            icon: Link2,
+          },
+        ]),
     {
       title: "Communications",
       desc: "SMS, WhatsApp, and messaging workflows.",

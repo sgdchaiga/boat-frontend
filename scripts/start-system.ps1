@@ -6,6 +6,7 @@ $pidFile = Join-Path $runtimeDir "boat-system-pids.json"
 $apiUrl = "http://127.0.0.1:3001"
 $webUrl = "http://127.0.0.1:5173"
 $postgresService = "postgresql-x64-18"
+$npmCmd = (Get-Command "npm.cmd" -ErrorAction Stop).Source
 
 function Test-PidRunning {
   param([int]$PidToCheck)
@@ -78,18 +79,21 @@ if ($pgService) {
 
 Write-Host "Starting BOAT API server..." -ForegroundColor Cyan
 $serverProc = Start-Process -FilePath "powershell.exe" `
-  -ArgumentList "-NoExit", "-Command", "cd '$repoRoot\server'; npm run dev" `
+  -ArgumentList "-NoExit", "-Command", "cd '$repoRoot\server'; & '$npmCmd' run dev" `
   -PassThru
+
+Write-Host "Starting BOAT frontend..." -ForegroundColor Cyan
+$webProc = Start-Process -FilePath "powershell.exe" `
+  -ArgumentList "-NoExit", "-Command", "cd '$repoRoot'; `$env:VITE_DESKTOP_DATA_MODE='api'; `$env:VITE_BOAT_API_URL='$apiUrl'; `$env:VITE_LOCAL_BUSINESS_TYPE='school'; & '$npmCmd' run dev -- --host 127.0.0.1" `
+  -PassThru
+
+Write-Host "Waiting for BOAT frontend..." -ForegroundColor Cyan
+$webReady = Wait-HttpOk -Url $webUrl -TimeoutSeconds 45
 
 Write-Host "Waiting for BOAT API..." -ForegroundColor Cyan
 if (-not (Wait-HttpOk -Url "$apiUrl/ready" -TimeoutSeconds 60)) {
   Write-Host "BOAT API did not report ready within 60 seconds. The API window may show the reason." -ForegroundColor Yellow
 }
-
-Write-Host "Starting BOAT frontend..." -ForegroundColor Cyan
-$webProc = Start-Process -FilePath "powershell.exe" `
-  -ArgumentList "-NoExit", "-Command", "cd '$repoRoot'; `$env:VITE_DESKTOP_DATA_MODE='api'; `$env:VITE_BOAT_API_URL='$apiUrl'; `$env:VITE_LOCAL_BUSINESS_TYPE='school'; npm run dev" `
-  -PassThru
 
 $state = @{
   started_at = (Get-Date).ToString("o")
@@ -102,7 +106,9 @@ $state = @{
 Set-Content -Path $pidFile -Value $state -Encoding UTF8
 
 Write-Host "Opening browser at $webUrl ..." -ForegroundColor Green
-Start-Sleep -Seconds 3
+if (-not $webReady) {
+  Write-Host "Frontend did not answer within 45 seconds; opening the URL anyway so it can finish loading." -ForegroundColor Yellow
+}
 Start-Process $webUrl
 
 Write-Host "BOAT started." -ForegroundColor Green

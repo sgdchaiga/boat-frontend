@@ -52,7 +52,7 @@ import {
 } from '@/lib/reportHubCatalog';
 import { desktopApi } from '@/lib/desktopApi';
 import { organizationMembershipLabel } from '@/lib/orgMembership';
-import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncPush';
+import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncStatus';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 
 interface LayoutProps {
@@ -263,6 +263,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const allowPayroll = !retailLikeTenant && enablePayroll;
   const allowBudget = !retailLikeTenant && enableBudget;
   const allowAgent = !retailLikeTenant && user?.enable_agent !== false;
+  const allowBoatConnect = user?.enable_boat_connect !== false;
   const allowHotelAssessment =
     (businessType === "hotel" || businessType === "mixed") && user?.enable_hotel_assessment !== false;
   const allowManufacturing = user?.enable_manufacturing !== false;
@@ -309,7 +310,6 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
-      { name: 'Image to Excel / Word', icon: FileText, page: 'image_document_converter' },
       {
         name: '👥 Members',
         icon: UsersRound,
@@ -452,6 +452,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                   items: [
                     { name: 'Settings', page: 'admin' },
                     ...(saccoPermissionsNav ? [{ name: 'Permissions', page: SACCOPRO_PAGE.permissions }] : []),
+                    ...(allowBoatConnect ? [{ name: 'BOAT Connect', page: 'boat_connect' }] : []),
+                    { name: 'Image to Excel / Word', page: 'image_document_converter' },
                     { name: 'Loan products', page: SACCOPRO_PAGE.loanSettings },
                     { name: 'Savings numbering', page: 'sacco_members_savings_settings' },
                     { name: 'Interest rules', page: SACCOPRO_PAGE.savingsInterest },
@@ -468,6 +470,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enableFixedAssets,
       enableBudget,
       enablePayroll,
+      allowBoatConnect,
       saccoPermissionsNav,
       saccoSystemCashbookNav,
     ]
@@ -875,6 +878,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         enableTreasury,
         enableReconciliation: user?.enable_reconciliation !== false,
         enableAgent: allowAgent,
+        enableBoatConnect: allowBoatConnect,
         enableHotelAssessment: allowHotelAssessment,
         enableManufacturing: allowManufacturing,
         enableReports: user?.enable_reports !== false,
@@ -899,6 +903,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.enable_asset_verification,
       user?.enable_treasury,
       user?.enable_reconciliation,
+      user?.enable_boat_connect,
       user?.school_enable_reports,
       user?.school_enable_fixed_deposit,
       user?.school_enable_accounting,
@@ -913,6 +918,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enableTreasury,
       user?.enable_reconciliation,
       allowAgent,
+      allowBoatConnect,
       allowHotelAssessment,
       allowManufacturing,
     ]
@@ -933,6 +939,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enableTreasury,
       enableReconciliation: user?.enable_reconciliation !== false,
       enableAgent: allowAgent,
+      enableBoatConnect: allowBoatConnect,
       enableHotelAssessment: allowHotelAssessment,
       enableManufacturing: allowManufacturing,
       enableReports: user?.enable_reports !== false,

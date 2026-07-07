@@ -24,6 +24,7 @@ type Org = {
   enable_treasury?: boolean | null;
   enable_reconciliation?: boolean | null;
   enable_agent?: boolean | null;
+  enable_boat_connect?: boolean | null;
   enable_hotel_assessment?: boolean | null;
   enable_manufacturing?: boolean | null;
   clearing_enabled?: boolean | null;
@@ -191,6 +192,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableTreasury, setEditEnableTreasury] = useState(true);
   const [editEnableReconciliation, setEditEnableReconciliation] = useState(true);
   const [editEnableAgent, setEditEnableAgent] = useState(true);
+  const [editEnableBoatConnect, setEditEnableBoatConnect] = useState(true);
   const [editEnableReports, setEditEnableReports] = useState(true);
   const [editEnableAccounting, setEditEnableAccounting] = useState(true);
   const [editEnableInventory, setEditEnableInventory] = useState(true);
@@ -252,6 +254,7 @@ export function PlatformOrganizationsPage() {
       | "enable_treasury"
       | "enable_reconciliation"
       | "enable_agent"
+      | "enable_boat_connect"
       | "enable_hotel_assessment"
       | "enable_manufacturing",
     nextValue: boolean
@@ -609,6 +612,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableTreasury(org.enable_treasury !== false);
     setEditEnableReconciliation(org.enable_reconciliation !== false);
     setEditEnableAgent(org.enable_agent !== false);
+    setEditEnableBoatConnect(org.enable_boat_connect !== false);
     setEditEnableReports(org.enable_reports !== false);
     setEditEnableAccounting(org.enable_accounting !== false);
     setEditEnableInventory(org.enable_inventory !== false);
@@ -653,6 +657,7 @@ export function PlatformOrganizationsPage() {
         enable_treasury: editEnableTreasury,
         enable_reconciliation: editEnableReconciliation,
         enable_agent: editEnableAgent,
+        enable_boat_connect: editEnableBoatConnect,
         enable_hotel_assessment: editEnableHotelAssessment,
         enable_manufacturing: editEnableManufacturing,
         enable_reports: editEnableReports,
@@ -818,6 +823,7 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Treasury</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Budget</th>
+                <th className="text-left p-3 font-semibold text-slate-700">BOAT Connect</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Agent Hub</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Assessment</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Manufacturing</th>
@@ -831,7 +837,7 @@ export function PlatformOrganizationsPage() {
             <tbody>
               {filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={14} className="p-8 text-center text-slate-600 text-sm">
+                  <td colSpan={15} className="p-8 text-center text-slate-600 text-sm">
                     {orgSearch.trim()
                       ? "No organizations match your search."
                       : "No organizations yet."}
@@ -902,6 +908,28 @@ export function PlatformOrganizationsPage() {
                           className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
                         >
                           {org.enable_budget === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_boat_connect === false
+                              ? "bg-red-100 text-red-800"
+                              : "bg-emerald-100 text-emerald-800"
+                          }`}
+                        >
+                          {org.enable_boat_connect === false ? "Off" : "On"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleOrgModule(org.id, "enable_boat_connect", !(org.enable_boat_connect !== false))
+                          }
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_boat_connect === false ? "Turn On" : "Turn Off"}
                         </button>
                       </div>
                     </td>
@@ -1418,6 +1446,14 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnableAgent(e.target.checked)}
                 />
                 Agent Hub
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableBoatConnect}
+                  onChange={(e) => setEditEnableBoatConnect(e.target.checked)}
+                />
+                BOAT Connect
               </label>
             </div>
             {editBiz === "school" && (

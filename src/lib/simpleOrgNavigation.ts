@@ -63,6 +63,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     ...clinicPriorityReports,
     { name: "Daily summary", page: "reports_daily_summary" },
     { name: "Sales report", page: "reports_daily_sales" },
+    { name: "POS cash collections", page: "reports_pos_cash_collections" },
     purchasesByItemReport,
     ...(businessType === "clinic" ? [] : [periodPurchasesReport]),
     ...(businessType !== "clinic" ? [{ name: "Expense report", page: "reports_expenses" as const }] : []),
@@ -187,6 +188,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     settings.push({ name: "Payroll", page: PAYROLL_PAGE.hub });
   }
   settings.push({ name: "Integrations", page: "system_integrations" });
+  settings.push({ name: "BOAT Connect", page: "boat_connect" });
   if (allowBudget) {
     settings.push({ name: "Budgeting", page: "accounting_budgeting" });
   }
