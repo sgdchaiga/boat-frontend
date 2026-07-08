@@ -78,6 +78,14 @@ function slugify(s: string) {
     .slice(0, 80);
 }
 
+async function ensureStandardSetup(organizationId: string, businessType: string): Promise<string | null> {
+  const { error } = await supabase.rpc("ensure_organization_standard_setup", {
+    p_organization_id: organizationId,
+    p_business_type: businessType,
+  });
+  return error?.message ?? null;
+}
+
 /** Shareable filter for the platform orgs table (`?page=platform_organizations&org_q=…`). */
 const ORG_SEARCH_URL_KEY = "org_q";
 
@@ -512,6 +520,10 @@ export function PlatformOrganizationsPage() {
       setSaving(false);
       return;
     }
+    let setupError: string | null = null;
+    if (inserted?.id) {
+      setupError = await ensureStandardSetup(inserted.id, newBiz);
+    }
     if (newPlanId && inserted?.id) {
       const { error: e2 } = await supabase.from("organization_subscriptions").insert({
         organization_id: inserted.id,
@@ -575,6 +587,7 @@ export function PlatformOrganizationsPage() {
         setErr(`Organization created, but failed to create first admin: ${staffErr.message}`);
       }
     }
+    if (setupError) setErr(`Organization created, but standard setup needs review: ${setupError}`);
     setSaving(false);
     setModal(null);
     load();
@@ -675,6 +688,7 @@ export function PlatformOrganizationsPage() {
       setErr(orgUpdate.error.message);
       return;
     }
+    const setupError = await ensureStandardSetup(editOrg.id, editBiz);
 
     const sub = latestSub[editOrg.id];
     let error: { message: string } | null = null;
@@ -707,6 +721,7 @@ export function PlatformOrganizationsPage() {
     }
     setSaving(false);
     if (error) setErr(error.message);
+    else if (setupError) setErr(`Organization saved, but standard setup needs review: ${setupError}`);
     else {
       setModal(null);
       load();

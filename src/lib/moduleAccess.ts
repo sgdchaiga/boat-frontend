@@ -154,7 +154,8 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
       businessType === "clinic" ||
       businessType === "mixed" ||
       businessType === "restaurant" ||
-      businessType === "manufacturing"
+      businessType === "manufacturing" ||
+      businessType === "agriculture"
     );
   }
   if (audience === "production") {
@@ -175,7 +176,11 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
   /** Lodging-plus-retail tenants use both waiter POS surfaces and retail counter routes. */
   if (businessType === "mixed" && audience === "retail") return true;
   const normalized: ModuleAudience =
-    businessType === "mixed" || businessType === "accounting_practice" ? "both" : businessType === "restaurant" ? "retail" : businessType;
+    businessType === "mixed" || businessType === "accounting_practice"
+      ? "both"
+      : businessType === "restaurant" || businessType === "agriculture"
+        ? "retail"
+        : businessType;
   return audience === "both" || audience === normalized;
 }
 
@@ -514,6 +519,7 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
   if (page === "image_document_converter") return true;
+  if (page === "data_migration") return true;
   if (page === "boat_connect") return true;
   if (page === "asset_verification") return true;
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
@@ -576,6 +582,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "asset_verification") return "asset_verification";
   if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
+  if (page === "data_migration") return "admin";
   if (page === "communications") return "communications";
   if (page === "boat_connect") return "boat_connect";
   if (page === "agent_hub") return "agent";
@@ -604,6 +611,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "manufacturing_work_orders",
     "manufacturing_production_entries",
     "manufacturing_costing",
+    "manufacturing_cost_allocation",
     "manufacturing_price_lists",
   ].includes(page)) return "manufacturing";
   if (["purchases_vendors", "purchases_expenses", "purchases_orders", "purchases_bills", "purchases_payments", "purchases_credits", "purchases_cash_out_reconciliation"].includes(page)) return "purchases";
@@ -646,6 +654,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "accounting_income",
     "accounting_balance",
     "accounting_cashflow",
+    "accounting_cost_allocation",
   ].includes(page)) return "accounting";
   if (page === "accounting_bank_reconciliation") return "reconciliation";
   if (["accounting_budgeting", "reports_budget_variance"].includes(page)) return "budget";

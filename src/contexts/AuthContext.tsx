@@ -55,6 +55,7 @@ export type BusinessType =
   | "sacco"
   | "school"
   | "manufacturing"
+  | "agriculture"
   | "accounting_practice"
   | "vsla"
   | "other";
@@ -244,6 +245,7 @@ function parseLocalBusinessType(value: string): BusinessType {
     "sacco",
     "school",
     "manufacturing",
+    "agriculture",
     "vsla",
     "other",
   ];

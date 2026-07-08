@@ -13,6 +13,8 @@ export const PERMISSION_KEYS = [
   "pos_orders_edit",
   "cash_receipts_edit",
   "stock_adjustments_delete",
+  "cost_allocation_manage",
+  "cost_allocation_post",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -20,7 +22,7 @@ export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 export type PermissionDef = {
   key: PermissionKey;
   label: string;
-  group: "Approvals" | "Payroll" | "Sales Operations" | "Inventory";
+  group: "Approvals" | "Payroll" | "Sales Operations" | "Inventory" | "Accounting";
   description: string;
 };
 
@@ -37,6 +39,8 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "pos_orders_edit", label: "Edit POS orders", group: "Sales Operations", description: "Edit/reverse POS orders." },
   { key: "cash_receipts_edit", label: "Edit cash receipts", group: "Sales Operations", description: "Edit/reverse cash receipts." },
   { key: "stock_adjustments_delete", label: "Delete inventory movements", group: "Inventory", description: "Delete complete inventory movement batches." },
+  { key: "cost_allocation_manage", label: "Cost allocation setup", group: "Accounting", description: "Create cost centres, drivers, and allocation rules." },
+  { key: "cost_allocation_post", label: "Cost allocation post", group: "Accounting", description: "Approve, post, reverse, and rerun cost allocation journals." },
 ];
 
 const CACHE_KEY = "boat.permissions.snapshot.v2";
@@ -140,6 +144,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "accounting_journal", label: "Journal entries", group: "Accounting" },
   { page: "accounting_manual", label: "Manual journals", group: "Accounting" },
   { page: "accounting_gl", label: "General ledger", group: "Accounting" },
+  { page: "accounting_cost_allocation", label: "Cost allocation", group: "Accounting" },
   { page: "accounting_bank_reconciliation", label: "Cash & float reconciliation", group: "Accounting" },
   { page: "accounting_trial", label: "Trial balance", group: "Accounting" },
   { page: "accounting_income", label: "Income statement", group: "Accounting" },
@@ -263,6 +268,8 @@ function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean 
     return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant" || roleKey === "supervisor";
   }
   if (permission === "stock_adjustments_delete") return roleKey === "admin" || roleKey === "manager";
+  if (permission === "cost_allocation_manage") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
+  if (permission === "cost_allocation_post") return roleKey === "admin" || roleKey === "accountant";
   return false;
 }
 

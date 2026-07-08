@@ -36,7 +36,8 @@ export type JournalReferenceType =
   | "sacco_teller"
   | "school_invoice"
   | "school_payment"
-  | "manufacturing_costing";
+  | "manufacturing_costing"
+  | "cost_allocation";
 
 export interface JournalLine {
   gl_account_id: string;
@@ -3232,6 +3233,7 @@ export function getReferenceTypeLabel(ref: string | null): string {
     vendor_credit: "Vendor credit",
     expense: "Expense",
     manual: "Manual",
+    cost_allocation: "Cost allocation",
     stock_adjustment: "Inventory movement",
     fixed_asset_capitalization: "Fixed asset — capitalization",
     fixed_asset_depreciation_run: "Fixed asset — depreciation",
@@ -3772,7 +3774,12 @@ export async function backfillJournalEntries(options?: {
               row.period,
               `${row.period}-01`,
               backfillCreatedBy,
-              organizationId
+              organizationId,
+              {
+                materialCost: Number(row.material_cost || 0),
+                laborCost: Number(row.labor_cost || 0),
+                overheadCost: Number(row.overhead_cost || 0),
+              }
             );
         if (jr.ok) {
           add("manufacturing_costing", row.id);

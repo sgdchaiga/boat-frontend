@@ -2,6 +2,8 @@ import { Suspense, lazy, useState, useEffect, type ComponentType, type ReactNode
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LoginPage } from "@/components/LoginPage";
 import { OrganizationPickerPage } from "@/components/OrganizationPickerPage";
+import { SelfServiceOnboardingPage } from "@/components/SelfServiceOnboardingPage";
+import { OnboardingChecklist } from "@/components/OnboardingChecklist";
 import { Layout } from './components/Layout';
 import { AppProvider } from './contexts/AppContext';
 import SaccoSavingsStatementsPage from './components/sacco/SaccoSavingsStatementsPage';
@@ -120,6 +122,7 @@ const ManufacturingBomPage = lazyNamed(() => import('./components/manufacturing/
 const ManufacturingWorkOrdersPage = lazyNamed(() => import('./components/manufacturing/ManufacturingWorkOrdersPage'), 'ManufacturingWorkOrdersPage');
 const ManufacturingProductionEntriesPage = lazyNamed(() => import('./components/manufacturing/ManufacturingProductionEntriesPage'), 'ManufacturingProductionEntriesPage');
 const ManufacturingCostingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingCostingPage'), 'ManufacturingCostingPage');
+const CostAllocationPage = lazyNamed(() => import('./components/accounting/CostAllocationPage'), 'CostAllocationPage');
 const ManufacturingPriceListsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingPriceListsPage'), 'ManufacturingPriceListsPage');
 const PlatformOverviewPage = lazyNamed(() => import('./components/platform/PlatformOverviewPage'), 'PlatformOverviewPage');
 const PlatformOrganizationsPage = lazyNamed(() => import('./components/platform/PlatformOrganizationsPage'), 'PlatformOrganizationsPage');
@@ -210,6 +213,7 @@ const HotelAssessmentWizardPage = lazyNamed(() => import('./components/hotel-ass
 const IntegrationsHubPage = lazyNamed(() => import('./components/system/IntegrationsHubPage'), 'IntegrationsHubPage');
 const BoatConnectPage = lazyNamed(() => import('./components/system/BoatConnectPage'), 'BoatConnectPage');
 const ImageDocumentConverterPage = lazyNamed(() => import('./components/tools/ImageDocumentConverterPage'), 'ImageDocumentConverterPage');
+const DataMigrationPage = lazyNamed(() => import('./components/DataMigrationPage'), 'DataMigrationPage');
 
 function PageLoadingFallback() {
   return (
@@ -414,7 +418,7 @@ function getPageStateFromUrl(): Record<string, unknown> {
 }
 
 function AppContent() {
-  const { user, loading, needsOrganizationPicker, isSuperAdmin, isHotelStaff, signOut, completeMemberInitialPassword } = useAuth();
+  const { user, loading, needsOrganizationPicker, memberships, isSuperAdmin, isHotelStaff, signOut, completeMemberInitialPassword } = useAuth();
   const [currentPage, setCurrentPage] = useState(() => getPageFromUrl('dashboard'));
   const [pageState, setPageState] = useState<Record<string, unknown>>(() => getPageStateFromUrl());
   const [pageHistory, setPageHistory] = useState<Array<{ page: string; state: Record<string, unknown> }>>([]);
@@ -741,6 +745,9 @@ function AppContent() {
   }
 
   if (needsOrganizationPicker) {
+    if (memberships.filter((m) => m.is_active).length === 0) {
+      return <SelfServiceOnboardingPage />;
+    }
     return <OrganizationPickerPage />;
   }
 
@@ -1394,6 +1401,9 @@ function AppContent() {
         return <ManufacturingProductionEntriesPage readOnly={access.readOnly} />;
       case 'manufacturing_costing':
         return <ManufacturingCostingPage readOnly={access.readOnly} />;
+      case 'accounting_cost_allocation':
+      case 'manufacturing_cost_allocation':
+        return <CostAllocationPage readOnly={access.readOnly} />;
       case 'manufacturing_price_lists':
         return <ManufacturingPriceListsPage readOnly={access.readOnly} />;
       case PAYROLL_PAGE.hub:
@@ -1433,6 +1443,8 @@ function AppContent() {
         );
       case 'system_integrations':
         return <IntegrationsHubPage onNavigate={navigate} />;
+      case 'data_migration':
+        return <DataMigrationPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'boat_connect':
         return <BoatConnectPage readOnly={access.readOnly} />;
       case 'image_document_converter':
@@ -1524,6 +1536,7 @@ function AppContent() {
         onBack={navigateBack}
         canGoBack={pageHistory.length > 0}
       >
+        <OnboardingChecklist onNavigate={(page) => navigate(page)} />
         {pageSuspense(renderPage())}
       </Layout>}
     </AppProvider>

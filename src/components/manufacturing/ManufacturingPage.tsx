@@ -51,6 +51,11 @@ const starterCards = [
     desc: "Review material and labor costs before posting to inventory/GL.",
     page: "manufacturing_costing",
   },
+  {
+    title: "Cost allocation",
+    desc: "Allocate overhead by cost centre, driver basis, and production batch.",
+    page: "accounting_cost_allocation",
+  },
 ] as const;
 
 export function ManufacturingPage({ onNavigate, readOnly = false }: Props) {

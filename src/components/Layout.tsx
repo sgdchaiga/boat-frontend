@@ -32,6 +32,7 @@ import {
   Landmark,
   Briefcase,
   PackageCheck,
+  FileUp,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -420,6 +421,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                     { name: 'Journal entries', page: 'accounting_journal' },
                     { name: 'Manual journals', page: 'accounting_manual' },
                     { name: 'General ledger', page: 'accounting_gl' },
+                    { name: 'Cost allocation', page: 'accounting_cost_allocation' },
                     { name: 'Cash & float reconciliation', page: 'accounting_bank_reconciliation' },
                     ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
                   ],
@@ -621,6 +623,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Journal Entries', page: 'accounting_journal' },
         { name: 'Manual Journals', page: 'accounting_manual' },
         { name: 'General Ledger', page: 'accounting_gl' },
+        { name: 'Cost Allocation', page: 'accounting_cost_allocation' },
+        { name: 'Data migration', page: 'data_migration' },
         { name: 'Cash & Float Reconciliation', page: 'accounting_bank_reconciliation' },
         ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
       ],
@@ -656,6 +660,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           ]
         : []),
       { name: 'Staff', icon: UsersRound, page: 'staff' },
+      { name: 'Import', icon: FileUp, page: 'data_migration' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
     [enableFixedAssets, enableBudget, enablePayroll, allowManufacturing]
@@ -710,6 +715,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         ],
       },
       { name: 'Staff', icon: UsersRound, page: 'staff' },
+      { name: 'Import', icon: FileUp, page: 'data_migration' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
     []

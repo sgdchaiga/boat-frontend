@@ -117,6 +117,7 @@ export function JournalEntriesPage() {
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const isHotelOrganization = user?.business_type === "hotel" || user?.business_type === "mixed";
+  const isManufacturingOrganization = user?.business_type === "manufacturing";
 
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
@@ -146,6 +147,7 @@ export function JournalEntriesPage() {
   const [posRepairFrom, setPosRepairFrom] = useState("");
   const [posRepairTo, setPosRepairTo] = useState("");
   const [repairingRooms, setRepairingRooms] = useState(false);
+  const [repairingManufacturing, setRepairingManufacturing] = useState(false);
   const [repairingStockAdjustments, setRepairingStockAdjustments] = useState(false);
   const [stockAdjustmentRepairProgress, setStockAdjustmentRepairProgress] = useState({ processed: 0, total: 0 });
   const [stockAdjustmentRepairResult, setStockAdjustmentRepairResult] = useState<StockAdjustmentJournalRepairResult | null>(null);
@@ -681,6 +683,40 @@ export function JournalEntriesPage() {
     }
   };
 
+  const handleRepairManufacturingJournals = async () => {
+    if (repairingManufacturing) return;
+    if (!confirm("Rebuild all manufacturing costing journals so past production entries populate WIP and Finished Goods with the current GL mappings?")) return;
+    setRepairingManufacturing(true);
+    setBackfillResult(null);
+    setBackfillProgress(null);
+    try {
+      const result = await backfillJournalEntries({
+        dryRun: false,
+        businessType: "manufacturing",
+        repairExisting: true,
+        organizationId: orgId,
+        onProgress: setBackfillProgress,
+      });
+      setBackfillResult(result);
+      await fetchData();
+    } catch (e) {
+      setBackfillResult({
+        room_charge: 0,
+        payment: 0,
+        pos: 0,
+        bill: 0,
+        vendor_payment: 0,
+        vendor_credit: 0,
+        expense: 0,
+        manufacturing_costing: 0,
+        stock_adjustment: 0,
+        errors: [e instanceof Error ? e.message : String(e)],
+      });
+    } finally {
+      setRepairingManufacturing(false);
+    }
+  };
+
   const handleReconcileInventory = async () => {
     if (reconcilingInventory) return;
     if (!confirm("Post a balanced adjustment so Bar and Kitchen inventory GL balances match the Stock Summary weighted-average valuation?")) return;
@@ -948,7 +984,7 @@ export function JournalEntriesPage() {
           <button
             type="button"
             onClick={handleBackfill}
-            disabled={backfilling || repairingPos || repairingRooms || repairingStockAdjustments}
+            disabled={backfilling || repairingPos || repairingRooms || repairingManufacturing || repairingStockAdjustments}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Create missing journals for transactions belonging to the logged-in organization"
           >
@@ -988,10 +1024,22 @@ export function JournalEntriesPage() {
               </button>
             </>
           ) : null}
+          {isManufacturingOrganization ? (
+            <button
+              type="button"
+              onClick={handleRepairManufacturingJournals}
+              disabled={repairingManufacturing || backfilling || repairingStockAdjustments}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-indigo-300 bg-indigo-50 text-indigo-900 hover:bg-indigo-100 disabled:opacity-50 disabled:cursor-not-allowed"
+              title="Rebuild manufacturing costing journals so old production entries post WIP and finished goods figures"
+            >
+              <RefreshCw className={`w-4 h-4 ${repairingManufacturing ? "animate-spin" : ""}`} />
+              {repairingManufacturing ? "Repairing manufacturing..." : "Repair manufacturing WIP/FG journals"}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={handleRepairStockAdjustmentJournals}
-            disabled={repairingStockAdjustments || backfilling || repairingPos || repairingRooms}
+            disabled={repairingStockAdjustments || backfilling || repairingPos || repairingRooms || repairingManufacturing}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
             title="Rebuild inventory movement journals from stock movement batches"
           >
@@ -1060,6 +1108,12 @@ export function JournalEntriesPage() {
       {repairingStockAdjustments && (
         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
           Repairing inventory movement journals: {stockAdjustmentRepairProgress.processed}/{stockAdjustmentRepairProgress.total}
+        </div>
+      )}
+
+      {repairingManufacturing && backfillProgress && (
+        <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-900">
+          Repairing manufacturing journals: {backfillProgress.processed}/{backfillProgress.total}
         </div>
       )}
 

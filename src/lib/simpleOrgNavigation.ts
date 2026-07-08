@@ -5,6 +5,7 @@ import {
   CreditCard,
   ShoppingCart,
   Package,
+  FileUp,
   TrendingUp,
   Settings,
   BedDouble,
@@ -178,11 +179,13 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   const settings: NavChild[] = [
     { name: "Users", page: "staff" },
     { name: "System settings", page: "admin" },
+    { name: "Data migration", page: "data_migration" },
     ...(isHotelOrMixed ? [{ name: "Rooms setup", page: HOTEL_PAGE.roomsSetup }] : []),
     { name: "Image to Excel / Word", page: "image_document_converter" },
     ...(allowCommunications ? [{ name: "Communications", page: "communications" }] : []),
     { name: "Chart of accounts", page: "gl_accounts" },
     { name: "Journal entries", page: "accounting_journal" },
+    { name: "Cost allocation", page: "accounting_cost_allocation" },
     { name: "Cash & float reconciliation", page: "accounting_bank_reconciliation" },
   ];
   if (allowPayroll) {
@@ -263,6 +266,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
       : []),
     /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */
     { name: "Reports", icon: TrendingUp, page: getSimpleOrgDefaultReportRoute(businessType) },
+    { name: "Import", icon: FileUp, page: "data_migration" },
     { name: "Settings", icon: Settings, children: settings }
   );
 
