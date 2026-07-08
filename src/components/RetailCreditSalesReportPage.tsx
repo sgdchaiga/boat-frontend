@@ -31,7 +31,31 @@ type InvoiceRow = {
   total: number;
 };
 
-const STATUS_CARD_ORDER: DisplayInvoiceStatus[] = ["paid", "overdue", "draft", "sent", "void"];
+type PosCreditRow = {
+  id: string;
+  reference: string;
+  customer_name: string | null;
+  recorded_at: string | null;
+  status: string;
+  amount_due: number;
+};
+
+type DebtorSource = "invoice" | "pos_credit";
+
+type DebtorReportRow = {
+  id: string;
+  source: DebtorSource;
+  reference: string;
+  customer_name: string;
+  date: string;
+  status: DisplayInvoiceStatus | "pos_credit";
+  total: number;
+  paid: number;
+  balance: number;
+  invoice?: InvoiceRow;
+};
+
+const STATUS_CARD_ORDER: Array<DisplayInvoiceStatus | "pos_credit"> = ["pos_credit", "paid", "overdue", "draft", "sent", "void"];
 
 function formatMoney(amount: number) {
   return Number.isFinite(amount)
@@ -44,6 +68,14 @@ function issueDateKey(issueDate: string): string {
   const s = String(issueDate || "").trim();
   if (s.length >= 10) return s.slice(0, 10);
   return s;
+}
+
+function parseSaleId(transactionId: string | null | undefined): string | null {
+  if (!transactionId) return null;
+  const reasonTag = "[REFUND_REASON:";
+  const rawRef = String(transactionId);
+  const base = rawRef.includes(reasonTag) ? rawRef.slice(0, rawRef.indexOf(reasonTag)).trim() : rawRef.trim();
+  return base || null;
 }
 
 /** Paid = settled in full; overdue = unpaid with due date before today; else draft/sent/void from DB rules. */
@@ -102,6 +134,7 @@ export function RetailCreditSalesReportPage({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [allInvoices, setAllInvoices] = useState<InvoiceRow[]>([]);
+  const [allPosCredits, setAllPosCredits] = useState<PosCreditRow[]>([]);
   const [invoiceSettlement, setInvoiceSettlement] = useState<InvoiceSettlementMap>({});
 
   const [dateFrom, setDateFrom] = useState("");
@@ -116,6 +149,7 @@ export function RetailCreditSalesReportPage({
     try {
       if (!orgId && !superAdmin) {
         setAllInvoices([]);
+        setAllPosCredits([]);
         setInvoiceSettlement({});
         setLoading(false);
         return;
@@ -134,6 +168,98 @@ export function RetailCreditSalesReportPage({
 
       setAllInvoices((data || []) as InvoiceRow[]);
 
+      const posCreditMap = new Map<string, PosCreditRow>();
+
+      const pendingPaymentQ = filterByOrganizationId(
+        supabase
+          .from("payments")
+          .select("id, transaction_id, paid_at, amount, payment_status, payment_source")
+          .is("stay_id", null)
+          .eq("payment_status", "pending")
+          .order("paid_at", { ascending: false }),
+        orgId ?? undefined,
+        superAdmin
+      );
+      const { data: pendingPayments, error: pendingErr } = await pendingPaymentQ;
+      if (pendingErr) {
+        console.warn("[CreditSalesReport] pending POS payments:", pendingErr.message);
+      } else {
+        for (const raw of pendingPayments || []) {
+          const payment = raw as {
+            id: string;
+            transaction_id: string | null;
+            paid_at: string | null;
+            amount: number | null;
+            payment_status: string | null;
+            payment_source?: string | null;
+          };
+          const saleId = parseSaleId(payment.transaction_id) || payment.id;
+          const existing = posCreditMap.get(saleId);
+          const amount = Number(payment.amount ?? 0);
+          if (!existing) {
+            posCreditMap.set(saleId, {
+              id: saleId,
+              reference: saleId,
+              customer_name: null,
+              recorded_at: payment.paid_at,
+              status: payment.payment_source === "pos_hotel" ? "hotel POS credit" : "POS credit",
+              amount_due: amount,
+            });
+          } else {
+            existing.amount_due += amount;
+            if (payment.paid_at && (!existing.recorded_at || payment.paid_at > existing.recorded_at)) {
+              existing.recorded_at = payment.paid_at;
+            }
+          }
+        }
+      }
+
+      const retailSalesQ = filterByOrganizationId(
+        supabase
+          .from("retail_sales")
+          .select("id, amount_due, sale_at, payment_status, customer_name")
+          .gt("amount_due", 0)
+          .in("payment_status", ["pending", "partial"])
+          .order("sale_at", { ascending: false })
+          .limit(1000),
+        orgId ?? undefined,
+        superAdmin
+      );
+      const { data: salesData, error: salesErr } = await retailSalesQ;
+      if (salesErr) {
+        console.warn("[CreditSalesReport] retail_sales credit:", salesErr.message);
+      } else {
+        for (const raw of salesData || []) {
+          const sale = raw as {
+            id: string;
+            amount_due: number | null;
+            sale_at: string | null;
+            payment_status: string | null;
+            customer_name: string | null;
+          };
+          const due = Number(sale.amount_due ?? 0);
+          if (due <= 0) continue;
+          const existing = posCreditMap.get(sale.id);
+          if (!existing) {
+            posCreditMap.set(sale.id, {
+              id: sale.id,
+              reference: sale.id,
+              customer_name: sale.customer_name,
+              recorded_at: sale.sale_at,
+              status: sale.payment_status || "credit",
+              amount_due: due,
+            });
+          } else {
+            existing.amount_due = Math.max(existing.amount_due, due);
+            if (sale.customer_name) existing.customer_name = sale.customer_name;
+            if (sale.sale_at && (!existing.recorded_at || sale.sale_at > existing.recorded_at)) {
+              existing.recorded_at = sale.sale_at;
+            }
+          }
+        }
+      }
+      setAllPosCredits(Array.from(posCreditMap.values()).sort((a, b) => (b.recorded_at || "").localeCompare(a.recorded_at || "")));
+
       const payQ = filterByOrganizationId(
         supabase.from("payments").select("id, paid_at, payment_status, invoice_allocations").order("paid_at", { ascending: false }),
         orgId ?? undefined,
@@ -149,6 +275,7 @@ export function RetailCreditSalesReportPage({
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to load invoices.");
       setAllInvoices([]);
+      setAllPosCredits([]);
       setInvoiceSettlement({});
     } finally {
       setLoading(false);
@@ -159,17 +286,60 @@ export function RetailCreditSalesReportPage({
     void load();
   }, [load]);
 
-  const filteredInvoices = useMemo(
-    () =>
-      applyInvoiceFilters(allInvoices, invoiceSettlement, {
-        dateFrom,
-        dateTo,
-        customer: customerFilter,
-        invoiceNumber: invoiceNumberFilter,
-        status: statusFilter,
-      }),
-    [allInvoices, invoiceSettlement, dateFrom, dateTo, customerFilter, invoiceNumberFilter, statusFilter]
-  );
+  const allDebtors = useMemo<DebtorReportRow[]>(() => {
+    const invoiceRows = allInvoices.map((inv) => {
+      const paid = invoiceSettlement[inv.id]?.paid ?? 0;
+      const balance = invoiceBalanceDue(inv, invoiceSettlement);
+      return {
+        id: `invoice:${inv.id}`,
+        source: "invoice" as const,
+        reference: inv.invoice_number,
+        customer_name: inv.customer_name || "",
+        date: issueDateKey(inv.issue_date),
+        status: displayInvoiceStatus(inv, invoiceSettlement),
+        total: Number(inv.total ?? 0),
+        paid,
+        balance,
+        invoice: inv,
+      };
+    });
+    const posRows = allPosCredits.map((row) => ({
+      id: `pos:${row.id}`,
+      source: "pos_credit" as const,
+      reference: row.reference,
+      customer_name: row.customer_name || "",
+      date: row.recorded_at ? issueDateKey(row.recorded_at) : "",
+      status: "pos_credit" as const,
+      total: Number(row.amount_due ?? 0),
+      paid: 0,
+      balance: Number(row.amount_due ?? 0),
+    }));
+    return [...invoiceRows, ...posRows].sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [allInvoices, allPosCredits, invoiceSettlement]);
+
+  const filteredDebtors = useMemo(() => {
+    const invoices = applyInvoiceFilters(allInvoices, invoiceSettlement, {
+      dateFrom,
+      dateTo,
+      customer: customerFilter,
+      invoiceNumber: invoiceNumberFilter,
+      status: statusFilter,
+    });
+    const visibleInvoiceIds = new Set(invoices.map((i) => `invoice:${i.id}`));
+    const cust = customerFilter.trim().toLowerCase();
+    const ref = invoiceNumberFilter.trim().toLowerCase();
+    const from = dateFrom.trim();
+    const to = dateTo.trim();
+    return allDebtors.filter((row) => {
+      if (row.source === "invoice") return visibleInvoiceIds.has(row.id);
+      if (statusFilter !== "all") return false;
+      if (from && row.date < from) return false;
+      if (to && row.date > to) return false;
+      if (cust && (row.customer_name || "").trim().toLowerCase() !== cust) return false;
+      if (ref && (row.reference || "").trim().toLowerCase() !== ref) return false;
+      return true;
+    });
+  }, [allDebtors, allInvoices, invoiceSettlement, dateFrom, dateTo, customerFilter, invoiceNumberFilter, statusFilter]);
 
   const hasActiveFilters =
     !!dateFrom.trim() ||
@@ -179,23 +349,23 @@ export function RetailCreditSalesReportPage({
     statusFilter !== "all";
 
   const totals = useMemo(() => {
-    const totalAmount = filteredInvoices.reduce((sum, i) => sum + Number(i.total ?? 0), 0);
-    const totalPaid = filteredInvoices.reduce((sum, i) => sum + (invoiceSettlement[i.id]?.paid ?? 0), 0);
-    const totalBalance = filteredInvoices.reduce((sum, i) => sum + invoiceBalanceDue(i, invoiceSettlement), 0);
+    const totalAmount = filteredDebtors.reduce((sum, i) => sum + Number(i.total ?? 0), 0);
+    const totalPaid = filteredDebtors.reduce((sum, i) => sum + Number(i.paid ?? 0), 0);
+    const totalBalance = filteredDebtors.reduce((sum, i) => sum + Number(i.balance ?? 0), 0);
     const byStatus: Record<string, { total: number; count: number }> = {};
-    filteredInvoices.forEach((i) => {
-      const key = displayInvoiceStatus(i, invoiceSettlement);
+    filteredDebtors.forEach((i) => {
+      const key = i.status;
       if (!byStatus[key]) byStatus[key] = { total: 0, count: 0 };
       byStatus[key].total += Number(i.total ?? 0);
       byStatus[key].count += 1;
     });
-    return { totalAmount, totalPaid, totalBalance, invoiceCount: filteredInvoices.length, byStatus };
-  }, [filteredInvoices, invoiceSettlement]);
+    return { totalAmount, totalPaid, totalBalance, invoiceCount: filteredDebtors.length, byStatus };
+  }, [filteredDebtors]);
 
   const customerOptions = useMemo(() => {
     const seen = new Set<string>();
     const labels: string[] = [];
-    for (const row of allInvoices) {
+    for (const row of allDebtors) {
       const name = (row.customer_name || "").trim();
       if (!name) continue;
       const k = name.toLowerCase();
@@ -204,13 +374,13 @@ export function RetailCreditSalesReportPage({
       labels.push(name);
     }
     return labels.sort((a, b) => a.localeCompare(b)).map((label) => ({ id: label, label }));
-  }, [allInvoices]);
+  }, [allDebtors]);
 
   const invoiceNumberOptions = useMemo(() => {
     const seen = new Set<string>();
     const labels: string[] = [];
-    for (const row of allInvoices) {
-      const num = (row.invoice_number || "").trim();
+    for (const row of allDebtors) {
+      const num = (row.reference || "").trim();
       if (!num) continue;
       if (seen.has(num)) continue;
       seen.add(num);
@@ -220,7 +390,7 @@ export function RetailCreditSalesReportPage({
       id: label,
       label,
     }));
-  }, [allInvoices]);
+  }, [allDebtors]);
 
   const clearFilters = () => {
     setDateFrom("");
@@ -231,12 +401,10 @@ export function RetailCreditSalesReportPage({
   };
 
   const downloadCsv = () => {
-    const header = ["Invoice #", "Customer", "Issue date", "Status", "Invoice amount", "Payment so far", "Balance"].join(",");
-    const lines = filteredInvoices.map((i) => {
-      const paid = invoiceSettlement[i.id]?.paid ?? 0;
-      const balance = invoiceBalanceDue(i, invoiceSettlement);
-      const statusLabel = displayInvoiceStatus(i, invoiceSettlement);
-      return [i.invoice_number, i.customer_name, i.issue_date, statusLabel, i.total, paid, balance]
+    const header = ["Source", "Reference", "Customer", "Date", "Status", "Amount", "Payment so far", "Balance"].join(",");
+    const lines = filteredDebtors.map((i) => {
+      const statusLabel = i.status === "pos_credit" ? "POS credit" : i.status;
+      return [i.source === "invoice" ? "Invoice" : "POS credit", i.reference, i.customer_name, i.date, statusLabel, i.total, i.paid, i.balance]
         .map((x) => `"${String(x ?? "").replace(/"/g, '""')}"`)
         .join(",");
     });
@@ -245,7 +413,7 @@ export function RetailCreditSalesReportPage({
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `credit_sales_invoices_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `debtors_report_${new Date().toISOString().slice(0, 10)}.csv`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -265,12 +433,12 @@ export function RetailCreditSalesReportPage({
       <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold text-slate-900">Credit Sales Report</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Debtors Report</h1>
             <PageNotes ariaLabel="Credit sales report help">
               <p>
                 {hasActiveFilters
-                  ? "Filtered sales invoices."
-                  : "Status includes paid (settled), overdue (past due with balance), and draft/sent/void."}
+                  ? "Filtered debtor balances."
+                  : "Includes sales invoices and POS credit sales, with the source shown on each row."}
               </p>
             </PageNotes>
           </div>
@@ -297,7 +465,7 @@ export function RetailCreditSalesReportPage({
             type="button"
             onClick={downloadCsv}
             className="flex items-center gap-1.5 px-2.5 py-1.5 bg-brand-700 text-white text-xs rounded-lg hover:bg-brand-800 transition disabled:opacity-50"
-            disabled={readOnly || filteredInvoices.length === 0}
+            disabled={readOnly || filteredDebtors.length === 0}
           >
             <Download className="w-3.5 h-3.5" />
             Export CSV
@@ -307,7 +475,7 @@ export function RetailCreditSalesReportPage({
 
       {!orgId && !superAdmin ? (
         <p className="text-amber-800 text-sm bg-amber-50 border border-amber-200 rounded-lg px-4 py-3">
-          Link your account to an organization to see invoices.
+          Link your account to an organization to see debtor balances.
         </p>
       ) : null}
 
@@ -363,15 +531,15 @@ export function RetailCreditSalesReportPage({
             </div>
           </div>
           <div className="block text-sm sm:col-span-2 lg:col-span-1">
-            <span className="text-slate-600">Invoice #</span>
+            <span className="text-slate-600">Reference</span>
             <div className="mt-1">
               <SearchableCombobox
                 value={invoiceNumberFilter}
                 onChange={(id) => setInvoiceNumberFilter(id)}
                 options={invoiceNumberOptions}
-                placeholder="Search or choose invoice…"
-                emptyOption={{ label: "All invoices" }}
-                inputAriaLabel="Filter by invoice number"
+                placeholder="Search or choose reference..."
+                emptyOption={{ label: "All references" }}
+                inputAriaLabel="Filter by debtor reference"
                 className="w-full"
               />
             </div>
@@ -398,7 +566,7 @@ export function RetailCreditSalesReportPage({
         <p className="text-sm font-semibold text-slate-900 mb-2">By status</p>
         {Object.keys(totals.byStatus).length === 0 ? (
           <p className="text-slate-500 text-xs">
-            {allInvoices.length === 0 ? "No invoices yet." : "No invoices match the current filters."}
+            {allDebtors.length === 0 ? "No debtor balances yet." : "No debtor balances match the current filters."}
           </p>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2">
@@ -409,7 +577,7 @@ export function RetailCreditSalesReportPage({
                   <div key={status} className="rounded-md border border-slate-100 bg-slate-50 px-2 py-1.5">
                     <p className="text-[10px] text-slate-500 capitalize leading-tight">{status}</p>
                     <p className="text-xs font-semibold tabular-nums text-slate-900">{formatMoney(v.total)}</p>
-                    <p className="text-[10px] text-slate-500">{v.count} inv.</p>
+                    <p className="text-[10px] text-slate-500">{v.count} row(s)</p>
                   </div>
                 );
               })}
@@ -421,33 +589,32 @@ export function RetailCreditSalesReportPage({
         <table className="w-full text-sm">
           <thead className="bg-slate-50">
             <tr>
-              <th className="text-left p-3">Invoice #</th>
+              <th className="text-left p-3">Source</th>
+              <th className="text-left p-3">Reference</th>
               <th className="text-left p-3">Customer</th>
-              <th className="text-left p-3">Issue</th>
+              <th className="text-left p-3">Date</th>
               <th className="text-left p-3">Status</th>
-              <th className="text-right p-3">Invoice amount</th>
+              <th className="text-right p-3">Amount</th>
               <th className="text-right p-3">Payment so far</th>
               <th className="text-right p-3">Balance</th>
             </tr>
           </thead>
           <tbody>
-            {allInvoices.length === 0 ? (
+            {allDebtors.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-500">
-                  No invoices loaded.
+                <td colSpan={8} className="p-8 text-center text-slate-500">
+                  No debtor balances loaded.
                 </td>
               </tr>
-            ) : filteredInvoices.length === 0 ? (
+            ) : filteredDebtors.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-8 text-center text-slate-500">
-                  No invoices match the current filters.
+                <td colSpan={8} className="p-8 text-center text-slate-500">
+                  No debtor balances match the current filters.
                 </td>
               </tr>
             ) : (
-              filteredInvoices.map((inv) => {
-                const paid = invoiceSettlement[inv.id]?.paid ?? 0;
-                const balance = invoiceBalanceDue(inv, invoiceSettlement);
-                const disp = displayInvoiceStatus(inv, invoiceSettlement);
+              filteredDebtors.map((row) => {
+                const disp = row.status;
                 const statusClass =
                   disp === "paid"
                     ? "text-emerald-700 font-medium"
@@ -457,13 +624,20 @@ export function RetailCreditSalesReportPage({
                         ? "text-slate-400"
                         : "text-slate-800";
                 return (
-                <tr key={inv.id} className="border-t border-slate-100">
-                  <td className="p-3 font-mono text-xs font-medium">{inv.invoice_number}</td>
-                  <td className="p-3 max-w-[220px] truncate">{inv.customer_name || "—"}</td>
-                  <td className="p-3">{inv.issue_date}</td>
-                  <td className={`p-3 capitalize ${statusClass}`}>{disp}</td>
+                <tr key={row.id} className="border-t border-slate-100">
+                  <td className="p-3">
+                    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                      row.source === "invoice" ? "bg-blue-50 text-blue-700" : "bg-purple-50 text-purple-700"
+                    }`}>
+                      {row.source === "invoice" ? "Invoice" : "POS credit"}
+                    </span>
+                  </td>
+                  <td className="p-3 font-mono text-xs font-medium">{row.reference}</td>
+                  <td className="p-3 max-w-[220px] truncate">{row.customer_name || "—"}</td>
+                  <td className="p-3">{row.date || "—"}</td>
+                  <td className={`p-3 capitalize ${statusClass}`}>{disp === "pos_credit" ? "POS credit" : disp}</td>
                   <td className="p-3 text-right">
-                    {onNavigate ? (
+                    {onNavigate && row.source === "invoice" ? (
                       <button
                         type="button"
                         className="font-semibold text-brand-700 hover:underline tabular-nums inline-flex items-center gap-1"
@@ -472,16 +646,16 @@ export function RetailCreditSalesReportPage({
                             invoiceTab: "invoices",
                           })
                         }
-                      >
+                        >
                         <FileText className="w-4 h-4" />
-                        {formatMoney(inv.total)}
+                        {formatMoney(row.total)}
                       </button>
                     ) : (
-                      <span className="font-semibold text-slate-900">{formatMoney(inv.total)}</span>
+                      <span className="font-semibold text-slate-900">{formatMoney(row.total)}</span>
                     )}
                   </td>
-                  <td className="p-3 text-right tabular-nums text-slate-700">{formatMoney(paid)}</td>
-                  <td className="p-3 text-right tabular-nums font-semibold text-slate-900">{formatMoney(balance)}</td>
+                  <td className="p-3 text-right tabular-nums text-slate-700">{formatMoney(row.paid)}</td>
+                  <td className="p-3 text-right tabular-nums font-semibold text-slate-900">{formatMoney(row.balance)}</td>
                 </tr>
                 );
               })

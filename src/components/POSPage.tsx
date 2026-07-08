@@ -201,6 +201,7 @@ export function POSPage({
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const [hotelBizConfig, setHotelBizConfig] = useState<HotelConfig>(() => loadHotelConfig(orgId));
+  const [posCreditEnabled, setPosCreditEnabled] = useState(true);
   const [products, setProducts] = useState<Product[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [hotelCustomers, setHotelCustomers] = useState<PropertyCustomer[]>([]);
@@ -347,6 +348,27 @@ export function POSPage({
       const r = s.default_vat_percent;
       setPosVatRate(r != null && Number.isFinite(r) ? r : null);
     });
+  }, [orgId]);
+
+  useEffect(() => {
+    if (!orgId) {
+      setPosCreditEnabled(true);
+      return;
+    }
+    void supabase
+      .from("organization_permissions")
+      .select("allowed")
+      .eq("organization_id", orgId)
+      .eq("role_key", "__org__")
+      .eq("permission_key", "hotel_pos_credit_enabled")
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) {
+          setPosCreditEnabled(true);
+          return;
+        }
+        setPosCreditEnabled(data?.allowed !== false);
+      });
   }, [orgId]);
 
   useEffect(() => {
@@ -1530,6 +1552,10 @@ export function POSPage({
       alert("Send to Kitchen is only available for kitchen items. Use Pay Now, Credit Sale, or Bill Room for Bar or Sauna items.");
       return;
     }
+    if (action === "credit_sale" && !posCreditEnabled) {
+      alert("POS credit is turned off by the administrator.");
+      return;
+    }
     if (action === "bill_to_room" && !selectedStay) {
       alert("Select a room for bill to room");
       return;
@@ -2597,6 +2623,7 @@ export function POSPage({
               </div>
             )}
 
+            {posCreditEnabled ? (
             <div>
               <button
                 onClick={() => processOrder("credit_sale")}
@@ -2607,6 +2634,7 @@ export function POSPage({
                 Credit Sale
               </button>
             </div>
+            ) : null}
 
             {heldTickets.length > 0 && (
               <div className="border rounded-lg p-3 bg-slate-50">

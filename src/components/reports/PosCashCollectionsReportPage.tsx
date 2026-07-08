@@ -17,6 +17,7 @@ type CollectionRow = {
   department: string;
   totalSales: number;
   paid: number;
+  paidToDate: number;
   notPaid: number;
   recoveredDebt: number;
 };
@@ -286,6 +287,7 @@ export function PosCashCollectionsReportPage() {
             department: department.department,
             totalSales: saleTotal * department.share,
             paid: paidInPeriod * department.share,
+            paidToDate: Math.max(0, saleTotal - notPaid) * department.share,
             notPaid: notPaid * department.share,
             recoveredDebt: 0,
           });
@@ -308,6 +310,7 @@ export function PosCashCollectionsReportPage() {
             department: department.department,
             totalSales: orderTotal * department.share,
             paid: paidInPeriod * department.share,
+            paidToDate: paidAllTime * department.share,
             notPaid: notPaid * department.share,
             recoveredDebt: 0,
           });
@@ -329,6 +332,7 @@ export function PosCashCollectionsReportPage() {
               department: department.department,
               totalSales: 0,
               paid: 0,
+              paidToDate: 0,
               notPaid: 0,
               recoveredDebt: amount * department.share,
             });
@@ -349,6 +353,7 @@ export function PosCashCollectionsReportPage() {
             department: department.department,
             totalSales: 0,
             paid: 0,
+            paidToDate: 0,
             notPaid: 0,
             recoveredDebt: amount * department.share,
           });
@@ -379,17 +384,18 @@ export function PosCashCollectionsReportPage() {
         (sum, row) => ({
           totalSales: sum.totalSales + row.totalSales,
           paid: sum.paid + row.paid,
+          paidToDate: sum.paidToDate + row.paidToDate,
           notPaid: sum.notPaid + row.notPaid,
           recoveredDebt: sum.recoveredDebt + row.recoveredDebt,
         }),
-        { totalSales: 0, paid: 0, notPaid: 0, recoveredDebt: 0 }
+        { totalSales: 0, paid: 0, paidToDate: 0, notPaid: 0, recoveredDebt: 0 }
       ),
     [filtered]
   );
   const cashCollected = totals.paid + totals.recoveredDebt;
 
   const exportCsv = () => {
-    const header = ["Date/time", "Reference", "Source", "Customer", "Department", "Total sales", "Paid", "Not paid", "Recovered debts", "Cash collected"];
+    const header = ["Date/time", "Reference", "Source", "Customer", "Department", "Total sales", "Paid in period", "Paid to date", "Not paid", "Recovered debts", "Cash collected"];
     const detail = filtered.map((row) => [
       formatDateTime(row.occurredAt),
       row.reference,
@@ -398,6 +404,7 @@ export function PosCashCollectionsReportPage() {
       row.department,
       row.totalSales.toFixed(2),
       row.paid.toFixed(2),
+      row.paidToDate.toFixed(2),
       row.notPaid.toFixed(2),
       row.recoveredDebt.toFixed(2),
       (row.paid + row.recoveredDebt).toFixed(2),
@@ -410,6 +417,7 @@ export function PosCashCollectionsReportPage() {
       "Total",
       totals.totalSales.toFixed(2),
       totals.paid.toFixed(2),
+      totals.paidToDate.toFixed(2),
       totals.notPaid.toFixed(2),
       totals.recoveredDebt.toFixed(2),
       cashCollected.toFixed(2),
@@ -508,7 +516,8 @@ export function PosCashCollectionsReportPage() {
                   <th className="p-3 text-left">Customer</th>
                   <th className="p-3 text-left">Department</th>
                   <th className="p-3 text-right">Total sales</th>
-                  <th className="p-3 text-right">Paid</th>
+                  <th className="p-3 text-right">Paid in period</th>
+                  <th className="p-3 text-right">Paid to date</th>
                   <th className="p-3 text-right">Not paid</th>
                   <th className="p-3 text-right">Recovered debts</th>
                   <th className="p-3 text-right">Cash collected</th>
@@ -517,7 +526,7 @@ export function PosCashCollectionsReportPage() {
               <tbody>
                 {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={10} className="p-8 text-center text-slate-500">No POS cash collections for this period.</td>
+                    <td colSpan={11} className="p-8 text-center text-slate-500">No POS cash collections for this period.</td>
                   </tr>
                 ) : (
                   filtered.map((row) => (
@@ -529,6 +538,7 @@ export function PosCashCollectionsReportPage() {
                       <td className="p-3">{row.department}</td>
                       <td className="p-3 text-right tabular-nums">{formatMoney(row.totalSales)}</td>
                       <td className="p-3 text-right tabular-nums">{formatMoney(row.paid)}</td>
+                      <td className="p-3 text-right tabular-nums">{formatMoney(row.paidToDate)}</td>
                       <td className="p-3 text-right tabular-nums">{formatMoney(row.notPaid)}</td>
                       <td className="p-3 text-right tabular-nums">{formatMoney(row.recoveredDebt)}</td>
                       <td className="p-3 text-right font-medium tabular-nums">{formatMoney(row.paid + row.recoveredDebt)}</td>

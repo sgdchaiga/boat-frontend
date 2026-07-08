@@ -35,6 +35,8 @@ export function AdminHotelPosControlsPage() {
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [advancedModeEnabled, setAdvancedModeEnabled] = useState(true);
   const [savingAdvancedMode, setSavingAdvancedMode] = useState(false);
+  const [posCreditEnabled, setPosCreditEnabled] = useState(true);
+  const [savingPosCredit, setSavingPosCredit] = useState(false);
 
   const pendingRows = useMemo(() => rows.filter((r) => r.status === "pending"), [rows]);
 
@@ -100,11 +102,28 @@ export function AdminHotelPosControlsPage() {
     }
   };
 
+  const loadPosCreditMode = async () => {
+    if (!orgId) return;
+    try {
+      const { data, error } = await supabase
+        .from("organization_permissions")
+        .select("id,allowed")
+        .eq("organization_id", orgId)
+        .eq("role_key", "__org__")
+        .eq("permission_key", "hotel_pos_credit_enabled")
+        .maybeSingle();
+      if (error) throw error;
+      setPosCreditEnabled(data?.allowed !== false);
+    } catch {
+      setPosCreditEnabled(true);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       setLoading(true);
-      await Promise.all([loadPinStatus(), loadVoidLogs(), loadAdvancedMode()]);
+      await Promise.all([loadPinStatus(), loadVoidLogs(), loadAdvancedMode(), loadPosCreditMode()]);
       if (!cancelled) setLoading(false);
     })();
     return () => {
@@ -115,7 +134,7 @@ export function AdminHotelPosControlsPage() {
 
   const refresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadPinStatus(), loadVoidLogs(), loadAdvancedMode()]);
+    await Promise.all([loadPinStatus(), loadVoidLogs(), loadAdvancedMode(), loadPosCreditMode()]);
     setRefreshing(false);
   };
 
@@ -157,6 +176,47 @@ export function AdminHotelPosControlsPage() {
       alert(err instanceof Error ? err.message : "Failed to update advanced mode setting.");
     } finally {
       setSavingAdvancedMode(false);
+    }
+  };
+
+  const togglePosCredit = async () => {
+    if (!orgId) return;
+    if (!canManage && !superAdmin) {
+      alert("Only supervisor/manager can change this setting.");
+      return;
+    }
+    setSavingPosCredit(true);
+    const next = !posCreditEnabled;
+    try {
+      const { data, error } = await supabase
+        .from("organization_permissions")
+        .select("id")
+        .eq("organization_id", orgId)
+        .eq("role_key", "__org__")
+        .eq("permission_key", "hotel_pos_credit_enabled")
+        .maybeSingle();
+      if (error) throw error;
+      if (data?.id) {
+        const { error: updErr } = await supabase
+          .from("organization_permissions")
+          .update({ allowed: next, updated_at: new Date().toISOString() })
+          .eq("id", data.id);
+        if (updErr) throw updErr;
+      } else {
+        const { error: insErr } = await supabase.from("organization_permissions").insert({
+          organization_id: orgId,
+          role_key: "__org__",
+          permission_key: "hotel_pos_credit_enabled",
+          allowed: next,
+        });
+        if (insErr) throw insErr;
+      }
+      setPosCreditEnabled(next);
+      alert(`Hotel POS credit sales ${next ? "enabled" : "disabled"}.`);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to update POS credit setting.");
+    } finally {
+      setSavingPosCredit(false);
     }
   };
 
@@ -241,6 +301,27 @@ export function AdminHotelPosControlsPage() {
             } disabled:opacity-50`}
           >
             {savingAdvancedMode ? "Saving..." : advancedModeEnabled ? "On" : "Off"}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white border border-slate-200 rounded-xl p-6">
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Hotel POS Credit Sales</h2>
+            <p className="text-sm text-slate-600">Allow or block the Credit Sale button in Hotel POS.</p>
+          </div>
+          <button
+            type="button"
+            onClick={togglePosCredit}
+            disabled={savingPosCredit || (!canManage && !superAdmin)}
+            className={`px-3 py-2 rounded-lg text-sm font-semibold border ${
+              posCreditEnabled
+                ? "border-emerald-300 bg-emerald-50 text-emerald-700"
+                : "border-slate-300 bg-white text-slate-700"
+            } disabled:opacity-50`}
+          >
+            {savingPosCredit ? "Saving..." : posCreditEnabled ? "On" : "Off"}
           </button>
         </div>
       </div>

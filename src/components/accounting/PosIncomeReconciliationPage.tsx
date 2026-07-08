@@ -177,6 +177,12 @@ export function PosIncomeReconciliationPage() {
       ((referencedOrdersRes.data || []) as PosOrderRow[]).forEach((order) => {
         referencedOrdersById.set(order.id, order);
       });
+      const ordersForRowsById = new Map<string, PosOrderRow>();
+      [...orders, ...((referencedOrdersRes.data || []) as PosOrderRow[])].forEach((order) => {
+        const status = (order.order_status || "").toLowerCase();
+        if (["cancelled", "canceled", "reversed", "void", "voided"].includes(status)) return;
+        ordersForRowsById.set(order.id, order);
+      });
       const journalIds = journals.map((journal) => journal.id);
       const journalLinesRes = journalIds.length
         ? await supabase
@@ -221,7 +227,9 @@ export function PosIncomeReconciliationPage() {
 
       const nextRows: PosReconRow[] = [];
       const orderIdsWithPosRows = new Set<string>();
-      orders.forEach((order) => {
+      Array.from(ordersForRowsById.values()).forEach((order) => {
+        const orderDate = toBusinessDateString(order.created_at || "");
+        const orderDateInSelectedRange = !!orderDate && orderDate >= fromDate && orderDate <= toDate;
         const departmentTotals = new Map<string, number>();
         (order.kitchen_order_items || []).forEach((item) => {
           const product = item.product_id ? productsById.get(item.product_id) : null;
@@ -254,13 +262,14 @@ export function PosIncomeReconciliationPage() {
         if (orderJournals.length === 0) status = "missing_journal";
         else if (orderJournals.every((journal) => journal.is_deleted === true)) status = "deleted";
         else if (postedActiveJournals.length === 0) status = "unposted";
+        else if (!orderDateInSelectedRange) status = "date_mismatch";
         else if (postedActiveJournals.some((journal) => !journal.entry_date || journal.entry_date < fromDate || journal.entry_date > toDate)) status = "date_mismatch";
         else if (Math.abs(variance) > 0.01) status = "amount_mismatch";
 
         orderIdsWithPosRows.add(order.id);
         nextRows.push({
           orderId: order.id,
-          orderDate: toBusinessDateString(order.created_at || ""),
+          orderDate,
           label: order.customer_name || order.table_number || "POS order",
           departmentName,
           posTotal,
@@ -275,6 +284,7 @@ export function PosIncomeReconciliationPage() {
               : activeJournal?.description || null,
           status,
           rowType: "pos_order",
+          note: !orderDateInSelectedRange ? `POS order date is ${orderDate || "unknown"}, but the journal is in the selected date range.` : null,
         });
       });
 
