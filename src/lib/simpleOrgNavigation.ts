@@ -69,7 +69,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     ...(businessType !== "clinic" ? [{ name: "Expense report", page: "reports_expenses" as const }] : []),
     { name: "Sales by item", page: "reports_sales_by_item" },
     { name: "Stock summary", page: "reports_stock_summary" },
-    { name: "Stock adjustments", page: "reports_stock_adjustments" },
+    { name: "Inventory movements", page: "reports_stock_adjustments" },
     ...(businessType === "manufacturing"
       ? [
           { name: "Daily production", page: "reports_manufacturing_daily_production" as const },
@@ -172,7 +172,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Buy stock", page: "purchases_orders" },
     { name: "Suppliers", page: "purchases_vendors" },
     { name: "Stock levels", page: "inventory_stock_balances" },
-    { name: "Adjust stock", page: "inventory_stock_adjustments" },
+    { name: "Inventory movements", page: "inventory_stock_adjustments" },
   ];
 
   const settings: NavChild[] = [

@@ -552,7 +552,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             items: [
               { name: 'Stock Summary', page: 'reports_stock_summary' },
               { name: 'Stock Movement', page: 'reports_stock_movement' },
-              { name: 'Stock Adjustments', page: 'reports_stock_adjustments' },
+              { name: 'Inventory Movements', page: 'reports_stock_adjustments' },
             ],
           },
           {
@@ -593,7 +593,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       children: [
         { name: 'Items', page: 'Products' },
         { name: 'Barcodes', page: 'inventory_barcodes' },
-        { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
+        { name: 'Inventory Movements', page: 'inventory_stock_adjustments' },
         { name: 'Stock Balances', page: 'inventory_stock_balances' },
         { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
       ],

@@ -36,7 +36,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "payroll_post", label: "Payroll post", group: "Payroll", description: "Post payroll journals to ledger." },
   { key: "pos_orders_edit", label: "Edit POS orders", group: "Sales Operations", description: "Edit/reverse POS orders." },
   { key: "cash_receipts_edit", label: "Edit cash receipts", group: "Sales Operations", description: "Edit/reverse cash receipts." },
-  { key: "stock_adjustments_delete", label: "Delete stock adjustments", group: "Inventory", description: "Delete complete stock adjustment batches." },
+  { key: "stock_adjustments_delete", label: "Delete inventory movements", group: "Inventory", description: "Delete complete inventory movement batches." },
 ];
 
 const CACHE_KEY = "boat.permissions.snapshot.v2";
@@ -112,7 +112,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "purchases_cash_out_reconciliation", label: "Cash-out reconciliation", group: "Purchases" },
   { page: "Products", label: "Items", group: "Inventory" },
   { page: "inventory_barcodes", label: "Barcodes", group: "Inventory" },
-  { page: "inventory_stock_adjustments", label: "Stock adjustments", group: "Inventory" },
+  { page: "inventory_stock_adjustments", label: "Inventory movements", group: "Inventory" },
   { page: "inventory_stock_balances", label: "Stock balances", group: "Inventory" },
   { page: "inventory_store_requisitions", label: "Store requisitions", group: "Inventory" },
   { page: "reports", label: "Reports hub", group: "Reports" },
@@ -132,7 +132,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "reports_expenses", label: "Expenses report", group: "Reports" },
   { page: "reports_stock_summary", label: "Stock summary", group: "Reports" },
   { page: "reports_stock_movement", label: "Stock movement", group: "Reports" },
-  { page: "reports_stock_adjustments", label: "Stock adjustments", group: "Reports" },
+  { page: "reports_stock_adjustments", label: "Inventory movements", group: "Reports" },
   { page: "reports_budget_variance", label: "Budget variance", group: "Reports" },
   { page: "retail_credit_sales_report", label: "Credit sales report", group: "Reports" },
   { page: "reports_manufacturing_daily_production", label: "Daily production", group: "Reports" },

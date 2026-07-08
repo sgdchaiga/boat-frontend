@@ -42,6 +42,7 @@ type ReportRow = {
   productName: string;
   departmentId: string | null;
   departmentName: string;
+  movementType: string;
   reason: string;
   quantityIn: number;
   quantityOut: number;
@@ -62,10 +63,29 @@ const dateRangeOptions: Array<{ value: DateRangeKey; label: string }> = [
 ];
 
 function adjustmentReasonFromNote(note: string | null): string {
-  return String(note || "Manual adjustment")
+  return String(note || "Manual movement")
     .replace(/^GL .*?\| /, "")
-    .replace(/\s*\[CLOSING_STOCK:[^\]]+\]\s*$/, "")
+    .replace(/\s*\[[^\]]+\]\s*/g, " ")
+    .replace(/\s*\|\s*/g, " | ")
+    .replace(/\s+\|\s*$/, "")
     .trim();
+}
+
+function movementTypeFromNote(note: string | null): string {
+  const text = String(note || "");
+  const explicit = /\[MOVEMENT_TYPE:([a-z_]+)\]/i.exec(text)?.[1];
+  const raw = (explicit || adjustmentReasonFromNote(note)).replace(/_/g, " ").toLowerCase();
+  if (raw.includes("purchase")) return "Purchase";
+  if (raw.includes("sale")) return "Sale (automatic)";
+  if (raw.includes("consumption")) return "Consumption";
+  if (raw.includes("damage")) return "Damage";
+  if (raw.includes("theft") || raw.includes("shrinkage")) return "Theft";
+  if (raw.includes("expir")) return "Expiry";
+  if (raw.includes("internal")) return "Internal Use";
+  if (raw.includes("transfer")) return "Transfer";
+  if (raw.includes("manufacturing issue") || raw.includes("production issue")) return "Manufacturing Issue";
+  if (raw.includes("manufacturing receipt") || raw.includes("production receipt")) return "Manufacturing Receipt";
+  return "Physical Count";
 }
 
 function numberCell(value: number): string {
@@ -201,6 +221,7 @@ export function StockAdjustmentsReportPage() {
             productName: product?.name || "Unknown item",
             departmentId,
             departmentName: departmentId ? deptById.get(departmentId) || "Unassigned" : "Unassigned",
+            movementType: movementTypeFromNote(movement.note),
             reason: adjustmentReasonFromNote(movement.note),
             quantityIn: inQty,
             quantityOut: outQty,
@@ -217,8 +238,8 @@ export function StockAdjustmentsReportPage() {
 
       setRows(result);
     } catch (e) {
-      console.error("[Stock adjustments report] load failed:", e);
-      setError(e instanceof Error ? e.message : "Could not load stock adjustments report.");
+      console.error("[Inventory movements report] load failed:", e);
+      setError(e instanceof Error ? e.message : "Could not load inventory movements report.");
     } finally {
       setLoading(false);
     }
@@ -229,12 +250,13 @@ export function StockAdjustmentsReportPage() {
   }, [dateRange, customFrom, customTo, orgId, superAdmin]);
 
   const exportCsv = () => {
-    downloadCsv("stock_adjustments_report.csv", [
-      ["Date", "Department", "Item", "Reason", "Qty in", "Qty out", "Net qty", "Unit cost", "Value impact", "Posted by", "Source ID"],
+    downloadCsv("inventory_movements_report.csv", [
+      ["Date", "Department", "Item", "Movement type", "Memo", "Qty in", "Qty out", "Net qty", "Unit cost", "Value impact", "Posted by", "Source ID"],
       ...filteredRows.map((row) => [
         row.date,
         row.departmentName,
         row.productName,
+        row.movementType,
         row.reason,
         numberCell(row.quantityIn),
         numberCell(row.quantityOut),
@@ -252,13 +274,13 @@ export function StockAdjustmentsReportPage() {
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-xl font-semibold text-slate-900">Stock adjustments report</h2>
-            <PageNotes ariaLabel="Stock adjustments report help">
-              <p>Review manual and imported stock adjustments by department and date range.</p>
+            <h2 className="text-xl font-semibold text-slate-900">Inventory movements report</h2>
+            <PageNotes ariaLabel="Inventory movements report help">
+              <p>Review manual and imported inventory movements by department and date range.</p>
             </PageNotes>
           </div>
           <p className="mt-1 text-sm text-slate-500">
-            Showing adjustments from {toBusinessDateString(from)} to {toBusinessDateString(new Date(to.getTime() - 1))}.
+            Showing movements from {toBusinessDateString(from)} to {toBusinessDateString(new Date(to.getTime() - 1))}.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -332,7 +354,8 @@ export function StockAdjustmentsReportPage() {
                 <th className="px-3 py-2 text-left">Date</th>
                 <th className="px-3 py-2 text-left">Department</th>
                 <th className="px-3 py-2 text-left">Item</th>
-                <th className="px-3 py-2 text-left">Reason</th>
+                <th className="px-3 py-2 text-left">Movement type</th>
+                <th className="px-3 py-2 text-left">Memo</th>
                 <th className="px-3 py-2 text-right">In</th>
                 <th className="px-3 py-2 text-right">Out</th>
                 <th className="px-3 py-2 text-right">Net</th>
@@ -345,14 +368,14 @@ export function StockAdjustmentsReportPage() {
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
-                  <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
-                    Loading adjustments...
+                  <td className="px-3 py-6 text-center text-slate-500" colSpan={12}>
+                    Loading movements...
                   </td>
                 </tr>
               ) : filteredRows.length === 0 ? (
                 <tr>
-                  <td className="px-3 py-6 text-center text-slate-500" colSpan={11}>
-                    No stock adjustments match these filters.
+                  <td className="px-3 py-6 text-center text-slate-500" colSpan={12}>
+                    No inventory movements match these filters.
                   </td>
                 </tr>
               ) : (
@@ -361,6 +384,7 @@ export function StockAdjustmentsReportPage() {
                     <td className="px-3 py-2 text-slate-700">{row.date}</td>
                     <td className="px-3 py-2 text-slate-700">{row.departmentName}</td>
                     <td className="px-3 py-2 font-medium text-slate-900">{row.productName}</td>
+                    <td className="px-3 py-2 text-slate-700">{row.movementType}</td>
                     <td className="px-3 py-2 text-slate-700">{row.reason}</td>
                     <td className="px-3 py-2 text-right text-emerald-700">{numberCell(row.quantityIn)}</td>
                     <td className="px-3 py-2 text-right text-rose-700">{numberCell(row.quantityOut)}</td>

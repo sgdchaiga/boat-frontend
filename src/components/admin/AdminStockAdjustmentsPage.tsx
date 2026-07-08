@@ -18,6 +18,32 @@ interface Product {
   track_inventory?: boolean | null;
 }
 
+type InventoryMovementType =
+  | "purchase"
+  | "sale_auto"
+  | "consumption"
+  | "physical_count"
+  | "damage"
+  | "theft"
+  | "expiry"
+  | "internal_use"
+  | "transfer"
+  | "manufacturing_issue"
+  | "manufacturing_receipt";
+
+type MovementDirection = "in" | "out" | "count" | "transfer" | "automatic";
+
+type InventoryMovementOption = {
+  id: InventoryMovementType;
+  label: string;
+  purpose: string;
+  debit: string;
+  credit: string;
+  plClassification: string;
+  direction: MovementDirection;
+  noteLabel: string;
+};
+
 interface AdjustmentRow {
   id: string;
   product_id: string;
@@ -40,16 +66,149 @@ interface AdjustmentHistoryRow {
 
 type AdjustmentTab = "manual" | "import";
 
-const STOCK_ADJUSTMENT_REASONS = [
-  "Physical Count Shortage",
-  "Physical Count Surplus",
-  "Damage",
-  "Theft",
-  "Expired",
-  "Internal Consumption",
-  "Production Issue",
-  "Production Receipt",
+const INVENTORY_MOVEMENT_OPTIONS: InventoryMovementOption[] = [
+  {
+    id: "purchase",
+    label: "Purchase",
+    purpose: "Buy inventory",
+    debit: "Inventory",
+    credit: "Cash / Creditors",
+    plClassification: "None",
+    direction: "in",
+    noteLabel: "Purchase",
+  },
+  {
+    id: "sale_auto",
+    label: "Sale (automatic)",
+    purpose: "Sell inventory",
+    debit: "COGS",
+    credit: "Inventory",
+    plClassification: "COGS",
+    direction: "automatic",
+    noteLabel: "Sale (automatic)",
+  },
+  {
+    id: "consumption",
+    label: "Consumption",
+    purpose: "Inventory used in operations",
+    debit: "Department COGS / Expense",
+    credit: "Inventory",
+    plClassification: "Usually COGS",
+    direction: "out",
+    noteLabel: "Consumption",
+  },
+  {
+    id: "physical_count",
+    label: "Physical Count",
+    purpose: "Count stock and post gain/loss",
+    debit: "Inventory or adjustment expense",
+    credit: "Inventory gain or inventory",
+    plClassification: "Other income / Operating expense",
+    direction: "count",
+    noteLabel: "Physical Count",
+  },
+  {
+    id: "damage",
+    label: "Damage",
+    purpose: "Damaged stock",
+    debit: "Damaged Stock Expense",
+    credit: "Inventory",
+    plClassification: "Operating Expense",
+    direction: "out",
+    noteLabel: "Damage",
+  },
+  {
+    id: "theft",
+    label: "Theft",
+    purpose: "Missing stock",
+    debit: "Inventory Shrinkage",
+    credit: "Inventory",
+    plClassification: "Operating Expense",
+    direction: "out",
+    noteLabel: "Theft",
+  },
+  {
+    id: "expiry",
+    label: "Expiry",
+    purpose: "Expired goods",
+    debit: "Expired Stock Expense",
+    credit: "Inventory",
+    plClassification: "Operating Expense",
+    direction: "out",
+    noteLabel: "Expiry",
+  },
+  {
+    id: "internal_use",
+    label: "Internal Use",
+    purpose: "Office/staff use",
+    debit: "Department Expense",
+    credit: "Inventory",
+    plClassification: "Operating Expense",
+    direction: "out",
+    noteLabel: "Internal Use",
+  },
+  {
+    id: "transfer",
+    label: "Transfer",
+    purpose: "Move between stores",
+    debit: "Inventory",
+    credit: "Inventory",
+    plClassification: "No P&L",
+    direction: "transfer",
+    noteLabel: "Transfer",
+  },
+  {
+    id: "manufacturing_issue",
+    label: "Manufacturing Issue",
+    purpose: "Issue raw materials to production",
+    debit: "Work in Progress",
+    credit: "Raw Materials Inventory",
+    plClassification: "None until costing",
+    direction: "out",
+    noteLabel: "Production Issue",
+  },
+  {
+    id: "manufacturing_receipt",
+    label: "Manufacturing Receipt",
+    purpose: "Receive finished goods from production",
+    debit: "Finished Goods Inventory",
+    credit: "Work in Progress",
+    plClassification: "None",
+    direction: "in",
+    noteLabel: "Production Receipt",
+  },
 ];
+
+const INVENTORY_MOVEMENT_BY_ID = new Map(INVENTORY_MOVEMENT_OPTIONS.map((option) => [option.id, option]));
+
+function signedDeltaForMovement(direction: MovementDirection, amount: number): number {
+  if (!Number.isFinite(amount)) return Number.NaN;
+  if (direction === "in") return Math.abs(amount);
+  if (direction === "out") return -Math.abs(amount);
+  if (direction === "transfer" || direction === "automatic") return 0;
+  return amount;
+}
+
+function normalizeInventoryMovementType(value: string | null | undefined): InventoryMovementType {
+  const raw = String(value || "").trim().toLowerCase();
+  if (raw === "sale" || raw === "sale_auto") return "sale_auto";
+  if (raw === "physical_count" || raw === "physical count" || raw.includes("physical count") || raw.includes("stock count")) return "physical_count";
+  if (raw === "expired" || raw === "expiry" || raw.includes("expir")) return "expiry";
+  if (raw === "internal_use" || raw === "internal use" || raw.includes("internal")) return "internal_use";
+  if (raw === "manufacturing_issue" || raw.includes("production issue") || raw.includes("manufacturing issue")) return "manufacturing_issue";
+  if (raw === "manufacturing_receipt" || raw.includes("production receipt") || raw.includes("manufacturing receipt")) return "manufacturing_receipt";
+  if (raw.includes("consumption") || raw === "consume") return "consumption";
+  if (raw.includes("damage")) return "damage";
+  if (raw.includes("theft") || raw.includes("shrinkage")) return "theft";
+  if (raw.includes("transfer")) return "transfer";
+  if (raw.includes("purchase")) return "purchase";
+  return "physical_count";
+}
+
+function movementTypeFromNote(note: string | null): InventoryMovementType {
+  const explicit = /\[MOVEMENT_TYPE:([a-z_]+)\]/i.exec(String(note || ""))?.[1];
+  return normalizeInventoryMovementType(explicit || adjustmentReasonFromNote(note));
+}
 
 function closingStockFromNote(note: string | null): number | null {
   const raw = /\[CLOSING_STOCK:([+-]?\d+(?:\.\d+)?)\]/.exec(String(note || ""))?.[1];
@@ -59,10 +218,17 @@ function closingStockFromNote(note: string | null): number | null {
 }
 
 function adjustmentReasonFromNote(note: string | null): string {
-  return String(note || "Manual adjustment")
+  return String(note || "Manual movement")
     .replace(/^GL .*?\| /, "")
-    .replace(/\s*\[CLOSING_STOCK:[^\]]+\]\s*$/, "")
+    .replace(/\s*\[[^\]]+\]\s*/g, " ")
+    .replace(/\s*\|\s*/g, " | ")
+    .replace(/\s+\|\s*$/, "")
     .trim();
+}
+
+function movementLabelFromNote(note: string | null): string {
+  const movement = INVENTORY_MOVEMENT_BY_ID.get(movementTypeFromNote(note));
+  return movement?.label ?? "Physical Count";
 }
 
 export function AdminStockAdjustmentsPage({
@@ -80,6 +246,7 @@ export function AdminStockAdjustmentsPage({
   const [products, setProducts] = useState<Product[]>([]);
   const [currentStock, setCurrentStock] = useState<Record<string, number>>({});
   const [date, setDate] = useState(businessTodayISO);
+  const [movementType, setMovementType] = useState<InventoryMovementType>("physical_count");
   const [reason, setReason] = useState("");
   const [rows, setRows] = useState<AdjustmentRow[]>([
     {
@@ -97,6 +264,7 @@ export function AdminStockAdjustmentsPage({
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [editingSourceId, setEditingSourceId] = useState<string | null>(null);
   const [deletingSourceId, setDeletingSourceId] = useState<string | null>(null);
+  const selectedMovement = INVENTORY_MOVEMENT_BY_ID.get(movementType) || INVENTORY_MOVEMENT_OPTIONS[0];
 
   const loadStockSnapshot = async (asAtDate = date) => {
     if (orgId) await ensureActiveOrganization(orgId);
@@ -116,16 +284,24 @@ export function AdminStockAdjustmentsPage({
         prev.map((row) => {
           if (!row.product_id) return row;
           const currentQty = stock[row.product_id] ?? 0;
+          const amount = row.qtyDelta === "" ? Number.NaN : Number(row.qtyDelta);
           const newQtyNumber = row.newQty === "" ? Number.NaN : Number(row.newQty);
+          const signedDelta =
+            selectedMovement.direction === "count"
+              ? Number.isFinite(newQtyNumber)
+                ? newQtyNumber - currentQty
+                : Number.NaN
+              : signedDeltaForMovement(selectedMovement.direction, amount);
           return {
             ...row,
             currentQty,
-            qtyDelta: Number.isFinite(newQtyNumber) ? String(newQtyNumber - currentQty) : "",
+            qtyDelta: selectedMovement.direction === "count" && Number.isFinite(signedDelta) ? String(signedDelta) : row.qtyDelta,
+            newQty: Number.isFinite(signedDelta) ? String(currentQty + signedDelta) : "",
           };
         })
       );
     } catch (e) {
-      console.error("[Stock adjustments] dated stock snapshot failed:", e);
+      console.error("[Inventory movements] dated stock snapshot failed:", e);
       alert("Failed to load stock balances for the selected date.");
     } finally {
       setLoadingStockSnapshot(false);
@@ -221,7 +397,7 @@ export function AdminStockAdjustmentsPage({
         setCurrentStock(stock);
         await loadAdjustmentHistory();
       } catch (e) {
-        console.error("[Stock adjustments] load failed:", e);
+        console.error("[Inventory movements] load failed:", e);
       } finally {
         setLoading(false);
       }
@@ -247,6 +423,7 @@ export function AdminStockAdjustmentsPage({
   };
 
   const handleNewQtyChange = (id: string, value: string) => {
+    if (selectedMovement.direction !== "count") return;
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== id) return r;
@@ -262,10 +439,23 @@ export function AdminStockAdjustmentsPage({
       prev.map((r) => {
         if (r.id !== id) return r;
         const deltaNum = value === "" ? NaN : Number(value);
-        const newQtyVal = !isNaN(deltaNum)
-          ? (r.currentQty + deltaNum).toString()
-          : "";
+        const signedDelta = signedDeltaForMovement(selectedMovement.direction, deltaNum);
+        const newQtyVal = !isNaN(deltaNum) ? (r.currentQty + signedDelta).toString() : "";
         return { ...r, qtyDelta: value, newQty: newQtyVal };
+      })
+    );
+  };
+
+  const handleMovementTypeChange = (nextType: InventoryMovementType) => {
+    const next = INVENTORY_MOVEMENT_BY_ID.get(nextType) || INVENTORY_MOVEMENT_OPTIONS[0];
+    setMovementType(nextType);
+    setReason("");
+    setRows((prev) =>
+      prev.map((row) => {
+        const amount = row.qtyDelta === "" ? Number.NaN : Number(row.qtyDelta);
+        if (!Number.isFinite(amount)) return { ...row, newQty: "" };
+        const signed = signedDeltaForMovement(next.direction, amount);
+        return { ...row, newQty: String(row.currentQty + signed) };
       })
     );
   };
@@ -313,6 +503,8 @@ export function AdminStockAdjustmentsPage({
     setSelectedSourceId(sourceId);
     setEditingSourceId(sourceId);
     setDate(effectiveDate);
+    const nextMovementType = movementTypeFromNote(rowsData[0].note);
+    setMovementType(nextMovementType);
     setReason(adjustmentReasonFromNote(rowsData[0].note));
     setRows(
       rowsData.map((row) => {
@@ -340,12 +532,13 @@ export function AdminStockAdjustmentsPage({
     if (readOnly || !canDeleteAdjustments || deletingSourceId) return;
     const effectiveDate = toBusinessDateString(adjustment.movement_date);
     const confirmed = window.confirm(
-      `Delete stock adjustment ${adjustment.source_id.slice(0, 8)}?\n\n` +
+      `Delete inventory movement ${adjustment.source_id.slice(0, 8)}?\n\n` +
         `Effective date: ${effectiveDate}\n` +
-        `Reason: ${adjustmentReasonFromNote(adjustment.note)}\n` +
+        `Movement type: ${movementLabelFromNote(adjustment.note)}\n` +
+        `Memo: ${adjustmentReasonFromNote(adjustment.note)}\n` +
         `Lines: ${adjustment.lines}\n` +
         `Net stock effect: ${adjustment.totalAmount.toFixed(2)}\n\n` +
-        "This removes every stock movement in this adjustment batch and recalculates stock balances."
+        "This removes every stock movement in this batch and recalculates stock balances."
     );
     if (!confirmed) return;
 
@@ -361,7 +554,7 @@ export function AdminStockAdjustmentsPage({
       }
       const retiredJournal = await deleteJournalEntryByReference("stock_adjustment", adjustment.source_id, orgId);
       if (!retiredJournal.ok) {
-        throw new Error(`Movements were deleted, but the stock adjustment journal could not be retired: ${retiredJournal.error}`);
+        throw new Error(`Movements were deleted, but the inventory movement journal could not be retired: ${retiredJournal.error}`);
       }
       if (editingSourceId === adjustment.source_id) {
         setEditingSourceId(null);
@@ -369,20 +562,26 @@ export function AdminStockAdjustmentsPage({
       }
       await Promise.all([loadStockSnapshot(), loadAdjustmentHistory()]);
     } catch (e) {
-      console.error("[Stock adjustments] delete failed:", e);
-      alert(e instanceof Error ? `Failed to delete adjustment: ${e.message}` : "Failed to delete adjustment.");
+      console.error("[Inventory movements] delete failed:", e);
+      alert(e instanceof Error ? `Failed to delete movement: ${e.message}` : "Failed to delete movement.");
     } finally {
       setDeletingSourceId(null);
     }
   };
 
   const handleSave = async () => {
+    if (selectedMovement.direction === "automatic") {
+      alert("Sale movements are automatic. Use POS / sales workflows so stock, revenue, COGS, and payments stay in sync.");
+      return;
+    }
     const validRows = rows.filter((r) => {
-      const delta = Number(r.qtyDelta);
-      return r.product_id && !isNaN(delta) && delta !== 0;
+      const qty = Number(r.qtyDelta);
+      if (!r.product_id || !Number.isFinite(qty)) return false;
+      if (selectedMovement.direction === "count") return qty !== 0;
+      return Math.abs(qty) > 0;
     });
     if (validRows.length === 0) {
-      alert("Enter at least one valid adjustment row (product and non-zero amount).");
+      alert("Enter at least one valid movement row (product and non-zero quantity).");
       return;
     }
     setSaving(true);
@@ -391,17 +590,32 @@ export function AdminStockAdjustmentsPage({
       const sourceId = editingSourceId || randomUuid();
       const movementDateIso = date && /^\d{4}-\d{2}-\d{2}$/.test(date) ? `${date}T12:00:00.000Z` : new Date().toISOString();
       const payload = validRows.map((r) => {
-        const delta = Number(r.qtyDelta);
+        const rawQty = Number(r.qtyDelta);
+        const delta =
+          signedDeltaForMovement(selectedMovement.direction, rawQty);
+        const transferQty = selectedMovement.direction === "transfer" ? Math.abs(rawQty) : 0;
         const closingStock = r.currentQty + delta;
+        const physicalCountLabel =
+          selectedMovement.direction === "count"
+            ? delta > 0
+              ? "Physical Count Surplus"
+              : "Physical Count Shortage"
+            : selectedMovement.noteLabel;
+        const noteParts = [
+          physicalCountLabel,
+          reason.trim(),
+          `[MOVEMENT_TYPE:${movementType}]`,
+          `[CLOSING_STOCK:${closingStock}]`,
+        ].filter(Boolean);
         const row: Record<string, unknown> = {
           product_id: r.product_id,
           movement_date: movementDateIso,
           source_type: "adjustment",
           source_id: sourceId,
-          quantity_in: delta > 0 ? delta : 0,
-          quantity_out: delta < 0 ? Math.abs(delta) : 0,
+          quantity_in: selectedMovement.direction === "transfer" ? transferQty : delta > 0 ? delta : 0,
+          quantity_out: selectedMovement.direction === "transfer" ? transferQty : delta < 0 ? Math.abs(delta) : 0,
           unit_cost: null,
-          note: `${reason.trim() || "Physical Count Shortage"} [CLOSING_STOCK:${closingStock}]`,
+          note: noteParts.join(" | "),
         };
         if (orgId) row.organization_id = orgId;
         return row;
@@ -424,14 +638,19 @@ export function AdminStockAdjustmentsPage({
       if ((inserted?.length ?? 0) !== payload.length) {
         throw new Error(`Only ${inserted?.length ?? 0} of ${payload.length} movement(s) were saved.`);
       }
-      const journal = await createJournalForStockAdjustment(sourceId, user?.id ?? null, {
-        organizationId: orgId,
-        replaceExisting: true,
-      });
-      if (!journal.ok) {
-        alert(`Stock adjusted, but the journal was not posted: ${journal.error}`);
+      if (selectedMovement.direction === "transfer") {
+        await deleteJournalEntryByReference("stock_adjustment", sourceId, orgId);
+        alert("Inventory transfer saved. No P&L journal was posted because the global stock value is unchanged.");
       } else {
-        alert("Stock adjusted and journal posted.");
+        const journal = await createJournalForStockAdjustment(sourceId, user?.id ?? null, {
+          organizationId: orgId,
+          replaceExisting: true,
+        });
+        if (!journal.ok) {
+          alert(`Inventory movement saved, but the journal was not posted: ${journal.error}`);
+        } else {
+          alert("Inventory movement saved and journal posted.");
+        }
       }
       // Refresh current stock and reset rows
       await loadStockSnapshot();
@@ -449,7 +668,7 @@ export function AdminStockAdjustmentsPage({
       setEditingSourceId(null);
     } catch (e) {
       console.error(e);
-      alert("Failed to save adjustments.");
+      alert("Failed to save inventory movement.");
     } finally {
       setSaving(false);
     }
@@ -461,15 +680,15 @@ export function AdminStockAdjustmentsPage({
     <div className="space-y-6">
       {highlightAdjustmentSourceId && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          Adjustment deep-link received ({highlightAdjustmentSourceId}). Click the linked amount in history to open details.
+          Inventory movement deep-link received ({highlightAdjustmentSourceId}). Click the linked amount in history to open details.
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-semibold text-slate-900">Stock Adjustments</h2>
-        <PageNotes ariaLabel="Stock adjustments help">
+        <h2 className="text-lg font-semibold text-slate-900">Inventory Movements</h2>
+        <PageNotes ariaLabel="Inventory movements help">
           <p>
-            Enter adjustments manually or import many lines from CSV/Excel. Use either new quantity or amount adjusted per
-            line.
+            Record inventory purchases, consumption, losses, counts, transfers, and manufacturing movements. Sales stay
+            automatic from POS and sales workflows.
           </p>
         </PageNotes>
       </div>
@@ -514,7 +733,7 @@ export function AdminStockAdjustmentsPage({
       <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4 overflow-x-auto max-w-5xl">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-base font-semibold text-slate-900">
-            {editingSourceId ? `Edit adjustment ${editingSourceId.slice(0, 8)}` : "New adjustment"}
+            {editingSourceId ? `Edit movement ${editingSourceId.slice(0, 8)}` : "New inventory movement"}
           </h3>
           {editingSourceId ? (
             <button
@@ -523,6 +742,8 @@ export function AdminStockAdjustmentsPage({
               onClick={() => {
                 setEditingSourceId(null);
                 setSelectedSourceId(null);
+                setMovementType("physical_count");
+                setReason("");
                 setRows([
                   {
                     id: randomUuid(),
@@ -552,30 +773,92 @@ export function AdminStockAdjustmentsPage({
               {loadingStockSnapshot ? "Loading balance for selected date..." : "Current Qty is shown as at this date."}
             </p>
           </div>
+          <div className="min-w-[240px] flex-1">
+            <label className="block text-sm font-medium mb-1">Movement type</label>
+            <select
+              className="border rounded-lg px-3 py-2 w-full"
+              value={movementType}
+              onChange={(e) => handleMovementTypeChange(e.target.value as InventoryMovementType)}
+            >
+              {INVENTORY_MOVEMENT_OPTIONS.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1 text-xs text-slate-500">{selectedMovement.purpose}</p>
+          </div>
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-sm font-medium mb-1">Reason</label>
+            <label className="block text-sm font-medium mb-1">Memo / details</label>
             <input
-              list="stock-adjustment-reasons"
               className="border rounded-lg px-3 py-2 w-full"
               value={reason}
               onChange={(e) => setReason(e.target.value)}
-              placeholder="e.g. Physical Count Shortage"
+              placeholder={selectedMovement.direction === "count" ? "Optional count notes" : "Optional reference or explanation"}
             />
-            <datalist id="stock-adjustment-reasons">
-              {STOCK_ADJUSTMENT_REASONS.map((value) => (
-                <option key={value} value={value} />
-              ))}
-            </datalist>
           </div>
         </div>
+
+        <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm md:grid-cols-4">
+          <div>
+            <p className="text-xs font-medium uppercase text-slate-500">Debit</p>
+            <p className="font-medium text-slate-900">{selectedMovement.debit}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase text-slate-500">Credit</p>
+            <p className="font-medium text-slate-900">{selectedMovement.credit}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase text-slate-500">P&L</p>
+            <p className="font-medium text-slate-900">{selectedMovement.plClassification}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase text-slate-500">Posting</p>
+            <p className="font-medium text-slate-900">
+              {selectedMovement.direction === "automatic" ? "Automatic" : selectedMovement.direction === "count" ? "Count gain/loss" : "Manual"}
+            </p>
+          </div>
+        </div>
+
+        <details className="rounded-lg border border-slate-200 bg-white p-3 text-sm">
+          <summary className="cursor-pointer font-medium text-slate-700">Recommended GL mappings</summary>
+          <table className="mt-3 w-full min-w-[720px] text-sm">
+            <thead className="bg-slate-50 text-xs uppercase text-slate-500">
+              <tr>
+                <th className="px-3 py-2 text-left">Transaction</th>
+                <th className="px-3 py-2 text-left">Purpose</th>
+                <th className="px-3 py-2 text-left">Debit</th>
+                <th className="px-3 py-2 text-left">Credit</th>
+                <th className="px-3 py-2 text-left">P&L</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {INVENTORY_MOVEMENT_OPTIONS.map((option) => (
+                <tr key={option.id}>
+                  <td className="px-3 py-2 font-medium">{option.label}</td>
+                  <td className="px-3 py-2">{option.purpose}</td>
+                  <td className="px-3 py-2">{option.debit}</td>
+                  <td className="px-3 py-2">{option.credit}</td>
+                  <td className="px-3 py-2">{option.plClassification}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+
+        {selectedMovement.direction === "automatic" ? (
+          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            Sale movements are posted automatically from POS and sales workflows.
+          </div>
+        ) : null}
 
         <table className="w-full text-sm min-w-[800px]">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="p-2 text-left">Item</th>
               <th className="p-2 text-right">Current Qty</th>
-              <th className="p-2 text-right">New Qty</th>
-              <th className="p-2 text-right">Amount Adjusted</th>
+              <th className="p-2 text-right">{selectedMovement.direction === "count" ? "New Qty" : "Resulting Qty"}</th>
+              <th className="p-2 text-right">{selectedMovement.direction === "count" ? "Amount Adjusted" : "Quantity moved"}</th>
             </tr>
           </thead>
           <tbody>
@@ -606,7 +889,8 @@ export function AdminStockAdjustmentsPage({
                     className="border rounded-lg px-2 py-1 w-full text-right"
                     value={r.newQty}
                     onChange={(e) => handleNewQtyChange(r.id, e.target.value)}
-                    placeholder="New quantity"
+                    placeholder={selectedMovement.direction === "count" ? "New quantity" : "Auto"}
+                    disabled={selectedMovement.direction !== "count"}
                   />
                 </td>
                 <td className="p-2">
@@ -615,7 +899,8 @@ export function AdminStockAdjustmentsPage({
                     className="border rounded-lg px-2 py-1 w-full text-right"
                     value={r.qtyDelta}
                     onChange={(e) => handleDeltaChange(r.id, e.target.value)}
-                    placeholder="Amount adjusted"
+                    placeholder={selectedMovement.direction === "count" ? "Amount adjusted" : "Quantity"}
+                    disabled={selectedMovement.direction === "automatic"}
                   />
                 </td>
               </tr>
@@ -633,20 +918,20 @@ export function AdminStockAdjustmentsPage({
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || loadingStockSnapshot}
+            disabled={saving || loadingStockSnapshot || selectedMovement.direction === "automatic"}
             className="inline-flex items-center gap-2 bg-brand-700 text-white px-4 py-2 rounded-lg disabled:opacity-50"
           >
             <Save className="w-4 h-4" />
-            {saving ? "Saving…" : "Save adjustments"}
+            {saving ? "Saving…" : "Save movement"}
           </button>
         </div>
       </div>
       ) : null}
 
       <div className="bg-white border border-slate-200 rounded-xl p-6 overflow-x-auto max-w-5xl">
-        <h3 className="text-base font-semibold text-slate-900 mb-3">Adjustments history</h3>
+        <h3 className="text-base font-semibold text-slate-900 mb-3">Inventory movement history</h3>
         {history.length === 0 ? (
-          <p className="text-sm text-slate-500">No saved adjustments yet.</p>
+          <p className="text-sm text-slate-500">No saved movements yet.</p>
         ) : (
           <table className="w-full text-sm min-w-[980px]">
             <thead className="bg-slate-50 border-b border-slate-200">
@@ -655,10 +940,11 @@ export function AdminStockAdjustmentsPage({
                 <th className="p-2 text-left">Done at</th>
                 <th className="p-2 text-left">Effective date</th>
                 <th className="p-2 text-left">Reference</th>
-                <th className="p-2 text-left">Reason</th>
+                <th className="p-2 text-left">Movement type</th>
+                <th className="p-2 text-left">Memo</th>
                 <th className="p-2 text-right">Lines</th>
                 <th className="p-2 text-right">Closing stock</th>
-                <th className="p-2 text-right">Net adjustment</th>
+                <th className="p-2 text-right">Net movement</th>
                 <th className="p-2 text-right">Actions</th>
               </tr>
             </thead>
@@ -674,6 +960,7 @@ export function AdminStockAdjustmentsPage({
                   </td>
                   <td className="p-2 whitespace-nowrap">{toBusinessDateString(h.movement_date)}</td>
                   <td className="p-2 font-mono text-xs">{h.source_id.slice(0, 8)}</td>
+                  <td className="p-2">{movementLabelFromNote(h.note)}</td>
                   <td className="p-2">{adjustmentReasonFromNote(h.note)}</td>
                   <td className="p-2 text-right">{h.lines}</td>
                   <td className="p-2 text-right">
@@ -698,8 +985,8 @@ export function AdminStockAdjustmentsPage({
                         readOnly
                           ? "Read-only access"
                           : !canDeleteAdjustments
-                            ? "You do not have permission to delete stock adjustments"
-                            : "Delete this entire adjustment batch"
+                            ? "You do not have permission to delete inventory movements"
+                            : "Delete this entire movement batch"
                       }
                     >
                       <Trash2 className="h-3.5 w-3.5" />

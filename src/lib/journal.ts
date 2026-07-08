@@ -375,12 +375,16 @@ type StockAdjustmentMovementForJournal = {
 };
 
 type StockAdjustmentReason =
+  | "purchase"
+  | "consumption"
   | "physical_count_shortage"
   | "physical_count_surplus"
   | "damage"
   | "theft"
   | "expired"
+  | "internal_use"
   | "internal_consumption"
+  | "transfer"
   | "production_issue"
   | "production_receipt";
 
@@ -402,8 +406,12 @@ function stockAdjustmentReasonText(note: string | null): string {
 
 function classifyStockAdjustmentReason(note: string | null, deltaQty: number): StockAdjustmentReason | null {
   const text = stockAdjustmentReasonText(note).toLowerCase();
+  if (/purchase|buy inventory/.test(text)) return "purchase";
+  if (/transfer|move between stores/.test(text)) return "transfer";
   if (/production\s+receipt|finished\s+goods?\s+receipt/.test(text)) return "production_receipt";
   if (/production\s+issue|raw\s+materials?\s+issue|wip/.test(text)) return "production_issue";
+  if (/internal\s+use|office\s+use|staff\s+use/.test(text)) return "internal_use";
+  if (/\bconsumption\b|used\s+in\s+operations/.test(text)) return "consumption";
   if (/internal\s+consumption|staff\s+meal|consume/.test(text)) return "internal_consumption";
   if (/expired|expiry|obsolete/.test(text)) return "expired";
   if (/theft|stolen|shrinkage/.test(text)) return "theft";
@@ -449,6 +457,7 @@ function resolveStockAdjustmentLineAccounts(args: {
   const { reason, deltaQty, departmentId, context, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
   const departmentGl = departmentId ? context.deptGlMap.get(departmentId) : null;
   const departmentStock = departmentGl?.stock ?? legacyInventoryGlAccountId ?? context.defaults.purchasesInventory ?? context.defaults.posInvKitchen ?? context.defaults.posInvBar ?? null;
+  const payableOrCash = context.defaults.payable ?? context.defaults.cash ?? null;
   const departmentExpense =
     departmentGl?.purchases ??
     legacyPurchasesGlAccountId ??
@@ -489,6 +498,10 @@ function resolveStockAdjustmentLineAccounts(args: {
     departmentStock;
 
   switch (reason) {
+    case "purchase":
+      return { debitGlAccountId: departmentStock, creditGlAccountId: payableOrCash, label: "Purchase" };
+    case "consumption":
+      return { debitGlAccountId: departmentExpense, creditGlAccountId: departmentStock, label: "Consumption" };
     case "physical_count_shortage":
       return { debitGlAccountId: inventoryVarianceExpense, creditGlAccountId: departmentStock, label: "Physical count shortage" };
     case "physical_count_surplus":
@@ -499,6 +512,8 @@ function resolveStockAdjustmentLineAccounts(args: {
       return { debitGlAccountId: shrinkageExpense, creditGlAccountId: departmentStock, label: "Theft" };
     case "expired":
       return { debitGlAccountId: expiredStockExpense, creditGlAccountId: departmentStock, label: "Expired stock" };
+    case "internal_use":
+      return { debitGlAccountId: departmentExpense, creditGlAccountId: departmentStock, label: "Internal use" };
     case "internal_consumption":
       if (departmentId && (!departmentGl?.purchases || !departmentGl?.stock)) {
         return {
@@ -510,15 +525,17 @@ function resolveStockAdjustmentLineAccounts(args: {
         };
       }
       return { debitGlAccountId: departmentExpense, creditGlAccountId: departmentStock, label: "Internal consumption" };
+    case "transfer":
+      return { debitGlAccountId: departmentStock, creditGlAccountId: departmentStock, label: "Transfer" };
     case "production_issue":
       return { debitGlAccountId: workInProgress, creditGlAccountId: rawMaterialsInventory, label: "Production issue" };
     case "production_receipt":
       return { debitGlAccountId: finishedGoodsInventory, creditGlAccountId: workInProgress, label: "Production receipt" };
     default:
       if (deltaQty > 0) {
-        return { debitGlAccountId: departmentStock, creditGlAccountId: legacyPurchasesGlAccountId ?? departmentExpense, label: "Stock adjustment surplus" };
+        return { debitGlAccountId: departmentStock, creditGlAccountId: legacyPurchasesGlAccountId ?? departmentExpense, label: "Inventory movement surplus" };
       }
-      return { debitGlAccountId: legacyPurchasesGlAccountId ?? departmentExpense, creditGlAccountId: departmentStock, label: "Stock adjustment shortage" };
+      return { debitGlAccountId: legacyPurchasesGlAccountId ?? departmentExpense, creditGlAccountId: departmentStock, label: "Inventory movement shortage" };
   }
 }
 
@@ -566,7 +583,7 @@ export async function createJournalForStockAdjustment(
   }
 ): Promise<JournalPostResult> {
   const organizationId = options?.organizationId ?? (await resolveOrganizationId());
-  if (!organizationId) return { ok: false, error: "Sign in under an organization before posting stock adjustment journals." };
+  if (!organizationId) return { ok: false, error: "Sign in under an organization before posting inventory movement journals." };
 
   const { data: movements, error } = await filterByOrganizationId(
     supabase
@@ -580,7 +597,7 @@ export async function createJournalForStockAdjustment(
   );
   if (error) return { ok: false, error: error.message };
   const rows = (movements || []) as StockAdjustmentMovementForJournal[];
-  if (rows.length === 0) return { ok: false, error: "No stock adjustment movements found for this reference." };
+  if (rows.length === 0) return { ok: false, error: "No inventory movements found for this reference." };
 
   const firstNote = rows[0]?.note ?? null;
   const accounts = await resolveStockAdjustmentAccountIds({
@@ -624,7 +641,7 @@ export async function createJournalForStockAdjustment(
   }
 
   if (lines.length === 0) {
-    return { ok: false, error: "Stock adjustment has no value or mapped accounts to post. Add product costs and configure stock adjustment GL accounts." };
+    return { ok: false, error: "Inventory movement has no value or mapped accounts to post. Add product costs and configure inventory movement GL accounts." };
   }
   if (options?.replaceExisting) {
     const retired = await deleteJournalEntryByReference("stock_adjustment", sourceId, organizationId);
@@ -632,7 +649,7 @@ export async function createJournalForStockAdjustment(
   }
   return createJournalEntry({
     entry_date: toBusinessDateString(rows[0].movement_date || businessTodayISO()),
-    description: `Stock adjustment ${sourceId.slice(0, 8)}`,
+    description: `Inventory movement ${sourceId.slice(0, 8)}`,
     reference_type: "stock_adjustment",
     reference_id: sourceId,
     created_by: createdBy,
@@ -648,11 +665,11 @@ export async function repairStockAdjustmentJournals(options?: {
   onProgress?: (processed: number, total: number) => void;
 }): Promise<StockAdjustmentJournalRepairResult> {
   const organizationId = options?.organizationId ?? (await resolveOrganizationId());
-  if (!organizationId) throw new Error("Sign in under an organization before repairing stock adjustment journals.");
+  if (!organizationId) throw new Error("Sign in under an organization before repairing inventory movement journals.");
   const {
     data: { user },
   } = await supabase.auth.getUser();
-  if (!user?.id) throw new Error("Sign in before repairing stock adjustment journals.");
+  if (!user?.id) throw new Error("Sign in before repairing inventory movement journals.");
 
   const { data, error } = await filterByOrganizationId(
     supabase
@@ -3155,7 +3172,7 @@ export function getReferenceTypeLabel(ref: string | null): string {
     vendor_credit: "Vendor credit",
     expense: "Expense",
     manual: "Manual",
-    stock_adjustment: "Stock adjustment",
+    stock_adjustment: "Inventory movement",
     fixed_asset_capitalization: "Fixed asset — capitalization",
     fixed_asset_depreciation_run: "Fixed asset — depreciation",
     fixed_asset_disposal: "Fixed asset — disposal",
@@ -3574,7 +3591,7 @@ export async function backfillJournalEntries(options?: {
     organizationId,
     false
   );
-  if (adjustmentSourcesError) result.errors.push(`Stock adjustments could not be loaded: ${adjustmentSourcesError.message}`);
+  if (adjustmentSourcesError) result.errors.push(`Inventory movements could not be loaded: ${adjustmentSourcesError.message}`);
   const stockAdjustmentSourceIds = Array.from(
     new Set(
       ((adjustmentSources || []) as Array<{ source_id: string | null }>)
@@ -3582,12 +3599,12 @@ export async function backfillJournalEntries(options?: {
         .filter((id): id is string => !!id)
     )
   );
-  reportProgress("stock_adjustment", "Backfilling stock adjustments", 0, stockAdjustmentSourceIds.length);
+  reportProgress("stock_adjustment", "Backfilling inventory movements", 0, stockAdjustmentSourceIds.length);
   let stockAdjustmentsProcessed = 0;
   for (const sourceId of stockAdjustmentSourceIds) {
     if (has("stock_adjustment", sourceId)) {
       stockAdjustmentsProcessed += 1;
-      reportProgress("stock_adjustment", "Backfilling stock adjustments", stockAdjustmentsProcessed, stockAdjustmentSourceIds.length);
+      reportProgress("stock_adjustment", "Backfilling inventory movements", stockAdjustmentsProcessed, stockAdjustmentSourceIds.length);
       continue;
     }
     const jr = dryRun
@@ -3597,10 +3614,10 @@ export async function backfillJournalEntries(options?: {
       add("stock_adjustment", sourceId);
       result.stock_adjustment++;
     } else {
-      result.errors.push(`Stock adjustment ${sourceId}: ${jr.error}`);
+      result.errors.push(`Inventory movement ${sourceId}: ${jr.error}`);
     }
     stockAdjustmentsProcessed += 1;
-    reportProgress("stock_adjustment", "Backfilling stock adjustments", stockAdjustmentsProcessed, stockAdjustmentSourceIds.length);
+    reportProgress("stock_adjustment", "Backfilling inventory movements", stockAdjustmentsProcessed, stockAdjustmentSourceIds.length);
   }
 
   // POS (kitchen_orders): get orders with items and product prices to compute total

@@ -103,7 +103,7 @@ const REFERENCE_FILTER_OPTIONS: { value: string; label: string }[] = [
   { value: "vendor_payment", label: "Vendor payment" },
   { value: "vendor_credit", label: "Vendor credit" },
   { value: "expense", label: "Expense" },
-  { value: "stock_adjustment", label: "Stock adjustment" },
+  { value: "stock_adjustment", label: "Inventory movement" },
   { value: "manual", label: "Manual" },
   { value: "fixed_asset_capitalization", label: "Fixed asset — capitalization" },
   { value: "fixed_asset_depreciation_run", label: "Fixed asset — depreciation" },
@@ -663,7 +663,7 @@ export function JournalEntriesPage() {
 
   const handleRepairStockAdjustmentJournals = async () => {
     if (repairingStockAdjustments) return;
-    if (!confirm("Rebuild stock adjustment journals from saved stock movement batches? This will replace active stock-adjustment journals.")) return;
+    if (!confirm("Rebuild inventory movement journals from saved stock movement batches? This will replace active inventory-movement journals.")) return;
     setRepairingStockAdjustments(true);
     setStockAdjustmentRepairResult(null);
     setStockAdjustmentRepairProgress({ processed: 0, total: 0 });
@@ -993,10 +993,10 @@ export function JournalEntriesPage() {
             onClick={handleRepairStockAdjustmentJournals}
             disabled={repairingStockAdjustments || backfilling || repairingPos || repairingRooms}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-emerald-300 bg-emerald-50 text-emerald-900 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Rebuild stock adjustment journals from stock movement batches"
+            title="Rebuild inventory movement journals from stock movement batches"
           >
             <RefreshCw className={`w-4 h-4 ${repairingStockAdjustments ? "animate-spin" : ""}`} />
-            {repairingStockAdjustments ? "Repairing stock adjustments..." : "Repair stock adjustment journals"}
+            {repairingStockAdjustments ? "Repairing inventory movements..." : "Repair inventory movement journals"}
           </button>
           {inventoryReconciliationMessage ? (
             <p className="text-sm text-slate-700">{inventoryReconciliationMessage}</p>
@@ -1059,7 +1059,7 @@ export function JournalEntriesPage() {
 
       {repairingStockAdjustments && (
         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          Repairing stock adjustment journals: {stockAdjustmentRepairProgress.processed}/{stockAdjustmentRepairProgress.total}
+          Repairing inventory movement journals: {stockAdjustmentRepairProgress.processed}/{stockAdjustmentRepairProgress.total}
         </div>
       )}
 
@@ -1077,7 +1077,7 @@ export function JournalEntriesPage() {
 
       {stockAdjustmentRepairResult && (
         <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900">
-          <p className="font-medium">Stock adjustment journal repair complete: {stockAdjustmentRepairResult.repaired} rebuilt.</p>
+          <p className="font-medium">Inventory movement journal repair complete: {stockAdjustmentRepairResult.repaired} rebuilt.</p>
           {stockAdjustmentRepairResult.errors.length > 0 && (
             <ul className="mt-2 list-disc list-inside text-xs">
               {stockAdjustmentRepairResult.errors.slice(0, 10).map((error, index) => <li key={index}>{error}</li>)}
@@ -1126,7 +1126,7 @@ export function JournalEntriesPage() {
             {backfillResult.vendor_payment > 0 && <li>Vendor payments: {backfillResult.vendor_payment}</li>}
             {backfillResult.vendor_credit > 0 && <li>Vendor credits: {backfillResult.vendor_credit}</li>}
             {backfillResult.expense > 0 && <li>Expenses: {backfillResult.expense}</li>}
-            {backfillResult.stock_adjustment > 0 && <li>Stock adjustments: {backfillResult.stock_adjustment}</li>}
+            {backfillResult.stock_adjustment > 0 && <li>Inventory movements: {backfillResult.stock_adjustment}</li>}
             {backfillResult.manufacturing_costing > 0 && <li>Manufacturing costing: {backfillResult.manufacturing_costing}</li>}
           </ul>
           {backfillResult.errors.length > 0 && (

@@ -110,23 +110,23 @@ export interface JournalAccountSettings {
   pos_agent_commission_expense_id: string | null;
   /** Manufacturing POS rider transport expense. */
   pos_transport_expense_id: string | null;
-  /** Stock adjustment: debit for physical-count shortages. */
+  /** Inventory movement: debit for physical-count shortages. */
   stock_adjustment_inventory_variance_expense_id: string | null;
-  /** Stock adjustment: credit for physical-count surplus. */
+  /** Inventory movement: credit for physical-count surplus. */
   stock_adjustment_inventory_variance_gain_id: string | null;
-  /** Stock adjustment: debit for damaged stock. */
+  /** Inventory movement: debit for damaged stock. */
   stock_adjustment_damaged_goods_expense_id: string | null;
-  /** Stock adjustment: debit for theft/shrinkage. */
+  /** Inventory movement: debit for theft/shrinkage. */
   stock_adjustment_inventory_shrinkage_expense_id: string | null;
-  /** Stock adjustment: debit for expired stock. */
+  /** Inventory movement: debit for expired stock. */
   stock_adjustment_expired_stock_expense_id: string | null;
-  /** Stock adjustment: internal-consumption expense fallback when department expense is blank. */
+  /** Inventory movement: internal-consumption expense fallback when department expense is blank. */
   stock_adjustment_internal_consumption_expense_id: string | null;
-  /** Stock adjustment: debit on production issue, credit on production receipt. */
+  /** Inventory movement: debit on production issue, credit on production receipt. */
   stock_adjustment_work_in_progress_id: string | null;
-  /** Stock adjustment: credit on production issue. */
+  /** Inventory movement: credit on production issue. */
   stock_adjustment_raw_materials_inventory_id: string | null;
-  /** Stock adjustment: debit on production receipt. */
+  /** Inventory movement: debit on production receipt. */
   stock_adjustment_finished_goods_inventory_id: string | null;
 }
 
@@ -876,7 +876,7 @@ export async function upsertJournalGlSettings(organizationId: string, settings: 
   }
   if (stockAdjustmentError) {
     console.warn(
-      "[journal_gl_settings] Stock adjustment reason mappings are stored locally until migration 20260702120000_stock_adjustment_reason_account_settings.sql is applied."
+      "[journal_gl_settings] Inventory movement reason mappings are stored locally until migration 20260702120000_stock_adjustment_reason_account_settings.sql is applied."
     );
   }
 }
@@ -960,47 +960,47 @@ export const JOURNAL_ACCOUNT_ROLES: { id: JournalAccountRole; label: string; acc
   },
   {
     id: "stock_adjustment_inventory_variance_expense",
-    label: "Stock adjustment - Inventory variance expense",
+    label: "Inventory movement - Inventory variance expense",
     accountType: "expense",
   },
   {
     id: "stock_adjustment_inventory_variance_gain",
-    label: "Stock adjustment - Inventory variance gain",
+    label: "Inventory movement - Inventory variance gain",
     accountType: "income",
   },
   {
     id: "stock_adjustment_damaged_goods_expense",
-    label: "Stock adjustment - Damaged goods expense",
+    label: "Inventory movement - Damaged goods expense",
     accountType: "expense",
   },
   {
     id: "stock_adjustment_inventory_shrinkage_expense",
-    label: "Stock adjustment - Inventory shrinkage / theft expense",
+    label: "Inventory movement - Inventory shrinkage / theft expense",
     accountType: "expense",
   },
   {
     id: "stock_adjustment_expired_stock_expense",
-    label: "Stock adjustment - Expired stock expense",
+    label: "Inventory movement - Expired stock expense",
     accountType: "expense",
   },
   {
     id: "stock_adjustment_internal_consumption_expense",
-    label: "Stock adjustment - Internal consumption expense fallback",
+    label: "Inventory movement - Internal consumption expense fallback",
     accountType: "expense",
   },
   {
     id: "stock_adjustment_work_in_progress",
-    label: "Stock adjustment - Work in progress",
+    label: "Inventory movement - Work in progress",
     accountType: "asset",
   },
   {
     id: "stock_adjustment_raw_materials_inventory",
-    label: "Stock adjustment - Raw materials inventory",
+    label: "Inventory movement - Raw materials inventory",
     accountType: "asset",
   },
   {
     id: "stock_adjustment_finished_goods_inventory",
-    label: "Stock adjustment - Finished goods inventory",
+    label: "Inventory movement - Finished goods inventory",
     accountType: "asset",
   },
 ];
@@ -1032,7 +1032,7 @@ const STOCK_ADJUSTMENT_JOURNAL_ROLE_ROWS: JournalAccountRoleRow[] = JOURNAL_ACCO
   r.id.startsWith("stock_adjustment_")
 ).map((r) => ({
   ...r,
-  group: "Stock adjustments",
+  group: "Inventory movements",
 }));
 
 /**
