@@ -58,6 +58,7 @@ type TotalsSnapshot = {
 };
 
 const CASH_BASIS_REFERENCE_TYPES = ["payment", "vendor_payment", "expense", "school_payment"] as const;
+const MANUFACTURING_COSTING_ROW_PREFIX = "manufacturing-costing:";
 
 export function IncomeStatementPage() {
   const { user } = useAuth();
@@ -514,6 +515,48 @@ export function IncomeStatementPage() {
         operationalRevenueDetails = operationalRevenue.details;
       }
 
+      const manufacturingCostingRows: AccountTotal[] = [];
+      if (mode === "manufacturing" && basis === "accrual") {
+        const fromPeriod = fromDate.slice(0, 7);
+        const toPeriod = toDateInclusive.slice(0, 7);
+        const costingRes = await filterByOrganizationId(
+          supabase
+            .from("manufacturing_costing_entries")
+            .select("material_cost,labor_cost,overhead_cost")
+            .gte("period", fromPeriod)
+            .lte("period", toPeriod),
+          orgId,
+          superAdmin
+        );
+        if (costingRes.error) throw new Error(costingRes.error.message);
+        const costingTotals = ((costingRes.data || []) as Array<{
+          material_cost: number | null;
+          labor_cost: number | null;
+          overhead_cost: number | null;
+        }>).reduce(
+          (sum, row) => ({
+            material: sum.material + Number(row.material_cost || 0),
+            labor: sum.labor + Number(row.labor_cost || 0),
+            overhead: sum.overhead + Number(row.overhead_cost || 0),
+          }),
+          { material: 0, labor: 0, overhead: 0 }
+        );
+        [
+          ["materials", "MFG-COST-MAT", "Manufacturing costing - materials", costingTotals.material],
+          ["labor", "MFG-COST-LAB", "Manufacturing costing - direct labor", costingTotals.labor],
+          ["overhead", "MFG-COST-OH", "Manufacturing costing - factory overhead", costingTotals.overhead],
+        ].filter(([, , , total]) => Math.abs(Number(total) || 0) > 0.0001).forEach(([key, code, name, total]) => {
+          manufacturingCostingRows.push({
+            account_id: `${MANUFACTURING_COSTING_ROW_PREFIX}${key}`,
+            account_code: String(code),
+            account_name: String(name),
+            total: Number(total) || 0,
+            category: "manufacturing_costing_entries",
+            account_type: "expense",
+          });
+        });
+      }
+
       let cogsRows: AccountTotal[] = [];
       let opexRows: AccountTotal[] = [];
       let saccoResult: SaccoStatementNumbers | null = null;
@@ -536,6 +579,9 @@ export function IncomeStatementPage() {
         for (const row of exp) {
           if (classifier(row) === "cogs") cogsRows.push(row);
           else opexRows.push(row);
+        }
+        if (mode === "manufacturing") {
+          cogsRows.push(...manufacturingCostingRows);
         }
         totalCogs = cogsRows.reduce((s, r) => s + r.total, 0);
         totalOpex = opexRows.reduce((s, r) => s + r.total, 0);
@@ -1467,13 +1513,17 @@ export function IncomeStatementPage() {
                     <tr key={r.account_code} className="border-t">
                       <td className="p-3 font-mono">{r.account_code}</td>
                       <td className="p-3">
-                        <button
-                          type="button"
-                          onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "expense" })}
-                          className="text-left text-blue-700 hover:underline"
-                        >
-                          {r.account_name}
-                        </button>
+                        {r.account_id.startsWith(MANUFACTURING_COSTING_ROW_PREFIX) ? (
+                          <span>{r.account_name}</span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "expense" })}
+                            className="text-left text-blue-700 hover:underline"
+                          >
+                            {r.account_name}
+                          </button>
+                        )}
                       </td>
                       <td className="p-3 text-right text-slate-600">
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}

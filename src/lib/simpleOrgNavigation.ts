@@ -7,6 +7,7 @@ import {
   Package,
   FileUp,
   TrendingUp,
+  Lightbulb,
   Settings,
   BedDouble,
   Receipt,
@@ -192,6 +193,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     settings.push({ name: "Payroll", page: PAYROLL_PAGE.hub });
   }
   settings.push({ name: "Integrations", page: "system_integrations" });
+  settings.push({ name: "Ecosystem", page: "ecosystem" });
   settings.push({ name: "BOAT Connect", page: "boat_connect" });
   if (allowBudget) {
     settings.push({ name: "Budgeting", page: "accounting_budgeting" });
@@ -266,6 +268,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
       : []),
     /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */
     { name: "Reports", icon: TrendingUp, page: getSimpleOrgDefaultReportRoute(businessType) },
+    { name: "Intelligence", icon: Lightbulb, page: "industry_intelligence" },
     { name: "Import", icon: FileUp, page: "data_migration" },
     { name: "Settings", icon: Settings, children: settings }
   );

@@ -520,6 +520,8 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
   if (page === "image_document_converter") return true;
   if (page === "data_migration") return true;
+  if (page === "industry_intelligence") return true;
+  if (page === "ecosystem") return true;
   if (page === "boat_connect") return true;
   if (page === "asset_verification") return true;
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
@@ -582,7 +584,9 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "asset_verification") return "asset_verification";
   if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
+  if (page === "ecosystem") return "admin";
   if (page === "data_migration") return "admin";
+  if (page === "industry_intelligence") return "reports";
   if (page === "communications") return "communications";
   if (page === "boat_connect") return "boat_connect";
   if (page === "agent_hub") return "agent";

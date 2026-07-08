@@ -1,9 +1,15 @@
-import { Link2, MessageSquare, Settings, Smartphone, Wallet } from "lucide-react";
+import { Globe2, Link2, MessageSquare, Settings, Smartphone, Wallet } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 export function IntegrationsHubPage({ onNavigate }: { onNavigate: (page: string) => void }) {
   const { user } = useAuth();
   const links = [
+    {
+      title: "Ecosystem",
+      desc: "Marketplace modules, API clients, webhooks, third-party connectors, and mobile app readiness.",
+      page: "ecosystem",
+      icon: Globe2,
+    },
     ...(user?.enable_boat_connect === false
       ? []
       : [

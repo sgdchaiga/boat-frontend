@@ -214,6 +214,8 @@ const IntegrationsHubPage = lazyNamed(() => import('./components/system/Integrat
 const BoatConnectPage = lazyNamed(() => import('./components/system/BoatConnectPage'), 'BoatConnectPage');
 const ImageDocumentConverterPage = lazyNamed(() => import('./components/tools/ImageDocumentConverterPage'), 'ImageDocumentConverterPage');
 const DataMigrationPage = lazyNamed(() => import('./components/DataMigrationPage'), 'DataMigrationPage');
+const IndustryIntelligencePage = lazyNamed(() => import('./components/IndustryIntelligencePage'), 'IndustryIntelligencePage');
+const EcosystemPage = lazyNamed(() => import('./components/EcosystemPage'), 'EcosystemPage');
 
 function PageLoadingFallback() {
   return (
@@ -1443,8 +1445,12 @@ function AppContent() {
         );
       case 'system_integrations':
         return <IntegrationsHubPage onNavigate={navigate} />;
+      case 'ecosystem':
+        return <EcosystemPage onNavigate={navigate} />;
       case 'data_migration':
         return <DataMigrationPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case 'industry_intelligence':
+        return <IndustryIntelligencePage onNavigate={navigate} />;
       case 'boat_connect':
         return <BoatConnectPage readOnly={access.readOnly} />;
       case 'image_document_converter':

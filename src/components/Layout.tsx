@@ -33,6 +33,7 @@ import {
   Briefcase,
   PackageCheck,
   FileUp,
+  Lightbulb,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -55,6 +56,7 @@ import { desktopApi } from '@/lib/desktopApi';
 import { organizationMembershipLabel } from '@/lib/orgMembership';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncStatus';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
+import { WorkspaceGuide } from './WorkspaceGuide';
 
 interface LayoutProps {
   children: ReactNode;
@@ -364,6 +366,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         icon: TrendingUp,
         page: SACCOPRO_PAGE.performanceDashboard,
       },
+      { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       {
         name: '📑 Reports',
         icon: BarChart3,
@@ -454,6 +457,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                   items: [
                     { name: 'Settings', page: 'admin' },
                     ...(saccoPermissionsNav ? [{ name: 'Permissions', page: SACCOPRO_PAGE.permissions }] : []),
+                    { name: 'Ecosystem', page: 'ecosystem' },
                     ...(allowBoatConnect ? [{ name: 'BOAT Connect', page: 'boat_connect' }] : []),
                     { name: 'Image to Excel / Word', page: 'image_document_converter' },
                     { name: 'Loan products', page: SACCOPRO_PAGE.loanSettings },
@@ -519,6 +523,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         ],
       },
       { name: 'Fixed deposits', icon: PiggyBank, page: SCHOOL_PAGE.fixedDeposit },
+      { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       {
         name: 'Reports',
         icon: FileText,
@@ -659,8 +664,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             } as NavItem,
           ]
         : []),
+      { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       { name: 'Staff', icon: UsersRound, page: 'staff' },
       { name: 'Import', icon: FileUp, page: 'data_migration' },
+      { name: 'Ecosystem', icon: Link2, page: 'ecosystem' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
     [enableFixedAssets, enableBudget, enablePayroll, allowManufacturing]
@@ -714,8 +721,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Controls & Audit', page: VSLA_PAGE.controls },
         ],
       },
+      { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       { name: 'Staff', icon: UsersRound, page: 'staff' },
       { name: 'Import', icon: FileUp, page: 'data_migration' },
+      { name: 'Ecosystem', icon: Link2, page: 'ecosystem' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
     []
@@ -1600,6 +1609,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           )}
         </main>
       </div>
+      <WorkspaceGuide currentPage={currentPage} businessType={businessType} onNavigate={onNavigate} />
       <TerminalLockOverlay />
     </div>
   );
