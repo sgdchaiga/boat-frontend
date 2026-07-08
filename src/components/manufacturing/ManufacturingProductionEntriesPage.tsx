@@ -246,7 +246,12 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
               saved.production_date || productionDate,
               user?.id ?? null,
               orgId,
-              costAllocation
+              {
+                materialCost: Number(costing.material_cost || 0),
+                laborCost: Number(costing.labor_cost || 0),
+                overheadCost: Number(costing.overhead_cost || 0),
+                ...costAllocation,
+              }
             );
             if (!journal.ok) setError(`Production saved, but a costing journal was not posted: ${journal.error}`);
           }

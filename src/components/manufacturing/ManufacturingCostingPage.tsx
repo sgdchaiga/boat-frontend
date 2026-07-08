@@ -77,7 +77,12 @@ export function ManufacturingCostingPage({ readOnly = false }: { readOnly?: bool
           period,
           entryDate,
           user?.id ?? null,
-          orgId
+          orgId,
+          {
+            materialCost: Number(materialCost || 0),
+            laborCost: Number(laborCost || 0),
+            overheadCost: Number(overheadCost || 0),
+          }
         );
         if (!jr.ok) {
           console.warn("[manufacturing journal]", jr.error);

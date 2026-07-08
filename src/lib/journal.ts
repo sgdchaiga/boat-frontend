@@ -1663,7 +1663,7 @@ export async function createJournalForSchoolFeePayment(
   });
 }
 
-/** Capitalize period manufacturing costs to finished goods: Dr FG / Cr WIP (or production clearing). */
+/** Post manufacturing costs into WIP, then transfer completed production to finished goods. */
 export async function createJournalForManufacturingCostingEntry(
   entryId: string,
   totalCost: number,
@@ -1672,26 +1672,68 @@ export async function createJournalForManufacturingCostingEntry(
   entryDate: string,
   createdBy: string | null,
   organizationId: string,
-  productionCosts?: { consumablesCost?: number; scrapCost?: number }
+  productionCosts?: {
+    materialCost?: number;
+    laborCost?: number;
+    overheadCost?: number;
+    consumablesCost?: number;
+    scrapCost?: number;
+  }
 ): Promise<JournalPostResult> {
-  const amt = Math.round(totalCost * 100) / 100;
+  const round = (value: number) => Math.round(value * 100) / 100;
+  const amt = round(totalCost);
   if (amt <= 0) return { ok: false, error: "Manufacturing journal skipped: total cost is zero." };
   const removed = await deleteJournalEntryByReference("manufacturing_costing", entryId);
   if (!removed.ok) return removed;
   const s = await resolveJournalAccountSettings(organizationId);
   const fg = s.manufacturing_finished_goods_id;
   const wip = s.manufacturing_wip_id;
-  const consumablesCost = Math.min(amt, Math.max(0, Math.round(Number(productionCosts?.consumablesCost || 0) * 100) / 100));
+  const rawMaterials = s.manufacturing_raw_materials_id ?? s.stock_adjustment_raw_materials_inventory_id ?? s.purchases_inventory_id;
+  const wagesPayable = s.manufacturing_wages_payable_id ?? s.payable_id ?? s.cash_id;
+  const factoryOverhead = s.manufacturing_overhead_id ?? s.expense_id;
+  const hasCostSplit =
+    productionCosts?.materialCost != null ||
+    productionCosts?.laborCost != null ||
+    productionCosts?.overheadCost != null;
+  let materialCost = hasCostSplit ? Math.max(0, round(Number(productionCosts?.materialCost || 0))) : amt;
+  let laborCost = hasCostSplit ? Math.max(0, round(Number(productionCosts?.laborCost || 0))) : 0;
+  let overheadCost = hasCostSplit ? Math.max(0, round(Number(productionCosts?.overheadCost || 0))) : 0;
+  const splitTotal = round(materialCost + laborCost + overheadCost);
+  if (hasCostSplit && splitTotal > 0 && splitTotal !== amt) {
+    const factor = amt / splitTotal;
+    materialCost = round(materialCost * factor);
+    laborCost = round(laborCost * factor);
+    overheadCost = Math.max(0, round(amt - materialCost - laborCost));
+  }
+  const consumablesCost = Math.min(amt, Math.max(0, round(Number(productionCosts?.consumablesCost || 0))));
   const scrapCost = Math.min(
     amt - consumablesCost,
-    Math.max(0, Math.round(Number(productionCosts?.scrapCost || 0) * 100) / 100)
+    Math.max(0, round(Number(productionCosts?.scrapCost || 0)))
   );
-  const finishedGoodsCost = Math.max(0, Math.round((amt - consumablesCost - scrapCost) * 100) / 100);
+  const finishedGoodsCost = Math.max(0, round(amt - consumablesCost - scrapCost));
   if (!fg || !wip) {
     return {
       ok: false,
       error:
         "Set Manufacturing — finished goods and WIP / production clearing GL accounts under Admin → Journal account settings.",
+    };
+  }
+  if (materialCost > 0 && !rawMaterials) {
+    return {
+      ok: false,
+      error: "Set the Manufacturing - raw materials inventory GL account under Admin -> Journal account settings.",
+    };
+  }
+  if (laborCost > 0 && !wagesPayable) {
+    return {
+      ok: false,
+      error: "Set the Manufacturing - wages payable/cash GL account under Admin -> Journal account settings.",
+    };
+  }
+  if (overheadCost > 0 && !factoryOverhead) {
+    return {
+      ok: false,
+      error: "Set the Manufacturing - factory overhead applied GL account under Admin -> Journal account settings.",
     };
   }
   if (consumablesCost > 0 && !s.manufacturing_consumables_expense_id) {
@@ -1709,6 +1751,24 @@ export async function createJournalForManufacturingCostingEntry(
   const date = toBusinessDateString(entryDate);
   const label = (productName || "Product").trim() || "Product";
   const lines = [
+    ...(materialCost > 0
+      ? [
+          { gl_account_id: wip, debit: materialCost, credit: 0, line_description: `${label} - materials issued to WIP` },
+          { gl_account_id: rawMaterials!, debit: 0, credit: materialCost, line_description: `${label} - raw materials inventory` },
+        ]
+      : []),
+    ...(laborCost > 0
+      ? [
+          { gl_account_id: wip, debit: laborCost, credit: 0, line_description: `${label} - direct labour to WIP` },
+          { gl_account_id: wagesPayable!, debit: 0, credit: laborCost, line_description: `${label} - wages payable / cash` },
+        ]
+      : []),
+    ...(overheadCost > 0
+      ? [
+          { gl_account_id: wip, debit: overheadCost, credit: 0, line_description: `${label} - factory overhead to WIP` },
+          { gl_account_id: factoryOverhead!, debit: 0, credit: overheadCost, line_description: `${label} - manufacturing overhead applied` },
+        ]
+      : []),
     ...(finishedGoodsCost > 0
       ? [{ gl_account_id: fg, debit: finishedGoodsCost, credit: 0, line_description: `${label} — finished goods` }]
       : []),
