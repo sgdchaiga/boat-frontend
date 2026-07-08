@@ -45,6 +45,8 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editingBomId, setEditingBomId] = useState<string | null>(null);
+  const [editingBomStatus, setEditingBomStatus] = useState<Bom["status"]>("Draft");
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
@@ -118,6 +120,28 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
     setMaterials(materials.filter((_, i) => i !== index));
   };
 
+  const startEdit = (bom: Bom) => {
+    if (readOnly) return;
+    setEditingBomId(bom.id);
+    setEditingBomStatus(bom.status);
+    setProductId(bom.product_id);
+    setOutputQty(bom.output_qty);
+    setOutputUnit(bom.output_unit);
+    setVersion(bom.version);
+    setMaterials(bom.materials || []);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelEdit = () => {
+    setEditingBomId(null);
+    setEditingBomStatus("Draft");
+    setMaterials([]);
+    setProductId("");
+    setOutputQty(1);
+    setOutputUnit("unit");
+    setVersion("v1");
+  };
+
   // 🔹 Save BOM
   const handleSave = async () => {
     if (readOnly) return;
@@ -137,21 +161,20 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
         version,
         output_qty: outputQty,
         output_unit: outputUnit,
-        status: "Draft",
+        status: editingBomId ? editingBomStatus : "Draft",
         materials,
         materials_count: materials.length,
       };
 
       if (orgId) payload.organization_id = orgId;
 
-      const { error } = await supabase.from("manufacturing_boms").insert(payload);
+      const { error } = editingBomId
+        ? await supabase.from("manufacturing_boms").update(payload).eq("id", editingBomId)
+        : await supabase.from("manufacturing_boms").insert(payload);
       if (error) throw error;
 
       // reset
-      setMaterials([]);
-      setProductId("");
-      setOutputQty(1);
-      setOutputUnit("unit");
+      cancelEdit();
 
       await loadAll();
     } catch (e: any) {
@@ -181,7 +204,18 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
       {/* 🔵 CREATE SECTION */}
       <div className="bg-white p-4 rounded-xl border mb-6">
 
-        <h2 className="font-semibold mb-3">Step 1: Select Product</h2>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="font-semibold">{editingBomId ? "Edit BOM" : "Step 1: Select Product"}</h2>
+          {editingBomId && (
+            <button
+              type="button"
+              onClick={cancelEdit}
+              className="rounded border border-slate-300 px-3 py-1 text-sm text-slate-600"
+            >
+              Cancel edit
+            </button>
+          )}
+        </div>
 
         <select
           value={productId}
@@ -266,7 +300,7 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
             disabled={saving}
             className="bg-blue-600 text-white px-4 py-2 rounded"
           >
-            {saving ? "Saving..." : "Save BOM"}
+            {saving ? "Saving..." : editingBomId ? "Update BOM" : "Save BOM"}
           </button>
         </div>
       </div>
@@ -288,13 +322,14 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
               <th className="p-2">Version</th>
               <th className="p-2 text-right">Output</th>
               <th className="p-2">Status</th>
+              <th className="p-2 text-right">Actions</th>
             </tr>
           </thead>
 
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={4} className="text-center p-4">
+                <td colSpan={5} className="text-center p-4">
                   Loading...
                 </td>
               </tr>
@@ -308,12 +343,22 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
                   {b.output_qty} {b.output_unit}
                 </td>
                 <td className="p-2">{b.status}</td>
+                <td className="p-2 text-right">
+                  <button
+                    type="button"
+                    onClick={() => startEdit(b)}
+                    disabled={readOnly}
+                    className="rounded border border-slate-300 px-3 py-1 text-sm text-blue-600 disabled:cursor-not-allowed disabled:text-slate-400"
+                  >
+                    Edit
+                  </button>
+                </td>
               </tr>
             ))}
 
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={4} className="text-center p-4">
+                <td colSpan={5} className="text-center p-4">
                   No BOMs found
                 </td>
               </tr>
