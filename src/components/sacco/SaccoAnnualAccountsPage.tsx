@@ -10,7 +10,7 @@ type Totals = Record<string, number>;
 const money = new Intl.NumberFormat("en-UG", { maximumFractionDigits: 0 });
 const readNumber = (value: unknown) => Number(String(value ?? "").replace(/[^0-9.-]/g, "")) || 0;
 
-export default function SaccoAnnualAccountsPage() {
+export function SaccoAnnualAccountsPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -63,3 +63,5 @@ export default function SaccoAnnualAccountsPage() {
     <article className="bg-white p-8 print:p-4"><header className="border-b pb-6 text-center"><h2 className="text-3xl font-bold">{name}</h2><p className="mt-2 text-lg">Annual Report and Financial Statements</p><p>For the year ended 31 December {period}</p></header><h3 className="mt-8 text-xl font-bold">SACCO information and governance</h3><p className="mt-2 whitespace-pre-line text-sm">Board of Directors\n{board || "To be completed"}\n\nCommittees / SUPCO\n{committees || "To be completed"}</p><h3 className="mt-8 text-xl font-bold">Statement of financial position</h3><table className="mt-2 w-full text-sm"><tbody><tr><td>Assets</td><td className="text-right">UShs {money.format(assets)}</td></tr><tr><td>Liabilities</td><td className="text-right">UShs {money.format(liabilities)}</td></tr><tr className="border-t font-bold"><td>Net assets / (liabilities)</td><td className="text-right">UShs {money.format(assets-liabilities)}</td></tr></tbody></table><h3 className="mt-8 text-xl font-bold">Statement of comprehensive income</h3><table className="mt-2 w-full text-sm"><tbody><tr><td>Total income</td><td className="text-right">UShs {money.format(income)}</td></tr><tr><td>Total expenditure</td><td className="text-right">UShs {money.format(expenses)}</td></tr><tr className="border-t font-bold"><td>Surplus / (deficit) for the year</td><td className="text-right">UShs {money.format(income-expenses)}</td></tr></tbody></table><h3 className="mt-8 text-xl font-bold">Notes and supporting schedules</h3><p className="text-sm">The following imported or BOAT-sourced account balances support the statements. Complete accounting policies, prior-year comparatives, audit report and statutory appropriations before issue.</p><table className="mt-2 w-full text-sm"><tbody>{rows.map(([label,value])=><tr key={label}><td>{label}</td><td className="text-right">{money.format(value)}</td></tr>)}</tbody></table></article>
   </div>;
 }
+
+export default SaccoAnnualAccountsPage;

@@ -28,13 +28,42 @@ import { desktopApi } from './lib/desktopApi';
 import { isDesktopApiDataMode } from './lib/boatApi';
 import { parseAdminTabParam } from './lib/adminTabs';
 
+const LAZY_CHUNK_RELOAD_KEY = "boat.lazy-chunk-reload";
+
+function reloadOnceForStaleLazyChunk(error: unknown): boolean {
+  if (typeof window === "undefined") return false;
+
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  if (!/(failed to fetch dynamically imported module|importing a module script failed|chunkloaderror)/i.test(message)) {
+    return false;
+  }
+
+  try {
+    if (window.sessionStorage.getItem(LAZY_CHUNK_RELOAD_KEY)) return false;
+    window.sessionStorage.setItem(LAZY_CHUNK_RELOAD_KEY, "1");
+  } catch {
+    return false;
+  }
+
+  window.location.reload();
+  return true;
+}
+
 const lazyNamed = (
   loader: () => Promise<Record<string, ComponentType<any>>>,
   exportName: string
 ) =>
   lazy(async () => {
-    const mod = await loader();
-    return { default: mod[exportName] };
+    try {
+      const mod = await loader();
+      window.sessionStorage.removeItem(LAZY_CHUNK_RELOAD_KEY);
+      return { default: mod[exportName] };
+    } catch (error) {
+      if (reloadOnceForStaleLazyChunk(error)) {
+        return new Promise<never>(() => undefined);
+      }
+      throw error;
+    }
   });
 
 const Dashboard = lazyNamed(() => import('./components/Dashboard'), 'Dashboard');
