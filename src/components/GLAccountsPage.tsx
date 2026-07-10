@@ -48,6 +48,7 @@ export function GLAccountsPage() {
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [showInactiveAccounts, setShowInactiveAccounts] = useState(false);
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<GLAccount | null>(null);
@@ -192,8 +193,9 @@ export function GLAccountsPage() {
 
   const filteredAccounts = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return accounts;
     return accounts.filter((acc) => {
+      if (!showInactiveAccounts && !acc.is_active) return false;
+      if (!q) return true;
       const haystack = [
         acc.account_code,
         acc.account_name,
@@ -204,7 +206,7 @@ export function GLAccountsPage() {
         .toLowerCase();
       return haystack.includes(q);
     });
-  }, [accounts, searchQuery]);
+  }, [accounts, searchQuery, showInactiveAccounts]);
 
   if (loading) {
     return <div className="p-6 md:p-8">Loading Chart of Accounts...</div>;
@@ -234,7 +236,7 @@ export function GLAccountsPage() {
       </div>
 
       {/* TABLE */}
-      <div className="mb-3">
+      <div className="mb-3 flex flex-wrap items-center gap-3">
         <input
           type="text"
           value={searchQuery}
@@ -242,6 +244,14 @@ export function GLAccountsPage() {
           placeholder="Search by code, name, type, or category"
           className="w-full md:w-96 border border-slate-300 rounded-lg px-3 py-2 text-sm"
         />
+        <label className="flex items-center gap-2 text-sm text-slate-700">
+          <input
+            type="checkbox"
+            checked={showInactiveAccounts}
+            onChange={(e) => setShowInactiveAccounts(e.target.checked)}
+          />
+          Show inactive accounts
+        </label>
       </div>
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <table className="w-full text-sm">
@@ -440,4 +450,3 @@ export function GLAccountsPage() {
     </div>
   );
 }
-

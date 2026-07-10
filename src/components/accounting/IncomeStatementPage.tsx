@@ -132,7 +132,7 @@ export function IncomeStatementPage() {
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillError, setDrillError] = useState<string | null>(null);
   /** When false, account rows with a net zero amount for the period are hidden (totals unchanged). */
-  const [showZeroBalanceAccounts, setShowZeroBalanceAccounts] = useState(true);
+  const [showZeroBalanceAccounts, setShowZeroBalanceAccounts] = useState(false);
   /** SACCO structured P&L only: when true, computed summary lines with a zero amount are hidden. */
   const [hideSaccoZeroSummaryLines, setHideSaccoZeroSummaryLines] = useState(false);
   const totalsCacheRef = useRef<Map<string, TotalsSnapshot>>(new Map());

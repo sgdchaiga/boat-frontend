@@ -31,7 +31,7 @@ export function BalanceSheetPage() {
   const [asOfDate, setAsOfDate] = useState(() => businessTodayISO());
   const [basis, setBasis] = useState<"accrual" | "cash">("accrual");
   const [showBasisHelp, setShowBasisHelp] = useState(false);
-  const [showZeroBalanceAccounts, setShowZeroBalanceAccounts] = useState(true);
+  const [showZeroBalanceAccounts, setShowZeroBalanceAccounts] = useState(false);
   const [compareRange, setCompareRange] = useState<"none" | "previous_period" | "same_period_last_year">("none");
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);

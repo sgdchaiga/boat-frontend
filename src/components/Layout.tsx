@@ -666,7 +666,6 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             } as NavItem,
           ]
         : []),
-      { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       { name: 'Staff', icon: UsersRound, page: 'staff' },
       { name: 'Import', icon: FileUp, page: 'data_migration' },
       { name: 'Ecosystem', icon: Link2, page: 'ecosystem' },
@@ -766,10 +765,19 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         : businessType === 'vsla'
           ? vslaNavigation
           : simpleNavigation;
-  const mainNavigation: NavItem[] =
-    businessType !== 'accounting_practice' && enableAssetVerification
+  const mainNavigation: NavItem[] = (() => {
+    const navigation = businessType !== 'accounting_practice' && enableAssetVerification
       ? [...baseNavigation, { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' }]
       : baseNavigation;
+    const seenPages = new Set<string>();
+
+    return navigation.filter((item) => {
+      if (!('page' in item) || !item.page) return true;
+      if (seenPages.has(item.page)) return false;
+      seenPages.add(item.page);
+      return true;
+    });
+  })();
 
   const showPlatform = isSuperAdmin;
   const showHotel = !isSuperAdmin || isHotelStaff;
