@@ -749,6 +749,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' },
     { name: 'Housekeeping Audit', icon: FileText, page: 'practice_housekeeping_audit' },
     { name: 'Tasks & Deadlines', icon: BookOpen, page: 'practice_tasks' },
+    { name: 'Annual accounts', icon: FileText, page: 'practice_annual_accounts' },
     { name: 'Billing', icon: Receipt, page: 'practice_billing' },
     { name: 'Staff', icon: UsersRound, page: 'staff' },
     { name: 'Permissions & settings', icon: Settings, page: 'admin' },

@@ -216,6 +216,7 @@ const BoatConnectPage = lazyNamed(() => import('./components/system/BoatConnectP
 const ImageDocumentConverterPage = lazyNamed(() => import('./components/tools/ImageDocumentConverterPage'), 'ImageDocumentConverterPage');
 const DataMigrationPage = lazyNamed(() => import('./components/DataMigrationPage'), 'DataMigrationPage');
 const IndustryIntelligencePage = lazyNamed(() => import('./components/IndustryIntelligencePage'), 'IndustryIntelligencePage');
+const SaccoAnnualAccountsPage = lazyNamed(() => import('./components/sacco/SaccoAnnualAccountsPage'), 'SaccoAnnualAccountsPage');
 const EcosystemPage = lazyNamed(() => import('./components/EcosystemPage'), 'EcosystemPage');
 
 function PageLoadingFallback() {
@@ -953,6 +954,10 @@ function AppContent() {
         return <PracticeWorkspacePage section="tasks" readOnly={access.readOnly} />;
       case 'practice_billing':
         return <PracticeWorkspacePage section="billing" readOnly={access.readOnly} />;
+      case 'practice_annual_accounts':
+        return user?.business_type === 'accounting_practice'
+          ? <SaccoAnnualAccountsPage />
+          : <Dashboard onNavigate={navigate} />;
       case 'practice_stock_take':
         return <PracticeStockTakePage readOnly={access.readOnly} />;
       case 'practice_housekeeping_audit':
