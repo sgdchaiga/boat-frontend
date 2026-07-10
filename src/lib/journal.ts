@@ -173,16 +173,18 @@ export async function getDefaultGlAccounts(): Promise<{
   const byCategory = (cat: string) =>
     list.find((a) => (a.category || "").toLowerCase().includes(cat))?.id ?? null;
   const byCode = (code: string) => list.find((a) => a.account_code === code)?.id ?? null;
+  const settingOfType = (id: string | null | undefined, accountType: string) =>
+    id && list.some((a) => a.id === id && a.account_type === accountType) ? id : null;
 
-  const revenue = settings.revenue_id ?? byCategory("revenue") ?? first(byType("income"));
-  const cash = settings.cash_id ?? byCategory("cash") ?? first(byType("asset"));
+  const revenue = settingOfType(settings.revenue_id, "income") ?? byCategory("revenue") ?? first(byType("income"));
+  const cash = settingOfType(settings.cash_id, "asset") ?? byCategory("cash") ?? first(byType("asset"));
   const assets = byType("asset");
   const receivable =
-    settings.receivable_id ??
+    settingOfType(settings.receivable_id, "asset") ??
     byCategory("receivable") ??
     list.find((a) => (a.account_name || "").toLowerCase().includes("receivable"))?.id ??
     first(assets);
-  const expense = settings.expense_id ?? byCategory("expense") ?? first(byType("expense"));
+  const expense = settingOfType(settings.expense_id, "expense") ?? byCategory("expense") ?? first(byType("expense"));
   const commissionExpense =
     settings.pos_agent_commission_expense_id ??
     list.find((a) => a.account_type === "expense" && /(commission|agent|broker)/i.test(a.account_name || ""))?.id ??
@@ -209,7 +211,7 @@ export async function getDefaultGlAccounts(): Promise<{
     null;
 
   const posBank =
-    settings.pos_bank_id ??
+    settingOfType(settings.pos_bank_id, "asset") ??
     byCode("1120") ??
     list.find(
       (a) =>
@@ -225,7 +227,7 @@ export async function getDefaultGlAccounts(): Promise<{
         /(mobile money|momo|mtn|airtel)/i.test(a.account_name || "")
     )?.id ?? null;
   const posMtnMobileMoney =
-    settings.pos_mtn_mobile_money_id ??
+    settingOfType(settings.pos_mtn_mobile_money_id, "asset") ??
     byCode("1130") ??
     list.find(
       (a) =>
@@ -235,7 +237,7 @@ export async function getDefaultGlAccounts(): Promise<{
     )?.id ??
     mobileFallback;
   const posAirtelMoney =
-    settings.pos_airtel_money_id ??
+    settingOfType(settings.pos_airtel_money_id, "asset") ??
     list.find((a) => a.account_type === "asset" && /airtel/i.test(a.account_name || ""))?.id ??
     mobileFallback;
 
@@ -303,6 +305,48 @@ export async function getDefaultGlAccounts(): Promise<{
   };
   cachedAccounts = { key: cacheKey, value };
   return value;
+}
+
+export async function resolveManufacturingCogsAccountId(organizationId?: string | null): Promise<string | null> {
+  const orgId = organizationId === undefined ? await resolveOrganizationId() : organizationId;
+  const settings = await resolveJournalAccountSettings(orgId ?? undefined);
+  const configured =
+    settings.pos_cogs_kitchen_id ||
+    settings.pos_cogs_bar_id ||
+    settings.pos_cogs_room_id ||
+    null;
+  if (configured) return configured;
+
+  let query = supabase
+    .from("gl_accounts")
+    .select("id,account_code,account_name,account_type,category,is_active,organization_id")
+    .order("account_code");
+  if (orgId) {
+    query = query.or(`organization_id.eq.${orgId},organization_id.is.null`);
+  }
+  const { data, error } = await query;
+  if (error) {
+    console.warn("[journal] manufacturing COGS account lookup:", error.message);
+    return null;
+  }
+
+  const rows = normalizeGlAccountRows((data || []) as unknown[]).filter(
+    (row) => row.is_active && row.account_type === "expense"
+  );
+  return (
+    rows.find((row) => row.account_code === "5130")?.id ??
+    rows.find((row) => {
+      const text = `${row.category || ""} ${row.account_name || ""} ${row.account_code || ""}`.toLowerCase();
+      return (
+        /\bcogs\b/.test(text) ||
+        text.includes("cost of goods") ||
+        text.includes("cost of sales") ||
+        text.includes("manufacturing cost of sales") ||
+        (text.includes("manufacturing") && text.includes("cost"))
+      );
+    })?.id ??
+    null
+  );
 }
 
 export function clearJournalAccountCache() {
@@ -611,6 +655,7 @@ export async function createJournalForStockAdjustment(
 
   const lines: JournalLine[] = [];
   const missingAccountMessages = new Set<string>();
+  let valuedMovementCount = 0;
   rows.forEach((movement) => {
     const { inQty, outQty } = effectiveStockMovementInOut(movement);
     const deltaQty = inQty - outQty;
@@ -618,6 +663,7 @@ export async function createJournalForStockAdjustment(
     const unitCost = Number(movement.unit_cost ?? movement.products?.cost_price ?? 0) || 0;
     const amount = roundMoney(Math.abs(deltaQty) * unitCost);
     if (amount <= 0) return;
+    valuedMovementCount += 1;
     const productName = movement.products?.name || "Stock item";
     const accountPair = resolveStockAdjustmentLineAccounts({
       reason: classifyStockAdjustmentReason(movement.note, deltaQty),
@@ -642,7 +688,10 @@ export async function createJournalForStockAdjustment(
   }
 
   if (lines.length === 0) {
-    return { ok: false, error: "Inventory movement has no value or mapped accounts to post. Add product costs and configure inventory movement GL accounts." };
+    if (valuedMovementCount === 0) {
+      return { ok: true, journalId: `skipped-zero-value-${sourceId}` };
+    }
+    return { ok: false, error: "Inventory movement has value but no mapped accounts to post. Configure inventory movement GL accounts." };
   }
   if (options?.replaceExisting) {
     const retired = await deleteJournalEntryByReference("stock_adjustment", sourceId, organizationId);
@@ -1817,6 +1866,12 @@ export type PosDepartmentAmountLine = {
   departmentName: string | null;
   amount: number;
 };
+export type PosDirectCogsLine = {
+  cogsGlAccountId: string;
+  inventoryGlAccountId: string;
+  amount: number;
+  label?: string;
+};
 
 /** Map department display name to Bar / Kitchen / Room for POS COGS routing. */
 export function mapDepartmentNameToPosBucket(deptName: string | null | undefined): PosDeptBucket {
@@ -1968,6 +2023,7 @@ export async function createJournalForPosOrder(
     transportExpenseGlAccountId?: string | null;
     cogsByDept?: PosCogsByDept;
     cogsByDepartment?: PosDepartmentAmountLine[];
+    cogsDirect?: PosDirectCogsLine[];
     /** Line totals by bar/kitchen/room; splits net revenue across department sales GLs (unless a single revenue override is set). */
     salesByDept?: PosCogsByDept;
     salesByDepartment?: PosDepartmentAmountLine[];
@@ -2139,10 +2195,29 @@ export async function createJournalForPosOrder(
   }
 
   const cogs = options?.cogsByDept;
+  const cogsDirect = (options?.cogsDirect || [])
+    .map((line) => ({ ...line, amount: roundMoney(line.amount) }))
+    .filter((line) => line.cogsGlAccountId && line.inventoryGlAccountId && line.amount > 0.001);
   const cogsByDepartment = (options?.cogsByDepartment || [])
     .map((line) => ({ ...line, amount: roundMoney(line.amount) }))
     .filter((line) => line.amount > 0.001);
-  if (cogsByDepartment.length > 0) {
+  if (cogsDirect.length > 0) {
+    for (const line of cogsDirect) {
+      const label = line.label?.trim() || "Finished goods";
+      lines.push({
+        gl_account_id: line.cogsGlAccountId,
+        debit: line.amount,
+        credit: 0,
+        line_description: `${label} COGS`,
+      });
+      lines.push({
+        gl_account_id: line.inventoryGlAccountId,
+        debit: 0,
+        credit: line.amount,
+        line_description: `${label} inventory`,
+      });
+    }
+  } else if (cogsByDepartment.length > 0) {
     for (const line of cogsByDepartment) {
       const deptGl = line.departmentId ? deptGlMap.get(line.departmentId) : null;
       const cogsId = deptGl?.purchases ?? null;

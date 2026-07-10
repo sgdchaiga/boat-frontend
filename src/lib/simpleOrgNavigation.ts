@@ -263,6 +263,8 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
             { name: "Production orders", page: "manufacturing_work_orders" },
             { name: "Production entries", page: "manufacturing_production_entries" },
             { name: "Costing", page: "manufacturing_costing" },
+            { name: "WIP report", page: "manufacturing_wip_report" },
+            { name: "Manufacturing account", page: "manufacturing_account" },
           ],
         } as NavItem]
       : []),

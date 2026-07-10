@@ -13,6 +13,7 @@ import {
   type RoomJournalRepairResult,
   type StockAdjustmentJournalRepairResult,
 } from "../../lib/journal";
+import { repairRetailPosOrderJournals } from "../../lib/retailPosOrderSync";
 import { ChevronLeft, ChevronRight, RefreshCw, Pencil, Trash2, Save, X, Plus, Star } from "lucide-react";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
@@ -118,6 +119,7 @@ export function JournalEntriesPage() {
   const superAdmin = !!user?.isSuperAdmin;
   const isHotelOrganization = user?.business_type === "hotel" || user?.business_type === "mixed";
   const isManufacturingOrganization = user?.business_type === "manufacturing";
+  const isPosRepairOrganization = isHotelOrganization || isManufacturingOrganization;
 
   const [entries, setEntries] = useState<JournalEntry[]>([]);
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
@@ -626,7 +628,8 @@ export function JournalEntriesPage() {
     setPosRepairResult(null);
     setPosRepairProgress({ processed: 0, total: 0 });
     try {
-      const result = await repairHotelPosOrderJournals({
+      const repairPosJournals = isManufacturingOrganization ? repairRetailPosOrderJournals : repairHotelPosOrderJournals;
+      const result = await repairPosJournals({
         organizationId: orgId,
         onProgress: (processed, total) => setPosRepairProgress({ processed, total }),
         journalOrOrder: posRepairJournal,
@@ -991,18 +994,20 @@ export function JournalEntriesPage() {
             <RefreshCw className={`w-4 h-4 ${backfilling ? "animate-spin" : ""}`} />
             {backfilling ? "Running…" : dryRunBackfill ? "Dry run organization backfill" : "Backfill organization journals"}
           </button>
-          {isHotelOrganization ? (
+          {isPosRepairOrganization ? (
             <>
               <button
                 type="button"
                 onClick={handleRepairPastPosJournals}
-                disabled={repairingPos || backfilling || repairingRooms}
+                disabled={repairingPos || backfilling || repairingRooms || repairingManufacturing}
                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100 disabled:opacity-50 disabled:cursor-not-allowed"
                 title="Rebuild POS journals for the logged-in organization and recalculate COGS"
               >
                 <RefreshCw className={`w-4 h-4 ${repairingPos ? "animate-spin" : ""}`} />
                 {repairingPos ? "Recalculating POS COGS..." : "Repair organization POS journals"}
               </button>
+              {isHotelOrganization ? (
+                <>
               <button
                 type="button"
                 onClick={handleRepairRoomChargeJournals}
@@ -1022,6 +1027,8 @@ export function JournalEntriesPage() {
               >
                 {reconcilingInventory ? "Reconciling inventory..." : "Reconcile organization inventory ledgers"}
               </button>
+                </>
+              ) : null}
             </>
           ) : null}
           {isManufacturingOrganization ? (
@@ -1052,7 +1059,7 @@ export function JournalEntriesPage() {
         </div>
       </div>
 
-      {isHotelOrganization ? <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+      {isPosRepairOrganization ? <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
         <p className="mb-2 text-sm font-medium text-amber-950">POS journal repair scope</p>
         <div className="flex flex-wrap gap-2">
           <input

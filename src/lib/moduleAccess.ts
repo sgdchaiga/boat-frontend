@@ -482,7 +482,11 @@ const HOTEL_EXCLUSIVE_PAGE_IDS = new Set([
 
 /** Rooms & stay ops only (kitchen / bar POS still allowed). */
 /** Manufacturing-only analytics / compliance routes */
-const MANUFACTURING_ONLY_PAGE_IDS = new Set(["reports_manufacturing_daily_production"]);
+const MANUFACTURING_ONLY_PAGE_IDS = new Set([
+  "reports_manufacturing_daily_production",
+  "manufacturing_wip_report",
+  "manufacturing_account",
+]);
 
 const HOTEL_LODGING_ONLY_PAGE_IDS = new Set([
   "rooms",
@@ -615,6 +619,8 @@ export function pageToModuleId(page: string): ModuleId | null {
     "manufacturing_work_orders",
     "manufacturing_production_entries",
     "manufacturing_costing",
+    "manufacturing_wip_report",
+    "manufacturing_account",
     "manufacturing_cost_allocation",
     "manufacturing_price_lists",
   ].includes(page)) return "manufacturing";
@@ -648,6 +654,8 @@ export function pageToModuleId(page: string): ModuleId | null {
     "hotel_pos_reports",
     "reports_retail_shift_variance",
     "reports_manufacturing_daily_production",
+    "manufacturing_wip_report",
+    "manufacturing_account",
   ].includes(page)) return "reports";
   if ([
     "gl_accounts",

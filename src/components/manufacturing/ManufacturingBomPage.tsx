@@ -45,6 +45,7 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [recosting, setRecosting] = useState(false);
   const [editingBomId, setEditingBomId] = useState<string | null>(null);
   const [editingBomStatus, setEditingBomStatus] = useState<Bom["status"]>("Draft");
   const [error, setError] = useState<string | null>(null);
@@ -142,6 +143,25 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
     setVersion("v1");
   };
 
+  const recostProductionForProduct = async (targetProductId: string) => {
+    if (!targetProductId) return 0;
+    setRecosting(true);
+    try {
+      let query = supabase
+        .from("manufacturing_production_entries")
+        .update({ product_id: targetProductId })
+        .eq("product_id", targetProductId);
+
+      if (orgId && !superAdmin) query = query.eq("organization_id", orgId);
+
+      const { data, error: recostError } = await query.select("id");
+      if (recostError) throw recostError;
+      return (data || []).length;
+    } finally {
+      setRecosting(false);
+    }
+  };
+
   // 🔹 Save BOM
   const handleSave = async () => {
     if (readOnly) return;
@@ -168,10 +188,16 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
 
       if (orgId) payload.organization_id = orgId;
 
-      const { error } = editingBomId
+      const wasEditing = !!editingBomId;
+      const { error } = wasEditing
         ? await supabase.from("manufacturing_boms").update(payload).eq("id", editingBomId)
         : await supabase.from("manufacturing_boms").insert(payload);
       if (error) throw error;
+
+      if (wasEditing && confirm("Recalculate existing production material costing for this product using the updated BOM?")) {
+        const recosted = await recostProductionForProduct(productId);
+        alert(`Recalculated ${recosted} production entr${recosted === 1 ? "y" : "ies"}.`);
+      }
 
       // reset
       cancelEdit();
@@ -297,10 +323,10 @@ export function ManufacturingBomPage({ readOnly = false }: { readOnly?: boolean 
         <div>
           <button
             onClick={handleSave}
-            disabled={saving}
+            disabled={saving || recosting}
             className="bg-blue-600 text-white px-4 py-2 rounded"
           >
-            {saving ? "Saving..." : editingBomId ? "Update BOM" : "Save BOM"}
+            {recosting ? "Recosting..." : saving ? "Saving..." : editingBomId ? "Update BOM" : "Save BOM"}
           </button>
         </div>
       </div>

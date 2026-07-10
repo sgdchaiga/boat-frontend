@@ -122,6 +122,7 @@ const ManufacturingBomPage = lazyNamed(() => import('./components/manufacturing/
 const ManufacturingWorkOrdersPage = lazyNamed(() => import('./components/manufacturing/ManufacturingWorkOrdersPage'), 'ManufacturingWorkOrdersPage');
 const ManufacturingProductionEntriesPage = lazyNamed(() => import('./components/manufacturing/ManufacturingProductionEntriesPage'), 'ManufacturingProductionEntriesPage');
 const ManufacturingCostingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingCostingPage'), 'ManufacturingCostingPage');
+const ManufacturingAccountingReportsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingAccountingReportsPage'), 'ManufacturingAccountingReportsPage');
 const CostAllocationPage = lazyNamed(() => import('./components/accounting/CostAllocationPage'), 'CostAllocationPage');
 const ManufacturingPriceListsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingPriceListsPage'), 'ManufacturingPriceListsPage');
 const PlatformOverviewPage = lazyNamed(() => import('./components/platform/PlatformOverviewPage'), 'PlatformOverviewPage');
@@ -1403,6 +1404,10 @@ function AppContent() {
         return <ManufacturingProductionEntriesPage readOnly={access.readOnly} />;
       case 'manufacturing_costing':
         return <ManufacturingCostingPage readOnly={access.readOnly} />;
+      case 'manufacturing_wip_report':
+        return <ManufacturingAccountingReportsPage mode="wip" />;
+      case 'manufacturing_account':
+        return <ManufacturingAccountingReportsPage mode="manufacturing_account" />;
       case 'accounting_cost_allocation':
       case 'manufacturing_cost_allocation':
         return <CostAllocationPage readOnly={access.readOnly} />;

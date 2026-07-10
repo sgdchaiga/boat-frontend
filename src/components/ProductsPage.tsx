@@ -30,12 +30,27 @@ type GlAccountOption = {
 };
 
 type ItemKind = "product" | "service";
-type ManufacturingItemType = "" | "raw_material" | "finished_product" | "consumable" | "other";
+type ManufacturingItemType =
+  | ""
+  | "raw_material"
+  | "packaging_material"
+  | "consumable"
+  | "semi_finished_goods"
+  | "finished_product"
+  | "service"
+  | "fixed_asset"
+  | "non_stock_item"
+  | "other";
 
 const MANUFACTURING_ITEM_TYPE_LABELS: Record<Exclude<ManufacturingItemType, "">, string> = {
   raw_material: "Raw material",
-  finished_product: "Finished product",
+  packaging_material: "Packaging material",
   consumable: "Consumable",
+  semi_finished_goods: "Semi-finished goods",
+  finished_product: "Finished goods",
+  service: "Service",
+  fixed_asset: "Fixed asset",
+  non_stock_item: "Non-stock item",
   other: "Other",
 };
 

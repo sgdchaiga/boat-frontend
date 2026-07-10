@@ -58,7 +58,30 @@ type TotalsSnapshot = {
 };
 
 const CASH_BASIS_REFERENCE_TYPES = ["payment", "vendor_payment", "expense", "school_payment"] as const;
-const MANUFACTURING_COSTING_ROW_PREFIX = "manufacturing-costing:";
+const CROSS_INDUSTRY_REVENUE_CODES_BY_MODE: Record<IncomeStatementMode, Set<string>> = {
+  manufacturing: new Set(["4110", "4120", "4130", "4140", "4150"]),
+  school: new Set(["4110", "4120", "4140", "4150", "4160", "4161", "4162"]),
+  sacco: new Set(["4110", "4120", "4130", "4150", "4160", "4161", "4162"]),
+  retail: new Set([]),
+};
+
+function shouldIncludeZeroBalanceAccountForStatement(
+  account: { account_code?: string | null; account_name?: string | null },
+  mode: IncomeStatementMode,
+  businessType: BusinessType | null | undefined
+): boolean {
+  const code = String(account.account_code || "").trim();
+  const name = String(account.account_name || "").toLowerCase();
+  const crossIndustryCodes = CROSS_INDUSTRY_REVENUE_CODES_BY_MODE[mode];
+  if (crossIndustryCodes.has(code)) return false;
+  if (mode === "retail") {
+    if (businessType === "hotel" || businessType === "mixed") return !/school fees|clinic service|interest & fee|product sales|manufacturing service|scrap sales/.test(name);
+    if (businessType === "clinic") return !/rooms revenue|food & beverage|school fees|interest & fee|product sales|manufacturing service|scrap sales/.test(name);
+    if (businessType === "restaurant") return !/rooms revenue|school fees|interest & fee|clinic service|product sales|manufacturing service|scrap sales/.test(name);
+    return !/rooms revenue|food & beverage|school fees|interest & fee|clinic service|manufacturing service|scrap sales/.test(name);
+  }
+  return true;
+}
 
 export function IncomeStatementPage() {
   const { user } = useAuth();
@@ -328,7 +351,7 @@ export function IncomeStatementPage() {
       const scopedLinesQuery = superAdmin ? filterJournalLinesByOrganizationId(linesQuery, orgId, true) : linesQuery;
       const [linesRes, accRes] = await Promise.all([
         scopedLinesQuery,
-        supabase.from("gl_accounts").select("*").order("account_code"),
+        filterByOrganizationId(supabase.from("gl_accounts").select("*").order("account_code"), orgId, superAdmin),
       ]);
 
       if (linesRes.error) throw new Error(linesRes.error.message);
@@ -448,9 +471,11 @@ export function IncomeStatementPage() {
         if (classified === "income") byAccount[acc.id] += (Number(l.credit) || 0) - (Number(l.debit) || 0);
         else byAccount[acc.id] += (Number(l.debit) || 0) - (Number(l.credit) || 0);
       });
-      accounts.forEach((acc) => {
-        if (!(acc.id in byAccount)) byAccount[acc.id] = 0;
-      });
+      accounts
+        .filter((acc) => shouldIncludeZeroBalanceAccountForStatement(acc, mode, businessType))
+        .forEach((acc) => {
+          if (!(acc.id in byAccount)) byAccount[acc.id] = 0;
+        });
 
       const rev: AccountTotal[] = [];
       const exp: AccountTotal[] = [];
@@ -515,48 +540,6 @@ export function IncomeStatementPage() {
         operationalRevenueDetails = operationalRevenue.details;
       }
 
-      const manufacturingCostingRows: AccountTotal[] = [];
-      if (mode === "manufacturing" && basis === "accrual") {
-        const fromPeriod = fromDate.slice(0, 7);
-        const toPeriod = toDateInclusive.slice(0, 7);
-        const costingRes = await filterByOrganizationId(
-          supabase
-            .from("manufacturing_costing_entries")
-            .select("material_cost,labor_cost,overhead_cost")
-            .gte("period", fromPeriod)
-            .lte("period", toPeriod),
-          orgId,
-          superAdmin
-        );
-        if (costingRes.error) throw new Error(costingRes.error.message);
-        const costingTotals = ((costingRes.data || []) as Array<{
-          material_cost: number | null;
-          labor_cost: number | null;
-          overhead_cost: number | null;
-        }>).reduce(
-          (sum, row) => ({
-            material: sum.material + Number(row.material_cost || 0),
-            labor: sum.labor + Number(row.labor_cost || 0),
-            overhead: sum.overhead + Number(row.overhead_cost || 0),
-          }),
-          { material: 0, labor: 0, overhead: 0 }
-        );
-        [
-          ["materials", "MFG-COST-MAT", "Manufacturing costing - materials", costingTotals.material],
-          ["labor", "MFG-COST-LAB", "Manufacturing costing - direct labor", costingTotals.labor],
-          ["overhead", "MFG-COST-OH", "Manufacturing costing - factory overhead", costingTotals.overhead],
-        ].filter(([, , , total]) => Math.abs(Number(total) || 0) > 0.0001).forEach(([key, code, name, total]) => {
-          manufacturingCostingRows.push({
-            account_id: `${MANUFACTURING_COSTING_ROW_PREFIX}${key}`,
-            account_code: String(code),
-            account_name: String(name),
-            total: Number(total) || 0,
-            category: "manufacturing_costing_entries",
-            account_type: "expense",
-          });
-        });
-      }
-
       let cogsRows: AccountTotal[] = [];
       let opexRows: AccountTotal[] = [];
       let saccoResult: SaccoStatementNumbers | null = null;
@@ -579,9 +562,6 @@ export function IncomeStatementPage() {
         for (const row of exp) {
           if (classifier(row) === "cogs") cogsRows.push(row);
           else opexRows.push(row);
-        }
-        if (mode === "manufacturing") {
-          cogsRows.push(...manufacturingCostingRows);
         }
         totalCogs = cogsRows.reduce((s, r) => s + r.total, 0);
         totalOpex = opexRows.reduce((s, r) => s + r.total, 0);
@@ -1038,8 +1018,8 @@ export function IncomeStatementPage() {
               </p>
             ) : statementMode === "manufacturing" ? (
               <p>
-                <strong>Manufacturing:</strong> Same layout as retail (revenue, cost of goods sold, operating expenses). Direct production and factory
-                costs are grouped under <strong>Cost of goods sold</strong> when account names/categories match manufacturing keywords.
+                <strong>Manufacturing:</strong> Revenue is matched against sale-time <strong>Cost of goods sold</strong> journals. Production costing
+                capitalizes materials, labour, and overhead into WIP / finished goods first; those costs become COGS only when finished goods are sold.
               </p>
             ) : (
               <p>
@@ -1513,17 +1493,13 @@ export function IncomeStatementPage() {
                     <tr key={r.account_code} className="border-t">
                       <td className="p-3 font-mono">{r.account_code}</td>
                       <td className="p-3">
-                        {r.account_id.startsWith(MANUFACTURING_COSTING_ROW_PREFIX) ? (
-                          <span>{r.account_name}</span>
-                        ) : (
-                          <button
-                            type="button"
-                            onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "expense" })}
-                            className="text-left text-blue-700 hover:underline"
-                          >
-                            {r.account_name}
-                          </button>
-                        )}
+                        <button
+                          type="button"
+                          onClick={() => openDrilldown({ id: r.account_id, code: r.account_code, name: r.account_name, type: "expense" })}
+                          className="text-left text-blue-700 hover:underline"
+                        >
+                          {r.account_name}
+                        </button>
                       </td>
                       <td className="p-3 text-right text-slate-600">
                         {totalRevenue !== 0 ? `${((r.total / totalRevenue) * 100).toFixed(1)}%` : "0.0%"}

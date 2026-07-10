@@ -69,11 +69,12 @@ const TEMPLATES: Template[] = [
   {
     code: "manufacturing",
     label: "Manufacturing",
-    description: "Raw materials, WIP, finished goods, production batches, costing, and overheads.",
-    defaults: ["Production", "Store / Warehouse", "Quality Control", "Administration", "Sales"],
+    description: "Raw materials, WIP, finished goods, production batches, cost centres, COGS, and overhead allocation.",
+    defaults: ["Production", "Warehouse", "Quality Control", "Maintenance", "Sales", "Administration"],
     questions: [
       { key: "main_products", label: "Main products manufactured", placeholder: "Furniture, food products, garments..." },
-      { key: "costing_method", label: "Preferred costing method", placeholder: "Weighted average", type: "select", options: ["Weighted average", "FIFO", "Standard costing"] },
+      { key: "costing_method", label: "Inventory valuation method", placeholder: "Weighted average", type: "select", options: ["Weighted average", "FIFO", "Standard costing"] },
+      { key: "overhead_driver", label: "Default overhead allocation driver", placeholder: "Machine hours", type: "select", options: ["Machine hours", "Labour hours", "Direct labour cost", "Material cost", "Units produced", "Fixed percentage"] },
       { key: "uses_batches", label: "Track production batches?", placeholder: "Yes", type: "select", options: ["Yes", "No"] },
     ],
   },

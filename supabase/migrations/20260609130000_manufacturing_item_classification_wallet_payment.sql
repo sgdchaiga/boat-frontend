@@ -9,7 +9,17 @@ ALTER TABLE public.products
   ADD CONSTRAINT products_manufacturing_item_type_check
   CHECK (
     manufacturing_item_type IS NULL OR
-    manufacturing_item_type IN ('raw_material', 'finished_product', 'consumable', 'other')
+    manufacturing_item_type IN (
+      'raw_material',
+      'packaging_material',
+      'consumable',
+      'semi_finished_goods',
+      'finished_product',
+      'service',
+      'fixed_asset',
+      'non_stock_item',
+      'other'
+    )
   );
 
 ALTER TABLE public.payments

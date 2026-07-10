@@ -1,5 +1,11 @@
 import { supabase } from "../../../lib/supabase";
-import { sumPosCogsByDept, createJournalForPosOrder, getDefaultGlAccounts } from "../../../lib/journal";
+import {
+  sumPosCogsByDept,
+  createJournalForPosOrder,
+  getDefaultGlAccounts,
+  resolveManufacturingCogsAccountId,
+  type PosDirectCogsLine,
+} from "../../../lib/journal";
 import { resolveJournalAccountSettings } from "../../../lib/journalAccountSettings";
 import { insertPaymentWithMethodCompat } from "../../../lib/paymentMethod";
 import type { OfflineRetailLine, OfflineRetailPayment } from "../../../lib/retailOfflineQueue";
@@ -59,6 +65,81 @@ interface ProcessSaleOnlineArgs {
   clinicPos?: boolean;
   saleAt: string;
   agentCommission?: PosAgentCommissionContext | null;
+}
+
+async function fetchWeightedStockUnitCosts(
+  organizationId: string | undefined,
+  lines: OfflineRetailLine[],
+  saleAt: string
+): Promise<Map<string, number>> {
+  const productIds = Array.from(new Set(lines.filter((line) => line.trackInventory).map((line) => line.productId).filter(Boolean)));
+  if (!organizationId || productIds.length === 0) return new Map();
+
+  const { data, error } = await supabase
+    .from("product_stock_movements")
+    .select("product_id,quantity_in,unit_cost")
+    .in("product_id", productIds)
+    .gt("quantity_in", 0)
+    .not("unit_cost", "is", null)
+    .lte("movement_date", saleAt)
+    .or(`organization_id.eq.${organizationId},organization_id.is.null`);
+
+  if (error) {
+    console.warn("[retail POS] weighted stock unit costs:", error.message);
+    return new Map();
+  }
+
+  const totals = new Map<string, { qty: number; value: number }>();
+  ((data || []) as Array<{ product_id: string | null; quantity_in: number | null; unit_cost: number | null }>).forEach((movement) => {
+    const productId = movement.product_id;
+    const qty = Number(movement.quantity_in || 0);
+    const unitCost = Number(movement.unit_cost || 0);
+    if (!productId || qty <= 0 || unitCost <= 0) return;
+    const prev = totals.get(productId) || { qty: 0, value: 0 };
+    totals.set(productId, { qty: prev.qty + qty, value: prev.value + qty * unitCost });
+  });
+
+  return new Map(
+    Array.from(totals.entries())
+      .filter(([, total]) => total.qty > 0 && total.value > 0)
+      .map(([productId, total]) => [productId, Math.round((total.value / total.qty) * 10000) / 10000])
+  );
+}
+
+async function fetchManufacturingProductTypes(
+  organizationId: string | undefined,
+  productIds: string[]
+): Promise<Map<string, string | null>> {
+  if (!organizationId || productIds.length === 0) return new Map();
+  const { data, error } = await supabase
+    .from("products")
+    .select("id,manufacturing_item_type")
+    .eq("organization_id", organizationId)
+    .in("id", productIds);
+  if (error) {
+    console.warn("[retail POS] manufacturing product types:", error.message);
+    return new Map();
+  }
+  return new Map(((data || []) as Array<{ id: string; manufacturing_item_type: string | null }>).map((product) => [product.id, product.manufacturing_item_type]));
+}
+
+async function fetchManufacturingReceiptProductIds(
+  organizationId: string | undefined,
+  productIds: string[]
+): Promise<Set<string>> {
+  if (!organizationId || productIds.length === 0) return new Set();
+  const { data, error } = await supabase
+    .from("product_stock_movements")
+    .select("product_id")
+    .eq("source_type", "manufacturing_production")
+    .in("product_id", productIds)
+    .gt("quantity_in", 0)
+    .or(`organization_id.eq.${organizationId},organization_id.is.null`);
+  if (error) {
+    console.warn("[retail POS] manufacturing receipt product lookup:", error.message);
+    return new Set();
+  }
+  return new Set(((data || []) as Array<{ product_id: string | null }>).map((row) => row.product_id).filter((id): id is string => !!id));
 }
 
 export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
@@ -160,6 +241,20 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     }
   }
   const deptNameById = new Map(departments.map((d) => [d.id, d.name]));
+  const productIds = Array.from(new Set(lines.map((line) => line.productId).filter(Boolean)));
+  const stockUnitCostByProduct = await fetchWeightedStockUnitCosts(organizationId, lines, saleAt);
+  const [manufacturingTypeByProduct, manufacturingReceiptProductIds] = await Promise.all([
+    fetchManufacturingProductTypes(organizationId, productIds),
+    fetchManufacturingReceiptProductIds(organizationId, productIds),
+  ]);
+  const unitCostForLine = (line: OfflineRetailLine) => {
+    const resolved = stockUnitCostByProduct.get(line.productId);
+    return Number.isFinite(Number(resolved)) && Number(resolved) > 0 ? Number(resolved) : Number(line.costPrice ?? 0);
+  };
+  const isManufacturedLine = (line: OfflineRetailLine) => {
+    const type = manufacturingTypeByProduct.get(line.productId);
+    return type === "finished_product" || type === "semi_finished_goods" || manufacturingReceiptProductIds.has(line.productId);
+  };
   const consumableCogs =
     organizationId && lines.some((l) => !(l.trackInventory ?? true) && l.productId)
       ? await fetchServiceConsumableCogsLines(
@@ -174,10 +269,10 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
   const cogsByDept = sumPosCogsByDept(
     [
       ...lines
-        .filter((i) => i.trackInventory ?? true)
+        .filter((i) => (i.trackInventory ?? true) && !isManufacturedLine(i))
         .map((i) => ({
           quantity: i.quantity,
-          unitCost: Number(i.costPrice ?? 0),
+          unitCost: unitCostForLine(i),
           departmentId: i.departmentId ?? null,
         })),
       ...consumableCogs,
@@ -185,6 +280,29 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     deptNameById
   );
   const acc = await getDefaultGlAccounts();
+  const manufacturingSettings = await resolveJournalAccountSettings(organizationId ?? undefined);
+  const manufacturingCogsGlAccountId = await resolveManufacturingCogsAccountId(organizationId ?? null);
+  const manufacturingCogsAmount = Math.round(
+    lines
+      .filter((line) => (line.trackInventory ?? true) && isManufacturedLine(line))
+      .reduce((sum, line) => sum + Number(line.quantity || 0) * unitCostForLine(line), 0) * 100
+  ) / 100;
+  const manufacturingCogsDirect: PosDirectCogsLine[] =
+    manufacturingCogsAmount > 0 &&
+    manufacturingSettings.manufacturing_finished_goods_id &&
+    manufacturingCogsGlAccountId
+      ? [{
+          cogsGlAccountId: manufacturingCogsGlAccountId,
+          inventoryGlAccountId: manufacturingSettings.manufacturing_finished_goods_id,
+          amount: manufacturingCogsAmount,
+          label: "Manufactured goods",
+        }]
+      : [];
+  if (manufacturingCogsAmount > 0 && (!manufacturingSettings.manufacturing_finished_goods_id || !manufacturingCogsGlAccountId)) {
+    throw new Error(
+      "Manufacturing COGS cannot be posted. Configure Manufacturing finished goods inventory and Manufacturing COGS accounts in Admin > Journal account settings."
+    );
+  }
   const receiptGlForTender = (tender: OfflineRetailPayment) =>
     tender.glAccountId ||
     (tender.method === "cash"
@@ -272,6 +390,16 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         { gl_account_id: acc.posInvRoom, debit: 0, credit: Number(cogsByDept.room), line_description: "Room stock" }
       );
     }
+    if (manufacturingCogsAmount > 0) {
+      const mfgCogsGl = manufacturingCogsDirect[0]?.cogsGlAccountId ?? null;
+      const mfgInventoryGl = manufacturingSettings.manufacturing_finished_goods_id;
+      if (mfgCogsGl && mfgInventoryGl) {
+        journalLines.push(
+          { gl_account_id: mfgCogsGl, debit: manufacturingCogsAmount, credit: 0, line_description: "Manufactured goods COGS" },
+          { gl_account_id: mfgInventoryGl, debit: 0, credit: manufacturingCogsAmount, line_description: "Finished goods inventory" }
+        );
+      }
+    }
   }
   const linePayload = lines.map((line, idx) => ({
     line_no: idx + 1,
@@ -280,7 +408,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
     quantity: line.quantity,
     unit_price: line.unitPrice,
     line_total: line.lineTotal,
-    unit_cost: line.costPrice,
+    unit_cost: unitCostForLine(line),
     department_id: line.departmentId,
     track_inventory: line.trackInventory,
   }));
@@ -444,9 +572,9 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
         source_id: saleId,
         quantity_in: 0,
         quantity_out: i.quantity,
-        unit_cost: i.costPrice,
-      note: "Retail POS sale",
-      movement_date: saleAt,
+        unit_cost: unitCostForLine(i),
+        note: "Retail POS sale",
+        movement_date: saleAt,
       })),
     ...consumableMoves,
   ];
@@ -473,6 +601,7 @@ export async function processSaleOnline(args: ProcessSaleOnlineArgs) {
       description: line.description,
     })),
     cogsByDept,
+    cogsDirect: manufacturingCogsDirect,
     vatRatePercent: useVatJournal ? vatRate : undefined,
     organizationId: organizationId ?? null,
   });

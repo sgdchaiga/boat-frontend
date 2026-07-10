@@ -149,7 +149,7 @@ BEGIN
         WHEN v_business_type IN ('hotel', 'mixed') THEN '["Rooms", "Restaurant", "Bar", "Housekeeping", "Administration"]'::jsonb
         WHEN v_business_type = 'restaurant' THEN '["Kitchen", "Bar", "Restaurant Floor", "Stores", "Administration"]'::jsonb
         WHEN v_business_type = 'retail' THEN '["Sales Floor", "Stores", "Purchasing", "Administration"]'::jsonb
-        WHEN v_business_type = 'manufacturing' THEN '["Production", "Stores", "Quality Control", "Maintenance", "Administration"]'::jsonb
+        WHEN v_business_type = 'manufacturing' THEN '["Production", "Warehouse", "Quality Control", "Maintenance", "Sales", "Administration"]'::jsonb
         WHEN v_business_type IN ('sacco', 'vsla') THEN '["Member Services", "Credit", "Cash Office", "Administration"]'::jsonb
         WHEN v_business_type = 'school' THEN '["Academics", "Boarding", "Bursar", "Stores", "Administration"]'::jsonb
         WHEN v_business_type = 'clinic' THEN '["Consultation", "Pharmacy", "Laboratory", "Reception", "Administration"]'::jsonb
@@ -157,7 +157,7 @@ BEGIN
         ELSE '["Operations", "Sales", "Stores", "Administration"]'::jsonb
       END,
       'catalogue', CASE
-        WHEN v_business_type = 'manufacturing' THEN '["Raw Material", "Packaging Material", "Finished Product", "Scrap Metal"]'::jsonb
+        WHEN v_business_type = 'manufacturing' THEN '["Raw Material", "Packaging Material", "Consumable", "Semi-Finished Goods", "Finished Goods", "Service", "Fixed Asset", "Non-stock Item"]'::jsonb
         WHEN v_business_type IN ('sacco', 'vsla') THEN '["Ordinary Savings", "Shares", "Development Loan", "Emergency Loan"]'::jsonb
         WHEN v_business_type = 'school' THEN '["Primary Classes", "Core Subjects", "Tuition Fees"]'::jsonb
         ELSE '["Starter products and services"]'::jsonb
@@ -193,9 +193,10 @@ BEGIN
         ('retail', 'Purchasing', 'product_catalog'),
         ('retail', 'Administration', 'product_catalog'),
         ('manufacturing', 'Production', 'product_catalog'),
-        ('manufacturing', 'Stores', 'product_catalog'),
+        ('manufacturing', 'Warehouse', 'product_catalog'),
         ('manufacturing', 'Quality Control', 'product_catalog'),
         ('manufacturing', 'Maintenance', 'product_catalog'),
+        ('manufacturing', 'Sales', 'product_catalog'),
         ('manufacturing', 'Administration', 'product_catalog'),
         ('sacco', 'Member Services', 'product_catalog'),
         ('sacco', 'Credit', 'product_catalog'),
@@ -272,9 +273,14 @@ BEGIN
         ('agriculture', 'Farm Inputs', 'unit', 0::numeric, 0::numeric, true, false, true, NULL),
         ('agriculture', 'Harvested Produce', 'kg', 0::numeric, 0::numeric, false, true, true, NULL),
         ('manufacturing', 'Raw Material', 'kg', 0::numeric, 0::numeric, true, false, true, 'raw_material'),
-        ('manufacturing', 'Packaging Material', 'unit', 0::numeric, 0::numeric, true, false, true, 'consumable'),
-        ('manufacturing', 'Finished Product', 'unit', 0::numeric, 0::numeric, false, true, true, 'finished_product'),
-        ('manufacturing', 'Scrap Metal', 'kg', 0::numeric, 0::numeric, false, true, true, 'other')
+        ('manufacturing', 'Packaging Material', 'unit', 0::numeric, 0::numeric, true, false, true, 'packaging_material'),
+        ('manufacturing', 'Consumable', 'unit', 0::numeric, 0::numeric, true, false, true, 'consumable'),
+        ('manufacturing', 'Semi-Finished Goods', 'unit', 0::numeric, 0::numeric, false, false, true, 'semi_finished_goods'),
+        ('manufacturing', 'Finished Goods', 'unit', 0::numeric, 0::numeric, false, true, true, 'finished_product'),
+        ('manufacturing', 'Manufacturing Service', 'service', 0::numeric, 0::numeric, false, true, false, 'service'),
+        ('manufacturing', 'Factory Fixed Asset', 'unit', 0::numeric, 0::numeric, true, false, false, 'fixed_asset'),
+        ('manufacturing', 'Non-stock Item', 'unit', 0::numeric, 0::numeric, true, false, false, 'non_stock_item'),
+        ('manufacturing', 'Scrap Material', 'kg', 0::numeric, 0::numeric, false, true, true, 'other')
     ) AS p(business_type, name, unit_of_measure, cost_price, sales_price, purchasable, saleable, track_inventory, manufacturing_item_type)
     WHERE p.business_type = v_business_type
       AND NOT EXISTS (

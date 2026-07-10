@@ -1,3 +1,44 @@
+ALTER TABLE public.journal_gl_settings
+  ADD COLUMN IF NOT EXISTS vat_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS default_vat_percent numeric,
+  ADD COLUMN IF NOT EXISTS purchases_inventory_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_bank_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_mtn_mobile_money_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_airtel_money_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_cogs_bar_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_inventory_bar_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_cogs_kitchen_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_inventory_kitchen_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_cogs_room_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_inventory_room_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_revenue_bar_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_revenue_kitchen_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_revenue_room_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS fixed_asset_cost_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS accumulated_depreciation_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS depreciation_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS retained_earnings_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS wallet_liability_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS wallet_clearing_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_finished_goods_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_wip_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_raw_materials_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_wages_payable_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_overhead_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_consumables_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS manufacturing_scrap_inventory_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_agent_commission_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS pos_transport_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_inventory_variance_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_inventory_variance_gain_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_damaged_goods_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_inventory_shrinkage_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_expired_stock_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_internal_consumption_expense_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_work_in_progress_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_raw_materials_inventory_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS stock_adjustment_finished_goods_inventory_gl_account_id uuid REFERENCES public.gl_accounts(id) ON DELETE SET NULL;
+
 CREATE OR REPLACE FUNCTION public.ensure_organization_standard_setup(
   p_organization_id uuid,
   p_business_type text DEFAULT NULL
@@ -16,7 +57,7 @@ DECLARE
   parent_uuid uuid;
   acc jsonb := '{}'::jsonb;
   centre_ids jsonb := '{}'::jsonb;
-  rule_id uuid;
+  new_rule_id uuid;
   current_period text := to_char(current_date, 'YYYY-MM');
 BEGIN
   IF p_organization_id IS NULL THEN
@@ -46,11 +87,16 @@ BEGIN
         ('1170', 'Work in Progress', 'asset', 'inventory', '1100'),
         ('1171', 'Raw Materials Inventory', 'asset', 'inventory', '1100'),
         ('1172', 'Finished Goods Inventory', 'asset', 'inventory', '1100'),
+        ('1173', 'Packaging Materials Inventory', 'asset', 'inventory', '1100'),
+        ('1174', 'Consumables Inventory', 'asset', 'inventory', '1100'),
+        ('1175', 'Spare Parts Inventory', 'asset', 'inventory', '1100'),
+        ('1176', 'Semi-Finished Goods Inventory', 'asset', 'inventory', '1100'),
         ('1200', 'Non-Current Assets', 'asset', 'other', '1000'),
         ('1210', 'Furniture & Fittings', 'asset', 'other', '1200'),
         ('1220', 'Plant & Equipment', 'asset', 'other', '1200'),
         ('1230', 'Motor Vehicles', 'asset', 'other', '1200'),
         ('1240', 'Accumulated Depreciation', 'asset', 'other', '1200'),
+        ('1250', 'Factory Buildings', 'asset', 'other', '1200'),
         ('2000', 'Liabilities', 'liability', 'other', NULL::text),
         ('2100', 'Current Liabilities', 'liability', 'other', '2000'),
         ('2110', 'Accounts Payable', 'liability', 'payable', '2100'),
@@ -70,6 +116,9 @@ BEGIN
         ('4130', 'School Fees Revenue', 'income', 'revenue', '4000'),
         ('4140', 'Interest & Fee Income', 'income', 'revenue', '4000'),
         ('4150', 'Clinic Service Revenue', 'income', 'revenue', '4000'),
+        ('4160', 'Product Sales', 'income', 'revenue', '4000'),
+        ('4161', 'Manufacturing Service Income', 'income', 'revenue', '4000'),
+        ('4162', 'Scrap Sales', 'income', 'revenue', '4000'),
         ('4200', 'Other Income', 'income', 'other', '4000'),
         ('4210', 'Inventory Variance Gain', 'income', 'other', '4000'),
         ('5000', 'Cost of Sales', 'expense', 'cogs', NULL::text),
@@ -77,6 +126,12 @@ BEGIN
         ('5110', 'Food Cost of Sales', 'expense', 'cogs', '5000'),
         ('5120', 'Beverage Cost of Sales', 'expense', 'cogs', '5000'),
         ('5130', 'Manufacturing Cost of Sales', 'expense', 'cogs', '5000'),
+        ('5131', 'COGS - Raw Material Cost', 'expense', 'cogs', '5130'),
+        ('5132', 'COGS - Direct Labour', 'expense', 'cogs', '5130'),
+        ('5133', 'COGS - Manufacturing Overhead', 'expense', 'cogs', '5130'),
+        ('5134', 'COGS - Packaging Cost', 'expense', 'cogs', '5130'),
+        ('5135', 'COGS - Freight In', 'expense', 'cogs', '5130'),
+        ('5136', 'COGS - Production Variances', 'expense', 'cogs', '5130'),
         ('6000', 'Operating Expenses', 'expense', 'other', NULL::text),
         ('6100', 'Salaries & Wages', 'expense', 'expense', '6000'),
         ('6200', 'Rent Expense', 'expense', 'expense', '6000'),
@@ -86,6 +141,16 @@ BEGIN
         ('6600', 'Advertising & Promotion', 'expense', 'expense', '6000'),
         ('6700', 'Depreciation Expense', 'expense', 'expense', '6000'),
         ('6800', 'Factory Overhead Applied', 'expense', 'expense', '6000'),
+        ('6810', 'Factory Electricity', 'expense', 'expense', '6000'),
+        ('6811', 'Factory Water', 'expense', 'expense', '6000'),
+        ('6812', 'Factory Rent', 'expense', 'expense', '6000'),
+        ('6813', 'Factory Security', 'expense', 'expense', '6000'),
+        ('6814', 'Factory Maintenance', 'expense', 'expense', '6000'),
+        ('6815', 'Factory Fuel', 'expense', 'expense', '6000'),
+        ('6816', 'Factory Cleaning', 'expense', 'expense', '6000'),
+        ('6817', 'Factory Depreciation', 'expense', 'expense', '6000'),
+        ('6818', 'Production Supervisor Salaries', 'expense', 'expense', '6000'),
+        ('6819', 'Quality Control Costs', 'expense', 'expense', '6000'),
         ('6900', 'Allocated Department Overheads', 'expense', 'expense', '6000'),
         ('8000', 'Inventory Loss / Shrinkage', 'expense', 'expense', '6000'),
         ('8010', 'Damaged Goods Expense', 'expense', 'expense', '6000'),
@@ -189,6 +254,7 @@ BEGIN
       WHEN bt = 'school' THEN '4130'
       WHEN bt IN ('sacco', 'vsla') THEN '4140'
       WHEN bt = 'clinic' THEN '4150'
+      WHEN bt = 'manufacturing' THEN '4160'
       WHEN bt = 'hotel' THEN '4110'
       WHEN bt = 'restaurant' THEN '4120'
       ELSE '4100'
@@ -202,11 +268,11 @@ BEGIN
     (acc->>'1130')::uuid,
     (acc->>'1130')::uuid,
     (acc->>(CASE WHEN bt = 'restaurant' THEN '5110' ELSE '5120' END))::uuid,
-    (acc->>'1150')::uuid,
+    (acc->>(CASE WHEN bt = 'manufacturing' THEN '1173' ELSE '1150' END))::uuid,
     (acc->>(CASE WHEN bt = 'manufacturing' THEN '5130' ELSE '5110' END))::uuid,
-    (acc->>'1150')::uuid,
+    (acc->>(CASE WHEN bt = 'manufacturing' THEN '1172' ELSE '1150' END))::uuid,
     (acc->>'5100')::uuid,
-    (acc->>'1150')::uuid,
+    (acc->>(CASE WHEN bt = 'manufacturing' THEN '1172' ELSE '1150' END))::uuid,
     (acc->>'4120')::uuid,
     (acc->>'4120')::uuid,
     (acc->>'4110')::uuid,
@@ -292,7 +358,11 @@ BEGIN
         ('rooms', 'Rooms / Front Desk', 'production', 'hotel,mixed'),
         ('fb', 'Food & Beverage', 'production', 'hotel,mixed,restaurant'),
         ('retail', 'Retail Shop', 'production', 'retail,mixed'),
-        ('store', 'Store / Warehouse', 'support', 'retail,restaurant,manufacturing,mixed'),
+        ('store', 'Store / Warehouse', 'support', 'retail,restaurant,mixed'),
+        ('warehouse', 'Warehouse', 'support', 'manufacturing'),
+        ('maintenance', 'Maintenance', 'support', 'manufacturing'),
+        ('machine', 'Machine', 'production', 'manufacturing'),
+        ('production_line', 'Production Line', 'production', 'manufacturing'),
         ('clinic', 'Clinical Services', 'production', 'clinic'),
         ('lab', 'Laboratory', 'production', 'clinic'),
         ('pharmacy', 'Pharmacy', 'production', 'clinic'),
@@ -350,7 +420,7 @@ BEGIN
         ('Transport by revenue', '6500', '6900', 'revenue')
     ) AS v(name, expense_code, debit_code, basis)
   LOOP
-    SELECT id INTO rule_id
+    SELECT id INTO new_rule_id
     FROM public.cost_allocation_rules
     WHERE organization_id = p_organization_id
       AND expense_gl_account_id = (acc->>rule.expense_code)::uuid
@@ -358,7 +428,7 @@ BEGIN
       AND basis = rule.basis
     LIMIT 1;
 
-    IF rule_id IS NULL THEN
+    IF new_rule_id IS NULL THEN
       INSERT INTO public.cost_allocation_rules (
         organization_id,
         name,
@@ -379,7 +449,7 @@ BEGIN
         NULL,
         true
       )
-      RETURNING id INTO rule_id;
+      RETURNING id INTO new_rule_id;
     END IF;
 
     INSERT INTO public.cost_allocation_rule_centres (
@@ -388,7 +458,7 @@ BEGIN
       cost_centre_id,
       is_enabled
     )
-    SELECT p_organization_id, rule_id, value::uuid, true
+    SELECT p_organization_id, new_rule_id, value::uuid, true
     FROM jsonb_each_text(centre_ids)
     ON CONFLICT (organization_id, rule_id, cost_centre_id) DO NOTHING;
   END LOOP;
