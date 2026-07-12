@@ -20,6 +20,7 @@ import {
   enqueueOfflineRetailSale,
   readOfflineRetailQueue,
   removeOfflineRetailSale,
+  updateOfflineRetailSaleSync,
   type OfflineRetailLine,
   type OfflineRetailPayment,
 } from "../lib/retailOfflineQueue";
@@ -1435,8 +1436,12 @@ export function RetailPOSPage({
     if (queue.length === 0) return;
     setSyncingOfflineQueue(true);
     try {
+      let failed = 0;
       for (const row of queue) {
-        await processSaleOnline({
+        const attemptAt = new Date().toISOString();
+        updateOfflineRetailSaleSync(row.id, { syncStatus: "syncing", syncAttempts: Number(row.syncAttempts || 0) + 1, lastSyncAttemptAt: attemptAt, lastSyncError: null });
+        try {
+          await processSaleOnline({
           saleId: row.id,
           lines: row.lines,
           tenders: row.payments,
@@ -1465,12 +1470,20 @@ export function RetailPOSPage({
           clinicPos: leftPanelMode === "clinic_workspace",
           clinicDispensing: clinicDispensingForCheckout,
           saleAt: row.saleAt || row.createdAt,
-        });
-        removeOfflineRetailSale(row.id);
+          });
+          removeOfflineRetailSale(row.id);
+        } catch (error) {
+          failed += 1;
+          const message = error instanceof Error ? error.message : "Sync failed";
+          updateOfflineRetailSaleSync(row.id, { syncStatus: "failed", lastSyncAttemptAt: attemptAt, lastSyncError: message.slice(0, 240) });
+          window.dispatchEvent(new CustomEvent("boat:retail-offline-sync-failed"));
+          console.error(`Offline sale ${row.id} sync failed:`, error);
+        }
       }
       refreshOfflineQueueCount();
+      if (failed > 0) toast({ title: "Some offline sales need attention", description: `${failed} sale${failed === 1 ? "" : "s"} could not sync. They remain safely queued for retry.` });
     } catch (error) {
-      console.error("Offline sync failed:", error);
+      console.error("Offline queue processing failed:", error);
     } finally {
       setSyncingOfflineQueue(false);
     }

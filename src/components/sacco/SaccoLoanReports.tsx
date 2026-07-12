@@ -5,6 +5,7 @@ import { downloadLoanReportPdf } from '@/lib/saccoReportPdf';
 import { PageNotes } from '@/components/common/PageNotes';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
 import type { Loan } from '@/types/saccoWorkspace';
+import { useAuth } from '@/contexts/AuthContext';
 
 /** Days since last payment, or since disbursement, or since application (for outstanding / aging buckets). */
 function daysSinceReferenceForAging(loan: Loan): number {
@@ -67,6 +68,7 @@ interface LoanReportsProps {
 }
 
 const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) => {
+  const { user } = useAuth();
   const { loans, formatCurrency } = useAppContext();
   const [reportType, setReportType] = useState<LoanReportTabId>(() =>
     loanReportTab && VALID_TABS.has(loanReportTab) ? loanReportTab : 'summary'
@@ -122,7 +124,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
           onPrint={() => window.print()}
           onPdf={() => {
             const today = new Date().toISOString().slice(0, 10);
-            downloadLoanReportPdf(reportType, loans, { dateFrom: today, dateTo: today });
+            void downloadLoanReportPdf(reportType, loans, { dateFrom: today, dateTo: today, organizationId: user?.organization_id });
           }}
         />
       </div>

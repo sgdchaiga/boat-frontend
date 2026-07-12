@@ -29,8 +29,14 @@ import {
   parseIsoDateOnly,
   planMemberLoansPortfolioImport,
 } from "@/lib/saccoMemberLoansBulkImport";
+import { applyHistoricalCashbookPlans, loadHistoricalImportContext, planHistoricalCashbookRows } from "@/lib/saccoHistoricalCashbookImport";
 
 const IMPORT_OPTIONS: Array<{ id: SaccoBulkImportKind; label: string; description: string }> = [
+  {
+    id: "historical_cashbook",
+    label: "Historical cashbook",
+    description: "Import deposits, withdrawals, shares, charges, fees and loan repayments from the legacy cashbook. Preview matches members, accounts and loans and blocks duplicates before posting.",
+  },
   {
     id: "savings_balances",
     label: "Savings account balances",
@@ -120,7 +126,17 @@ export function SaccoBulkImportPage({
 
       let plannedPreview: SaccoBulkImportPreviewRow[];
 
-      if (kind === "loan_products") {
+      if (kind === "historical_cashbook") {
+        const ctx = await loadHistoricalImportContext(orgId);
+        plannedPreview = planHistoricalCashbookRows(ctx, rows);
+        setPreview(plannedPreview);
+        const bad = plannedPreview.filter((r) => r.status === "error").length;
+        const ok = plannedPreview.filter((r) => r.status === "ok").length;
+        const skip = plannedPreview.filter((r) => r.status === "skip").length;
+        if (bad) setError(`${bad} row(s) need attention. Nothing can be posted until errors are fixed.`);
+        else if (!ok) setError(skip ? "All rows were already imported." : "No rows ready to import.");
+        else setResultMessage(`Ready: ${ok} historical transaction(s)${skip ? `, ${skip} duplicate(s) skipped` : ""}. Dates are interpreted as day/month/year.`);
+      } else if (kind === "loan_products") {
         const { merged, preview: pv } = planLoanProductImports(loanProducts, rows);
         plannedPreview = pv;
         const bad = pv.filter((r) => r.status === "error").length;
@@ -195,7 +211,9 @@ export function SaccoBulkImportPage({
       return;
     }
 
-    if (kind === "loan_products") {
+    if (kind === "historical_cashbook") {
+      if (!confirm(`Post ${okCount} historical cashbook transaction(s)?\n\nThis changes member savings/share balances and loan balances. Duplicate source rows are blocked.`)) return;
+    } else if (kind === "loan_products") {
       if (
         !confirm(
           `Import ${okCount} loan product row(s) from the file?\n\nProducts are matched or created by name. Products not listed in the file are unchanged.\n\nThis updates live configuration. Export current products from Loan products if you need a backup.`
@@ -227,7 +245,14 @@ export function SaccoBulkImportPage({
     try {
       const { rows } = await parseBulkImportFile(file);
 
-      if (kind === "loan_products") {
+      if (kind === "historical_cashbook") {
+        const ctx = await loadHistoricalImportContext(orgId);
+        const plans = planHistoricalCashbookRows(ctx, rows);
+        const result = await applyHistoricalCashbookPlans(orgId, plans);
+        await refreshSaccoWorkspace();
+        setResultMessage(`Done. Imported ${result.imported} historical transaction(s).`);
+        if (result.errors.length) setError(result.errors.slice(0, 10).join("\n"));
+      } else if (kind === "loan_products") {
         const { merged } = planLoanProductImports(loanProducts, rows);
         if (!merged) {
           setError("Import aborted: validation failed. Run preview again.");

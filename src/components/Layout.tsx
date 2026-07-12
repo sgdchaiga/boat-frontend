@@ -58,6 +58,7 @@ import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } 
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 import { WorkspaceGuide } from './WorkspaceGuide';
 import { MobileLiteCenter } from './mobile/MobileLiteCenter';
+import { MobilePrivacyLock } from './mobile/MobilePrivacyLock';
 import { observeMobileTableCards } from '@/lib/mobileTableCards';
 import { setMobileTelemetryOrganization } from '@/lib/mobilePerformance';
 import {
@@ -1710,11 +1711,15 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         open={mobileLite && liteCenterOpen}
         onClose={() => setLiteCenterOpen(false)}
         onNavigate={(page) => onNavigate(page)}
-        onLock={() => { setLiteCenterOpen(false); lockTerminal('manual'); }}
+        onLock={() => { setLiteCenterOpen(false); if (isLocalAuthMode) lockTerminal('manual'); else window.dispatchEvent(new CustomEvent('boat:mobile-privacy-lock')); }}
         organizationId={user?.organization_id ?? null}
         role={user?.role ?? null}
         businessType={businessType}
+        userId={user?.id ?? null}
+        onGlobalSignOut={() => void clockOut()}
+        cloudMode={!isLocalAuthMode}
       />
+      {!isLocalAuthMode && user?.id && <MobilePrivacyLock userId={user.id} onSignOut={() => void clockOut()} />}
       {!mobileLite && <WorkspaceGuide currentPage={currentPage} businessType={businessType} onNavigate={onNavigate} />}
       <TerminalLockOverlay />
     </div>

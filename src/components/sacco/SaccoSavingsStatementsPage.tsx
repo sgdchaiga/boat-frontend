@@ -125,7 +125,7 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
           onPrint={() => window.print()}
           onPdf={() => {
             const today = new Date().toISOString().slice(0, 10);
-            downloadMemberSavingsPdf(members, today, today);
+            void downloadMemberSavingsPdf(members, today, today, user?.organization_id);
           }}
           printLabel="Print statement"
           pdfLabel="Download PDF"

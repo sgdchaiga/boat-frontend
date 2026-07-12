@@ -71,4 +71,5 @@ export function startMobilePerformanceTracking() {
     localStorage.setItem(KEY, JSON.stringify({ ...current, failedRequests: current.failedRequests + 1 }));
     recordMobileMetric("request_failed");
   });
+  window.addEventListener("boat:retail-offline-sync-failed", () => recordMobileMetric("sync_failed"));
 }

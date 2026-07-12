@@ -3,8 +3,10 @@ import { useAppContext } from '@/contexts/AppContext';
 import { PiggyBank, Plus, X, Eye, RefreshCw } from 'lucide-react';
 import { SaccoReportToolbar } from '@/components/common/SaccoReportToolbar';
 import { downloadFixedDepositsPdf } from '@/lib/saccoReportPdf';
+import { useAuth } from '@/contexts/AuthContext';
 
 const FixedDeposit: React.FC = () => {
+  const { user } = useAuth();
   const { fixedDeposits, addFixedDeposit, members, formatCurrency, setFixedDeposits } = useAppContext();
   const [showForm, setShowForm] = useState(false);
   const [statusFilter, setStatusFilter] = useState('all');
@@ -59,7 +61,7 @@ const FixedDeposit: React.FC = () => {
             onPrint={() => window.print()}
             onPdf={() => {
               const today = new Date().toISOString().slice(0, 10);
-              downloadFixedDepositsPdf(filtered, today, today);
+              void downloadFixedDepositsPdf(filtered, today, today, user?.organization_id);
             }}
           />
           <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">

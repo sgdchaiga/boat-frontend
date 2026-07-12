@@ -10,6 +10,22 @@ import {
   generateLoanPortfolioReport,
   generateMemberSavingsReport,
 } from "@/lib/pdfGenerator";
+import type { SaccoReportBranding } from "@/lib/pdfGenerator";
+import { supabase } from "@/lib/supabase";
+
+async function reportBranding(organizationId?: string | null): Promise<SaccoReportBranding> {
+  if (!organizationId) return {};
+  const { data } = await supabase.from("organizations").select("name,address,logo_url").eq("id", organizationId).maybeSingle();
+  const row = data as { name?: string | null; address?: string | null; logo_url?: string | null } | null;
+  let logoDataUrl: string | null = null;
+  if (row?.logo_url) {
+    try {
+      const blob = await (await fetch(row.logo_url)).blob();
+      logoDataUrl = await new Promise<string>((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = reject; reader.readAsDataURL(blob); });
+    } catch { logoDataUrl = null; }
+  }
+  return { name: row?.name, address: row?.address, logoDataUrl };
+}
 
 export function downloadTellerReportPdf(table: TellerReportTable, filename: string, companyName?: string): void {
   exportAccountingPdf({
@@ -22,11 +38,11 @@ export function downloadTellerReportPdf(table: TellerReportTable, filename: stri
   });
 }
 
-export function downloadLoanReportPdf(
+export async function downloadLoanReportPdf(
   reportTab: "summary" | "aging" | "disbursement" | "collection",
   loans: Loan[],
-  options: { dateFrom: string; dateTo: string; companyName?: string }
-): void {
+  options: { dateFrom: string; dateTo: string; companyName?: string; organizationId?: string | null }
+): Promise<void> {
   if (reportTab === "summary") {
     generateLoanPortfolioReport(
       loans.map((l) => ({
@@ -42,7 +58,7 @@ export function downloadLoanReportPdf(
         monthlyPayment: l.monthlyPayment,
       })),
       options.dateFrom,
-      options.dateTo
+      options.dateTo, await reportBranding(options.organizationId)
     );
     return;
   }
@@ -125,11 +141,11 @@ export function downloadLoanReportPdf(
   });
 }
 
-export function downloadMemberSavingsPdf(
+export async function downloadMemberSavingsPdf(
   members: Member[],
   dateFrom: string,
-  dateTo: string
-): void {
+  dateTo: string, organizationId?: string | null
+): Promise<void> {
   generateMemberSavingsReport(
     members.map((m) => ({
       accountNumber: m.accountNumber,
@@ -141,23 +157,23 @@ export function downloadMemberSavingsPdf(
       status: m.status,
     })),
     dateFrom,
-    dateTo
+    dateTo, await reportBranding(organizationId)
   );
 }
 
-export function downloadFixedDepositsPdf(
+export async function downloadFixedDepositsPdf(
   fixedDeposits: FixedDeposit[],
   dateFrom: string,
-  dateTo: string
-): void {
-  generateFixedDepositReport(fixedDeposits, dateFrom, dateTo);
+  dateTo: string, organizationId?: string | null
+): Promise<void> {
+  generateFixedDepositReport(fixedDeposits, dateFrom, dateTo, await reportBranding(organizationId));
 }
 
-export function downloadCashbookPdf(
+export async function downloadCashbookPdf(
   cashbook: CashbookEntry[],
   dateFrom: string,
-  dateTo: string
-): void {
+  dateTo: string, organizationId?: string | null
+): Promise<void> {
   generateCashbookReport(
     cashbook.map((e) => ({
       id: e.id,
@@ -171,7 +187,7 @@ export function downloadCashbookPdf(
       balance: e.balance,
     })),
     dateFrom,
-    dateTo
+    dateTo, await reportBranding(organizationId)
   );
 }
 

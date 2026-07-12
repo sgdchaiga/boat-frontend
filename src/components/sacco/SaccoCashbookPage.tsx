@@ -5,6 +5,7 @@ import { downloadCashbookPdf } from "@/lib/saccoReportPdf";
 import { PageNotes } from "@/components/common/PageNotes";
 import { useAppContext } from "@/contexts/AppContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
+import { useAuth } from "@/contexts/AuthContext";
 
 export type CashbookSacView = "journal" | "reconciliation";
 
@@ -15,6 +16,7 @@ export function SaccoCashbookPage({
   cashbookView?: CashbookSacView;
   navigate?: (page: string, state?: Record<string, unknown>) => void;
 }) {
+  const { user } = useAuth();
   const { cashbook, formatCurrency, saccoLoading } = useAppContext();
 
   const sorted = useMemo(
@@ -49,7 +51,7 @@ export function SaccoCashbookPage({
             const today = new Date().toISOString().slice(0, 10);
             const from = sorted[0]?.date ?? today;
             const to = sorted[sorted.length - 1]?.date ?? today;
-            downloadCashbookPdf(cashbook, from, to);
+            void downloadCashbookPdf(cashbook, from, to, user?.organization_id);
           }}
         />
       </header>

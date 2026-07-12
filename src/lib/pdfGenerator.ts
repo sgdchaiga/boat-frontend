@@ -6,33 +6,32 @@ const PRIMARY_COLOR: [number, number, number] = [16, 185, 129]; // emerald-500
 const DARK_COLOR: [number, number, number] = [15, 23, 42]; // slate-900
 const GRAY_COLOR: [number, number, number] = [100, 116, 139]; // slate-500
 const LIGHT_BG: [number, number, number] = [248, 250, 252]; // slate-50
+export type SaccoReportBranding = { name?: string | null; address?: string | null; logoDataUrl?: string | null };
 
 const fmtCurrency = (n: number) => 'UGX ' + n.toLocaleString('en-UG', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
 
-function addHeader(doc: jsPDF, title: string, subtitle: string, dateRange: string) {
+function addHeader(doc: jsPDF, title: string, subtitle: string, dateRange: string, branding?: SaccoReportBranding) {
   const pageWidth = doc.internal.pageSize.getWidth();
 
   // Green header bar
   doc.setFillColor(...PRIMARY_COLOR);
   doc.rect(0, 0, pageWidth, 32, 'F');
 
-  // Logo circle
-  doc.setFillColor(255, 255, 255);
-  doc.circle(20, 16, 8, 'F');
-  doc.setFillColor(...PRIMARY_COLOR);
-  doc.setFontSize(9);
-  doc.setFont('helvetica', 'bold');
-  doc.setTextColor(...PRIMARY_COLOR);
-  doc.text('SP', 16.5, 18.5);
+  if (branding?.logoDataUrl) {
+    try { doc.addImage(branding.logoDataUrl, 12, 7, 16, 16, undefined, 'FAST'); } catch { /* keep text header */ }
+  } else {
+    doc.setFillColor(255, 255, 255); doc.circle(20, 16, 8, 'F');
+    doc.setFontSize(9); doc.setFont('helvetica', 'bold'); doc.setTextColor(...PRIMARY_COLOR); doc.text('B', 18.2, 18.5);
+  }
 
   // Company name
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(16);
   doc.setFont('helvetica', 'bold');
-  doc.text('SACCOPro', 32, 14);
+  doc.text(branding?.name?.trim() || 'BOAT', 32, 14);
   doc.setFontSize(7);
   doc.setFont('helvetica', 'normal');
-  doc.text('Financial Management System', 32, 20);
+  doc.text(branding?.address?.trim() || 'Business Operations & Accounting Tool', 32, 20);
 
   // Date on right
   doc.setFontSize(8);
@@ -76,7 +75,7 @@ function addFooter(doc: jsPDF) {
     doc.line(14, pageHeight - 18, pageWidth - 14, pageHeight - 18);
     doc.setFontSize(7);
     doc.setTextColor(...GRAY_COLOR);
-    doc.text('SACCOPro - Confidential Financial Report', 14, pageHeight - 12);
+    doc.text('BOAT - Confidential Financial Report', 14, pageHeight - 12);
     doc.text(`Page ${i} of ${pageCount}`, pageWidth - 14, pageHeight - 12, { align: 'right' });
   }
 }
@@ -180,7 +179,7 @@ export function generateIncomeStatement(
   doc.text(`NET INCOME: ${fmtCurrency(netIncome)}`, 20, y + 10);
 
   addFooter(doc);
-  doc.save(`SACCOPro_Income_Statement_${dateFrom}_to_${dateTo}.pdf`);
+  doc.save(`BOAT_Income_Statement_${dateFrom}_to_${dateTo}.pdf`);
 }
 
 export function generateBalanceSheet(
@@ -258,16 +257,16 @@ export function generateBalanceSheet(
   });
 
   addFooter(doc);
-  doc.save(`SACCOPro_Balance_Sheet_${dateTo}.pdf`);
+  doc.save(`BOAT_Balance_Sheet_${dateTo}.pdf`);
 }
 
 export function generateLoanPortfolioReport(
   loans: Loan[],
   dateFrom: string,
-  dateTo: string
+  dateTo: string, branding?: SaccoReportBranding
 ) {
   const doc = new jsPDF('landscape');
-  let y = addHeader(doc, 'Loan Portfolio Summary', 'Comprehensive Loan Performance Report', `${dateFrom} to ${dateTo}`);
+  let y = addHeader(doc, 'Loan Portfolio Summary', 'Comprehensive Loan Performance Report', `${dateFrom} to ${dateTo}`, branding);
 
   const activeLoans = loans.filter((l) => l.status === "disbursed");
   const totalDisbursed = activeLoans.reduce((s, l) => s + l.amount, 0);
@@ -356,16 +355,16 @@ export function generateLoanPortfolioReport(
   });
 
   addFooter(doc);
-  doc.save(`SACCOPro_Loan_Portfolio_${dateFrom}_to_${dateTo}.pdf`);
+  doc.save(`BOAT_Loan_Portfolio_${dateFrom}_to_${dateTo}.pdf`);
 }
 
 export function generateMemberSavingsReport(
   members: Member[],
   dateFrom: string,
-  dateTo: string
+  dateTo: string, branding?: SaccoReportBranding
 ) {
   const doc = new jsPDF();
-  let y = addHeader(doc, 'Member Savings Statement', 'Individual & Aggregate Savings Report', `${dateFrom} to ${dateTo}`);
+  let y = addHeader(doc, 'Member Savings Statement', 'Individual & Aggregate Savings Report', `${dateFrom} to ${dateTo}`, branding);
 
   const activeMembers = members.filter(m => m.status === 'active');
   const totalSavings = members.reduce((s, m) => s + m.savingsBalance, 0);
@@ -423,16 +422,16 @@ export function generateMemberSavingsReport(
   });
 
   addFooter(doc);
-  doc.save(`SACCOPro_Member_Savings_${dateFrom}_to_${dateTo}.pdf`);
+  doc.save(`BOAT_Member_Savings_${dateFrom}_to_${dateTo}.pdf`);
 }
 
 export function generateFixedDepositReport(
   fixedDeposits: FixedDeposit[],
   dateFrom: string,
-  dateTo: string
+  dateTo: string, branding?: SaccoReportBranding
 ) {
   const doc = new jsPDF('landscape');
-  let y = addHeader(doc, 'Fixed Deposit Maturity Schedule', 'Deposit Tracking & Interest Accrual Report', `${dateFrom} to ${dateTo}`);
+  let y = addHeader(doc, 'Fixed Deposit Maturity Schedule', 'Deposit Tracking & Interest Accrual Report', `${dateFrom} to ${dateTo}`, branding);
 
   const activeFDs = fixedDeposits.filter(f => f.status === 'active');
   const maturedFDs = fixedDeposits.filter(f => f.status === 'matured');
@@ -493,16 +492,16 @@ export function generateFixedDepositReport(
   });
 
   addFooter(doc);
-  doc.save(`SACCOPro_Fixed_Deposits_${dateFrom}_to_${dateTo}.pdf`);
+  doc.save(`BOAT_Fixed_Deposits_${dateFrom}_to_${dateTo}.pdf`);
 }
 
 export function generateCashbookReport(
   cashbook: CashbookEntry[],
   dateFrom: string,
-  dateTo: string
+  dateTo: string, branding?: SaccoReportBranding
 ) {
   const doc = new jsPDF('landscape');
-  let y = addHeader(doc, 'Cashbook Summary', 'Daily Cash Transactions Report', `${dateFrom} to ${dateTo}`);
+  let y = addHeader(doc, 'Cashbook Summary', 'Daily Cash Transactions Report', `${dateFrom} to ${dateTo}`, branding);
 
   const filtered = cashbook.filter(e => e.date >= dateFrom && e.date <= dateTo);
   const totalDebits = filtered.reduce((s, e) => s + e.debit, 0);
@@ -573,7 +572,7 @@ export function generateCashbookReport(
   });
 
   addFooter(doc);
-  doc.save(`SACCOPro_Cashbook_${dateFrom}_to_${dateTo}.pdf`);
+  doc.save(`BOAT_Cashbook_${dateFrom}_to_${dateTo}.pdf`);
 }
 
 export function generateTrialBalance(
@@ -653,5 +652,5 @@ export function generateTrialBalance(
   doc.text(balanced ? 'TRIAL BALANCE IS BALANCED' : `TRIAL BALANCE DIFFERENCE: ${fmtCurrency(Math.abs(totalDebits - totalCredits))}`, 20, y + 10);
 
   addFooter(doc);
-  doc.save(`SACCOPro_Trial_Balance_${dateTo}.pdf`);
+  doc.save(`BOAT_Trial_Balance_${dateTo}.pdf`);
 }

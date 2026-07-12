@@ -10,6 +10,7 @@ const sb = supabase as any;
 export type SaccoBulkImportKind =
   | "savings_balances"
   | "member_profile"
+  | "historical_cashbook"
   | "loan_products"
   /** Member loan accounts: principal, balance, etc. (often as at a snapshot date). */
   | "member_loans";
@@ -53,6 +54,8 @@ const SAVINGS_TEMPLATES: Record<Exclude<SaccoBulkImportKind, "loan_products" | "
 2,ORD,,SAV`,
   member_profile: `member_number,full_name,phone,email,address,savings_balance,shares_balance
 1,Jane Member,+256700000001,jane@example.com,Kampala,150000,50000`,
+  historical_cashbook: `ID,Date Submitted,Trx Type,Date,Narration,Client Name.,GL Account,Voucher_No,Deposit Amount,Withdraw Amount,Loan No.,A/C_NO,Client NO.,GL,Net Amount,Month,Year
+18d42486,01/08/2025,Savings/Deposits,01/02/2025,Deposit Ratibu,Axxxx 590,Savings Individuals - 21011,6692,"900,000",,,,590,21011,"900,000",1,2025`,
 };
 
 export function getSaccoBulkImportTemplate(kind: SaccoBulkImportKind): string {

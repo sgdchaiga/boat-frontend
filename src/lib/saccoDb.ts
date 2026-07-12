@@ -416,10 +416,11 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
     const sumShr = sharesByMember.get(id);
     const hasRollup = savingsByMember.has(id) || sharesByMember.has(id);
     if (hasRollup) {
-      // Do not wipe member-level balances when account rows exist but balances are still 0 (e.g. before teller sync).
-      // Take the higher of rolled-up accounts vs register columns.
-      m.savingsBalance = Math.max(sumSav ?? 0, colSav);
-      m.sharesBalance = Math.max(sumShr ?? 0, colShr);
+      // Account rows are the ledger source of truth once a member has accounts.
+      // Using the larger of these totals and the legacy member-register columns
+      // retained stale imports and could make savings appear as shares (or vice versa).
+      m.savingsBalance = sumSav ?? 0;
+      m.sharesBalance = sumShr ?? 0;
     }
     const fs = firstOrdinaryOpenByMember.get(id);
     if (fs) m.firstOrdinarySavingsOpenedAt = fs;

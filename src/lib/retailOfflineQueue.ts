@@ -37,6 +37,10 @@ export interface OfflineRetailSale {
   lines: OfflineRetailLine[];
   vatEnabled: boolean;
   vatRate: number | null;
+  syncStatus: "queued" | "syncing" | "failed";
+  syncAttempts: number;
+  lastSyncAttemptAt?: string | null;
+  lastSyncError?: string | null;
 }
 
 const STORAGE_KEY = "boat.retail.offline.queue.v1";
@@ -52,7 +56,7 @@ export function readOfflineRetailQueue(): OfflineRetailSale[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed as OfflineRetailSale[];
+    return (parsed as OfflineRetailSale[]).map(normalizeOfflineRetailSale);
   } catch {
     return [];
   }
@@ -61,15 +65,18 @@ export function readOfflineRetailQueue(): OfflineRetailSale[] {
 function writeOfflineRetailQueue(rows: OfflineRetailSale[]) {
   if (!hasWindow()) return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(rows));
+  window.dispatchEvent(new CustomEvent("boat:retail-offline-queue", { detail: { count: rows.length } }));
 }
 
 export function enqueueOfflineRetailSale(
-  payload: Omit<OfflineRetailSale, "id" | "createdAt">
+  payload: Omit<OfflineRetailSale, "id" | "createdAt" | "syncStatus" | "syncAttempts" | "lastSyncAttemptAt" | "lastSyncError">
 ): OfflineRetailSale {
   const next: OfflineRetailSale = {
     ...payload,
     id: randomUuid(),
     createdAt: new Date().toISOString(),
+    syncStatus: "queued",
+    syncAttempts: 0,
   };
   const queue = readOfflineRetailQueue();
   queue.push(next);
@@ -80,4 +87,16 @@ export function enqueueOfflineRetailSale(
 export function removeOfflineRetailSale(id: string) {
   const queue = readOfflineRetailQueue();
   writeOfflineRetailQueue(queue.filter((row) => row.id !== id));
+}
+
+export function updateOfflineRetailSaleSync(
+  id: string,
+  patch: Partial<Pick<OfflineRetailSale, "syncStatus" | "syncAttempts" | "lastSyncAttemptAt" | "lastSyncError">>
+) {
+  const queue = readOfflineRetailQueue();
+  writeOfflineRetailQueue(queue.map((row) => row.id === id ? { ...row, ...patch } : row));
+}
+
+export function normalizeOfflineRetailSale(row: OfflineRetailSale): OfflineRetailSale {
+  return { ...row, syncStatus: row.syncStatus || "queued", syncAttempts: Number(row.syncAttempts || 0) };
 }
