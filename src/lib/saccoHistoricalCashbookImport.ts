@@ -14,6 +14,13 @@ export type HistoricalPlan = {
 const text = (v: unknown) => String(v ?? "").trim();
 const key = (v: unknown) => text(v).toLowerCase().replace(/\s+/g, " ");
 const amount = (v: unknown) => { const n = Number(text(v).replace(/,/g, "")); return Number.isFinite(n) ? Math.abs(n) : 0; };
+const field = (row: Raw, ...names: string[]) => {
+  for (const name of names) {
+    const value = text(row[name]);
+    if (value) return value;
+  }
+  return "";
+};
 
 /** SACCO source sheets are normally dd/mm/yyyy; ISO and Excel serial dates are also accepted. */
 export function parseHistoricalDate(value: string): string | null {
@@ -35,7 +42,7 @@ export function parseHistoricalDate(value: string): string | null {
 
 function classify(row: Raw): HistoricalKind | null {
   const s = key(`${row.trx_type} ${row.narration} ${row.gl_account}`);
-  if (/loan.*(repay|payment)|repay.*loan/.test(s) || text(row.loan_no)) return "loan_repayment";
+  if (/loan.*(repay|payment)|repay.*loan/.test(s) || field(row, "loan_no", "loan_no.")) return "loan_repayment";
   if (/share|equity|capital contribution/.test(s)) return "share_purchase";
   if (/(ledger|interest|penalty|charge)/.test(s) && !/(interest paid|interest income received)/.test(s)) return "account_charge";
   if (/fee|subscription|membership/.test(s)) return "fee_payment";
@@ -73,16 +80,22 @@ export function planHistoricalCashbookRows(ctx: Awaited<ReturnType<typeof loadHi
     if (!date) return { line, status: "error", summary: `Invalid Date “${text(row.date)}” (expected dd/mm/yyyy)`, fingerprint };
     if (!kind) return { line, status: "error", summary: `Could not classify Trx Type “${text(row.trx_type)}”`, fingerprint };
     if (!value) return { line, status: "error", summary: "Deposit, withdrawal and net amounts are all zero/blank", fingerprint };
-    const acct = accounts.get(key(row.a_c_no));
-    const member = membersNo.get(key(row.client_no)) ?? (acct ? ctx.members.find(m => m.id === acct.sacco_member_id) : undefined) ?? membersName.get(key(row.client_name));
-    const loan = loans.get(key(row.loan_no));
+    // The legacy workbook literally uses punctuation in these headings. XLSX
+    // normalization therefore produces keys such as "client_no." and "a/c_no".
+    const accountNo = field(row, "a_c_no", "a/c_no", "ac_no", "account_no", "account_number");
+    const clientNo = field(row, "client_no", "client_no.", "client_number", "member_number");
+    const clientName = field(row, "client_name", "client_name.", "member_name", "name");
+    const loanNo = field(row, "loan_no", "loan_no.", "loan_number");
+    const acct = accounts.get(key(accountNo));
+    const member = membersNo.get(key(clientNo)) ?? (acct ? ctx.members.find(m => m.id === acct.sacco_member_id) : undefined) ?? membersName.get(key(clientName));
+    const loan = loans.get(key(loanNo));
     if (["savings_deposit","savings_withdrawal","share_purchase","account_charge"].includes(kind) && !acct)
-      return { line, status: "error", summary: `Account ${text(row.a_c_no) || "(blank)"} was not found`, fingerprint };
-    if (!member && kind !== "fee_payment") return { line, status: "error", summary: `Member ${text(row.client_no) || text(row.client_name) || "(blank)"} was not found`, fingerprint };
-    if (kind === "loan_repayment" && !loan) return { line, status: "error", summary: `Loan ${text(row.loan_no) || "(blank)"} was not found`, fingerprint };
+      return { line, status: "error", summary: `Account ${accountNo || "(blank)"} was not found`, fingerprint };
+    if (!member && kind !== "fee_payment") return { line, status: "error", summary: `Member ${clientNo || clientName || "(blank)"} was not found`, fingerprint };
+    if (kind === "loan_repayment" && !loan) return { line, status: "error", summary: `Loan ${loanNo || "(blank)"} was not found`, fingerprint };
     const out = kind === "savings_withdrawal" || kind === "account_charge" || withdrawal > 0;
-    return { line, status: "ok", fingerprint, summary: `${date} · ${kind.replace(/_/g," ")} · ${(member?.full_name ?? text(row.client_name)) || "General"} · UGX ${value.toLocaleString("en-UG")}`,
-      payload: { source_id: sourceId || ref, entry_date: date, submitted_date: submitted, kind, narration: text(row.narration) || text(row.trx_type), reference: ref, amount: value, cash_direction: out ? "out" : "in", member_id: member?.id ?? null, member_name: (member?.full_name ?? text(row.client_name)) || null, savings_account_id: acct?.id ?? null, loan_id: loan?.id ?? null, source_gl_code: text(row.gl) || null, source_row: row } };
+    return { line, status: "ok", fingerprint, summary: `${date} · ${kind.replace(/_/g," ")} · ${(member?.full_name ?? clientName) || "General"} · UGX ${value.toLocaleString("en-UG")}`,
+      payload: { source_id: sourceId || ref, entry_date: date, submitted_date: submitted, kind, narration: text(row.narration) || text(row.trx_type), reference: ref, amount: value, cash_direction: out ? "out" : "in", member_id: member?.id ?? null, member_name: (member?.full_name ?? clientName) || null, savings_account_id: acct?.id ?? null, loan_id: loan?.id ?? null, source_gl_code: text(row.gl) || null, source_row: row } };
   });
 }
 
