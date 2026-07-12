@@ -83,6 +83,53 @@ export function downloadSaccoBulkImportTemplate(kind: SaccoBulkImportKind, filen
   URL.revokeObjectURL(a.href);
 }
 
+/** One guided workbook for the recommended SACCO migration sequence. */
+export function downloadSaccoMigrationWorkbook(): void {
+  const wb = XLSX.utils.book_new();
+  const add = (name: string, rows: (string | number)[][], widths: number[]) => {
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws["!cols"] = widths.map((wch) => ({ wch }));
+    XLSX.utils.book_append_sheet(wb, ws, name);
+  };
+  add("Instructions", [
+    ["BOAT SACCO BULK MIGRATION WORKBOOK"],
+    ["Import order", "1 Members → 2 Savings Accounts → 3 Loan Products → 4 Loan Accounts → 5 Historical Cashbook"],
+    ["Dates", "Use DD/MM/YYYY or YYYY-MM-DD. Historical cashbook dates default to DD/MM/YYYY."],
+    ["Identifiers", "Keep Client NO., A/C_NO, Loan No. and source ID exactly as they appear in the old system."],
+    ["Amounts", "Enter numbers only; commas are accepted. Do not enter UGX text."],
+    ["Safety", "Run Preview first. Correct every error before posting. Previously imported cashbook fingerprints are skipped."],
+    [],
+    ["Worksheet", "Use in BOAT"],
+    ["Members", "Bulk import → Member profile"],
+    ["Savings Accounts", "Bulk import → Savings account balances (accounts must exist/backfill first)"],
+    ["Loan Products", "Bulk import → Loan products"],
+    ["Loan Accounts", "Bulk import → Member loan accounts"],
+    ["Historical Cashbook", "Bulk import → Historical cashbook"],
+  ], [24, 105]);
+  add("Members", [
+    ["member_number","full_name","phone","email","address","savings_balance","shares_balance"],
+    ["590","Example Member","+256700000000","member@example.com","Kampala",0,0],
+  ], [18,28,20,28,28,18,18]);
+  add("Savings Accounts", [
+    ["member_number","account_number","current_savings_product_code","balance","new_savings_product_code"],
+    ["590","590","ORD",900000,""],
+    ["590","590-SH","SHARE",50000,""],
+  ], [18,20,30,18,28]);
+  add("Loan Products", [
+    ["name","loan_code","interest_rate","interest_basis","term_months","minimum_amount","maximum_amount","processing_fee_rate","is_active"],
+    ["Development Loan","01",12,"declining",12,100000,10000000,1,"true"],
+  ], [28,14,18,20,16,20,20,22,14]);
+  add("Loan Accounts", [
+    ["member_number","loan_number","loan_type","loan_code","principal","balance","interest_rate","term_months","status","application_date","disbursement_date","balance_as_at"],
+    ["590","LN-001","Development Loan","01",1000000,750000,12,12,"disbursed","01/01/2025","05/01/2025","31/07/2025"],
+  ], [18,20,26,14,16,16,18,16,16,20,20,20]);
+  add("Historical Cashbook", [
+    ["ID","Date Submitted","Trx Type","Date","Narration","Client Name.","GL Account","Voucher_No","Deposit Amount","Withdraw Amount","Loan No.","A/C_NO","Client NO.","GL","Net Amount","Month","Year"],
+    ["18d42486","01/08/2025","Savings/Deposits","01/02/2025","Deposit Ratibu","Example Member","Savings Individuals - 21011","6692",900000,"","","590","590","21011",900000,1,2025],
+  ], [18,18,22,16,30,26,34,18,20,20,18,16,16,14,18,10,10]);
+  XLSX.writeFile(wb, "BOAT_SACCO_Bulk_Migration_Templates.xlsx");
+}
+
 function parseCsvLine(line: string): string[] {
   const out: string[] = [];
   let cur = "";

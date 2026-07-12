@@ -9,6 +9,7 @@ import {
   applyMemberProfilePlans,
   applySavingsBalancePlans,
   downloadSaccoBulkImportTemplate,
+  downloadSaccoMigrationWorkbook,
   loadSaccoBulkImportContext,
   parseBulkImportFile,
   planMemberProfileImports,
@@ -409,6 +410,16 @@ export function SaccoBulkImportPage({
         <p className="text-xs text-slate-500">{selected.description}</p>
 
         <div className="flex flex-wrap gap-2">
+          {!lockedKind ? (
+            <button
+              type="button"
+              onClick={downloadSaccoMigrationWorkbook}
+              className="inline-flex items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800 hover:bg-emerald-100"
+            >
+              <Download className="h-4 w-4" />
+              Download complete migration workbook
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={() => {
