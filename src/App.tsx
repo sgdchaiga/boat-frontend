@@ -27,6 +27,7 @@ import { DesktopServerConnectionPage } from './components/system/DesktopServerCo
 import { desktopApi } from './lib/desktopApi';
 import { isDesktopApiDataMode } from './lib/boatApi';
 import { parseAdminTabParam } from './lib/adminTabs';
+import { isConstrainedConnection } from './lib/mobileLite';
 
 const LAZY_CHUNK_RELOAD_KEY = "boat.lazy-chunk-reload";
 
@@ -262,6 +263,7 @@ function pageSuspense(children: ReactNode) {
 
 function runWhenIdle(task: () => void, timeout = 2000) {
   if (typeof window === "undefined") return () => undefined;
+  if (isConstrainedConnection()) timeout = Math.max(timeout, 8000);
   const idleCallback = window.requestIdleCallback;
   if (idleCallback) {
     const id = idleCallback(task, { timeout });

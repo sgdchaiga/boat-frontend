@@ -93,3 +93,22 @@
     overflow-x: auto;
   }
 }
+@media (max-width: 767px) {
+  .boat-lite .app-page {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+
+  .boat-lite table {
+    font-size: 0.8125rem;
+  }
+
+  .boat-lite img:not([data-essential-image]) {
+    content-visibility: auto;
+  }
+
+  .boat-lite [data-treasury-comment],
+  .boat-lite [data-mobile-optional] {
+    display: none;
+  }
+}

@@ -57,6 +57,13 @@ import { organizationMembershipLabel } from '@/lib/orgMembership';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncStatus';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 import { WorkspaceGuide } from './WorkspaceGuide';
+import {
+  networkInformation,
+  readMobileLitePreference,
+  shouldUseMobileLite,
+  writeMobileLitePreference,
+  type MobileLitePreference,
+} from '@/lib/mobileLite';
 
 interface LayoutProps {
   children: ReactNode;
@@ -223,6 +230,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const businessType = user?.business_type ?? null;
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [litePreference, setLitePreference] = useState<MobileLitePreference>(readMobileLitePreference);
+  const [mobileLite, setMobileLite] = useState(() => shouldUseMobileLite());
   const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   /** Submenus stay collapsed until the user clicks the section header (no auto-expand on navigation). */
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
@@ -234,6 +243,31 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const [syncLastError, setSyncLastError] = useState<string | null>(null);
 
   const toggleSection = (key: string) => setExpandedSections((s) => ({ ...s, [key]: !s[key] }));
+
+  useEffect(() => {
+    const refresh = () => {
+      const preference = readMobileLitePreference();
+      setLitePreference(preference);
+      setMobileLite(shouldUseMobileLite(preference));
+    };
+    const connection = networkInformation();
+    const media = window.matchMedia('(max-width: 767px)');
+    window.addEventListener('boat-mobile-lite-change', refresh);
+    connection?.addEventListener?.('change', refresh);
+    media.addEventListener?.('change', refresh);
+    return () => {
+      window.removeEventListener('boat-mobile-lite-change', refresh);
+      connection?.removeEventListener?.('change', refresh);
+      media.removeEventListener?.('change', refresh);
+    };
+  }, []);
+
+  const toggleMobileLite = () => {
+    const next: MobileLitePreference = mobileLite ? 'off' : 'on';
+    writeMobileLitePreference(next);
+    setLitePreference(next);
+    setMobileLite(next === 'on');
+  };
 
   const isReportSubgroupOpen = (groupName: string, itemPages: string[]) => {
     const v = reportSubgroupExpanded[groupName];
@@ -801,6 +835,20 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     appModeLabel === "LOCAL"
       ? "bg-emerald-500/20 text-emerald-200 border-emerald-500/40"
       : "bg-violet-500/20 text-violet-200 border-violet-500/40";
+
+  const homePage = businessType === 'retail'
+    ? 'retail_dashboard'
+    : businessType === 'clinic'
+      ? 'clinic_dashboard'
+      : businessType === 'sacco'
+        ? SACCOPRO_PAGE.dashboard
+        : businessType === 'school'
+          ? SCHOOL_PAGE.dashboard
+          : businessType === 'vsla'
+            ? VSLA_PAGE.dashboard
+            : businessType === 'manufacturing'
+              ? 'manufacturing'
+              : 'dashboard';
 
   const formatGraceRemaining = (ms: number) => {
     const totalHours = Math.max(0, Math.ceil(ms / (60 * 60 * 1000)));
@@ -1412,6 +1460,16 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           </nav>
 
           <div className="max-h-[45vh] overflow-y-auto px-2 pt-2 border-t border-slate-800 shrink-0">
+            <button
+              type="button"
+              onClick={toggleMobileLite}
+              className="mb-2 flex w-full items-center justify-between rounded-md border border-slate-700 px-2 py-2 text-left text-xs text-slate-300 lg:hidden"
+            >
+              <span className="flex items-center gap-2"><Smartphone className="h-4 w-4" /> BOAT Lite</span>
+              <span className={`rounded-full px-2 py-0.5 font-semibold ${mobileLite ? 'bg-emerald-500/20 text-emerald-300' : 'bg-slate-800 text-slate-400'}`}>
+                {mobileLite ? 'On' : litePreference === 'auto' ? 'Auto' : 'Off'}
+              </span>
+            </button>
             <div className="px-2 py-1 mb-1">
               <p className="text-xs font-medium text-slate-200 truncate">{user?.full_name}</p>
               <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
@@ -1491,8 +1549,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         />
       )}
 
-      <div className="h-[100dvh] min-w-0 max-w-full overflow-hidden lg:pl-64">
-        <main className="h-full min-w-0 max-w-full overflow-x-auto overflow-y-auto overscroll-contain pt-14 lg:pt-0">
+      <div className={`h-[100dvh] min-w-0 max-w-full overflow-hidden lg:pl-64 ${mobileLite ? 'boat-lite' : ''}`}>
+        <main className={`h-full min-w-0 max-w-full overflow-x-auto overflow-y-auto overscroll-contain pt-14 lg:pt-0 ${mobileLite ? 'pb-16' : ''}`}>
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -1620,7 +1678,20 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           )}
         </main>
       </div>
-      <WorkspaceGuide currentPage={currentPage} businessType={businessType} onNavigate={onNavigate} />
+      {mobileLite && (
+        <nav className="fixed inset-x-0 bottom-0 z-20 grid h-16 grid-cols-3 border-t border-slate-200 bg-white/95 shadow-[0_-4px_12px_rgba(15,23,42,0.08)] backdrop-blur lg:hidden" aria-label="BOAT Lite navigation">
+          <button type="button" onClick={() => onNavigate(homePage)} className="flex flex-col items-center justify-center gap-1 text-xs font-semibold text-slate-700 touch-manipulation">
+            <LayoutDashboard className="h-5 w-5" /> Home
+          </button>
+          <button type="button" onClick={() => setSidebarOpen(true)} className="flex flex-col items-center justify-center gap-1 text-xs font-semibold text-slate-700 touch-manipulation">
+            <Menu className="h-5 w-5" /> Menu
+          </button>
+          <button type="button" onClick={toggleMobileLite} className="flex flex-col items-center justify-center gap-1 text-xs font-semibold text-emerald-700 touch-manipulation">
+            <Smartphone className="h-5 w-5" /> Lite on
+          </button>
+        </nav>
+      )}
+      {!mobileLite && <WorkspaceGuide currentPage={currentPage} businessType={businessType} onNavigate={onNavigate} />}
       <TerminalLockOverlay />
     </div>
   );

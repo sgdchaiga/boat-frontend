@@ -1,4 +1,4 @@
-const CACHE_VERSION = "v4";
+const CACHE_VERSION = "v5";
 const SHELL_CACHE = `boat-shell-${CACHE_VERSION}`;
 const ASSET_CACHE = `boat-assets-${CACHE_VERSION}`;
 const APP_SHELL = ["/", "/manifest.webmanifest", "/member-app.webmanifest", "/boat-logo-square.svg"];

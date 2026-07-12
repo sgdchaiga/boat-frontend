@@ -1,8 +1,9 @@
 {
-  "name": "BOAT Housekeeping",
-  "short_name": "Housekeeping",
-  "description": "Focused BOAT room-service and housekeeping workspace",
-  "start_url": "/?page=housekeeping",
+  "name": "BOAT Lite",
+  "short_name": "BOAT",
+  "description": "Lightweight mobile access to BOAT business operations",
+  "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
   "background_color": "#f1f5f9",
   "theme_color": "#020617",
