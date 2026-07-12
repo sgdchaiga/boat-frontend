@@ -1,12 +1,6 @@
 import { Suspense, lazy, useState, useEffect, type ComponentType, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { LoginPage } from "@/components/LoginPage";
-import { OrganizationPickerPage } from "@/components/OrganizationPickerPage";
-import { SelfServiceOnboardingPage } from "@/components/SelfServiceOnboardingPage";
-import { OnboardingChecklist } from "@/components/OnboardingChecklist";
-import { Layout } from './components/Layout';
 import { AppProvider } from './contexts/AppContext';
-import SaccoSavingsStatementsPage from './components/sacco/SaccoSavingsStatementsPage';
 import type { LoanReportTabId } from './components/sacco/SaccoLoanReports';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from './lib/moduleAccess';
 import {
@@ -23,11 +17,11 @@ import { HOTEL_ASSESSMENT_PAGE, HOTEL_PAGE } from './lib/hotelPages';
 import { AccessDeniedNotice } from './components/common/AccessDeniedNotice';
 import { PageNotes } from './components/common/PageNotes';
 import type { CommunicationsTabId } from './components/communications/CommunicationsPage';
-import { DesktopServerConnectionPage } from './components/system/DesktopServerConnectionPage';
 import { desktopApi } from './lib/desktopApi';
 import { isDesktopApiDataMode } from './lib/boatApi';
 import { parseAdminTabParam } from './lib/adminTabs';
 import { isConstrainedConnection } from './lib/mobileLite';
+import { confirmHeavyMobileNavigation } from './lib/mobileHeavyFeatures';
 
 const LAZY_CHUNK_RELOAD_KEY = "boat.lazy-chunk-reload";
 
@@ -66,6 +60,14 @@ const lazyNamed = (
       throw error;
     }
   });
+
+const LoginPage = lazyNamed(() => import('./components/LoginPage'), 'LoginPage');
+const OrganizationPickerPage = lazyNamed(() => import('./components/OrganizationPickerPage'), 'OrganizationPickerPage');
+const SelfServiceOnboardingPage = lazyNamed(() => import('./components/SelfServiceOnboardingPage'), 'SelfServiceOnboardingPage');
+const OnboardingChecklist = lazyNamed(() => import('./components/OnboardingChecklist'), 'OnboardingChecklist');
+const Layout = lazyNamed(() => import('./components/Layout'), 'Layout');
+const DesktopServerConnectionPage = lazyNamed(() => import('./components/system/DesktopServerConnectionPage'), 'DesktopServerConnectionPage');
+const SaccoSavingsStatementsPage = lazy(() => import('./components/sacco/SaccoSavingsStatementsPage'));
 
 const Dashboard = lazyNamed(() => import('./components/Dashboard'), 'Dashboard');
 const RetailDashboard = lazyNamed(() => import('./components/RetailDashboard'), 'RetailDashboard');
@@ -496,6 +498,7 @@ function AppContent() {
 
   const navigate = (page: string, state?: Record<string, unknown>) => {
     const nextPage = normalizeLegacyPage(page);
+    if (nextPage !== currentPage && !confirmHeavyMobileNavigation(nextPage)) return;
     let nextState: Record<string, unknown> = {};
     if (!state || Object.keys(state).length === 0) {
       if (nextPage === currentPage && Object.keys(pageState).length === 0) return;
@@ -761,7 +764,7 @@ function AppContent() {
   }
 
   if (needsServerConnection && !serverConnectionReady) {
-    return <DesktopServerConnectionPage onConnected={() => setServerConnectionReady(true)} />;
+    return pageSuspense(<DesktopServerConnectionPage onConnected={() => setServerConnectionReady(true)} />);
   }
 
   if (loading) {
@@ -776,14 +779,14 @@ function AppContent() {
   }
 
   if (!user) {
-    return <LoginPage />;
+    return pageSuspense(<LoginPage />);
   }
 
   if (needsOrganizationPicker) {
     if (memberships.filter((m) => m.is_active).length === 0) {
-      return <SelfServiceOnboardingPage />;
+      return pageSuspense(<SelfServiceOnboardingPage />);
     }
-    return <OrganizationPickerPage />;
+    return pageSuspense(<OrganizationPickerPage />);
   }
 
   if (user.isSaccoMember && user.sacco_member_id &&
@@ -1576,7 +1579,7 @@ function AppContent() {
 
   return (
     <AppProvider navigate={(p, state) => navigate(normalizeLegacyPage(p), state)}>
-      {user.isSaccoMember ? pageSuspense(renderMemberPage()) : <Layout
+      {user.isSaccoMember ? pageSuspense(renderMemberPage()) : pageSuspense(<Layout
         currentPage={currentPage}
         pageState={pageState}
         onNavigate={(page, state) => navigate(page, state)}
@@ -1585,7 +1588,7 @@ function AppContent() {
       >
         <OnboardingChecklist onNavigate={(page) => navigate(page)} />
         {pageSuspense(renderPage())}
-      </Layout>}
+      </Layout>)}
     </AppProvider>
   );
 }

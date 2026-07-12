@@ -21,6 +21,7 @@ import { AdminPosCogsReconciliationPage } from "./AdminPosCogsReconciliationPage
 import { AdminSyncQueuePage } from "./AdminSyncQueuePage";
 import { AdminLocalImportPage } from "./AdminLocalImportPage";
 import { AdminSubscriptionRenewalPage } from "./AdminSubscriptionRenewalPage";
+import { AdminMobileLitePage } from "./AdminMobileLitePage";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
@@ -30,6 +31,7 @@ import { ADMIN_TAB_IDS, type AdminTab } from "../../lib/adminTabs";
 const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "users", label: "User & Role Management", icon: Users },
   { id: "business", label: "Business Configuration", icon: Building2 },
+  { id: "mobile_lite", label: "BOAT Lite mobile", icon: Building2 },
   { id: "products", label: "Products & Departments", icon: Package },
   { id: "recipes", label: "Recipe Management", icon: Package },
   { id: "approval", label: "Permissions & Page Access", icon: ShieldCheck },
@@ -97,6 +99,8 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
         );
       case "business":
         return <AdminHotelConfigPage />;
+      case "mobile_lite":
+        return <AdminMobileLitePage />;
       case "products":
         return <AdminProductsPage />;
       case "recipes":

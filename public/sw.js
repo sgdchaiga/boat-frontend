@@ -1,7 +1,7 @@
-const CACHE_VERSION = "v5";
+const CACHE_VERSION = "v6";
 const SHELL_CACHE = `boat-shell-${CACHE_VERSION}`;
 const ASSET_CACHE = `boat-assets-${CACHE_VERSION}`;
-const APP_SHELL = ["/", "/manifest.webmanifest", "/member-app.webmanifest", "/boat-logo-square.svg"];
+const APP_SHELL = ["/", "/manifest.webmanifest", "/member-app.webmanifest", "/boat-logo-square.svg", "/boat-icon-192.png", "/boat-icon-512.png", "/boat-icon-maskable-512.png", "/apple-touch-icon.png"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

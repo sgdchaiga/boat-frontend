@@ -10,7 +10,8 @@ export type AdminTab =
   | "hotel_pos"
   | "sync_queue"
   | "local_import"
-  | "subscription_renewal";
+  | "subscription_renewal"
+  | "mobile_lite";
 
 export const ADMIN_TAB_IDS: AdminTab[] = [
   "users",
@@ -25,6 +26,7 @@ export const ADMIN_TAB_IDS: AdminTab[] = [
   "sync_queue",
   "local_import",
   "subscription_renewal",
+  "mobile_lite",
 ];
 
 export function parseAdminTabParam(raw: string | null | undefined): AdminTab | undefined {

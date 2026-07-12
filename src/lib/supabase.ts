@@ -57,8 +57,11 @@ const cloudDisabledFetch: typeof fetch = async (_input, _init) => {
 
 const resilientFetch: typeof fetch = async (input, init) => {
   try {
-    return await fetch(input, init);
+    const response = await fetch(input, init);
+    if (response.status >= 500 && typeof window !== "undefined") window.dispatchEvent(new CustomEvent("boat:request-failed"));
+    return response;
   } catch (error) {
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("boat:request-failed"));
     return new Response(
       JSON.stringify({
         error: "network_offline_or_unreachable",

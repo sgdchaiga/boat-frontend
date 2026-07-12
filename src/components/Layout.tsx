@@ -57,6 +57,9 @@ import { organizationMembershipLabel } from '@/lib/orgMembership';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncStatus';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 import { WorkspaceGuide } from './WorkspaceGuide';
+import { MobileLiteCenter } from './mobile/MobileLiteCenter';
+import { observeMobileTableCards } from '@/lib/mobileTableCards';
+import { setMobileTelemetryOrganization } from '@/lib/mobilePerformance';
 import {
   networkInformation,
   readMobileLitePreference,
@@ -232,6 +235,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [litePreference, setLitePreference] = useState<MobileLitePreference>(readMobileLitePreference);
   const [mobileLite, setMobileLite] = useState(() => shouldUseMobileLite());
+  const [liteCenterOpen, setLiteCenterOpen] = useState(false);
   const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   /** Submenus stay collapsed until the user clicks the section header (no auto-expand on navigation). */
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
@@ -261,6 +265,17 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       media.removeEventListener?.('change', refresh);
     };
   }, []);
+
+  useEffect(() => {
+    if (!mobileLite) return;
+    const main = document.querySelector<HTMLElement>('main[data-boat-workspace]');
+    if (!main) return;
+    return observeMobileTableCards(main);
+  }, [mobileLite, currentPage]);
+
+  useEffect(() => {
+    setMobileTelemetryOrganization(user?.organization_id ?? null);
+  }, [user?.organization_id]);
 
   const toggleMobileLite = () => {
     const next: MobileLitePreference = mobileLite ? 'off' : 'on';
@@ -1550,7 +1565,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       )}
 
       <div className={`h-[100dvh] min-w-0 max-w-full overflow-hidden lg:pl-64 ${mobileLite ? 'boat-lite' : ''}`}>
-        <main className={`h-full min-w-0 max-w-full overflow-x-auto overflow-y-auto overscroll-contain pt-14 lg:pt-0 ${mobileLite ? 'pb-16' : ''}`}>
+        <main data-boat-workspace className={`h-full min-w-0 max-w-full overflow-x-auto overflow-y-auto overscroll-contain pt-14 lg:pt-0 ${mobileLite ? 'pb-16' : ''}`}>
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">
@@ -1686,11 +1701,20 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           <button type="button" onClick={() => setSidebarOpen(true)} className="flex flex-col items-center justify-center gap-1 text-xs font-semibold text-slate-700 touch-manipulation">
             <Menu className="h-5 w-5" /> Menu
           </button>
-          <button type="button" onClick={toggleMobileLite} className="flex flex-col items-center justify-center gap-1 text-xs font-semibold text-emerald-700 touch-manipulation">
-            <Smartphone className="h-5 w-5" /> Lite on
+          <button type="button" onClick={() => setLiteCenterOpen(true)} className="flex flex-col items-center justify-center gap-1 text-xs font-semibold text-emerald-700 touch-manipulation">
+            <Smartphone className="h-5 w-5" /> Lite centre
           </button>
         </nav>
       )}
+      <MobileLiteCenter
+        open={mobileLite && liteCenterOpen}
+        onClose={() => setLiteCenterOpen(false)}
+        onNavigate={(page) => onNavigate(page)}
+        onLock={() => { setLiteCenterOpen(false); lockTerminal('manual'); }}
+        organizationId={user?.organization_id ?? null}
+        role={user?.role ?? null}
+        businessType={businessType}
+      />
       {!mobileLite && <WorkspaceGuide currentPage={currentPage} businessType={businessType} onNavigate={onNavigate} />}
       <TerminalLockOverlay />
     </div>
