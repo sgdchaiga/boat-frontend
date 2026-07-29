@@ -41,7 +41,7 @@ const mfiChart = [
   ["5140","Communication expense","expense","expense"],["5150","Bank and mobile-money charges","expense","expense"],
   ["5200","Loan-loss provision expense","expense","expense"],["5210","Loan write-off expense","expense","expense"],
 ] as const;
-const mfiAccountCodes = new Set(mfiChart.map(([code]) => code));
+const mfiAccountCodes: ReadonlySet<string> = new Set<string>(mfiChart.map(([code]) => code));
 
 export function MfiIntegrationPage({ readOnly = false }: { readOnly?: boolean }) {
   const { user } = useAuth();
