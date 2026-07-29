@@ -361,6 +361,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         allowManufacturing,
         allowBudget,
         allowInventory: user?.enable_inventory !== false,
+        allowFixedAssets: enableFixedAssets,
         salesWorkflow: user?.sales_workflow || "both",
         canManageAccounting: Boolean(
           isSuperAdmin || ["admin", "manager", "accountant"].includes(String(user?.role || "").toLowerCase())
@@ -376,6 +377,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       allowManufacturing,
       allowBudget,
       user?.enable_inventory,
+      enableFixedAssets,
       user?.sales_workflow,
       user?.role,
       isSuperAdmin,

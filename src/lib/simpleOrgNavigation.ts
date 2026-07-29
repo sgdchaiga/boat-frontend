@@ -39,6 +39,7 @@ export type BuildSimpleOrgNavArgs = {
   allowManufacturing: boolean;
   allowBudget: boolean;
   allowInventory?: boolean;
+  allowFixedAssets?: boolean;
   salesWorkflow?: "invoice" | "quick_sale" | "both";
   canManageAccounting?: boolean;
 };
@@ -116,6 +117,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     allowManufacturing,
     allowBudget,
     allowInventory = true,
+    allowFixedAssets = false,
     salesWorkflow = "both",
     canManageAccounting = false,
   } = args;
@@ -138,6 +140,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
         { name: "Journal entries", page: "accounting_journal" } as NavChild,
       ] : []),
       { name: "General ledger", page: "accounting_gl" },
+      ...(allowFixedAssets ? [{ name: "Fixed assets", page: "fixed_assets" } as NavChild] : []),
       { name: "Trial balance", page: "accounting_trial" },
       ...(canManageAccounting ? [
         { name: "Opening balances", page: "data_migration" } as NavChild,
