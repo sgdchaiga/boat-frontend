@@ -85,6 +85,7 @@ export type SaccoTellerTransactionRow = {
   reversed_at?: string | null;
   reversed_by_staff_id?: string | null;
   correction_reason?: string | null;
+  idempotency_key?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -1294,6 +1295,8 @@ export async function createTellerTransaction(params: {
   txnDate?: string | null;
   mode: "posted" | "pending_approval";
   journalBatchRef?: string | null;
+  /** Stable client request key; retries return the original transaction. */
+  idempotencyKey?: string | null;
 }): Promise<SaccoTellerTransactionRow> {
   const status = params.mode === "posted" ? "posted" : "pending_approval";
   const txnDateRow = normalizeTxnDateColumn(params.txnDate);
@@ -1317,9 +1320,29 @@ export async function createTellerTransaction(params: {
     checker_staff_id: null as string | null,
     approved_at: status === "posted" ? new Date().toISOString() : null,
     journal_batch_ref: params.journalBatchRef ?? null,
+    idempotency_key: params.idempotencyKey ?? null,
   };
   const { data, error } = await sb.from("sacco_teller_transactions").insert(insertRow).select("*").single();
   if (error) {
+    const code = String((error as { code?: string }).code ?? "");
+    if (params.idempotencyKey && code === "23505") {
+      const { data: duplicate, error: duplicateError } = await sb
+        .from("sacco_teller_transactions")
+        .select("*")
+        .eq("organization_id", params.organizationId)
+        .eq("idempotency_key", params.idempotencyKey)
+        .single();
+      if (duplicateError) throw duplicateError;
+      const duplicateRow = duplicate as SaccoTellerTransactionRow;
+      if (duplicateRow.status === "posted") {
+        await finalizePostedTellerTxnEffects({
+          organizationId: params.organizationId,
+          staffId: params.staffId,
+          txn: duplicateRow,
+        });
+      }
+      return duplicateRow;
+    }
     throwIfTellerDbError(error);
     throw error;
   }
@@ -1372,6 +1395,9 @@ export async function approveTellerTransaction(params: {
   if (!existing) throw new Error("Transaction not found.");
   const ex = existing as SaccoTellerTransactionRow;
   if (ex.status !== "pending_approval") throw new Error("Only pending transactions can be approved.");
+  if (ex.maker_staff_id && ex.maker_staff_id === params.checkerStaffId) {
+    throw new Error("You cannot approve a transaction that you entered. Ask another authorized officer.");
+  }
 
   const { data, error } = await sb
     .from("sacco_teller_transactions")
@@ -1383,6 +1409,7 @@ export async function approveTellerTransaction(params: {
     .eq("id", params.transactionId)
     .eq("organization_id", params.organizationId)
     .eq("status", "pending_approval")
+    .neq("maker_staff_id", params.checkerStaffId)
     .select("*")
     .single();
   if (error) {

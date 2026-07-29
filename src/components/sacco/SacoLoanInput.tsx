@@ -15,9 +15,12 @@ import {
   ListChecks,
   MinusCircle,
   PiggyBank,
+  Search,
   UserCheck,
+  X,
 } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
+import { SaccoWorkflowSteps } from '@/components/sacco/SaccoWorkflowSteps';
 
 /** Native <select> options inherit OS theme; force light scheme + explicit colors so lists stay readable. */
 const SELECT_FIELD =
@@ -52,12 +55,34 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
     lc1ChairmanPhone: '',
     useAgent: false,
   });
+  const [submitting, setSubmitting] = useState(false);
+  const [memberSearch, setMemberSearch] = useState('');
 
   const guarantorCandidates = memberChoices.filter(m => m.id !== form.memberId);
 
   // Get selected product
   const selectedProduct = activeProducts.find(p => p.name === form.loanType);
   const selectedMember = memberChoices.find(m => m.id === form.memberId);
+  const memberMatches = useMemo(() => {
+    const query = memberSearch.trim().toLowerCase();
+    if (!query || selectedMember) return [];
+    return memberChoices
+      .filter((member) =>
+        `${member.name} ${member.accountNumber} ${member.phone ?? ''}`.toLowerCase().includes(query)
+      )
+      .slice(0, 8);
+  }, [memberChoices, memberSearch, selectedMember]);
+
+  const chooseMember = (member: Member) => {
+    const product = activeProducts.find((item) => item.name === form.loanType);
+    setForm((previous) => ({
+      ...previous,
+      memberId: member.id,
+      memberName: member.name,
+      interestRate: suggestedAnnualRatePct(member, product ?? selectedProduct ?? undefined),
+    }));
+    setMemberSearch('');
+  };
 
   // Calculate fees
   const feeBreakdown = useMemo(() => {
@@ -166,10 +191,12 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
     if (!form.memberId) return;
     if (!eligibility?.allMet) {
       return;
     }
+    setSubmitting(true);
     try {
       await addLoan({
       memberId: form.memberId, memberName: form.memberName, loanType: form.loanType,
@@ -193,14 +220,26 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
       lc1ChairmanPhone: '',
       useAgent: false,
     });
+    setMemberSearch('');
     } catch (err) {
       toast({
         title: 'Cannot apply',
         description: err instanceof Error ? err.message : 'Application failed.',
         variant: 'destructive',
       });
+    } finally {
+      setSubmitting(false);
     }
   };
+
+  const applicationStep =
+    !selectedMember || !selectedProduct
+      ? 1
+      : !form.amount || !form.purpose.trim()
+        ? 2
+        : form.guarantors.every((guarantor) => !guarantor) && !form.collateralDescription.trim()
+          ? 3
+          : 4;
 
   return (
     <div className="space-y-6">
@@ -211,32 +250,80 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
         </PageNotes>
       </div>
 
+      <section className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Loan process</h2>
+            <p className="text-xs text-slate-600">Current stage: Application. Next action after submission: Assessment by a loan officer.</p>
+          </div>
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Responsible: Loan officer</span>
+        </div>
+        <SaccoWorkflowSteps
+          ariaLabel="Full loan process"
+          currentStep={1}
+          steps={["Application", "Assessment", "Security", "Approval", "Disbursement", "Repayment", "Arrears", "Closure"]}
+        />
+      </section>
+
+      <SaccoWorkflowSteps
+        ariaLabel="Loan application progress"
+        currentStep={applicationStep}
+        steps={["Member & product", "Loan details", "Security", "Review & submit"]}
+      />
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Form */}
         <div className="lg:col-span-2 space-y-6">
           <div className="bg-white rounded-xl p-6 shadow-sm border border-slate-100">
-            <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2"><FileText size={16} /> Application Form</h3>
+            <h3 className="text-sm font-semibold text-slate-900 mb-4 flex items-center gap-2"><FileText size={16} /> Application details</h3>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Member</label>
-                  <select required value={form.memberId} onChange={e => {
-                    const m = memberChoices.find(x => x.id === e.target.value);
-                    const lt = activeProducts.find(p => p.name === form.loanType);
-                    setForm(p => ({
-                      ...p,
-                      memberId: e.target.value,
-                      memberName: m?.name || '',
-                      interestRate: suggestedAnnualRatePct(m, lt ?? selectedProduct ?? undefined),
-                    }));
-                  }} className={SELECT_FIELD}>
-                    <option value="">Select Member</option>
-                    {memberChoices.map(m => (
-                      <option key={m.id} value={m.id} className="bg-white text-slate-900">
-                        {m.name} ({m.accountNumber}){m.status === 'inactive' ? ' — inactive' : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">Find member</label>
+                  {selectedMember ? (
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-slate-900">{selectedMember.name}</p>
+                        <p className="text-xs text-slate-600">{selectedMember.accountNumber}{selectedMember.phone ? ` · ${selectedMember.phone}` : ''}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setForm((previous) => ({ ...previous, memberId: '', memberName: '' }))}
+                        className="rounded-md p-1.5 text-slate-500 hover:bg-white hover:text-slate-800"
+                        aria-label="Change selected member"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="relative">
+                      <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" aria-hidden />
+                      <input
+                        value={memberSearch}
+                        onChange={(event) => setMemberSearch(event.target.value)}
+                        placeholder="Name, account number or phone"
+                        autoComplete="off"
+                        className={`${SELECT_FIELD} pl-9`}
+                      />
+                      {memberSearch.trim() && (
+                        <div className="absolute z-20 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+                          {memberMatches.length ? memberMatches.map((member) => (
+                            <button
+                              key={member.id}
+                              type="button"
+                              onClick={() => chooseMember(member)}
+                              className="block w-full rounded-md px-3 py-2 text-left hover:bg-emerald-50"
+                            >
+                              <span className="block text-sm font-medium text-slate-900">{member.name}</span>
+                              <span className="block text-xs text-slate-500">{member.accountNumber}{member.phone ? ` · ${member.phone}` : ''}</span>
+                            </button>
+                          )) : (
+                            <p className="px-3 py-3 text-sm text-slate-500">No matching member found.</p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {selectedMember && (
                     <p className="text-[11px] text-slate-600 mt-1.5">
                       Membership tier: <span className="font-semibold text-slate-800">{tierLabel(sharesToTier(selectedMember.sharesBalance))}</span>
@@ -526,9 +613,9 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
                 <div className="flex justify-end">
                   <button
                     type="submit"
-                    disabled={!eligibility?.allMet}
+                    disabled={!eligibility?.allMet || submitting}
                     title={
-                      !eligibility?.allMet
+                      !eligibility?.allMet || submitting
                         ? 'Fulfil every condition in the checklist (green tiles). Hover this button for status text above.'
                         : 'All checklist conditions are met — submit this application.'
                     }
@@ -538,7 +625,7 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
                         : 'bg-emerald-600 hover:bg-emerald-700'
                     }`}
                   >
-                    Submit Application
+                    {submitting ? 'Submitting…' : 'Submit application'}
                   </button>
                 </div>
               </div>

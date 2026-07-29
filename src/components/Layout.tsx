@@ -34,10 +34,14 @@ import {
   PackageCheck,
   FileUp,
   Lightbulb,
+  Calculator,
+  Search,
+  Bell,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
 import { SACCOPRO_PAGE } from '@/lib/saccoproPages';
+import { MFI_PAGE } from '@/lib/mfiPages';
 import { SCHOOL_PAGE } from '@/lib/schoolPages';
 import { VSLA_PAGE } from '@/lib/vslaPages';
 import { PAYROLL_PAGE } from '@/lib/payrollPages';
@@ -232,6 +236,11 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     useAuth();
   const [orgSwitching, setOrgSwitching] = useState(false);
   const businessType = user?.business_type ?? null;
+  const organizationAppVersion = user?.app_version || "1.0";
+  const usesVersionedLayout = organizationAppVersion
+    .split(".")
+    .map((part) => Number(part) || 0)
+    .reduce((score, part, index) => score + part * (index === 0 ? 10000 : index === 1 ? 100 : 1), 0) >= 10100;
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [litePreference, setLitePreference] = useState<MobileLitePreference>(readMobileLitePreference);
@@ -246,6 +255,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const [syncLastAttemptAt, setSyncLastAttemptAt] = useState<number | null>(null);
   const [syncLastSuccessAt, setSyncLastSuccessAt] = useState<number | null>(null);
   const [syncLastError, setSyncLastError] = useState<string | null>(null);
+  const [schoolSearch, setSchoolSearch] = useState('');
+  const [schoolYear, setSchoolYear] = useState(() => localStorage.getItem('boat.school.academic_year') || String(new Date().getFullYear()));
+  const [schoolTerm, setSchoolTerm] = useState(() => localStorage.getItem('boat.school.term') || 'Term 1');
 
   const toggleSection = (key: string) => setExpandedSections((s) => ({ ...s, [key]: !s[key] }));
 
@@ -295,7 +307,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Overview', icon: LayoutDashboard, page: 'platform_overview' },
     { name: 'Communications', icon: MessageSquare, page: 'communications' },
     { name: 'Organizations', icon: Building2, page: 'platform_organizations' },
-    { name: 'Business admins', icon: UsersRound, page: 'platform_business_admins' },
+    { name: 'Staff accounts', icon: UsersRound, page: 'platform_business_admins' },
     { name: 'Link user to org', icon: Link2, page: 'platform_link_user' },
     { name: 'Business types', icon: Building2, page: 'platform_business_types' },
     { name: 'Subscription plans', icon: CreditCard, page: 'platform_plans' },
@@ -326,6 +338,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ["admin", "accountant", "manager"].includes(String(user?.role ?? "").toLowerCase())
   );
   const saccoPermissionsNav = Boolean(isSuperAdmin || String(user?.role ?? "").toLowerCase() === "admin");
+  const saccoRole = String(user?.role ?? "").toLowerCase();
+  const saccoIsTeller = saccoRole === "teller";
+  const saccoIsLoanOfficer = saccoRole === "loan_officer";
+  const saccoCanApprove = Boolean(isSuperAdmin || ["admin", "manager", "accountant"].includes(saccoRole));
 
   const simpleNavigation: NavItem[] = useMemo(
     () =>
@@ -344,6 +360,11 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         allowCommunications,
         allowManufacturing,
         allowBudget,
+        allowInventory: user?.enable_inventory !== false,
+        salesWorkflow: user?.sales_workflow || "both",
+        canManageAccounting: Boolean(
+          isSuperAdmin || ["admin", "manager", "accountant"].includes(String(user?.role || "").toLowerCase())
+        ),
       }),
     [
       businessType,
@@ -354,6 +375,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       allowCommunications,
       allowManufacturing,
       allowBudget,
+      user?.enable_inventory,
+      user?.sales_workflow,
+      user?.role,
+      isSuperAdmin,
     ]
   );
 
@@ -532,6 +557,171 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ]
   );
 
+  const simplifiedSaccoNavigation: NavItem[] = useMemo(
+    () => [
+      { name: "Home", icon: LayoutDashboard, page: SACCOPRO_PAGE.dashboard },
+      {
+        name: "Members",
+        icon: UsersRound,
+        children: [
+          { name: "Find a member", page: SACCOPRO_PAGE.members },
+          { name: "Member accounts", page: SACCOPRO_PAGE.savingsAccountsList },
+          { name: "Member statements", page: SACCOPRO_PAGE.savingsStatements },
+        ],
+      },
+      ...(!saccoIsLoanOfficer
+        ? [
+            {
+              name: "Money In",
+              icon: Banknote,
+              children: [
+                { name: "Receive money", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "receive" } },
+                { name: "Loan repayment", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "receive", tellerTask: "loan_repayment" } },
+                { name: "Today's receipts", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "daily" } },
+              ],
+            } as NavItem,
+            {
+              name: "Money Out",
+              icon: Wallet,
+              children: [
+                { name: "Pay money", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "give" } },
+                { name: "Transfer money", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "transfer" } },
+                { name: "Today's payments", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "daily" } },
+              ],
+            } as NavItem,
+          ]
+        : []),
+      ...(!saccoIsTeller
+        ? [
+            {
+              name: "Loans",
+              icon: Building2,
+              children: [
+                { name: "Loan overview", page: SACCOPRO_PAGE.loanDashboard },
+                { name: "Apply for a loan", page: SACCOPRO_PAGE.loanInput },
+                { name: "Loan accounts", page: SACCOPRO_PAGE.loanList },
+                { name: "Loans in arrears", page: SACCOPRO_PAGE.loanRecovery, state: { recoveryView: "overdue" } },
+                { name: "Repayment schedules", page: SACCOPRO_PAGE.loanServicing },
+              ],
+            } as NavItem,
+          ]
+        : []),
+      ...(saccoCanApprove
+        ? [
+            {
+              name: "Approvals",
+              icon: Shield,
+              children: [
+                { name: "Pending loan approvals", page: SACCOPRO_PAGE.loanApproval },
+                { name: "Approved loans to pay", page: SACCOPRO_PAGE.loanDisbursement },
+              ],
+            } as NavItem,
+          ]
+        : []),
+      {
+        name: "Reports",
+        icon: BarChart3,
+        children: [
+          { name: "Daily transactions", page: SACCOPRO_PAGE.teller, state: { tellerDesk: "daily" } },
+          { name: "Loan portfolio", page: SACCOPRO_PAGE.loanReports, state: { loanReportTab: "summary" } },
+          { name: "Arrears ageing", page: SACCOPRO_PAGE.loanReports, state: { loanReportTab: "aging" } },
+          { name: "Member balances", page: SACCOPRO_PAGE.savingsReports },
+          ...(saccoSystemCashbookNav
+            ? [
+                { name: "Performance", page: SACCOPRO_PAGE.performanceDashboard },
+                { name: "Financial statements", page: SACCOPRO_PAGE.financialSummaries },
+              ]
+            : []),
+        ],
+      },
+      ...(saccoSystemCashbookNav
+        ? [
+            {
+              name: "Settings",
+              icon: Settings,
+              children: [
+                { name: "Products", page: SACCOPRO_PAGE.loanSettings },
+                { name: "Users & staff", page: "staff" },
+                ...(saccoPermissionsNav ? [{ name: "Roles & permissions", page: SACCOPRO_PAGE.permissions }] : []),
+                {
+                  group: "Accounting & Administration",
+                  items: [
+                    { name: "Accounting setup", page: "gl_accounts" },
+                    { name: "Accounting adjustments", page: "accounting_manual" },
+                    { name: "General ledger", page: "accounting_gl" },
+                    { name: "Cashbook records", page: SACCOPRO_PAGE.cashbook, state: { cashbookView: "journal" } },
+                    { name: "Reconciliation", page: SACCOPRO_PAGE.cashbook, state: { cashbookView: "reconciliation" } },
+                    { name: "Savings setup", page: SACCOPRO_PAGE.savingsSettings },
+                    { name: "Interest rules", page: SACCOPRO_PAGE.savingsInterest },
+                    { name: "Data imports", page: SACCOPRO_PAGE.bulkImport },
+                  ],
+                },
+                { name: "System configuration", page: "admin" },
+              ],
+            } as NavItem,
+          ]
+        : []),
+    ],
+    [
+      saccoCanApprove,
+      saccoIsLoanOfficer,
+      saccoIsTeller,
+      saccoPermissionsNav,
+      saccoSystemCashbookNav,
+    ]
+  );
+
+  const mfiNavigation: NavItem[] = useMemo(
+    () => [
+      { name: 'Dashboard', icon: LayoutDashboard, page: MFI_PAGE.dashboard },
+      {
+        name: 'Borrowers',
+        icon: UsersRound,
+        children: [
+          { name: 'Borrower register', page: MFI_PAGE.borrowers },
+          { name: 'New borrower', page: MFI_PAGE.borrowers },
+        ],
+      },
+      {
+        name: 'Loans',
+        icon: Briefcase,
+        children: [
+          { name: 'Applications', page: MFI_PAGE.applications },
+          { name: 'Loan products', page: MFI_PAGE.products },
+          { name: 'Approval & disbursement', page: MFI_PAGE.approvals },
+        ],
+      },
+      {
+        name: 'Collections',
+        icon: Banknote,
+        children: [
+          { name: 'Record repayment', page: MFI_PAGE.collections },
+          { name: 'Follow-up worklist', page: MFI_PAGE.followups },
+        ],
+      },
+      {
+        name: 'Portfolio risk',
+        icon: AlertTriangle,
+        children: [
+          { name: 'Arrears & PAR', page: MFI_PAGE.risk },
+          { name: 'Penalties & waivers', page: MFI_PAGE.servicing },
+          { name: 'Interest suspension', page: MFI_PAGE.servicing },
+          { name: 'Provisioning', page: MFI_PAGE.provisioning },
+          { name: 'Restructuring', page: MFI_PAGE.restructures },
+          { name: 'Write-offs & recoveries', page: MFI_PAGE.writeoffs },
+        ],
+      },
+      { name: 'Reports', icon: BarChart3, page: MFI_PAGE.reports },
+      { name: 'Accounting & Connect', icon: Link2, page: MFI_PAGE.integration },
+      { name: 'Cashbook', icon: Receipt, page: SACCOPRO_PAGE.cashbook },
+      { name: 'General ledger', icon: Landmark, page: 'accounting_gl' },
+      { name: 'Staff', icon: UsersRound, page: 'staff' },
+      { name: 'Settings', icon: Settings, page: 'admin' },
+      ...(allowBoatConnect ? [{ name: 'BOAT Connect', icon: Link2, page: 'boat_connect' } as NavItem] : []),
+    ],
+    [allowBoatConnect]
+  );
+
   const schoolNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: GraduationCap, page: SCHOOL_PAGE.dashboard },
@@ -573,6 +763,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         ],
       },
       { name: 'Fixed deposits', icon: PiggyBank, page: SCHOOL_PAGE.fixedDeposit },
+      { name: 'Vote book & budgets', icon: BookOpen, page: SCHOOL_PAGE.voteBook },
       { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       {
         name: 'Reports',
@@ -686,18 +877,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         ...(enableFixedAssets ? [{ name: 'Fixed assets', page: 'fixed_assets' as const }] : []),
       ],
     },
-    ...(enableBudget
-      ? [
-          {
-            name: 'Budget',
-            icon: FileText,
-              children: [
-                { name: 'Budgeting', page: 'accounting_budgeting' },
-                { name: 'Budget variance', page: 'reports_budget_variance' },
-              ],
-            } as NavItem,
-          ]
-        : []),
+    // School budgeting is consolidated under "Vote book & budgets" above.
       { name: 'Wallet', icon: Wallet, page: 'wallet' },
       ...(enablePayroll
         ? [
@@ -804,15 +984,101 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Staff', icon: UsersRound, page: 'staff' },
     { name: 'Permissions & settings', icon: Settings, page: 'admin' },
   ];
+  const financialModellingNavigation: NavItem[] = [
+    { name: 'Modelling Studio', icon: Calculator, page: 'financial_modelling_studio' },
+    { name: 'Team', icon: UsersRound, page: 'staff' },
+    { name: 'Settings', icon: Settings, page: 'admin' },
+  ];
 
-  const baseNavigation: NavItem[] = businessType === 'accounting_practice'
+  const schoolRole = normalizeNavRoleKey(user?.role);
+  const canUseAdvancedAccounting = isSuperAdmin || ["accountant", "finance_manager", "manager", "admin", "super_admin", "owner"].includes(schoolRole);
+  const professionalSchoolNavigation: NavItem[] = [
+    { name: 'Dashboard', icon: LayoutDashboard, page: SCHOOL_PAGE.dashboard },
+    { name: 'Students', icon: UsersRound, children: [
+      { name: 'Student register', page: SCHOOL_PAGE.studentsList },
+      { name: 'New admission & profiles', page: SCHOOL_PAGE.students },
+      { name: 'Parents & guardians', page: SCHOOL_PAGE.parents },
+      { name: 'Health information', page: SCHOOL_PAGE.healthIssues },
+    ] },
+    { name: 'Fees & Billing', icon: Receipt, children: [
+      { name: 'Fee structures', page: SCHOOL_PAGE.feeStructures },
+      { name: 'Special fee structures', page: SCHOOL_PAGE.specialFeeStructures },
+      { name: 'Bursaries & scholarships', page: SCHOOL_PAGE.bursary },
+      { name: 'Student invoices', page: SCHOOL_PAGE.invoices },
+      { name: 'Receive school fees', page: SCHOOL_PAGE.payments },
+      { name: 'Daily collections', page: SCHOOL_PAGE.collections },
+      { name: 'Other revenue', page: SCHOOL_PAGE.otherRevenue },
+      { name: 'Fixed deposits', page: SCHOOL_PAGE.fixedDeposit },
+    ] },
+    { name: 'Money', icon: Landmark, children: [
+      { name: 'Overview', page: 'finance_overview' },
+      { name: 'Receive Money', page: SCHOOL_PAGE.payments },
+      { name: 'Spend Money', page: 'purchases_expenses' },
+      { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
+      { name: 'Accounts & Balances', page: 'treasury' },
+      { name: 'Reconcile', page: 'accounting_bank_reconciliation' },
+      { name: 'Pay suppliers', page: 'purchases_payments' },
+      { name: 'Manual journals', page: 'accounting_manual' },
+    ] },
+    { name: 'Communication', icon: MessageSquare, children: [
+      { name: 'Messages & announcements', page: 'communications' },
+      { name: 'Agent Hub', page: 'agent_hub' },
+    ] },
+    { name: 'Purchasing & Inventory', icon: PackageCheck, children: [
+      { name: 'Purchasing', page: 'purchases_vendors' },
+      { name: 'Stock', page: 'Products' },
+      ...(enableAssetVerification ? [{ name: 'Assets', page: 'asset_verification' }] : []),
+    ] },
+    { name: 'Budget & Vote Book', icon: BookOpen, children: [
+      { name: 'Vote book & movement report', page: SCHOOL_PAGE.voteBook },
+      { name: 'Budget formulation', page: 'accounting_budgeting' },
+      { name: 'Budget analysis & variance', page: 'reports_budget_variance' },
+    ] },
+    { name: 'Reports', icon: TrendingUp, page: 'reports_school_fee_collections' },
+    { name: 'Staff', icon: UsersRound, children: [
+      { name: 'Staff register', page: 'staff' },
+      ...(enablePayroll ? [{ name: 'Payroll overview', page: PAYROLL_PAGE.hub }, { name: 'Staff & salaries', page: PAYROLL_PAGE.staff }, { name: 'Payroll settings', page: PAYROLL_PAGE.settings }, { name: 'Loans & advances', page: PAYROLL_PAGE.loans }, { name: 'Payroll periods', page: PAYROLL_PAGE.periods }, { name: 'Process payroll', page: PAYROLL_PAGE.run }, { name: 'Payroll audit trail', page: PAYROLL_PAGE.audit }] : []),
+    ] },
+    { name: 'Settings', icon: Settings, children: [
+      { group: 'School administration', items: [
+        { name: 'School profile & security', page: 'admin', state: { adminTab: 'business' } },
+        { name: 'Users & roles', page: 'admin', state: { adminTab: 'users' } },
+        { name: 'Permissions & page access', page: 'admin', state: { adminTab: 'approval' } },
+        { name: 'Mobile & local access', page: 'admin', state: { adminTab: 'mobile_lite' } },
+        { name: 'Backup & sync', page: 'admin', state: { adminTab: 'sync_queue' } },
+        { name: 'Bulk import', page: 'admin', state: { adminTab: 'local_import' } },
+        { name: 'Subscription renewal', page: 'admin', state: { adminTab: 'subscription_renewal' } },
+      ] },
+      { name: 'Classes', page: SCHOOL_PAGE.classes },
+      { name: 'Streams', page: SCHOOL_PAGE.streams },
+      { name: 'Subjects (existing)', page: SCHOOL_PAGE.subjects },
+      { name: 'Teachers', page: SCHOOL_PAGE.teachers },
+      ...(canUseAdvancedAccounting ? [{ group: 'Advanced accounting', items: [
+        { name: 'Journal entries', page: 'accounting_journal' },
+        { name: 'Manual journals', page: 'accounting_manual' },
+        { name: 'Chart of accounts', page: 'gl_accounts' },
+        { name: 'General ledger', page: 'accounting_gl' },
+        { name: 'Journal account settings', page: 'admin', state: { adminTab: 'journal_accounts' } },
+        { name: 'Opening balances & migration', page: 'data_migration' },
+      ] }] : []),
+      { name: 'Image to Excel / Word', page: 'image_document_converter' },
+      { name: 'Ecosystem', page: 'ecosystem' },
+      { name: 'Intelligence', page: 'industry_intelligence' },
+    ] },
+  ];
+
+  const baseNavigation: NavItem[] = businessType === 'financial_modelling'
+    ? financialModellingNavigation
+    : businessType === 'accounting_practice'
     ? practiceNavigation
     : useRoleScopedNav
     ? roleScopedNav
     : businessType === 'sacco'
-      ? saccoNavigation
+      ? simplifiedSaccoNavigation
+      : businessType === 'microfinance'
+        ? mfiNavigation
       : businessType === 'school'
-        ? schoolNavigation
+        ? (usesVersionedLayout ? professionalSchoolNavigation : schoolNavigation)
         : businessType === 'vsla'
           ? vslaNavigation
           : simpleNavigation;
@@ -830,8 +1096,18 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     });
   })();
 
-  const showPlatform = isSuperAdmin;
-  const showHotel = !isSuperAdmin || isHotelStaff;
+  // Keep the platform console and an opened tenant workspace as separate menu
+  // contexts. A platform super-admin linked to a tenant previously received both
+  // menus at once, which exposed pages belonging to unrelated business types.
+  const isPlatformRoute = currentPage.startsWith('platform_');
+  const showPlatform = isSuperAdmin && (!isHotelStaff || isPlatformRoute);
+  const showPlatformReturn = isSuperAdmin && isHotelStaff && !isPlatformRoute;
+  const showHotel = !isSuperAdmin || (isHotelStaff && !isPlatformRoute);
+  useEffect(() => {
+    localStorage.setItem('boat.school.academic_year', schoolYear);
+    localStorage.setItem('boat.school.term', schoolTerm);
+    window.dispatchEvent(new CustomEvent('boat-school-period-change', { detail: { academicYear: schoolYear, term: schoolTerm } }));
+  }, [schoolYear, schoolTerm]);
 
   const headerSubtitle = isSuperAdmin && !isHotelStaff
     ? 'Platform console'
@@ -854,10 +1130,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
   const homePage = businessType === 'retail'
     ? 'retail_dashboard'
+    : businessType === 'general_business'
+      ? 'general_business_dashboard'
     : businessType === 'clinic'
       ? 'clinic_dashboard'
       : businessType === 'sacco'
         ? SACCOPRO_PAGE.dashboard
+        : businessType === 'microfinance'
+          ? MFI_PAGE.dashboard
         : businessType === 'school'
           ? SCHOOL_PAGE.dashboard
           : businessType === 'vsla'
@@ -1013,6 +1293,19 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       allowManufacturing,
     ]
   );
+  const schoolSearchResults = useMemo(() => {
+    const query = schoolSearch.trim().toLowerCase();
+    if (!query) return [];
+    const rows: Array<{ name: string; page: string; state?: Record<string, unknown> }> = [];
+    for (const item of professionalSchoolNavigation) {
+      if ('page' in item && item.page) rows.push({ name: item.name, page: item.page, state: item.state });
+      if ('children' in item) for (const child of item.children) {
+        if ('page' in child) rows.push({ name: child.name, page: child.page, state: child.state });
+        else for (const leaf of child.items) rows.push({ name: leaf.name, page: leaf.page, state: leaf.state });
+      }
+    }
+    return rows.filter((row) => row.name.toLowerCase().includes(query) && canShowPage(row.page)).slice(0, 7);
+  }, [schoolSearch, professionalSchoolNavigation, canShowPage]);
   const isReadOnlyPage = (page: string) => {
     const moduleId = pageToModuleId(page);
     if (!moduleId) return false;
@@ -1047,7 +1340,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const pageStateKey = JSON.stringify(pageState ?? {});
 
   const reportHubCategories = useMemo(() => {
-    if (businessType === "sacco" || businessType === "school" || businessType === "vsla") return [];
+    if (businessType === "sacco" || businessType === "vsla") return [];
     return getSimpleOrgReportHubCategories(businessType, canShowPage);
   }, [businessType, canShowPage]);
 
@@ -1056,6 +1349,21 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const showSimpleOrgReportHub =
     reportHubCategories.length > 0 &&
     isSimpleOrgReportHubRoute(businessType, currentPage, pageStateResolved, canShowPage);
+
+  const schoolOperationsTabs = [
+    { id: 'purchasing', label: 'Purchasing', items: [
+      { name: 'Suppliers', page: 'purchases_vendors' }, { name: 'Purchase orders', page: 'purchases_orders' },
+      { name: 'Goods received & bills', page: 'purchases_bills' }, { name: 'Supplier payments', page: 'purchases_payments' },
+      { name: 'Supplier returns', page: 'purchases_credits' },
+    ] },
+    { id: 'stock', label: 'Stock', items: [
+      { name: 'Items', page: 'Products' }, { name: 'Stock balances', page: 'inventory_stock_balances' },
+      { name: 'Movements & adjustments', page: 'inventory_stock_adjustments' }, { name: 'Store requisitions', page: 'inventory_store_requisitions' },
+      { name: 'Barcodes', page: 'inventory_barcodes' },
+    ] },
+    { id: 'assets', label: 'Assets', items: [{ name: 'Asset verification', page: 'asset_verification' }] },
+  ].map((group) => ({ ...group, items: group.items.filter((item) => canShowPage(item.page)) })).filter((group) => group.items.length > 0);
+  const activeSchoolOperationsGroup = schoolOperationsTabs.find((group) => group.items.some((item) => item.page === currentPage));
 
   const [reportHubCategoryId, setReportHubCategoryId] = useState<string | null>(null);
 
@@ -1178,6 +1486,23 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
           <nav className="flex-1 min-h-0 p-2 pt-1 overflow-y-auto">
             <ul className="space-y-0.5">
+              {showPlatformReturn && (
+                <li className="mb-1 border-b border-slate-800 pb-1">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onNavigate('platform_overview');
+                      setSidebarOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm transition ${
+                      currentPage === 'platform_overview' ? 'bg-violet-600 text-white shadow-sm' : singleNavIdle
+                    }`}
+                  >
+                    <Building2 className="w-4 h-4 shrink-0" />
+                    <span className="font-medium">Back to Platform console</span>
+                  </button>
+                </li>
+              )}
               {showPlatform && (
                 <>
                   {showHotel && (
@@ -1276,13 +1601,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                               {visibleChildren.map((child) => {
                                 if ('group' in child) {
                                   const itemPages = child.items.map((i) => i.page);
+                                  const isCollapsibleSubgroup = item.name === 'Reports' || item.name === 'Settings';
                                   const reportSubOpen =
-                                    item.name === 'Reports'
+                                    isCollapsibleSubgroup
                                       ? isReportSubgroupOpen(child.group, itemPages)
                                       : true;
                                   return (
                                     <li key={child.group} className="list-none">
-                                      {item.name === 'Reports' ? (
+                                      {isCollapsibleSubgroup ? (
                                         <>
                                           <button
                                             type="button"
@@ -1295,7 +1621,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                             }}
                                             className={`w-full flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-semibold uppercase tracking-wide transition ${
                                               itemPages.includes(currentPage)
-                                                ? 'text-rose-200 bg-slate-800/30'
+                                                ? item.name === 'Reports' ? 'text-rose-200 bg-slate-800/30' : 'text-slate-100 bg-slate-800/60'
                                                 : 'text-slate-500 hover:text-slate-300 hover:bg-slate-800/40'
                                             }`}
                                           >
@@ -1567,6 +1893,35 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
       <div className={`h-[100dvh] min-w-0 max-w-full overflow-hidden lg:pl-64 ${mobileLite ? 'boat-lite' : ''}`}>
         <main data-boat-workspace className={`h-full min-w-0 max-w-full overflow-x-auto overflow-y-auto overscroll-contain pt-14 lg:pt-0 ${mobileLite ? 'pb-16' : ''}`}>
+          {businessType === 'school' && !showPlatform && (
+            <header className="sticky top-0 z-20 border-b border-slate-200/90 bg-white/95 px-4 py-3 backdrop-blur lg:px-8">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="mr-auto min-w-0">
+                  <p className="truncate text-sm font-bold text-slate-900">{user?.organization_name || 'School workspace'}</p>
+                  <p className="text-xs text-slate-500">Student administration · Billing · Finance</p>
+                </div>
+                <label className="relative order-last w-full sm:order-none sm:w-64">
+                  <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
+                  <input value={schoolSearch} onChange={(e) => setSchoolSearch(e.target.value)} placeholder="Search BOAT" className="w-full rounded-lg border border-slate-300 bg-slate-50 py-2 pl-9 pr-3 text-sm outline-none focus:border-brand-500 focus:bg-white focus:ring-2 focus:ring-brand-100" />
+                  {schoolSearchResults.length > 0 && <div className="absolute left-0 right-0 top-11 z-50 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl">{schoolSearchResults.map((result) => <button key={`${result.page}-${result.name}`} type="button" onClick={() => { onNavigate(result.page, result.state); setSchoolSearch(''); }} className="block w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"><span className="font-medium">{result.name}</span></button>)}</div>}
+                </label>
+                <select aria-label="Academic year" value={schoolYear} onChange={(e) => setSchoolYear(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">
+                  {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((year) => <option key={year}>{year}</option>)}
+                </select>
+                <select aria-label="School term" value={schoolTerm} onChange={(e) => setSchoolTerm(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"><option>Term 1</option><option>Term 2</option><option>Term 3</option></select>
+                <button type="button" onClick={() => onNavigate('communications')} className="relative rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" aria-label="Notifications"><Bell className="h-5 w-5" /><span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-amber-500" /></button>
+              </div>
+            </header>
+          )}
+          {businessType === 'school' && activeSchoolOperationsGroup && (
+            <div className="sticky top-[73px] z-10 border-b border-slate-200 bg-slate-50/95 px-4 py-2 backdrop-blur lg:top-0 lg:px-8">
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex rounded-lg border border-slate-200 bg-white p-1">{schoolOperationsTabs.map((group) => <button key={group.id} type="button" onClick={() => onNavigate(group.items[0].page)} className={`rounded-md px-3 py-1.5 text-xs font-bold ${group.id===activeSchoolOperationsGroup.id?'bg-slate-900 text-white':'text-slate-600 hover:bg-slate-100'}`}>{group.label}</button>)}</div>
+                <div className="hidden h-6 w-px bg-slate-300 sm:block" />
+                <div className="flex max-w-full gap-1 overflow-x-auto">{activeSchoolOperationsGroup.items.map((item) => <button key={item.page} type="button" onClick={() => onNavigate(item.page)} className={`whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold ${currentPage===item.page?'bg-indigo-100 text-indigo-800':'text-slate-600 hover:bg-white'}`}>{item.name}</button>)}</div>
+              </div>
+            </div>
+          )}
           {showLocalSyncStatus && (
             <div className="px-4 lg:px-8 pt-3">
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-xs text-slate-700 flex flex-wrap items-center gap-x-4 gap-y-1">

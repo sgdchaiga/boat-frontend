@@ -1,0 +1,9 @@
+import type { StatementYear } from "@/lib/phase1FinancialEngine";
+
+export function PhaseOneStatements({ statements, money }: { statements: StatementYear[]; money: (value: number, compact?: boolean) => string }) {
+  const rows: [string, keyof StatementYear][] = [["Revenue","revenue"],["Gross profit","grossProfit"],["EBITDA","ebitda"],["Net profit","netProfit"],["Closing cash","closingCash"],["Total assets","totalAssets"],["Debt","debt"],["Equity","equity"],["Balance check","balanceCheck"],["Current ratio","currentRatio"],["Quick ratio","quickRatio"],["Interest cover","interestCover"],["Debt / EBITDA","debtToEbitda"],["DSCR","dscr"]];
+  return <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+    <div className="border-b border-slate-100 p-5"><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Phase 1 · linked statements</p><h3 className="mt-1 text-xl font-bold">Financial statements and lender metrics</h3><p className="mt-1 text-sm text-slate-500">Income statement, cash flow, balance sheet and debt metrics generated from one model.</p></div>
+    <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-sm"><thead className="bg-slate-50"><tr><th className="px-5 py-3 text-left">Metric</th>{statements.map(row=><th key={row.year} className="px-4 py-3 text-right">Year {row.year}</th>)}</tr></thead><tbody>{rows.map(([label,key])=><tr key={String(key)} className="border-t border-slate-100"><td className="px-5 py-3 font-semibold">{label}</td>{statements.map(row=><td key={row.year} className={`px-4 py-3 text-right ${key==="balanceCheck"&&Math.abs(Number(row[key]))>.01?"font-bold text-red-600":""}`}>{["dscr","currentRatio","quickRatio","interestCover","debtToEbitda"].includes(String(key))?`${Number(row[key]).toFixed(2)}x`:money(Number(row[key]),true)}</td>)}</tr>)}</tbody></table></div>
+  </section>;
+}

@@ -10,6 +10,7 @@ import { postSchoolFeePaymentAccounting } from "@/lib/schoolFeeJournal";
 import { randomUuid } from "@/lib/randomUuid";
 import { boatApi } from "@/lib/boatApi";
 import { canUseSchoolApi, listSchoolRows } from "@/lib/schoolApiData";
+import { DEFAULT_SCHOOL_PAYMENT_METHODS, SCHOOL_PAYMENT_METHODS, normalizeSchoolPaymentMethods, type SchoolPaymentMethod } from "@/lib/schoolPaymentMethods";
 
 type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string };
 type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; created_at?: string; student_id?: string; status?: string };
@@ -61,12 +62,14 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [err, setErr] = useState<string | null>(null);
   const [orgName, setOrgName] = useState<string | null>(null);
   const [orgAddress, setOrgAddress] = useState<string | null>(null);
+  const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
+  const [enabledMethods, setEnabledMethods] = useState<SchoolPaymentMethod[]>(DEFAULT_SCHOOL_PAYMENT_METHODS);
   const [receiptPreview, setReceiptPreview] = useState<SchoolFeeReceiptDetail | null>(null);
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
     amount: "",
-    method: "cash" as "cash" | "mobile_money" | "bank" | "transfer" | "other" | "wallet",
+    method: "cash" as SchoolPaymentMethod,
   });
 
   useEffect(() => {
@@ -122,17 +125,22 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     if (!user?.organization_id) {
       setOrgName(null);
       setOrgAddress(null);
+      setOrgLogoUrl(null);
       return;
     }
     void supabase
       .from("organizations")
-      .select("name,address")
+      .select("name,address,logo_url,school_payment_methods")
       .eq("id", user.organization_id)
       .maybeSingle()
       .then(({ data }) => {
-        const o = data as { name?: string; address?: string | null } | null;
+        const o = data as { name?: string; address?: string | null; logo_url?: string | null; school_payment_methods?: string[] | null } | null;
         setOrgName(o?.name ?? null);
         setOrgAddress(o?.address?.trim() ? o.address : null);
+        setOrgLogoUrl(o?.logo_url?.trim() ? o.logo_url : null);
+        const methods = normalizeSchoolPaymentMethods(o?.school_payment_methods);
+        setEnabledMethods(methods);
+        setForm((f) => methods.includes(f.method) ? f : { ...f, method: methods[0] });
       });
   }, [user?.organization_id]);
 
@@ -208,10 +216,11 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             receipt.issued_at,
             st ? `${st.admission_number} - ${st.first_name} ${st.last_name}` : payment.student_id,
             orgName,
-            orgAddress
+            orgAddress,
+            orgLogoUrl
           )
         );
-        setForm({ student_id: "", invoice_id: "", amount: "", method: "cash" });
+        setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash" });
         await load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to record payment.");
@@ -389,7 +398,11 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           p_metadata: { source: "school_fees_reversal" },
         });
       }
-      setErr(error.message);
+      setErr(
+        error.message.includes("school_payments_method_check")
+          ? "This payment method is not enabled in the database yet. Apply migration 20260722151000_fix_school_payment_methods.sql, then try again."
+          : error.message
+      );
       return;
     }
     if (pay?.id) {
@@ -433,7 +446,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       setErr(rIns.error.message);
       return;
     }
-    setForm({ student_id: "", invoice_id: "", amount: "", method: "cash" });
+    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash" });
     load();
   };
 
@@ -448,7 +461,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           payment.receipt_issued_at || payment.paid_at,
           st ? `${st.admission_number} - ${st.first_name} ${st.last_name}` : payment.student_id,
           orgName,
-          orgAddress
+          orgAddress,
+          orgLogoUrl
         )
       );
       return;
@@ -489,7 +503,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       ? `${st.admission_number} — ${st.first_name} ${st.last_name}`
       : payment.student_id;
     setReceiptPreview(
-      schoolFeeReceiptDetailFromPayment(payment, receipt_number, issued_at, studentLabel, orgName, orgAddress)
+      schoolFeeReceiptDetailFromPayment(payment, receipt_number, issued_at, studentLabel, orgName, orgAddress, orgLogoUrl)
     );
   };
 
@@ -499,7 +513,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         <h1 className="text-2xl font-bold text-slate-900">School fees</h1>
         <PageNotes ariaLabel="Payments">
           <p>
-            Captures cash, mobile money, bank, wallet, and other methods. Wallet debits the student&apos;s wallet balance (same as the Wallet module).
+            Captures cash, mobile money, bank, SchoolPay, wallet, and other methods. Wallet debits the student&apos;s wallet balance (same as the Wallet module).
             Partial payments update invoice balances; a receipt row is created automatically. {refNote}
           </p>
         </PageNotes>
@@ -543,12 +557,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             value={form.method}
             onChange={(e) => setForm((f) => ({ ...f, method: e.target.value as typeof form.method }))}
           >
-            <option value="cash">Cash</option>
-            <option value="mobile_money">Mobile money</option>
-            <option value="bank">Bank</option>
-            <option value="transfer">Transfer</option>
-            <option value="wallet">Wallet</option>
-            <option value="other">Other</option>
+            {SCHOOL_PAYMENT_METHODS.filter((method) => enabledMethods.includes(method.code)).map((method) => (
+              <option key={method.code} value={method.code}>{method.label}</option>
+            ))}
           </select>
           <p className="md:col-span-2 text-xs text-slate-600">{refNote}</p>
           <button type="button" onClick={recordPayment} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 w-fit">

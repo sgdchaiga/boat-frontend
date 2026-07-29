@@ -301,8 +301,13 @@ function createLocalSupabaseClient() {
     from(table: string) {
       return new LocalQueryBuilder(table);
     },
-    rpc(_fn: string, _args?: Record<string, unknown>) {
-      return Promise.resolve({ data: null, error: { message: "RPC not available in local mode." } });
+    async rpc(fn: string, args?: Record<string, unknown>) {
+      try {
+        const data = await desktopApi.localRpc({ functionName: fn, args });
+        return { data, error: null };
+      } catch (error) {
+        return { data: null, error: { message: error instanceof Error ? error.message : "Local posting failed." } };
+      }
     },
     auth: {
       getSession: async () => ({ data: { session: null }, error: null }),

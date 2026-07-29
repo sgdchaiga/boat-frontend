@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Eye, FileSpreadsheet, Landmark, RefreshCw, Settings2, Sparkles, Trash2, Unlink, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Eye, FileSpreadsheet, Landmark, Printer, RefreshCw, Settings2, Sparkles, Trash2, Unlink, Upload, X } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import {
@@ -78,6 +78,8 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
   });
   const [sourceType, setSourceType] = useState<ReconciliationSourceType>("bank");
   const [sourceLabel, setSourceLabel] = useState("");
+  const [bankClosingBalance, setBankClosingBalance] = useState("");
+  const [cashbookClosingBalance, setCashbookClosingBalance] = useState("");
   const [countDate, setCountDate] = useState(new Date().toISOString().slice(0, 10));
   const [countAmount, setCountAmount] = useState("");
   const [countDescription, setCountDescription] = useState("");
@@ -223,6 +225,12 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
     .filter((row) => selectedLedger.includes(row.id))
     .reduce((sum, row) => sum + row.amount, 0);
   const difference = statementTotal - ledgerTotal;
+  const depositsInTransit = unmatchedLedger.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0);
+  const unpresentedPayments = Math.abs(unmatchedLedger.filter((row) => row.amount < 0).reduce((sum, row) => sum + row.amount, 0));
+  const bankCreditsNotInCashbook = unmatchedStatements.filter((row) => row.amount > 0).reduce((sum, row) => sum + row.amount, 0);
+  const bankChargesNotInCashbook = Math.abs(unmatchedStatements.filter((row) => row.amount < 0).reduce((sum, row) => sum + row.amount, 0));
+  const adjustedBankBalance = Number(bankClosingBalance || 0) + depositsInTransit - unpresentedPayments;
+  const adjustedCashbookBalance = Number(cashbookClosingBalance || 0) + bankCreditsNotInCashbook - bankChargesNotInCashbook;
 
   const saveMatch = async (
     statementIds: string[],
@@ -501,6 +509,28 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
         <Metric label="Reconciled control total" value={signed(matchedTotal)} />
       </div>
 
+      <section className="rounded-xl border border-slate-200 bg-white p-5 print:border-0 print:shadow-none">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div><h2 className="font-semibold text-slate-900">Standard bank reconciliation statement</h2><p className="text-xs text-slate-500">Enter the statement and cashbook closing balances; unmatched lines supply the reconciling items.</p></div>
+          <button type="button" onClick={() => window.print()} className="app-btn-secondary print:hidden"><Printer className="h-4 w-4" /> Print statement</button>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2 print:hidden">
+          <label className="text-xs font-medium text-slate-600">Balance as per bank statement<input type="number" value={bankClosingBalance} onChange={(e) => setBankClosingBalance(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+          <label className="text-xs font-medium text-slate-600">Balance as per cashbook<input type="number" value={cashbookClosingBalance} onChange={(e) => setCashbookClosingBalance(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        </div>
+        <table className="mt-4 w-full text-sm"><tbody className="divide-y divide-slate-100">
+          <StatementRow label="Balance as per bank statement" amount={Number(bankClosingBalance || 0)} strong />
+          <StatementRow label="Add: deposits in transit" amount={depositsInTransit} />
+          <StatementRow label="Less: unpresented payments" amount={-unpresentedPayments} />
+          <StatementRow label="Adjusted bank balance" amount={adjustedBankBalance} strong />
+          <StatementRow label="Balance as per cashbook" amount={Number(cashbookClosingBalance || 0)} strong />
+          <StatementRow label="Add: bank credits not recorded in cashbook" amount={bankCreditsNotInCashbook} />
+          <StatementRow label="Less: bank charges/debits not recorded in cashbook" amount={-bankChargesNotInCashbook} />
+          <StatementRow label="Adjusted cashbook balance" amount={adjustedCashbookBalance} strong />
+          <StatementRow label="Unreconciled difference" amount={adjustedBankBalance - adjustedCashbookBalance} strong alert={Math.abs(adjustedBankBalance - adjustedCashbookBalance) >= 0.005} />
+        </tbody></table>
+      </section>
+
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -727,6 +757,10 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
 
 function Metric({ label, value, compact = false, alert = false }: { label: string; value: string; compact?: boolean; alert?: boolean }) {
   return <div className={compact ? "" : "rounded-xl border border-slate-200 bg-white p-4"}><p className="text-xs text-slate-500">{label}</p><p className={`${compact ? "text-base" : "text-xl"} font-bold tabular-nums ${alert ? "text-rose-700" : "text-slate-900"}`}>{value}</p></div>;
+}
+
+function StatementRow({ label, amount, strong = false, alert = false }: { label: string; amount: number; strong?: boolean; alert?: boolean }) {
+  return <tr className={strong ? "bg-slate-50" : ""}><td className={`px-3 py-2 ${strong ? "font-semibold" : ""}`}>{label}</td><td className={`px-3 py-2 text-right tabular-nums ${strong ? "font-bold" : ""} ${alert ? "text-rose-700" : ""}`}>{signed(amount)}</td></tr>;
 }
 
 function ColumnMap({

@@ -87,7 +87,15 @@ interface QueuedOrder {
   payments_total?: number;
 }
 
-type PosAction = "send_kitchen" | "pay_now" | "bill_to_room" | "credit_sale";
+type PosAction = "send_kitchen" | "pay_now" | "bill_to_room" | "credit_sale" | "included_breakfast";
+interface BreakfastEntitlement {
+  id: string;
+  service_date: string;
+  eligible_count: number;
+  served_count: number;
+  status: "available" | "served" | "partially_served" | "not_claimed" | "waived_discounted" | "complimentary_extra";
+  allocated_revenue: number;
+}
 interface HeldTicket {
   id: string;
   label: string;
@@ -214,6 +222,10 @@ export function POSPage({
   const [payQueueDate, setPayQueueDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [savingQueuePayment, setSavingQueuePayment] = useState(false);
   const [selectedStay, setSelectedStay] = useState<ActiveStay | null>(null);
+  const [breakfastEntitlements, setBreakfastEntitlements] = useState<BreakfastEntitlement[]>([]);
+  const [selectedBreakfastEntitlementId, setSelectedBreakfastEntitlementId] = useState("");
+  const [breakfastServings, setBreakfastServings] = useState("1");
+  const [breakfastOverrideReason, setBreakfastOverrideReason] = useState("");
   const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>("");
   const [selectedGuestId, setSelectedGuestId] = useState<string>("");
   const [selectedProductId, setSelectedProductId] = useState<string>("");
@@ -397,6 +409,31 @@ export function POSPage({
   useEffect(() => {
     loadData();
   }, [queueDate, queueStatusFilter, user?.organization_id, user?.isSuperAdmin]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setBreakfastEntitlements([]);
+    setSelectedBreakfastEntitlementId("");
+    if (!selectedStay) return;
+    void (async () => {
+      await (supabase as any).rpc("close_unused_breakfast_entitlements", { p_organization_id: orgId ?? null });
+      const { data, error } = await (supabase as any)
+        .from("hotel_breakfast_entitlements")
+        .select("id,service_date,eligible_count,served_count,status,allocated_revenue")
+        .eq("stay_id", selectedStay.id)
+        .eq("service_date", businessTodayISO())
+        .order("created_at", { ascending: false });
+      if (cancelled || error) return;
+      const rows = (data || []) as BreakfastEntitlement[];
+      setBreakfastEntitlements(rows);
+      const usable = rows.find((row) => row.status === "available" || row.status === "partially_served");
+      if (usable) {
+        setSelectedBreakfastEntitlementId(usable.id);
+        setBreakfastServings(String(Math.max(1, usable.eligible_count - usable.served_count)));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [selectedStay, orgId]);
 
   useEffect(() => {
     void loadPostedTransactions();
@@ -1556,18 +1593,22 @@ export function POSPage({
       alert("POS credit is turned off by the administrator.");
       return;
     }
-    if (action === "bill_to_room" && !selectedStay) {
+    if ((action === "bill_to_room" || action === "included_breakfast") && !selectedStay) {
       alert("Select a room for bill to room");
       return;
     }
-    if (action !== "bill_to_room" && !selectedGuestId) {
+    if (action === "included_breakfast" && !selectedBreakfastEntitlementId) {
+      alert("This active room has no available breakfast entitlement for today.");
+      return;
+    }
+    if (action !== "bill_to_room" && action !== "included_breakfast" && !selectedGuestId) {
       alert("Select a customer from the guest list.");
       return;
     }
     const orderTablePreview = tableNumber.trim() || "POS";
     const manualMode = (hotelBizConfig.pos_table_session_mode ?? "manual") === "manual";
     const perTableExplicit = !!tableLayout[orderTablePreview]?.requireExplicitSession;
-    const needExplicitSession = action !== "bill_to_room" && (manualMode || perTableExplicit);
+    const needExplicitSession = action !== "bill_to_room" && action !== "included_breakfast" && (manualMode || perTableExplicit);
     if (!tableSessionOpen && needExplicitSession) {
       alert("Open table session first.");
       return;
@@ -1583,7 +1624,7 @@ export function POSPage({
     try {
       const entryDate = transactionDateOverride || queueDate || businessTodayISO();
       await validateStockBeforeSubmit(entryDate);
-      if (action !== "bill_to_room" && !needExplicitSession && !tableSessionOpen) {
+      if (action !== "bill_to_room" && action !== "included_breakfast" && !needExplicitSession && !tableSessionOpen) {
         await openTableSessionDb(orderTablePreview);
       }
       const { data: staffRow } = await supabase
@@ -1592,10 +1633,11 @@ export function POSPage({
         .eq("id", user?.id)
         .maybeSingle();
 
-      const roomId = action === "bill_to_room" && selectedStay ? selectedStay.room_id : null;
-      const orderTable = action !== "bill_to_room" ? (tableNumber.trim() || "POS") : null;
+      const isRoomLinked = (action === "bill_to_room" || action === "included_breakfast") && !!selectedStay;
+      const roomId = isRoomLinked ? selectedStay!.room_id : null;
+      const orderTable = isRoomLinked ? null : (tableNumber.trim() || "POS");
       const orderCustomer =
-        action === "bill_to_room" && selectedStay?.hotel_customers
+        isRoomLinked && selectedStay?.hotel_customers
           ? `${selectedStay.hotel_customers.first_name} ${selectedStay.hotel_customers.last_name}`.trim()
           : (() => {
               const g = hotelCustomers.find((gg) => gg.id === selectedGuestId);
@@ -1643,7 +1685,16 @@ export function POSPage({
       if (itemsErr) throw new Error(itemsErr.message || itemsErr.details || "Failed to create order items.");
 
       const consumption = buildStockConsumptionLines();
-      if (consumption.length > 0) {
+      if (action === "included_breakfast") {
+        const { data: served, error: serveError } = await (supabase as any).rpc("serve_included_breakfast", {
+          p_entitlement_id: selectedBreakfastEntitlementId,
+          p_kitchen_order_id: orderData.id,
+          p_servings: Math.max(1, Number.parseInt(breakfastServings, 10) || 1),
+          p_manager_pin: managerPinDraft.trim() || null,
+          p_override_reason: breakfastOverrideReason.trim() || null,
+        });
+        if (serveError || !served?.ok) throw new Error(serveError?.message || served?.error || "Breakfast entitlement could not be consumed.");
+      } else if (consumption.length > 0) {
         const stockMoves = consumption.map((i) => ({
           product_id: i.product_id,
           source_type: "sale",
@@ -1807,6 +1858,9 @@ export function POSPage({
 
       setCart([]);
       setSelectedStay(null);
+      setBreakfastEntitlements([]);
+      setSelectedBreakfastEntitlementId("");
+      setBreakfastOverrideReason("");
       setTableNumber("");
       setSelectedGuestId("");
       setTableSessionOpen(false);
@@ -1816,7 +1870,9 @@ export function POSPage({
       }
       loadData();
       alert(
-        action === "send_kitchen"
+        action === "included_breakfast"
+          ? "Breakfast entitlement consumed and order sent to kitchen. No guest charge or payment was created."
+          : action === "send_kitchen"
           ? "Order sent to kitchen."
           : action === "pay_now"
             ? "Order paid and sent successfully."
@@ -2413,6 +2469,28 @@ export function POSPage({
               </select>
             </div>
           </div>
+          {selectedStay ? (
+            <div className="mb-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-amber-900">Bed &amp; Breakfast entitlement</p>
+                <span className="text-[11px] text-amber-800">Included in Room Package</span>
+              </div>
+              {breakfastEntitlements.length === 0 ? (
+                <p className="mt-1 text-xs text-amber-800">No breakfast entitlement is available for this room today.</p>
+              ) : (
+                <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-4">
+                  <select value={selectedBreakfastEntitlementId} onChange={(e) => setSelectedBreakfastEntitlementId(e.target.value)} className="rounded border border-amber-300 px-2 py-1.5 text-xs">
+                    {breakfastEntitlements.map((e) => (
+                      <option key={e.id} value={e.id}>{e.service_date} · {e.status.replaceAll("_", " ")} · {Math.max(0, e.eligible_count-e.served_count)} available</option>
+                    ))}
+                  </select>
+                  <input type="number" min="1" value={breakfastServings} onChange={(e) => setBreakfastServings(e.target.value)} aria-label="Breakfast servings" className="rounded border border-amber-300 px-2 py-1.5 text-xs" />
+                  <input value={breakfastOverrideReason} onChange={(e) => setBreakfastOverrideReason(e.target.value)} placeholder="Override reason (extras only)" className="rounded border border-amber-300 px-2 py-1.5 text-xs" />
+                  <input type="password" value={managerPinDraft} onChange={(e) => setManagerPinDraft(e.target.value)} placeholder="Manager PIN (extras only)" className="rounded border border-amber-300 px-2 py-1.5 text-xs" />
+                </div>
+              )}
+            </div>
+          ) : null}
           <div className="grid grid-cols-2 md:grid-cols-5 gap-1.5 mb-3">
             <button
               onClick={() => processOrder("send_kitchen")}
@@ -2435,6 +2513,14 @@ export function POSPage({
               className="bg-indigo-700 hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium py-1.5 text-xs"
             >
               {sending ? "..." : "Bill Room"}
+            </button>
+            <button
+              onClick={() => processOrder("included_breakfast")}
+              disabled={sending || cart.length === 0 || readOnly || !selectedStay || !selectedBreakfastEntitlementId}
+              className="bg-amber-700 hover:bg-amber-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium py-1.5 text-xs"
+              title="Consume breakfast entitlement without creating a charge or payment"
+            >
+              {sending ? "..." : "Included in Room Package"}
             </button>
             <button
               type="button"

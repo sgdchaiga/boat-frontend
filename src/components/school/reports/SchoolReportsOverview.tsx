@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Download, GraduationCap, Receipt, Users, Wallet } from "lucide-react";
+import { ArrowLeft, BarChart3, ChevronRight, Download, GraduationCap, Receipt, Users, Wallet } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -33,6 +33,32 @@ const PAGES = {
 
 type Props = { onNavigate?: (page: string) => void };
 
+const REPORT_CATEGORIES = [
+  { id: "fees", label: "Fees & collections", description: "Collections, balances, cash summaries and payment performance.", icon: Receipt, reports: [
+    { page: PAGES.feeCollections, label: "Fee collection report", desc: "Payments by class, student, date and method" },
+    { page: PAGES.outstanding, label: "Outstanding balances", desc: "Invoices with amounts still due" },
+    { page: PAGES.dailyCash, label: "Daily cash report", desc: "Cash and mobile-money collections by day" },
+    { page: PAGES.feeTrends, label: "Fee payment trends", desc: "Collection patterns by month" },
+    { page: PAGES.topDefaulters, label: "Top defaulters", desc: "Students with the highest outstanding balances" },
+  ] },
+  { id: "finance", label: "Financial statements", description: "Ledger-based statements and budget performance.", icon: BarChart3, reports: [
+    { page: PAGES.incomeExpenditure, label: "Income & expenditure", desc: "Fee income compared with recorded expenditure" },
+    { page: PAGES.trialBalance, label: "Trial balance", desc: "Debit and credit account balances" },
+    { page: PAGES.incomeStatement, label: "Income statement", desc: "Income and expenses from the general ledger" },
+    { page: PAGES.balanceSheet, label: "Statement of financial position", desc: "Assets, liabilities and accumulated funds" },
+    { page: PAGES.cashFlow, label: "Cash flow statement", desc: "Operating, investing and financing cash movements" },
+    { page: PAGES.budgetVariance, label: "Budget variance analysis", desc: "Approved budget compared with actual spending" },
+  ] },
+  { id: "students", label: "Student management", description: "Enrollment, term billing and student-account analysis.", icon: Users, reports: [
+    { page: PAGES.enrollment, label: "Student enrollment statistics", desc: "Active student headcount by class" },
+    { page: PAGES.termPerformance, label: "Term billing performance", desc: "Amounts invoiced and collected by term" },
+  ] },
+  { id: "items", label: "Purchases & items", description: "Product-level purchasing and sales analysis.", icon: GraduationCap, reports: [
+    { page: PAGES.purchasesByItem, label: "Purchases by item", desc: "Quantity and spend by supplier and department" },
+    { page: PAGES.salesByItem, label: "Sales by item", desc: "Quantity and revenue by source and department" },
+  ] },
+] as const;
+
 export function SchoolReportsOverview({ onNavigate }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
@@ -49,6 +75,7 @@ export function SchoolReportsOverview({ onNavigate }: Props) {
   const [rangeFrom, setRangeFrom] = useState("");
   const [rangeTo, setRangeTo] = useState("");
   const [exportFormat, setExportFormat] = useState<"pdf" | "excel">("pdf");
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -278,7 +305,18 @@ export function SchoolReportsOverview({ onNavigate }: Props) {
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-6 mb-8 space-y-6">
+      <section className="hidden mb-8 rounded-xl border border-slate-200 bg-white p-6" aria-hidden="true">
+        {!selectedCategory ? <>
+          <div className="mb-5"><h2 className="text-lg font-bold text-slate-900">Report categories</h2><p className="mt-1 text-sm text-slate-600">Choose a category to view its available reports.</p></div>
+          <div className="grid gap-4 md:grid-cols-2">{REPORT_CATEGORIES.map((category) => { const Icon=category.icon; return <button key={category.id} type="button" onClick={() => setSelectedCategory(category.id)} className="group flex items-center gap-4 rounded-xl border border-slate-200 p-5 text-left transition hover:border-indigo-300 hover:bg-indigo-50/30"><span className="rounded-lg bg-indigo-50 p-3 text-indigo-700"><Icon className="h-6 w-6" /></span><span className="min-w-0 flex-1"><strong className="block text-slate-900">{category.label}</strong><span className="mt-1 block text-sm text-slate-600">{category.description}</span><span className="mt-2 block text-xs font-semibold text-indigo-700">{category.reports.length} reports</span></span><ChevronRight className="h-5 w-5 text-slate-400 group-hover:text-indigo-600" /></button>; })}</div>
+        </> : (() => { const category=REPORT_CATEGORIES.find((item)=>item.id===selectedCategory); if(!category) return null; const Icon=category.icon; return <>
+          <button type="button" onClick={() => setSelectedCategory(null)} className="mb-4 inline-flex items-center gap-2 text-sm font-semibold text-indigo-700 hover:text-indigo-900"><ArrowLeft className="h-4 w-4" /> Back to report categories</button>
+          <div className="mb-5 flex items-center gap-3"><span className="rounded-lg bg-indigo-50 p-3 text-indigo-700"><Icon className="h-6 w-6" /></span><div><h2 className="text-xl font-bold text-slate-900">{category.label}</h2><p className="text-sm text-slate-600">{category.description}</p></div></div>
+          <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">{category.reports.map((report) => <button key={report.page} type="button" onClick={() => onNavigate?.(report.page)} className="rounded-xl border border-slate-200 p-4 text-left transition hover:border-indigo-300 hover:bg-indigo-50/40"><strong className="text-sm text-indigo-800">{report.label}</strong><p className="mt-1 text-xs leading-5 text-slate-600">{report.desc}</p><span className="mt-3 inline-block text-xs font-semibold text-indigo-700">Open report →</span></button>)}</div>
+        </>; })()}
+      </section>
+
+      <div className="hidden bg-white rounded-xl border border-slate-200 p-6 mb-8 space-y-6">
         <div>
           <h2 className="text-lg font-bold text-slate-900 mb-1">Financial reports</h2>
           <p className="text-sm text-slate-600 mb-3">Fees, cash, balances, and accounting views.</p>

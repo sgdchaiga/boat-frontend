@@ -68,6 +68,7 @@ export type UseTellerCompleteTransactionArgs = {
 export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionArgs) {
   const [fieldMsg, setFieldMsg] = useState<TellerFieldErrors>({});
   const argsRef = useRef(args);
+  const pendingIdempotencyKeyRef = useRef<string | null>(null);
   argsRef.current = args;
 
   const doComplete = useCallback(async (): Promise<boolean> => {
@@ -219,6 +220,12 @@ export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionA
 
       const sessionVolume = (snap?.sessionReceiptsTotal ?? 0) + (snap?.sessionPaymentsTotal ?? 0);
       const mode = resolveTellerEntryMode({ amount: Math.round(amt), sessionSessionVolume: sessionVolume });
+      const idempotencyKey =
+        pendingIdempotencyKeyRef.current ??
+        (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      pendingIdempotencyKeyRef.current = idempotencyKey;
 
       await createTellerTransaction({
         organizationId,
@@ -235,7 +242,9 @@ export function useTellerCompleteTransaction(args: UseTellerCompleteTransactionA
         ...chq,
         txnDate: businessTodayISO().slice(0, 10),
         mode,
+        idempotencyKey,
       });
+      pendingIdempotencyKeyRef.current = null;
 
       if (taskAction !== "cheque") {
         setAmountStr("");

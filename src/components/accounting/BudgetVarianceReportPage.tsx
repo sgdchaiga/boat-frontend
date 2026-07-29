@@ -32,7 +32,7 @@ function BudgetUseBar({ pct, overBudget }: { pct: number; overBudget: boolean })
     <div className="w-full min-w-[120px]">
       <div className="h-2.5 rounded-full bg-slate-200 overflow-hidden">
         <div
-          className={`h-full rounded-full transition-all ${overBudget ? "bg-red-500" : "bg-emerald-600"}`}
+          className={`h-full rounded-full transition-all ${overBudget ? "bg-red-500" : pct >= 80 ? "bg-amber-500" : "bg-emerald-600"}`}
           style={{ width: `${w}%` }}
         />
       </div>
@@ -299,6 +299,7 @@ export function BudgetVarianceReportPage() {
                     <th className="text-right p-2 font-semibold text-slate-700">Actual</th>
                     <th className="text-right p-2 font-semibold text-slate-700">Variance</th>
                     <th className="text-left p-2 font-semibold text-slate-700 min-w-[140px]">Budget used</th>
+                    <th className="text-left p-2 font-semibold text-slate-700 min-w-[220px]">Variance explanation</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -326,11 +327,11 @@ export function BudgetVarianceReportPage() {
                           )}
                           {!hasGl && <div className="text-xs text-amber-700 bg-amber-50 inline-block rounded px-1.5 py-0.5 mt-1">No GL — no actual</div>}
                         </td>
-                        <td className="p-2 text-right tabular-nums">{bud.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                        <td className="p-2 text-right tabular-nums text-slate-800">
+                        <td className="w-32 whitespace-nowrap p-2 text-right tabular-nums">{bud.toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
+                        <td className="w-32 whitespace-nowrap p-2 text-right tabular-nums text-slate-800">
                           {!hasGl ? "—" : actualsLoading ? "…" : act.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </td>
-                        <td className={`p-2 text-right tabular-nums font-medium ${variClass}`}>
+                        <td className={`w-32 whitespace-nowrap p-2 text-right tabular-nums font-medium ${variClass}`}>
                           {!hasGl ? "—" : actualsLoading ? "…" : vari.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </td>
                         <td className="p-2">
@@ -341,6 +342,9 @@ export function BudgetVarianceReportPage() {
                           ) : (
                             <BudgetUseBar pct={pct} overBudget={over} />
                           )}
+                        </td>
+                        <td className={`min-w-[220px] max-w-sm p-2 text-xs ${over ? "text-red-700" : pct >= 80 ? "text-amber-700" : "text-slate-600"}`}>
+                          {!hasGl ? "Link this vote to a GL account to explain movements." : act <= 0 ? "No expenditure has posted to this vote in the period." : over ? `Overspent by ${(act-bud).toLocaleString()}; actual expenditure exceeded the approved vote.` : pct >= 80 ? `Only ${(bud-act).toLocaleString()} remains; spending is close to the approval limit.` : `Within budget; ${(bud-act).toLocaleString()} remains available.`}
                         </td>
                       </tr>
                     );

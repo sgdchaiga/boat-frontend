@@ -22,7 +22,8 @@ type TemplateCode =
   | "vsla"
   | "school"
   | "clinic"
-  | "agriculture";
+  | "agriculture"
+  | "financial_modelling";
 
 type Template = {
   code: TemplateCode;
@@ -33,6 +34,17 @@ type Template = {
 };
 
 const TEMPLATES: Template[] = [
+  {
+    code: "financial_modelling",
+    label: "Financial Modelling Studio",
+    description: "Investment-grade projections, funding scenarios, valuations, and investor-ready outputs without operational modules.",
+    defaults: ["Model Owners", "Reviewers", "Investor Outputs"],
+    questions: [
+      { key: "primary_industry", label: "Primary industry modelled", placeholder: "Education technology, agriculture, SaaS..." },
+      { key: "projection_years", label: "Default projection period", placeholder: "5", type: "number" },
+      { key: "funding_currency", label: "Primary funding currency", placeholder: "USD" },
+    ],
+  },
   {
     code: "hotel",
     label: "Hotel",

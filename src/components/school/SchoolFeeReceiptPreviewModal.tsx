@@ -114,6 +114,9 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
             className="flex flex-col border-2 border-slate-800 rounded-sm bg-white p-4 sm:p-5 w-full max-w-md mx-auto max-h-[min(520px,48svh)] min-h-0 overflow-y-auto shadow-sm print:overflow-hidden print:rounded-none print:shadow-none print:border-slate-900"
           >
             <header className="mb-3 text-center sm:text-left print:mb-2">
+              {detail.orgLogoUrl ? (
+                <img src={detail.orgLogoUrl} alt="School logo" className="h-16 w-16 object-contain mx-auto sm:mx-0 mb-2 print:h-14 print:w-14" />
+              ) : null}
               <p className="text-xl font-bold text-slate-900 print:text-lg leading-tight">{detail.orgName ?? "—"}</p>
               {detail.orgAddress ? (
                 <p className="text-xs text-slate-600 mt-1 whitespace-pre-line leading-snug print:text-[10px] print:mt-0.5">

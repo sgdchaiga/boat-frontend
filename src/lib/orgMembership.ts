@@ -54,6 +54,7 @@ const BUSINESS_TYPE_LABELS: Record<string, string> = {
   hotel: "Hotel",
   retail: "Retail",
   sacco: "SACCO",
+  microfinance: "Microfinance",
   school: "School",
   clinic: "Clinic",
   manufacturing: "Manufacturing",

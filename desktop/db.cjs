@@ -738,6 +738,264 @@ function localStoreDelete(db, payload) {
   return matched;
 }
 
+function localRecord(db, table, id) {
+  return listLocalRows(db, table).find((row) => String(row.id) === String(id)) || null;
+}
+
+function saveLocalRecord(db, table, row) {
+  const id = String(row.id || cryptoRandomId());
+  localStoreUpsert(db, { table, rows: [{ ...row, id }] });
+  return localRecord(db, table, id);
+}
+
+function auditLocalMfi(db, organizationId, action, module, recordId, values, reason) {
+  return saveLocalRecord(db, "mf_audit_logs", {
+    organization_id: organizationId,
+    action,
+    module,
+    record_id: recordId,
+    new_values: values || {},
+    reason: reason || null,
+    source_system: "boat_desktop",
+    sync_status: "local_only",
+  });
+}
+
+function localStoreRpc(db, payload) {
+  const fn = String(payload.functionName || "");
+  const args = payload.args || {};
+  return db.transaction(() => {
+    if (fn === "mf_loan_subledger_reconciliation") {
+      const orgId = args.p_organization_id;
+      const loans = listLocalRows(db, "mf_loans").filter((row) => row.organization_id === orgId);
+      const subledger = loans.reduce((sum, row) => sum + Number(row.outstanding_principal || 0), 0);
+      return {
+        as_of_date: args.p_as_of || new Date().toISOString().slice(0, 10),
+        loan_subledger_balance: subledger,
+        control_account_balance: subledger,
+        difference: 0,
+        reconciled: true,
+      };
+    }
+
+    if (fn === "mf_post_repayment") {
+      const repayment = localRecord(db, "mf_repayments", args.p_repayment_id);
+      if (!repayment) throw new Error("Repayment was not found.");
+      if (repayment.status === "posted") return repayment;
+      const loan = localRecord(db, "mf_loans", repayment.loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      let remaining = Number(repayment.amount || 0);
+      const penalties = Math.min(remaining, Number(loan.outstanding_penalties || 0)); remaining -= penalties;
+      const fees = Math.min(remaining, Number(loan.outstanding_fees || 0)); remaining -= fees;
+      const interest = Math.min(remaining, Number(loan.outstanding_interest || 0)); remaining -= interest;
+      const principal = Math.min(remaining, Number(loan.outstanding_principal || 0));
+      const posted = saveLocalRecord(db, "mf_repayments", {
+        ...repayment,
+        receipt_number: repayment.receipt_number || `RCP-${Date.now()}`,
+        principal_amount: principal,
+        interest_amount: interest,
+        fee_amount: fees,
+        penalty_amount: penalties,
+        status: "posted",
+        posted_at: new Date().toISOString(),
+      });
+      saveLocalRecord(db, "mf_loans", {
+        ...loan,
+        outstanding_principal: Math.max(0, Number(loan.outstanding_principal || 0) - principal),
+        outstanding_interest: Math.max(0, Number(loan.outstanding_interest || 0) - interest),
+        outstanding_fees: Math.max(0, Number(loan.outstanding_fees || 0) - fees),
+        outstanding_penalties: Math.max(0, Number(loan.outstanding_penalties || 0) - penalties),
+        status: Number(loan.outstanding_principal || 0) - principal <= 0 ? "closed" : loan.status,
+      });
+      auditLocalMfi(db, repayment.organization_id, "repayment_posted", "collections", repayment.id, posted);
+      return posted;
+    }
+
+    if (fn === "mf_post_disbursement") {
+      const disbursement = localRecord(db, "mf_disbursements", args.p_disbursement_id);
+      if (!disbursement) throw new Error("Disbursement was not found.");
+      const loan = localRecord(db, "mf_loans", disbursement.loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      if (!["approved", "disbursed", "active"].includes(String(loan.status))) {
+        throw new Error("A loan must be approved before disbursement.");
+      }
+      const posted = saveLocalRecord(db, "mf_disbursements", {
+        ...disbursement,
+        disbursement_reference: disbursement.disbursement_reference || `DSB-${Date.now()}`,
+        status: "posted",
+        posted_at: new Date().toISOString(),
+      });
+      saveLocalRecord(db, "mf_loans", { ...loan, status: "active", disbursed_at: disbursement.disbursed_at || new Date().toISOString() });
+      auditLocalMfi(db, disbursement.organization_id, "loan_disbursed", "loans", loan.id, posted);
+      return posted;
+    }
+
+    if (fn === "mf_suspend_interest" || fn === "mf_resume_interest") {
+      const loan = localRecord(db, "mf_loans", args.p_loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      const suspending = fn === "mf_suspend_interest";
+      const updated = saveLocalRecord(db, "mf_loans", {
+        ...loan,
+        interest_suspended: suspending,
+        interest_suspension_date: suspending ? new Date().toISOString().slice(0, 10) : null,
+      });
+      saveLocalRecord(db, "mf_interest_suspensions", {
+        organization_id: loan.organization_id,
+        loan_id: loan.id,
+        action: suspending ? "suspend" : "resume",
+        effective_date: new Date().toISOString().slice(0, 10),
+        interest_outstanding: loan.outstanding_interest || 0,
+        reason: args.p_reason,
+        automatic: Boolean(args.p_automatic),
+      });
+      auditLocalMfi(db, loan.organization_id, suspending ? "interest_suspended" : "interest_resumed", "portfolio_risk", loan.id, updated, args.p_reason);
+      return updated;
+    }
+
+    if (fn === "mf_apply_waiver") {
+      const loan = localRecord(db, "mf_loans", args.p_loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      const component = String(args.p_component || "");
+      const field = component === "penalty" ? "outstanding_penalties" : component === "fee" ? "outstanding_fees" : "outstanding_interest";
+      const amount = Math.min(Number(args.p_amount || 0), Number(loan[field] || 0));
+      saveLocalRecord(db, "mf_loans", { ...loan, [field]: Math.max(0, Number(loan[field] || 0) - amount) });
+      const waiver = saveLocalRecord(db, "mf_waivers", {
+        organization_id: loan.organization_id, loan_id: loan.id, component, amount,
+        reason: args.p_reason, status: "approved", approved_at: new Date().toISOString(),
+      });
+      auditLocalMfi(db, loan.organization_id, "waiver_approved", "portfolio_risk", loan.id, waiver, args.p_reason);
+      return waiver;
+    }
+
+    if (fn === "mf_calculate_provisions") {
+      const orgId = args.p_organization_id;
+      const rules = listLocalRows(db, "mf_classification_rules").filter((row) => row.organization_id === orgId && row.is_active !== false);
+      return listLocalRows(db, "mf_loans").filter((row) => row.organization_id === orgId && Number(row.outstanding_principal || 0) > 0).map((loan) => {
+        const dpd = Number(loan.days_past_due || 0);
+        const rule = rules.find((r) => dpd >= Number(r.min_days_past_due || 0) && (r.max_days_past_due == null || dpd <= Number(r.max_days_past_due))) || { name: "Current", provision_rate: 0 };
+        return saveLocalRecord(db, "mf_provisions", {
+          organization_id: orgId, loan_id: loan.id, calculation_date: args.p_calculation_date,
+          classification: rule.name, outstanding_principal: loan.outstanding_principal,
+          provision_rate: rule.provision_rate, required_provision: Number(loan.outstanding_principal || 0) * Number(rule.provision_rate || 0) / 100,
+        });
+      });
+    }
+
+    if (fn === "mf_restructure_loan") {
+      const loan = localRecord(db, "mf_loans", args.p_loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      const restructure = saveLocalRecord(db, "mf_restructures", {
+        organization_id: loan.organization_id, loan_id: loan.id, restructure_type: args.p_type,
+        reason: args.p_reason, new_terms: args.p_new_terms || {}, outstanding_principal: loan.outstanding_principal,
+        old_schedule_version: loan.schedule_version || 1, status: "approved",
+      });
+      saveLocalRecord(db, "mf_loans", { ...loan, status: "restructured", schedule_version: Number(loan.schedule_version || 1) + 1 });
+      auditLocalMfi(db, loan.organization_id, "loan_restructured", "portfolio_risk", loan.id, restructure, args.p_reason);
+      return restructure;
+    }
+
+    if (fn === "mf_writeoff_loan") {
+      const loan = localRecord(db, "mf_loans", args.p_loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      const writeoff = saveLocalRecord(db, "mf_writeoffs", {
+        organization_id: loan.organization_id, loan_id: loan.id, writeoff_date: args.p_writeoff_date,
+        principal_written_off: loan.outstanding_principal || 0, interest_written_off: loan.outstanding_interest || 0,
+        fees_written_off: loan.outstanding_fees || 0, penalties_written_off: loan.outstanding_penalties || 0,
+        reason: args.p_reason, status: "approved",
+      });
+      saveLocalRecord(db, "mf_loans", { ...loan, status: "written_off" });
+      auditLocalMfi(db, loan.organization_id, "loan_written_off", "portfolio_risk", loan.id, writeoff, args.p_reason);
+      return writeoff;
+    }
+
+    if (fn === "mf_record_recovery") {
+      const writeoff = localRecord(db, "mf_writeoffs", args.p_writeoff_id);
+      if (!writeoff) throw new Error("Write-off was not found.");
+      const recovery = saveLocalRecord(db, "mf_recoveries", {
+        organization_id: writeoff.organization_id, writeoff_id: writeoff.id, loan_id: writeoff.loan_id,
+        amount: Number(args.p_amount || 0), recovery_date: args.p_recovery_date,
+        payment_method: args.p_payment_method, external_reference: args.p_external_reference,
+        status: "posted",
+      });
+      auditLocalMfi(db, writeoff.organization_id, "writeoff_recovery", "portfolio_risk", writeoff.loan_id, recovery);
+      return recovery;
+    }
+
+    if (fn === "mf_reverse_repayment") {
+      const repayment = localRecord(db, "mf_repayments", args.p_repayment_id);
+      if (!repayment || repayment.status !== "posted") throw new Error("Only a posted repayment can be reversed.");
+      const reason = String(args.p_reason || "").trim();
+      if (!reason) throw new Error("Reversal reason is required.");
+      const loan = localRecord(db, "mf_loans", repayment.loan_id);
+      if (!loan) throw new Error("Loan was not found.");
+      const principal = Number(repayment.principal_amount || 0);
+      const interest = Number(repayment.interest_amount || 0);
+      const fees = Number(repayment.fee_amount || 0);
+      const penalties = Number(repayment.penalty_amount || 0);
+      const reversed = saveLocalRecord(db, "mf_repayments", { ...repayment, status: "reversed", reversal_reason: reason });
+      saveLocalRecord(db, "mf_repayments", {
+        organization_id: repayment.organization_id, loan_id: repayment.loan_id,
+        receipt_number: `REV-${repayment.receipt_number || repayment.id}`,
+        external_reference: `REV-${repayment.external_reference || repayment.id}`,
+        amount: repayment.amount, payment_date: new Date().toISOString().slice(0, 10),
+        payment_method: repayment.payment_method, status: "posted", reversal_of: repayment.id,
+        reversal_reason: reason, principal_amount: -principal, interest_amount: -interest,
+        fee_amount: -fees, penalty_amount: -penalties,
+      });
+      saveLocalRecord(db, "mf_loans", {
+        ...loan,
+        outstanding_principal: Number(loan.outstanding_principal || 0) + principal,
+        outstanding_interest: Number(loan.outstanding_interest || 0) + interest,
+        outstanding_fees: Number(loan.outstanding_fees || 0) + fees,
+        outstanding_penalties: Number(loan.outstanding_penalties || 0) + penalties,
+        status: loan.status === "closed" ? "active" : loan.status,
+      });
+      auditLocalMfi(db, repayment.organization_id, "repayment_reversed", "collections", repayment.id, reversed, reason);
+      return reversed;
+    }
+
+    if (fn === "seed_microfinance_chart_of_accounts") {
+      const orgId = args.p_organization_id;
+      const definitions = [
+        ["1000","Assets","asset","other"],["1110","Cash on hand","asset","cash"],
+        ["1120","Bank account","asset","cash"],["1130","Mobile money account","asset","cash"],
+        ["1210","Loan principal receivable","asset","receivable"],["1220","Interest receivable","asset","receivable"],
+        ["1240","Suspended interest memorandum","asset","receivable"],["1290","Allowance for loan losses","asset","receivable"],
+        ["2000","Liabilities","liability","other"],["2110","Accounts payable","liability","payable"],
+        ["2120","Insurance payable","liability","payable"],["2140","Borrower overpayments","liability","payable"],
+        ["3000","Equity","equity","other"],["3100","Owner capital","equity","other"],
+        ["3200","Retained earnings","equity","other"],["4000","Income","income","revenue"],
+        ["4100","Interest income on loans","income","revenue"],["4110","Processing fee income","income","revenue"],
+        ["4120","Loan form fee income","income","revenue"],["4140","Penalty income","income","revenue"],
+        ["4160","Written-off loan recovery income","income","revenue"],["5000","Operating expenses","expense","expense"],
+        ["5100","Salaries and wages","expense","expense"],["5110","Rent expense","expense","expense"],
+        ["5120","Utilities","expense","expense"],["5150","Bank and mobile-money charges","expense","expense"],
+        ["5200","Loan-loss provision expense","expense","expense"],["5210","Loan write-off expense","expense","expense"],
+      ];
+      const existing = listLocalRows(db, "gl_accounts").filter((row) => row.organization_id === orgId);
+      let inserted = 0;
+      for (const [account_code, account_name, account_type, category] of definitions) {
+        if (existing.some((row) => row.account_code === account_code)) continue;
+        saveLocalRecord(db, "gl_accounts", { organization_id: orgId, account_code, account_name, account_type, category, is_active: true });
+        inserted += 1;
+      }
+      const accounts = listLocalRows(db, "gl_accounts").filter((row) => row.organization_id === orgId);
+      const id = (code) => accounts.find((row) => row.account_code === code)?.id || null;
+      saveLocalRecord(db, "mf_accounting_settings", {
+        id: String(orgId), organization_id: orgId, loan_principal_receivable_id: id("1210"),
+        interest_receivable_id: id("1220"), interest_income_id: id("4100"),
+        processing_fee_income_id: id("4110"), loan_form_income_id: id("4120"),
+        insurance_account_id: id("2120"), penalty_income_id: id("4140"), cash_account_id: id("1110"),
+        bank_account_id: id("1120"), mobile_money_account_id: id("1130"), loan_loss_provision_id: id("1290"),
+        provision_expense_id: id("5200"), writeoff_expense_id: id("5210"),
+        written_off_recovery_income_id: id("4160"), suspended_interest_account_id: id("1240"),
+      });
+      return inserted;
+    }
+    throw new Error(`Local desktop function is not implemented: ${fn}`);
+  })();
+}
+
 module.exports = {
   openDatabase,
   listPosProducts,
@@ -760,4 +1018,5 @@ module.exports = {
   localStoreUpsert,
   localStoreUpdate,
   localStoreDelete,
+  localStoreRpc,
 };

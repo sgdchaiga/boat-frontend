@@ -1,10 +1,13 @@
 import type { BusinessType, SubscriptionStatus } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { SCHOOL_PAGE } from "@/lib/schoolPages";
+import { MFI_PAGE } from "@/lib/mfiPages";
 
 export type ModuleId =
   | "dashboard"
   | "retail_dashboard"
+  | "general_business_dashboard"
+  | "general_business_projects"
   | "retail_credit_invoices"
   | "retail_customers"
   | "retail_credit_sales_report"
@@ -27,6 +30,7 @@ export type ModuleId =
   | "staff"
   | "admin"
   | "sacco"
+  | "microfinance"
   | "school"
   | "school_fixed_deposit"
   | "vsla"
@@ -48,10 +52,12 @@ type ModuleAudience =
   /** Clinic / pharmacy workspace (hotels, retail, restaurants, mixed; not sacco/school/vsla/manufacturing). */
   | "clinic"
   | "sacco"
+  | "microfinance"
   | "school"
   | "manufacturing"
   | "production"
-  | "vsla";
+  | "vsla"
+  | "financial_modelling";
 
 export interface ModuleAccess {
   visible: boolean;
@@ -64,6 +70,8 @@ const ACTIVE_STATUSES: SubscriptionStatus[] = ["active", "trial"];
 const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   dashboard: "hotel",
   retail_dashboard: "retail",
+  general_business_dashboard: "both",
+  general_business_projects: "both",
   retail_credit_invoices: "both",
   retail_customers: "both",
   retail_credit_sales_report: "both",
@@ -89,6 +97,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   staff: "both",
   admin: "both",
   sacco: "sacco",
+  microfinance: "microfinance",
   school: "school",
   school_fixed_deposit: "school",
   vsla: "vsla",
@@ -105,6 +114,8 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
 const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   dashboard: false,
   retail_dashboard: false,
+  general_business_dashboard: false,
+  general_business_projects: true,
   retail_credit_invoices: true,
   retail_customers: true,
   retail_credit_sales_report: true,
@@ -127,6 +138,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   staff: true,
   admin: true,
   sacco: true,
+  microfinance: true,
   school: true,
   school_fixed_deposit: true,
   vsla: true,
@@ -156,6 +168,7 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
       businessType === "restaurant" ||
       businessType === "manufacturing" ||
       businessType === "agriculture"
+      || businessType === "general_business"
     );
   }
   if (audience === "production") {
@@ -172,13 +185,15 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
   if (businessType === "school") return audience === "both";
   if (audience === "sacco") return businessType === "sacco";
   if (businessType === "sacco") return audience === "both";
+  if (audience === "microfinance") return businessType === "microfinance";
+  if (businessType === "microfinance") return audience === "both";
   if (businessType === "mixed" && audience === "hotel") return true;
   /** Lodging-plus-retail tenants use both waiter POS surfaces and retail counter routes. */
   if (businessType === "mixed" && audience === "retail") return true;
   const normalized: ModuleAudience =
     businessType === "mixed" || businessType === "accounting_practice"
       ? "both"
-      : businessType === "restaurant" || businessType === "agriculture"
+      : businessType === "restaurant" || businessType === "agriculture" || businessType === "general_business"
         ? "retail"
         : businessType;
   return audience === "both" || audience === normalized;
@@ -522,6 +537,10 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  if (businessType === "financial_modelling") {
+    return ["financial_modelling_studio", "admin", "staff"].includes(page);
+  }
+  if (page === "financial_modelling_studio") return false;
   if (page === "image_document_converter") return true;
   if (page === "data_migration") return true;
   if (page === "industry_intelligence") return true;
@@ -535,7 +554,7 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
 
   if (!businessType || businessType === "mixed") return true;
 
-  const nonRetailLodgingProfiles: BusinessType[] = ["hotel", "school", "sacco", "vsla", "manufacturing"];
+  const nonRetailLodgingProfiles: BusinessType[] = ["hotel", "school", "sacco", "microfinance", "vsla", "manufacturing"];
   if (nonRetailLodgingProfiles.includes(businessType) && RETAIL_EXCLUSIVE_PAGE_IDS.has(page)) {
     /** Lodging tenants use credit invoices for property customers — same page as retail debtors. */
     if (businessType === "hotel" && page === "retail_credit_invoices") {
@@ -585,6 +604,7 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
 }
 
 export function pageToModuleId(page: string): ModuleId | null {
+  if (page === "financial_modelling_studio") return null;
   if (page === "asset_verification") return "asset_verification";
   if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
@@ -597,6 +617,8 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "hotel_assessment" || page === "hotel_assessment_run") return "hotel_assessment";
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
   if (SCHOOL_PAGE_VALUES.has(page)) return "school";
+  if (page === "general_business_dashboard") return "general_business_dashboard";
+  if (page === "general_business_projects") return "general_business_projects";
   if (["dashboard"].includes(page)) return "dashboard";
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return "accounting";
   if (["retail_dashboard"].includes(page)) return "retail_dashboard";
@@ -679,6 +701,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   /** Explicit SACCO routes (also covered by SACCOPRO_PAGE; kept for URL/bookmark stability). */
   if (page === "sacco_members_savings_settings") return "sacco";
   if ((Object.values(SACCOPRO_PAGE) as string[]).includes(page)) return "sacco";
+  if ((Object.values(MFI_PAGE) as string[]).includes(page)) return "microfinance";
   if (page.startsWith("vsla_")) return "vsla";
   return null;
 }

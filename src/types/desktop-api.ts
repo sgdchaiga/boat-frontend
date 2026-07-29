@@ -205,5 +205,9 @@ export type BoatDesktopApi = {
       table: string;
       filters?: Array<{ column: string; operator: string; value: unknown }>;
     }) => Promise<Record<string, unknown>[]>;
+    rpc: (payload: {
+      functionName: string;
+      args?: Record<string, unknown>;
+    }) => Promise<unknown>;
   };
 };

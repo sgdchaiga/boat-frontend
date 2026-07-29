@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Briefcase, CalendarClock, ChevronDown, ChevronRight, FileArchive, FileSpreadsheet, ReceiptText, RefreshCw, Scale, Settings2, Upload, Users } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Briefcase, CalendarClock, ChevronDown, ChevronRight, Download, FileArchive, FileSpreadsheet, Printer, ReceiptText, RefreshCw, Scale, Settings2, Upload, Users } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
+import { downloadXlsx, exportAccountingPdf } from "../../lib/accountingReportExport";
 import { mapStatementFileRows, parseStatementFile, suggestStatementColumnMapping, type StatementColumnMapping, type StatementFilePageStat, type StatementFileRow } from "../../lib/bankReconciliation";
 import { supabase } from "../../lib/supabase";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
@@ -252,13 +253,83 @@ function Reconciliation(props: any) {
   const toggleImportFile = (file: string) => setExpandedImportFiles((current) => current.includes(file) ? current.filter((value) => value !== file) : [...current, file]);
   const reconciledBalance = cashbookTotal - unmatchedCashbookTotal + unmatchedStatementTotal;
   const controlDifference = latestControl ? reconciledBalance - latestControl.amount : null;
+  const selectedClientName = (clients as Client[]).find((client) => client.id === clientId)?.name || "Client";
+  const reportRows = (): Array<Array<string | number>> => [
+      ["Bank Reconciliation Statement"],
+      ["Client", selectedClientName],
+      ["Period", `${periodStart} to ${periodEnd}`],
+      [],
+      ["Summary", "Amount"],
+      ["Cashbook total", cashbookTotal],
+      ["Bank / channel statement total", statementTotal],
+      ["Unmatched cashbook items", unmatchedCashbookTotal],
+      ["Unmatched statement items", unmatchedStatementTotal],
+      ["Reconciled balance", reconciledBalance],
+      [latestControl ? `${latestControl.label} (${latestControl.balance_date})` : "Latest control balance", latestControl?.amount ?? "Not recorded"],
+      ["Control difference", controlDifference ?? "Not available"],
+      ["Status", controlDifference != null && Math.abs(controlDifference) < 0.005 ? "Reconciled" : "Review required"],
+      [],
+      ["Outstanding cashbook items"],
+      ["Date", "Description", "Reference / source", "Amount"],
+      ...periodCashbook.map((line) => [line.line_date, line.description, line.reference || line.source_file || "", line.amount]),
+      [],
+      ["Outstanding bank / channel statement items"],
+      ["Date", "Description", "Reference / source", "Amount"],
+      ...periodStatements.map((line) => [line.line_date, line.description, line.reference || line.source_file || "", line.amount]),
+  ];
+  const reportFileStem = `${selectedClientName.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "client"}-bank-reconciliation-${periodEnd}`;
+  const downloadBankReconciliationExcel = () => {
+    downloadXlsx(reportFileStem, reportRows(), { companyName: selectedClientName, sheetName: "Bank Reconciliation" });
+  };
+  const downloadBankReconciliationPdf = () => {
+    exportAccountingPdf({
+      title: "Bank Reconciliation Statement",
+      subtitle: `${selectedClientName} · ${periodStart} to ${periodEnd}`,
+      filename: reportFileStem,
+      companyName: selectedClientName,
+      sections: [
+        {
+          title: "Reconciliation summary",
+          head: ["Item", "Amount / status"],
+          body: [
+            ["Cashbook total", money(cashbookTotal)],
+            ["Bank / channel statement total", money(statementTotal)],
+            ["Outstanding cashbook items", money(unmatchedCashbookTotal)],
+            ["Outstanding statement items", money(unmatchedStatementTotal)],
+            ["Reconciled balance", money(reconciledBalance)],
+            [latestControl ? `${latestControl.label} (${latestControl.balance_date})` : "Latest control balance", latestControl ? money(latestControl.amount) : "Not recorded"],
+            ["Control difference", controlDifference == null ? "Not available" : money(controlDifference)],
+            ["Status", controlDifference != null && Math.abs(controlDifference) < 0.005 ? "Reconciled" : "Review required"],
+          ],
+        },
+        {
+          title: "Outstanding cashbook items",
+          head: ["Date", "Description", "Reference / source", "Amount"],
+          body: periodCashbook.map((line) => [line.line_date, line.description, line.reference || line.source_file || "-", money(line.amount)]),
+        },
+        {
+          title: "Outstanding bank / channel statement items",
+          head: ["Date", "Description", "Reference / source", "Amount"],
+          body: periodStatements.map((line) => [line.line_date, line.description, line.reference || line.source_file || "-", money(line.amount)]),
+        },
+      ],
+      footerLines: ["Prepared from the Accounting Practice Reconciliation Center."],
+    });
+  };
   return <>
     <div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-3"><ClientSelect clients={clients} value={clientId} setValue={setClientId}/><select className={input} value={importSide} onChange={(e) => setImportSide(e.target.value)}><option value="cashbook">Client cashbook</option><option value="statement">Bank / channel statement</option></select><label className="app-btn-secondary cursor-pointer"><FileSpreadsheet className="h-4 w-4"/> Choose CSV, Excel, or PDF<input type="file" accept=".csv,.xls,.xlsx,.pdf,application/pdf" className="hidden" disabled={disabled || !clientId} onChange={(e) => void readImport(e.target.files?.[0] || null)}/></label></div>
     {headers.length > 0 && <div className="rounded-xl border bg-white p-4"><p className="text-sm font-semibold">{importFileName}</p><p className="mb-3 text-xs text-slate-500">{importSheetNames.length} page/worksheet(s) · {importRowCount} rows found · {mappedCount} valid · {invalidCount} skipped</p><details className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs"><summary className="cursor-pointer font-semibold text-slate-700">Page extraction audit</summary><div className="mt-2 grid gap-1 sm:grid-cols-2 lg:grid-cols-4">{(importPageStats as StatementFilePageStat[]).map((stat) => <p key={stat.name} className={stat.rowCount === 0 ? "font-semibold text-rose-700" : "text-slate-600"}>{stat.name}: {stat.rowCount} row(s)</p>)}</div></details><div className="grid gap-3 md:grid-cols-3">{mapField("date", "Date *")}{mapField("description", "Description")}{mapField("reference", "Reference")}{mapField("amount", "Signed amount")}{mapField("debit", "Debit")}{mapField("credit", "Credit")}</div>{invalidCount > 0 && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><p className="font-semibold">Skipped row reasons</p>{Object.entries(invalidReasons as Record<string, number>).map(([reason, count]) => <p key={reason}>{reason}: {count}</p>)}</div>}<button className="app-btn-primary mt-4" disabled={disabled || !mappedCount} onClick={() => void importLines()}><Upload className="h-4 w-4"/> Import {importSide}</button></div>}
     <div className="rounded-xl border bg-white p-4"><h2 className="font-semibold text-slate-900">Record client control balance</h2><p className="text-xs text-slate-500">Capture the closing bank, cash, mobile-money, or other independent control balance.</p><div className="mt-3 grid gap-3 md:grid-cols-4"><input className={input} type="date" value={controlDate} onChange={(e) => setControlDate(e.target.value)}/><input className={input} value={controlLabel} onChange={(e) => setControlLabel(e.target.value)} placeholder="Control balance label"/><input className={input} type="number" value={controlAmount} onChange={(e) => setControlAmount(e.target.value)} placeholder="Control amount"/><button className="app-btn-primary" disabled={disabled || !clientId || controlAmount === ""} onClick={() => void addControlBalance()}>Record balance</button></div></div>
     <div className="rounded-xl border bg-white p-4"><div><h2 className="font-semibold text-slate-900">Reconcile selected period</h2><p className="text-xs text-slate-500">Choose the period, then manually match selected transactions or automatically match the whole period.</p></div><div className="mt-3 grid gap-3 md:grid-cols-4"><label className="text-xs text-slate-600">Period start<input className={`${input} mt-1 w-full`} type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)}/></label><label className="text-xs text-slate-600">Period end<input className={`${input} mt-1 w-full`} type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)}/></label><input className={`${input} self-end`} value={reconcileNotes} onChange={(e) => setReconcileNotes(e.target.value)} placeholder="Reconciliation notes"/><div className="flex items-end gap-2"><button className="app-btn-primary" disabled={disabled || (!selectedCashbook.length && !selectedStatements.length) || (selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005)} onClick={() => void manualReconcile()}>Manually reconcile selected</button><button className="app-btn-secondary" disabled={disabled || !clientId} onClick={() => void autoReconcile()}>Auto reconcile period</button></div></div><div className="mt-3 grid gap-3 sm:grid-cols-3"><StatementMetric label="Selected cashbook" value={money(selectedCashbookTotal)}/><StatementMetric label="Selected statement" value={money(selectedStatementTotal)}/><StatementMetric label="Difference" value={money(selectedDifference)} alert={selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005}/></div></div>
     <div className="grid gap-3 md:grid-cols-3"><Metric label="Cashbook unmatched" value={cashbook.length}/><Metric label="Statement unmatched" value={statements.length}/><Metric label="Matched lines" value={matched.length}/></div>
-    <div className="rounded-xl border bg-white p-4"><h2 className="font-semibold text-slate-900">Reconciliation statement</h2><p className="text-xs text-slate-500">Client reconciliation position based on imported lines and the latest control balance.</p><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><StatementMetric label="Cashbook total" value={money(cashbookTotal)}/><StatementMetric label="Statement total" value={money(statementTotal)}/><StatementMetric label="Unmatched cashbook" value={money(unmatchedCashbookTotal)}/><StatementMetric label="Unmatched statement" value={money(unmatchedStatementTotal)}/><StatementMetric label="Reconciled balance" value={money(reconciledBalance)}/><StatementMetric label={latestControl ? `${latestControl.label} (${latestControl.balance_date})` : "Latest control balance"} value={latestControl ? money(latestControl.amount) : "Not recorded"}/><StatementMetric label="Control difference" value={controlDifference == null ? "Not available" : money(controlDifference)} alert={controlDifference != null && Math.abs(controlDifference) >= 0.005}/><StatementMetric label="Status" value={controlDifference != null && Math.abs(controlDifference) < 0.005 ? "Reconciled" : "Review required"} alert={controlDifference == null || Math.abs(controlDifference) >= 0.005}/></div></div>
+    <section className="rounded-xl border bg-white p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div><p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Reconciliation report</p><h2 className="font-semibold text-slate-900">Bank reconciliation statement</h2><p className="text-xs text-slate-500">{selectedClientName} · {periodStart} to {periodEnd}</p></div>
+        <div className="flex flex-wrap gap-2 print:hidden"><button type="button" className="app-btn-secondary" disabled={!clientId} onClick={downloadBankReconciliationExcel}><Download className="h-4 w-4"/> Excel</button><button type="button" className="app-btn-secondary" disabled={!clientId} onClick={downloadBankReconciliationPdf}><Download className="h-4 w-4"/> PDF</button><button type="button" className="app-btn-secondary" disabled={!clientId} onClick={() => window.print()}><Printer className="h-4 w-4"/> Print statement</button></div>
+      </div>
+      <p className="mt-3 text-xs text-slate-500">Reconciliation position based on imported cashbook and bank/channel statement lines, with the latest recorded control balance.</p>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><StatementMetric label="Cashbook total" value={money(cashbookTotal)}/><StatementMetric label="Bank / channel statement total" value={money(statementTotal)}/><StatementMetric label="Outstanding cashbook items" value={money(unmatchedCashbookTotal)}/><StatementMetric label="Outstanding statement items" value={money(unmatchedStatementTotal)}/><StatementMetric label="Reconciled balance" value={money(reconciledBalance)}/><StatementMetric label={latestControl ? `${latestControl.label} (${latestControl.balance_date})` : "Latest control balance"} value={latestControl ? money(latestControl.amount) : "Not recorded"}/><StatementMetric label="Control difference" value={controlDifference == null ? "Not available" : money(controlDifference)} alert={controlDifference != null && Math.abs(controlDifference) >= 0.005}/><StatementMetric label="Status" value={controlDifference != null && Math.abs(controlDifference) < 0.005 ? "Reconciled" : "Review required"} alert={controlDifference == null || Math.abs(controlDifference) >= 0.005}/></div>
+    </section>
     <div className="grid items-start gap-4 xl:grid-cols-2">{cashbookFirst ? <><ReconTable title="Unmatched client cashbook" rows={periodCashbook} money={money} selected={selectedCashbook} setSelected={setSelectedCashbook} moveDirection="right" onMove={() => setCashbookFirst(false)} independentlyScrollable/><ReconTable title="Unmatched statements" rows={periodStatements} money={money} selected={selectedStatements} setSelected={setSelectedStatements} moveDirection="left" onMove={() => setCashbookFirst(false)} independentlyScrollable/></> : <><ReconTable title="Unmatched statements" rows={periodStatements} money={money} selected={selectedStatements} setSelected={setSelectedStatements} moveDirection="right" onMove={() => setCashbookFirst(true)} independentlyScrollable/><ReconTable title="Unmatched client cashbook" rows={periodCashbook} money={money} selected={selectedCashbook} setSelected={setSelectedCashbook} moveDirection="left" onMove={() => setCashbookFirst(true)} independentlyScrollable/></>}</div>
     <ReconTable title="Matched reconciliation lines" rows={matched} money={money}/>
     <div className="grid gap-4 xl:grid-cols-2"><div className="overflow-hidden rounded-xl border bg-white"><div className="flex items-center justify-between gap-3 border-b p-3"><div><h3 className="font-semibold">Imported documents</h3><p className="text-xs text-slate-500">{showImportedDocuments ? "Document transaction details are visible." : "Document transaction details are hidden."}</p></div><button type="button" className="app-btn-secondary" onClick={() => setShowImportedDocuments((value) => !value)}>{showImportedDocuments ? "Hide details" : "Show details"}</button></div>{importedFiles.map((file) => { const fileLines = (allLines as ReconLine[]).filter((line) => line.source_file === file); const expanded = expandedImportFiles.includes(file); return <div key={file} className="border-b"><div className="flex items-center justify-between gap-3 px-3 py-2 text-sm"><button type="button" className="flex items-center gap-2 text-left font-medium" disabled={!showImportedDocuments} onClick={() => toggleImportFile(file)}>{showImportedDocuments ? expanded ? <ChevronDown className="h-4 w-4"/> : <ChevronRight className="h-4 w-4"/> : null}{file}<span className="text-xs font-normal text-slate-500">{fileLines.length} line(s)</span></button><button type="button" className="text-rose-700 hover:underline" disabled={disabled} onClick={() => void removeImportedFile(file)}>Remove unreconciled lines</button></div>{showImportedDocuments && expanded && <ReconTable title={`${file} details`} rows={fileLines} money={money}/>}</div>; })}{!importedFiles.length && <p className="p-5 text-center text-sm text-slate-500">No imported documents.</p>}</div><div className="overflow-hidden rounded-xl border bg-white"><h3 className="border-b p-3 font-semibold">Reconciliation history</h3>{(runs as ReconRun[]).map((run) => <div key={run.id} className="flex items-center justify-between gap-3 border-b px-3 py-2 text-sm"><div><p className="font-medium">{run.period_start} to {run.period_end}</p><p className="text-xs text-slate-500 capitalize">{run.method} · {run.side_mode} side{run.notes ? ` · ${run.notes}` : ""}</p></div><button type="button" className="text-rose-700 hover:underline" disabled={disabled} onClick={() => void cancelRun(run.id)}>Cancel reconciliation</button></div>)}{!runs.length && <p className="p-5 text-center text-sm text-slate-500">No reconciliations saved.</p>}</div></div>

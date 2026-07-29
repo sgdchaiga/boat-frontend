@@ -53,6 +53,8 @@ type InvRow = {
   bursary_amount: number;
   scholarship_amount: number;
   notes: string | null;
+  issue_date?: string | null;
+  due_date?: string | null;
 };
 
 type InvEditDraft = {
@@ -98,6 +100,59 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   });
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkSummary, setBulkSummary] = useState<string | null>(null);
+  const [schoolHeader, setSchoolHeader] = useState({ name: "School", address: "", logoUrl: "" });
+
+  useEffect(() => {
+    if (!user?.organization_id) return;
+    void supabase.from("organizations").select("name,address,logo_url").eq("id", user.organization_id).maybeSingle().then(({ data }) => {
+      const org = data as { name?: string; address?: string | null; logo_url?: string | null } | null;
+      setSchoolHeader({ name: org?.name || "School", address: org?.address || "", logoUrl: org?.logo_url || "" });
+    });
+  }, [user?.organization_id]);
+
+  const printDocument = (title: string, body: string) => {
+    const popup = window.open("", "_blank", "width=900,height=700");
+    if (!popup) {
+      setErr("Pop-ups are blocked. Allow pop-ups to print this document.");
+      return;
+    }
+    const header = `<header class="school"><div>${schoolHeader.logoUrl ? `<img src="${schoolHeader.logoUrl}" alt="School logo">` : ""}</div><div><h2>${schoolHeader.name}</h2>${schoolHeader.address ? `<p>${schoolHeader.address}</p>` : ""}</div></header>`;
+    popup.document.write(`<!doctype html><html><head><title>${title}</title><style>
+      body{font-family:Arial,sans-serif;color:#172033;padding:36px} h1{font-size:22px;margin:0 0 6px}
+      .school{display:flex;align-items:center;gap:16px;border-bottom:2px solid #172033;padding-bottom:14px;margin-bottom:24px}.school img{width:72px;height:72px;object-fit:contain}.school h2{font-size:24px;margin:0}.school p{margin:5px 0 0;white-space:pre-line;color:#64748b}
+      .muted{color:#64748b}.meta{margin:22px 0;line-height:1.7}table{width:100%;border-collapse:collapse;margin-top:18px}
+      th,td{border:1px solid #cbd5e1;padding:9px;text-align:left}th{background:#f1f5f9}.num{text-align:right}
+      .total{font-size:18px;font-weight:700;margin-top:20px;text-align:right}@media print{button{display:none}}
+    </style></head><body>${header}${body}<script>window.onload=()=>window.print()<\/script></body></html>`);
+    popup.document.close();
+  };
+
+  const printInvoice = (invoice: InvRow, demandNote = false) => {
+    const student = students.find((s) => s.id === invoice.student_id);
+    const name = student ? `${student.first_name} ${student.last_name}` : studentLabel(invoice.student_id);
+    const balance = Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid));
+    printDocument(demandNote ? `Demand note ${invoice.invoice_number}` : `Invoice ${invoice.invoice_number}`, `
+      <h1>${demandNote ? "SCHOOL FEES DEMAND NOTE" : "SCHOOL FEES INVOICE"}</h1>
+      <div class="muted">${invoice.invoice_number}</div>
+      <div class="meta"><strong>Student:</strong> ${name}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}<br>
+      <strong>Term:</strong> ${invoice.academic_year} · ${invoice.term_name}<br><strong>Issue date:</strong> ${invoice.issue_date ?? "—"}<br>
+      <strong>Due date:</strong> ${invoice.due_date ?? "—"}</div>
+      <table><tr><th>Description</th><th class="num">Amount</th></tr><tr><td>School fees</td><td class="num">${Number(invoice.subtotal).toLocaleString()}</td></tr>
+      <tr><td>Discounts, bursary and scholarship</td><td class="num">-${(Number(invoice.discount_amount)+Number(invoice.bursary_amount)+Number(invoice.scholarship_amount)).toLocaleString()}</td></tr>
+      <tr><th>Total due</th><th class="num">${Number(invoice.total_due).toLocaleString()}</th></tr><tr><td>Paid</td><td class="num">${Number(invoice.amount_paid).toLocaleString()}</td></tr></table>
+      <div class="total">Balance: ${balance.toLocaleString()}</div>${demandNote ? "<p>Please settle the outstanding balance by the due date or contact the school bursar.</p>" : ""}`);
+  };
+
+  const printStatement = (studentId: string) => {
+    const student = students.find((s) => s.id === studentId);
+    const items = rows.filter((r) => r.student_id === studentId && r.status !== "cancelled");
+    const totalDue = items.reduce((sum, r) => sum + Number(r.total_due), 0);
+    const totalPaid = items.reduce((sum, r) => sum + Number(r.amount_paid), 0);
+    printDocument(`Fees statement - ${student?.admission_number ?? "student"}`, `<h1>SCHOOL FEES STATEMENT</h1>
+      <div class="meta"><strong>Student:</strong> ${student ? `${student.first_name} ${student.last_name}` : studentId}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}</div>
+      <table><tr><th>Invoice</th><th>Term</th><th class="num">Due</th><th class="num">Paid</th><th class="num">Balance</th></tr>${items.map((r) => `<tr><td>${r.invoice_number}</td><td>${r.academic_year} ${r.term_name}</td><td class="num">${Number(r.total_due).toLocaleString()}</td><td class="num">${Number(r.amount_paid).toLocaleString()}</td><td class="num">${Math.max(0,Number(r.total_due)-Number(r.amount_paid)).toLocaleString()}</td></tr>`).join("")}</table>
+      <div class="total">Total balance: ${Math.max(0,totalDue-totalPaid).toLocaleString()}</div>`);
+  };
 
   const studentLabel = useMemo(() => {
     const m = new Map(students.map((s) => [s.id, `${s.admission_number} — ${s.first_name} ${s.last_name}`]));
@@ -707,7 +762,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
               <th className="text-right p-3 font-semibold text-slate-700">Due</th>
               <th className="text-right p-3 font-semibold text-slate-700">Paid</th>
               <th className="text-left p-3 font-semibold text-slate-700">Status</th>
-              {!readOnly && <th className="text-right p-3 font-semibold text-slate-700 w-28">Actions</th>}
+              <th className="text-right p-3 font-semibold text-slate-700 min-w-52">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -791,8 +846,12 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                     <td className="p-3 text-right text-slate-900">{Number(r.total_due).toLocaleString()}</td>
                     <td className="p-3 text-right text-slate-600">{Number(r.amount_paid).toLocaleString()}</td>
                     <td className="p-3 capitalize text-slate-600">{r.status}</td>
-                    {!readOnly && (
-                      <td className="p-3 text-right">
+                    <td className="p-3 text-right">
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button type="button" onClick={() => printInvoice(r)} className="text-xs font-medium text-sky-700">Invoice</button>
+                        <button type="button" onClick={() => printInvoice(r, true)} className="text-xs font-medium text-amber-700">Demand note</button>
+                        <button type="button" onClick={() => printStatement(r.student_id)} className="text-xs font-medium text-emerald-700">Statement</button>
+                      {!readOnly && (
                         <button
                           type="button"
                           onClick={() => startEdit(r)}
@@ -800,8 +859,9 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                         >
                           Edit
                         </button>
-                      </td>
-                    )}
+                      )}
+                      </div>
+                    </td>
                   </tr>
                 )
               )

@@ -231,4 +231,9 @@ export const desktopApi = {
     if (!api) return [];
     return api.localStore.delete(payload);
   },
+  async localRpc(payload: { functionName: string; args?: Record<string, unknown> }) {
+    const api = getDesktopApi();
+    if (!api) throw new Error("Local desktop API is unavailable.");
+    return api.localStore.rpc(payload);
+  },
 };

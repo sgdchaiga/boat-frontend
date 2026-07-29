@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { AdminUsersPage } from "./AdminUsersPage";
 import { AdminHotelConfigPage } from "./AdminHotelConfigPage";
+import { AdminSchoolProfilePage } from "./AdminSchoolProfilePage";
 import { AdminProductsPage } from "./AdminProductsPage";
 import { AdminApprovalRightsPage } from "./AdminApprovalRightsPage";
 import { AdminJournalAccountsPage } from "./AdminJournalAccountsPage";
@@ -98,7 +99,7 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
           />
         );
       case "business":
-        return <AdminHotelConfigPage />;
+        return businessType === "school" ? <AdminSchoolProfilePage /> : <AdminHotelConfigPage />;
       case "mobile_lite":
         return <AdminMobileLitePage />;
       case "products":

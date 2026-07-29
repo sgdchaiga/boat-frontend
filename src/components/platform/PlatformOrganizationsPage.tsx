@@ -9,6 +9,7 @@ type Org = {
   name: string;
   slug: string | null;
   business_type: string;
+  sales_workflow?: "invoice" | "quick_sale" | "both" | null;
   created_at: string;
   enable_fixed_assets?: boolean | null;
   enable_asset_verification?: boolean | null;
@@ -42,6 +43,7 @@ type Org = {
   /** Platform: hotel automated room charges (check-in + night audit). */
   hotel_enable_smart_room_charges?: boolean | null;
   desktop_device_limit?: number | null;
+  app_version?: string | null;
 };
 
 type Plan = { id: string; code: string; name: string; business_type_code?: string | null };
@@ -66,6 +68,8 @@ type BusinessTypeRow = {
   name: string;
   is_active?: boolean | null;
   sort_order?: number | null;
+  current_version?: string | null;
+  available_versions?: string[] | null;
 };
 
 function slugify(s: string) {
@@ -167,6 +171,7 @@ export function PlatformOrganizationsPage() {
   const [newName, setNewName] = useState("");
   const [newSlug, setNewSlug] = useState("");
   const [newBiz, setNewBiz] = useState("hotel");
+  const [newSalesWorkflow, setNewSalesWorkflow] = useState<"invoice" | "quick_sale" | "both">("both");
   const [newPlanId, setNewPlanId] = useState("");
   const [createFirstAdmin, setCreateFirstAdmin] = useState(true);
   const [firstAdminName, setFirstAdminName] = useState("");
@@ -177,6 +182,7 @@ export function PlatformOrganizationsPage() {
 
   const [editOrg, setEditOrg] = useState<Org | null>(null);
   const [editBiz, setEditBiz] = useState("hotel");
+  const [editSalesWorkflow, setEditSalesWorkflow] = useState<"invoice" | "quick_sale" | "both">("both");
   const [subStatus, setSubStatus] = useState("active");
   const [subPlanId, setSubPlanId] = useState("");
   const [subStart, setSubStart] = useState("");
@@ -211,6 +217,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableHotelAssessment, setEditEnableHotelAssessment] = useState(true);
   const [editEnableManufacturing, setEditEnableManufacturing] = useState(true);
   const [editDesktopDeviceLimit, setEditDesktopDeviceLimit] = useState(1);
+  const [editAppVersion, setEditAppVersion] = useState("1.0");
   const [orgSearch, setOrgSearch] = useState(readOrgSearchFromUrl);
   const [clearingBusyByOrgId, setClearingBusyByOrgId] = useState<Record<string, boolean>>({});
   const [renewalOrg, setRenewalOrg] = useState<Org | null>(null);
@@ -428,7 +435,7 @@ export function PlatformOrganizationsPage() {
     const [pRes, btRes] = await Promise.all([
       supabase.from("subscription_plans").select("id,code,name,business_type_code").order("sort_order"),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (supabase as any).from("business_types").select("id,code,name,is_active,sort_order").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true }),
+      (supabase as any).from("business_types").select("id,code,name,is_active,sort_order,current_version,available_versions").eq("is_active", true).order("sort_order", { ascending: true }).order("name", { ascending: true }),
     ]);
     const plansData = (pRes.data as Plan[]) || [];
     setPlans(plansData);
@@ -475,6 +482,7 @@ export function PlatformOrganizationsPage() {
     setNewSlug("");
     const bt = businessTypes[0]?.code || "hotel";
     setNewBiz(bt);
+    setNewSalesWorkflow("both");
     const match = plansMatchingBusinessType(plans, bt);
     setNewPlanId(match[0]?.id ?? plans[0]?.id ?? "");
     setCreateFirstAdmin(true);
@@ -512,6 +520,8 @@ export function PlatformOrganizationsPage() {
         name: newName.trim(),
         slug,
         business_type: newBiz,
+        sales_workflow: newBiz === "general_business" ? newSalesWorkflow : "both",
+        app_version: businessTypes.find((item) => item.code === newBiz)?.current_version || "1.1",
       })
       .select("id")
       .single();
@@ -607,6 +617,7 @@ export function PlatformOrganizationsPage() {
     setEditOrgName(org.name);
     setEditOrgSlug(org.slug ?? "");
     setEditBiz(biz);
+    setEditSalesWorkflow(org.sales_workflow || "both");
     setSubStatus(sub?.status || "active");
     setSubPlanId(planId);
     setSubStart(sub?.period_start || new Date().toISOString().slice(0, 10));
@@ -636,6 +647,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableHotelAssessment(org.enable_hotel_assessment !== false);
     setEditEnableManufacturing(org.enable_manufacturing !== false);
     setEditDesktopDeviceLimit(Math.max(1, Number(org.desktop_device_limit ?? 1)));
+    setEditAppVersion(org.app_version?.trim() || "1.0");
     setErr(null);
     setModal("sub");
   };
@@ -649,6 +661,11 @@ export function PlatformOrganizationsPage() {
       setSaving(false);
       return;
     }
+    if (!/^\d+(?:\.\d+){0,2}$/.test(editAppVersion.trim())) {
+      setErr("BOAT application version must look like 1, 1.1, or 1.1.2.");
+      setSaving(false);
+      return;
+    }
     const slugTrim = editOrgSlug.trim();
     const orgUpdate = await supabase
       .from("organizations")
@@ -656,6 +673,7 @@ export function PlatformOrganizationsPage() {
         name: editOrgName.trim(),
         ...(slugTrim ? { slug: slugify(slugTrim) } : { slug: null }),
         business_type: editBiz,
+        sales_workflow: editBiz === "general_business" ? editSalesWorkflow : "both",
         enable_fixed_assets: editEnableFixedAssets,
         enable_asset_verification: editBiz === "accounting_practice" || editEnableAssetVerification,
         school_enable_reports: editSchoolReports,
@@ -681,6 +699,7 @@ export function PlatformOrganizationsPage() {
         purchases_require_bill_approval: editPurchasesRequireBillApproval,
         hotel_enable_smart_room_charges: editHotelSmartRoomCharges,
         desktop_device_limit: Math.max(1, Math.floor(editDesktopDeviceLimit || 1)),
+        app_version: editAppVersion.trim(),
       })
       .eq("id", editOrg.id);
     if (orgUpdate.error) {
@@ -834,6 +853,7 @@ export function PlatformOrganizationsPage() {
               <tr>
                 <th className="text-left p-3 font-semibold text-slate-700">Name</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Business type</th>
+                <th className="text-left p-3 font-semibold text-slate-700">BOAT version</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Staff</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Treasury</th>
@@ -852,7 +872,7 @@ export function PlatformOrganizationsPage() {
             <tbody>
               {filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={15} className="p-8 text-center text-slate-600 text-sm">
+                  <td colSpan={16} className="p-8 text-center text-slate-600 text-sm">
                     {orgSearch.trim()
                       ? "No organizations match your search."
                       : "No organizations yet."}
@@ -865,6 +885,7 @@ export function PlatformOrganizationsPage() {
                   <tr key={org.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                     <td className="p-3 font-medium text-slate-900">{org.name}</td>
                     <td className="p-3 text-slate-600 capitalize">{org.business_type}</td>
+                    <td className="p-3 font-mono text-xs">v{org.app_version?.trim() || "1.0"}</td>
                     <td className="p-3 text-slate-600">{staffCounts[org.id] ?? 0}</td>
                     <td className="p-3">
                       <div className="flex items-center gap-2">
@@ -1145,6 +1166,20 @@ export function PlatformOrganizationsPage() {
                 </option>
               ))}
             </select>
+            {newBiz === "general_business" && (
+              <>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Sales workflow</label>
+                <select
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+                  value={newSalesWorkflow}
+                  onChange={(e) => setNewSalesWorkflow(e.target.value as "invoice" | "quick_sale" | "both")}
+                >
+                  <option value="invoice">Invoice-based sales</option>
+                  <option value="quick_sale">Quick Sale (POS)</option>
+                  <option value="both">Both invoicing and Quick Sale</option>
+                </select>
+              </>
+            )}
             <label className="block text-sm font-medium text-slate-700 mb-1">Initial plan</label>
             <select
               className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-4"
@@ -1276,6 +1311,20 @@ export function PlatformOrganizationsPage() {
                 </option>
               ))}
             </select>
+            {editBiz === "general_business" && (
+              <>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Sales workflow</label>
+                <select
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
+                  value={editSalesWorkflow}
+                  onChange={(e) => setEditSalesWorkflow(e.target.value as "invoice" | "quick_sale" | "both")}
+                >
+                  <option value="invoice">Invoice-based sales</option>
+                  <option value="quick_sale">Quick Sale (POS)</option>
+                  <option value="both">Both invoicing and Quick Sale</option>
+                </select>
+              </>
+            )}
             <label className="block text-sm font-medium text-slate-700 mb-1">Plan</label>
             <select
               className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-3"
@@ -1296,6 +1345,35 @@ export function PlatformOrganizationsPage() {
               value={editDesktopDeviceLimit}
               onChange={(e) => setEditDesktopDeviceLimit(Math.max(1, Number(e.target.value || 1)))}
             />
+            <label className="block text-sm font-medium text-slate-700 mb-1">BOAT application version</label>
+            <select
+              className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-1"
+              value={editAppVersion}
+              onChange={(e) => setEditAppVersion(e.target.value)}
+            >
+              {Array.from(
+                new Set([
+                  "1.0",
+                  ...(businessTypes.find((item) => item.code === editBiz)?.available_versions || []),
+                  businessTypes.find((item) => item.code === editBiz)?.current_version || "1.1",
+                  editAppVersion,
+                ])
+              )
+                .filter(Boolean)
+                .sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" }))
+                .map((version) => (
+                  <option key={version} value={version}>
+                    Version {version}
+                    {version === businessTypes.find((item) => item.code === editBiz)?.current_version
+                      ? " (current)"
+                      : ""}
+                  </option>
+                ))}
+            </select>
+            <p className="text-xs text-slate-500 mb-3">
+              Current {businessTypes.find((item) => item.code === editBiz)?.name || editBiz} release: v
+              {businessTypes.find((item) => item.code === editBiz)?.current_version || "1.1"}. This upgrades only this organization.
+            </p>
             <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
               <input
                 type="checkbox"

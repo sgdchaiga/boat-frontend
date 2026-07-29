@@ -9,7 +9,7 @@ import {
 import { supabase } from '@/lib/supabase';
 import {
   Users, CreditCard, PiggyBank, TrendingUp,
-  ArrowUpRight, ArrowDownRight, DollarSign, Building2, AlertTriangle, CheckCircle
+  ArrowUpRight, ArrowDownRight, DollarSign, AlertTriangle, CheckCircle
 } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
 
@@ -22,15 +22,13 @@ const EMPTY_CHARTS: SaccoDashboardCharts = {
 };
 
 const Dashboard: React.FC = () => {
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const organizationId = user?.organization_id ?? null;
 
   const {
     members,
     loans,
-    fixedDeposits,
     cashbook,
-    fixedAssets,
     formatCurrency,
     setCurrentPage,
     saccoLoading,
@@ -79,9 +77,21 @@ const Dashboard: React.FC = () => {
   const activeLoans = loans.filter(l => l.status === 'disbursed');
   const totalLoanPortfolio = activeLoans.reduce((s, l) => s + l.balance, 0);
   const pendingLoans = loans.filter(l => l.status === 'pending').length;
-  const totalFD = fixedDeposits.filter(f => f.status === 'active').reduce((s, f) => s + f.amount, 0);
-  const totalAssets = fixedAssets.filter(a => a.status === 'In Use').reduce((s, a) => s + a.currentValue, 0);
   const cashBalance = cashbook.length > 0 ? cashbook[cashbook.length - 1].balance : 0;
+  const today = new Date().toLocaleDateString('en-CA');
+  const todayEntries = cashbook.filter((entry) => entry.date === today);
+  const todayReceipts = todayEntries.reduce((sum, entry) => sum + Number(entry.debit || 0), 0);
+  const todayPayments = todayEntries.reduce((sum, entry) => sum + Number(entry.credit || 0), 0);
+  const arrearsAmount = loans
+    .filter((loan) => loan.status === 'defaulted')
+    .reduce((sum, loan) => sum + Number(loan.balance || 0), 0);
+  const portfolioAtRisk = totalLoanPortfolio > 0 ? (arrearsAmount / totalLoanPortfolio) * 100 : 0;
+  const canApprove = Boolean(
+    isSuperAdmin || ['admin', 'manager', 'accountant'].includes(String(user?.role ?? '').toLowerCase())
+  );
+  const role = String(user?.role ?? '').toLowerCase();
+  const canUseTeller = role !== 'loan_officer';
+  const canUseLoans = role !== 'teller';
 
   const { monthlyData, savingsGrowth, loanTypeData } = charts;
 
@@ -103,20 +113,30 @@ const Dashboard: React.FC = () => {
   const stats: {
     label: string;
     value: string;
-    change: string;
-    up: boolean;
     icon: React.ReactNode;
     color: string;
     page: string;
     state?: Record<string, unknown>;
   }[] = [
-    { label: 'Total Members', value: activeMembers.toString(), change: '+3 this month', up: true, icon: <Users size={22} />, color: 'bg-blue-500', page: SACCOPRO_PAGE.members },
-    { label: 'Total Savings', value: formatCurrency(totalSavings), change: '+8.2%', up: true, icon: <PiggyBank size={22} />, color: 'bg-emerald-500', page: SACCOPRO_PAGE.savingsAccountsList },
-    { label: 'Loan Portfolio', value: formatCurrency(totalLoanPortfolio), change: '+12.5%', up: true, icon: <CreditCard size={22} />, color: 'bg-violet-500', page: SACCOPRO_PAGE.loanList },
-    { label: 'Cash Balance', value: formatCurrency(cashBalance), change: '-2.1%', up: false, icon: <DollarSign size={22} />, color: 'bg-amber-500', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
-    { label: 'Fixed Deposits', value: formatCurrency(totalFD), change: '+5.3%', up: true, icon: <TrendingUp size={22} />, color: 'bg-cyan-500', page: SACCOPRO_PAGE.fixedDeposit },
-    { label: 'Fixed Assets', value: formatCurrency(totalAssets), change: '-1.8%', up: false, icon: <Building2 size={22} />, color: 'bg-rose-500', page: 'fixed_assets' },
+    { label: 'Cash balance', value: formatCurrency(cashBalance), icon: <DollarSign size={22} />, color: 'bg-amber-500', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
+    { label: 'Member savings', value: formatCurrency(totalSavings), icon: <PiggyBank size={22} />, color: 'bg-emerald-500', page: SACCOPRO_PAGE.savingsAccountsList },
+    { label: 'Loan portfolio', value: formatCurrency(totalLoanPortfolio), icon: <CreditCard size={22} />, color: 'bg-violet-500', page: SACCOPRO_PAGE.loanList },
+    { label: 'Amount in arrears', value: formatCurrency(arrearsAmount), icon: <AlertTriangle size={22} />, color: 'bg-rose-500', page: SACCOPRO_PAGE.loanRecovery, state: { recoveryView: 'overdue' } },
+    { label: 'Portfolio at risk', value: `${portfolioAtRisk.toFixed(1)}%`, icon: <TrendingUp size={22} />, color: 'bg-orange-500', page: SACCOPRO_PAGE.loanReports, state: { loanReportTab: 'aging' } },
+    { label: 'Active members', value: activeMembers.toString(), icon: <Users size={22} />, color: 'bg-blue-500', page: SACCOPRO_PAGE.members },
+    { label: "Today's receipts", value: formatCurrency(todayReceipts), icon: <ArrowUpRight size={22} />, color: 'bg-teal-500', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
+    { label: "Today's payments", value: formatCurrency(todayPayments), icon: <ArrowDownRight size={22} />, color: 'bg-slate-600', page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'daily' } },
+    { label: 'Pending approvals', value: pendingLoans.toString(), icon: <CheckCircle size={22} />, color: 'bg-indigo-500', page: canApprove ? SACCOPRO_PAGE.loanApproval : SACCOPRO_PAGE.loanList },
   ];
+
+  const quickActions = [
+    { label: 'Register member', icon: <Users size={20} />, page: SACCOPRO_PAGE.members, color: 'bg-blue-50 text-blue-600 hover:bg-blue-100', show: true },
+    { label: 'Receive money', icon: <ArrowUpRight size={20} />, page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'receive' }, color: 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100', show: canUseTeller },
+    { label: 'Pay money', icon: <ArrowDownRight size={20} />, page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'give' }, color: 'bg-rose-50 text-rose-600 hover:bg-rose-100', show: canUseTeller },
+    { label: 'Apply for loan', icon: <CreditCard size={20} />, page: SACCOPRO_PAGE.loanInput, color: 'bg-violet-50 text-violet-600 hover:bg-violet-100', show: canUseLoans },
+    { label: 'Repay loan', icon: <DollarSign size={20} />, page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'receive', tellerTask: 'loan_repayment' }, color: 'bg-amber-50 text-amber-700 hover:bg-amber-100', show: canUseTeller },
+    { label: 'Member statement', icon: <PiggyBank size={20} />, page: SACCOPRO_PAGE.savingsStatements, color: 'bg-cyan-50 text-cyan-700 hover:bg-cyan-100', show: true },
+  ].filter((action) => action.show);
 
   const chartScopeLabel = orgName ? `Showing data for ${orgName}` : 'Organization charts';
 
@@ -146,7 +166,7 @@ const Dashboard: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-2xl font-bold text-slate-900">Admin Dashboard</h1>
+            <h1 className="text-2xl font-bold text-slate-900">SACCO Home</h1>
             <PageNotes ariaLabel="Dashboard notes">
               <p className="text-slate-600">Welcome back! Here&apos;s your SACCO overview for {overviewMonthLabel}</p>
             </PageNotes>
@@ -166,15 +186,11 @@ const Dashboard: React.FC = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {stats.map((s, i) => (
           <button key={i} onClick={() => setCurrentPage(s.page, s.state)} className="bg-white rounded-xl p-4 shadow-sm border border-slate-100 hover:shadow-md transition-all text-left group">
             <div className="flex items-center justify-between mb-3">
               <div className={`${s.color} p-2 rounded-lg text-white`}>{s.icon}</div>
-              <span className={`flex items-center gap-0.5 text-xs font-medium ${s.up ? 'text-emerald-600' : 'text-red-500'}`}>
-                {s.up ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-                {s.change}
-              </span>
             </div>
             <p className="text-lg font-bold text-slate-900 group-hover:text-emerald-600 transition-colors">{s.value}</p>
             <p className="text-xs text-slate-500 mt-0.5">{s.label}</p>
@@ -190,9 +206,11 @@ const Dashboard: React.FC = () => {
             <p className="text-sm font-medium text-amber-800">{pendingLoans} loan application(s) pending approval</p>
             <p className="text-xs text-amber-600">Review and process pending applications</p>
           </div>
-          <button onClick={() => setCurrentPage(SACCOPRO_PAGE.loanApproval)} className="px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700">
-            Review Now
-          </button>
+          {canApprove ? (
+            <button onClick={() => setCurrentPage(SACCOPRO_PAGE.loanApproval)} className="px-3 py-1.5 bg-amber-600 text-white text-xs font-medium rounded-lg hover:bg-amber-700">
+              Review now
+            </button>
+          ) : null}
         </div>
       )}
 
@@ -317,14 +335,7 @@ const Dashboard: React.FC = () => {
       <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
         <h3 className="text-sm font-semibold text-slate-900 mb-4">Quick Actions</h3>
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3">
-          {[
-            { label: 'New Member', icon: <Users size={20} />, page: SACCOPRO_PAGE.members, color: 'bg-blue-50 text-blue-600 hover:bg-blue-100' },
-            { label: 'New Loan', icon: <CreditCard size={20} />, page: SACCOPRO_PAGE.loanInput, color: 'bg-violet-50 text-violet-600 hover:bg-violet-100' },
-            { label: 'Teller', icon: <DollarSign size={20} />, page: SACCOPRO_PAGE.teller, state: { tellerDesk: 'receive' }, color: 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100' },
-            { label: 'Fixed Deposit', icon: <PiggyBank size={20} />, page: SACCOPRO_PAGE.fixedDeposit, color: 'bg-cyan-50 text-cyan-600 hover:bg-cyan-100' },
-            { label: 'Approve Loans', icon: <CheckCircle size={20} />, page: SACCOPRO_PAGE.loanApproval, color: 'bg-amber-50 text-amber-600 hover:bg-amber-100' },
-            { label: 'View Ledger', icon: <Building2 size={20} />, page: 'accounting_gl', color: 'bg-rose-50 text-rose-600 hover:bg-rose-100' },
-          ].map((a, i) => (
+          {quickActions.map((a, i) => (
             <button key={i} onClick={() => setCurrentPage(a.page, 'state' in a ? a.state : undefined)} className={`${a.color} rounded-xl p-4 flex flex-col items-center gap-2 transition-colors`}>
               {a.icon}
               <span className="text-xs font-medium">{a.label}</span>

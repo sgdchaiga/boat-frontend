@@ -23,6 +23,7 @@ type OnboardingStateRow = {
 };
 
 function firstSetupPage(businessType: BusinessType | null | undefined): string {
+  if (businessType === "financial_modelling") return "financial_modelling_studio";
   if (businessType === "manufacturing") return "manufacturing";
   if (businessType === "sacco") return "sacco_overview";
   if (businessType === "vsla") return "vsla_dashboard";
@@ -69,6 +70,16 @@ function reportPage(businessType: BusinessType | null | undefined): string {
 }
 
 function stepsForBusinessType(businessType: BusinessType | null | undefined): Step[] {
+  if (businessType === "financial_modelling") {
+    return [
+      { id: "choose_template", title: "Modelling workspace created", note: "Your dedicated investment modelling segment is ready.", page: "financial_modelling_studio" },
+      { id: "business_profile", title: "Define the investment case", note: "Select an industry and enter the company, currency, projection period, and funding objective.", page: "financial_modelling_studio" },
+      { id: "assumptions", title: "Complete model assumptions", note: "Add revenue drivers, costs, capital expenditure, working capital, tax, and financing terms.", page: "financial_modelling_studio" },
+      { id: "scenarios", title: "Test scenarios", note: "Compare the base, optimistic, and conservative cases.", page: "financial_modelling_studio" },
+      { id: "validate", title: "Resolve readiness checks", note: "Review liquidity, funding allocation, margins, and debt-service warnings.", page: "financial_modelling_studio" },
+      { id: "export", title: "Generate investor outputs", note: "Export the completed projections and prepare the investment pack.", page: "financial_modelling_studio" },
+    ];
+  }
   return [
     {
       id: "choose_template",

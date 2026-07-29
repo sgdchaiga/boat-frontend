@@ -13,6 +13,8 @@ import {
   Receipt,
   Stethoscope,
   Landmark,
+  Calculator,
+  Briefcase,
 } from "lucide-react";
 import type { BusinessType } from "@/contexts/AuthContext";
 import { HOTEL_PAGE } from "@/lib/hotelPages";
@@ -36,6 +38,9 @@ export type BuildSimpleOrgNavArgs = {
   allowCommunications: boolean;
   allowManufacturing: boolean;
   allowBudget: boolean;
+  allowInventory?: boolean;
+  salesWorkflow?: "invoice" | "quick_sale" | "both";
+  canManageAccounting?: boolean;
 };
 
 /** Flat report links for simple-org tenants (sidebar + in-app report hub). */
@@ -110,7 +115,101 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     allowCommunications,
     allowManufacturing,
     allowBudget,
+    allowInventory = true,
+    salesWorkflow = "both",
+    canManageAccounting = false,
   } = args;
+
+  if (businessType === "general_business") {
+    const sales: NavChild[] = [
+      { name: "Sales overview", page: "retail_dashboard" },
+      ...(salesWorkflow !== "invoice" ? [{ name: "Quick Sale (POS)", page: "retail_pos" } as NavChild] : []),
+      { name: "Customers", page: "retail_customers" },
+      { name: "Quotations & sales orders", page: "retail_pos_orders" },
+      { name: "Sales invoices", page: "retail_credit_invoices" },
+      { name: "Customer receipts", page: "payments" },
+      { name: "Credit notes & returns", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
+      { name: "Customer statements", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
+      { name: "Sales reports", page: "reports_daily_sales" },
+    ];
+    const accounting: NavChild[] = [
+      ...(canManageAccounting ? [
+        { name: "Chart of accounts", page: "gl_accounts" } as NavChild,
+        { name: "Journal entries", page: "accounting_journal" } as NavChild,
+      ] : []),
+      { name: "General ledger", page: "accounting_gl" },
+      { name: "Trial balance", page: "accounting_trial" },
+      ...(canManageAccounting ? [
+        { name: "Opening balances", page: "data_migration" } as NavChild,
+        { name: "Period closing", page: "admin" } as NavChild,
+      ] : []),
+    ];
+    return [
+      { name: "Dashboard", icon: LayoutDashboard, page: "general_business_dashboard" },
+      { name: "Projects", icon: Briefcase, page: "general_business_projects" },
+      { name: "Sales", icon: ShoppingCart, children: sales },
+      {
+        name: "Purchases",
+        icon: CreditCard,
+        children: [
+          { name: "Suppliers", page: "purchases_vendors" },
+          { name: "Purchase orders", page: "purchases_orders" },
+          { name: "Supplier bills", page: "purchases_bills" },
+          { name: "Supplier payments", page: "purchases_payments" },
+          { name: "Debit notes", page: "purchases_credits" },
+          { name: "Purchase reports", page: "reports_daily_purchases_summary" },
+        ],
+      },
+      {
+        name: "Money",
+        icon: Banknote,
+        children: [
+          { name: "Cash, bank & mobile money", page: "treasury" },
+          { name: "Money In", page: "cash_receipts" },
+          { name: "Expenses / Money Out", page: "purchases_expenses" },
+          { name: "Transfers", page: "treasury", state: { treasuryTab: "movements" } },
+          { name: "Reconciliation", page: "accounting_bank_reconciliation" },
+        ],
+      },
+      ...(allowInventory ? [{
+        name: "Inventory",
+        icon: Package,
+        children: [
+          { name: "Products & services", page: "Products" },
+          { name: "Stock movements", page: "inventory_stock_adjustments" },
+          { name: "Stock balances & counts", page: "inventory_stock_balances" },
+          { name: "Inventory reports", page: "reports_stock_summary" },
+        ],
+      } as NavItem] : []),
+      { name: "Accounting", icon: Calculator, children: accounting },
+      {
+        name: "Reports",
+        icon: TrendingUp,
+        children: [
+          { name: "Profit and Loss", page: "accounting_income" },
+          { name: "Financial Position", page: "accounting_balance" },
+          { name: "Cash Flow", page: "accounting_cashflow" },
+          { name: "Receivables", page: "retail_credit_invoices", state: { invoiceTab: "credit" } },
+          { name: "Payables", page: "reports_daily_purchases_summary" },
+          ...(allowInventory ? [{ name: "Inventory", page: "reports_stock_summary" } as NavChild] : []),
+          { name: "Tax reports", page: "reports" },
+        ],
+      },
+      {
+        name: "Settings",
+        icon: Settings,
+        children: [
+          { name: "Users", page: "staff" },
+          { name: "System settings", page: "admin" },
+          ...(allowPayroll ? [{ name: "Payroll", page: PAYROLL_PAGE.hub } as NavChild] : []),
+          ...(allowBudget ? [{ name: "Budgeting", page: "accounting_budgeting" } as NavChild] : []),
+          ...(allowCommunications ? [{ name: "Communications", page: "communications" } as NavChild] : []),
+          { name: "Data migration", page: "data_migration" },
+          { name: "Integrations", page: "system_integrations" },
+        ],
+      },
+    ];
+  }
 
   const isHotelOrMixed = businessType === "hotel" || businessType === "mixed";
   const isRestaurant = businessType === "restaurant";
@@ -270,6 +369,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
       : []),
     /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */
     { name: "Reports", icon: TrendingUp, page: getSimpleOrgDefaultReportRoute(businessType) },
+    { name: "Modelling Studio", icon: Calculator, page: "financial_modelling_studio" },
     { name: "Intelligence", icon: Lightbulb, page: "industry_intelligence" },
     { name: "Import", icon: FileUp, page: "data_migration" },
     { name: "Settings", icon: Settings, children: settings }

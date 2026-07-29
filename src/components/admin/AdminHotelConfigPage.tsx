@@ -267,14 +267,6 @@ export function AdminHotelConfigPage() {
         allowed: treasurySpendMoneyApprovalEnabled,
       }, { onConflict: "organization_id,role_key,permission_key" });
       if (treasuryWorkflowError) throw treasuryWorkflowError;
-      if (!treasurySpendMoneyApprovalEnabled) {
-        const { error: queueError } = await supabase.from("treasury_requests").update({
-          status: "approved",
-          approved_by: user?.id ?? null,
-          approved_at: new Date().toISOString(),
-        }).eq("organization_id", organizationId).eq("source_type", "expense").eq("status", "pending_approval");
-        if (queueError) throw queueError;
-      }
       await refreshUserFlags();
       alert("Purchase workflow settings saved.");
     } catch (e) {
@@ -715,7 +707,7 @@ export function AdminHotelConfigPage() {
             <span>
               Require Treasury approval for Spend Money entries
               <span className="block text-xs text-slate-500 mt-0.5">
-                When off, Spend Money entries skip the Treasury approval queue and go directly to approved fund disbursements.
+                When on, new entries stay pending and do not reach the Income Statement until approved. When off, new entries post immediately; existing pending entries still require approval.
               </span>
             </span>
           </label>

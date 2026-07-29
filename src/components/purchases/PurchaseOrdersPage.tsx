@@ -98,6 +98,9 @@ interface PurchaseOrder {
   status?: string | null;
   total_amount?: number | null;
   approved_at?: string | null;
+  rejection_reason?: string | null;
+  rejected_at?: string | null;
+  amendment_number?: number | null;
   created_at?: string;
   vendors?: { name: string } | null;
   departments?: { name: string } | null;
@@ -231,6 +234,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [departments, setDepartments] = useState<{ id: string; name: string }[]>([]);
   const [products, setProducts] = useState<{ id: string; name: string; cost_price?: number }[]>([]);
+  const [budgetPriceByName, setBudgetPriceByName] = useState<Map<string, number>>(new Map());
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [viewOrder, setViewOrder] = useState<PurchaseOrder | null>(null);
@@ -238,6 +242,15 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const [vendorId, setVendorId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
+
+  useEffect(() => {
+    if (!orgId || String(user?.business_type || "").toLowerCase() !== "school") return void setBudgetPriceByName(new Map());
+    void supabase.from("budget_lines").select("line_label,unit_price,budgets!inner(organization_id,is_active)").eq("budgets.organization_id", orgId).eq("budgets.is_active", true).then(({ data }) => {
+      const map = new Map<string, number>();
+      for (const row of (data || []) as Array<{ line_label: string; unit_price: number | null }>) if (Number(row.unit_price) > 0) map.set(row.line_label.trim().toLowerCase(), Number(row.unit_price));
+      setBudgetPriceByName(map);
+    });
+  }, [orgId, user?.business_type]);
   const [lineItems, setLineItems] = useState<LineItem[]>([
     { product_id: "", description: "", cost_price: 0, quantity: 1 },
   ]);
@@ -454,7 +467,9 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       const prod = products.find((p) => p.id === value);
       if (prod) {
         next[idx].description = prod.name;
-        if (prod.cost_price != null) next[idx].cost_price = Number(prod.cost_price);
+        const budgetPrice = budgetPriceByName.get(prod.name.trim().toLowerCase());
+        if (budgetPrice != null) next[idx].cost_price = budgetPrice;
+        else if (prod.cost_price != null) next[idx].cost_price = Number(prod.cost_price);
       }
     }
     setLineItems(next);
@@ -588,8 +603,8 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
       if (isLocalDesktopMode && desktopApi.isAvailable()) {
         const effectiveOrg =
           orgId || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || DEFAULT_LOCAL_ORG_ID;
-        if (editingOrder && editingOrder.status !== "pending") {
-          alert("Only pending purchases can be edited in local mode.");
+        if (editingOrder && editingOrder.status !== "pending" && editingOrder.status !== "rejected") {
+          alert("Only pending or rejected purchases can be edited in local mode.");
           return;
         }
         const targetPoId = editingOrder?.id ?? randomUuid();
@@ -651,7 +666,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
         return;
       }
 
-      if (editingOrder && editingOrder.status === "pending") {
+      if (editingOrder && (editingOrder.status === "pending" || editingOrder.status === "rejected")) {
         const { error: poErr } = await supabase
           .from("purchase_orders")
           .update({
@@ -659,6 +674,12 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
             department_id: departmentId || null,
             order_date: orderDate,
             total_amount: total,
+            status: "pending",
+            rejection_reason: null,
+            rejected_at: null,
+            rejected_by: null,
+            amended_from_rejection: editingOrder.status === "rejected",
+            amendment_number: Number(editingOrder.amendment_number || 0) + (editingOrder.status === "rejected" ? 1 : 0),
           })
           .eq("id", editingOrder.id);
         if (poErr) throw poErr;
@@ -718,6 +739,14 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     } catch (e) {
       alert("Failed to approve: " + (e instanceof Error ? e.message : String(e)));
     }
+  };
+
+  const handleReject = async (order: PurchaseOrder) => {
+    if (readOnly || order.status !== "pending") return;
+    const reason = window.prompt("Reason for rejecting this purchase order:")?.trim();
+    if (!reason) return void alert("A rejection reason is required.");
+    const { error } = await supabase.from("purchase_orders").update({ status: "rejected", rejection_reason: reason, rejected_at: new Date().toISOString(), rejected_by: user?.id || null }).eq("id", order.id);
+    if (error) alert("Failed to reject: " + error.message); else void fetchData();
   };
 
   const handleCancelPurchase = async (order: PurchaseOrder) => {
@@ -1057,6 +1086,9 @@ const approvedAt = new Date().toISOString();
                       Edit
                     </button>
                   )}
+                  {o.status === "rejected" && !billsByPoId[o.id] && (
+                    <button type="button" onClick={() => void openEdit(o)} disabled={readOnly} className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border-2 border-amber-500 bg-amber-50 text-amber-800 font-semibold text-sm disabled:opacity-50">Amend &amp; resubmit</button>
+                  )}
                   {!billsByPoId[o.id] && (
                     <button
                       type="button"
@@ -1068,15 +1100,16 @@ const approvedAt = new Date().toISOString();
                     </button>
                   )}
                   {requirePoApproval && canApprovePO && o.status === "pending" && (
-                    <button
+                    <><button
                       type="button"
                       onClick={() => handleApprove(o)}
                       disabled={readOnly}
                       className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-emerald-600 text-white font-semibold text-sm hover:bg-emerald-700 disabled:opacity-50"
                     >
                       <CheckCircle className="w-4 h-4" /> Approve
-                    </button>
+                    </button><button type="button" onClick={() => void handleReject(o)} disabled={readOnly} className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-red-600 text-white font-semibold text-sm disabled:opacity-50">Reject</button></>
                   )}
+                  {o.status === "rejected" && o.rejection_reason && <p className="col-span-2 text-xs text-red-700 bg-red-50 rounded-lg p-2"><strong>Rejected:</strong> {o.rejection_reason}</p>}
                   {(canConvertToBill(o) || billsByPoId[o.id]) && (
                     <>
                       {billsByPoId[o.id] ? (
@@ -1326,6 +1359,7 @@ const approvedAt = new Date().toISOString();
                             onBlur={(e) => updateLineItem(idx, "cost_price", normalizeNumericInput(e.target.value))}
                             className="w-full border rounded-lg px-3 py-2 text-base text-right"
                           />
+                          {budgetPriceByName.has((resolveLineProduct(item)?.name || item.description).trim().toLowerCase()) && <p className="mt-1 text-xs font-medium text-indigo-700">Price from active budget</p>}
                         </div>
                       </div>
                       <div className="flex justify-between items-center pt-1 border-t border-slate-200">

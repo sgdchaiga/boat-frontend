@@ -12,6 +12,9 @@ interface Product {
   id: string;
   name: string;
   track_inventory?: boolean | null;
+  reorder_level?: number | null;
+  reorder_lead_days?: number | null;
+  is_food_item?: boolean | null;
 }
 
 interface BalanceRow {
@@ -20,6 +23,10 @@ interface BalanceRow {
   qty_in: number;
   qty_out: number;
   balance: number;
+  daily_use: number;
+  days_cover: number | null;
+  reorder_point: number;
+  is_food: boolean;
 }
 
 export function StockBalancesPage() {
@@ -46,11 +53,11 @@ export function StockBalancesPage() {
         await ensureActiveOrganization(orgId);
       }
 
-      const productsRes = await filterByOrganizationId(
-        supabase.from("products").select("id,name,track_inventory").order("name"),
+      const [productsRes, orgRes] = await Promise.all([filterByOrganizationId(
+        supabase.from("products").select("id,name,track_inventory,reorder_level,reorder_lead_days,is_food_item").order("name"),
         orgId,
         superAdmin
-      );
+      ), orgId ? supabase.from("organizations").select("school_term_end_date").eq("id",orgId).maybeSingle() : Promise.resolve({data:null,error:null})]);
       if (productsRes.error) throw productsRes.error;
 
       const products = (productsRes.data || []) as Product[];
@@ -68,6 +75,10 @@ export function StockBalancesPage() {
           qty_in: 0,
           qty_out: 0,
           balance: 0,
+          daily_use: 0,
+          days_cover: null,
+          reorder_point: Number(p.reorder_level||0),
+          is_food: p.is_food_item === true,
         };
       });
 
@@ -78,13 +89,21 @@ export function StockBalancesPage() {
         const { inQty, outQty } = effectiveStockMovementInOut(m);
         map[m.product_id].qty_in += inQty;
         map[m.product_id].qty_out += outQty;
+        const ageDays = (asAtEnd - movementMs) / 86400000;
+        if (ageDays >= 0 && ageDays <= 30) map[m.product_id].daily_use += outQty / 30;
       });
 
+      const termEndRaw=(orgRes.data as {school_term_end_date?:string|null}|null)?.school_term_end_date;
+      const daysToTermEnd=termEndRaw?Math.max(0,Math.ceil((new Date(termEndRaw).getTime()-new Date(asAtDate).getTime())/86400000)):null;
+
       const result = Object.values(map)
-        .map((r) => ({
-          ...r,
-          balance: r.qty_in - r.qty_out,
-        }))
+        .map((r) => {
+          const balance=r.qty_in-r.qty_out;
+          const product=products.find(p=>p.id===r.product_id);
+          const lead=Math.min(Number(product?.reorder_lead_days??7),daysToTermEnd??Number(product?.reorder_lead_days??7));
+          const reorder=Math.max(r.reorder_point,r.daily_use*lead);
+          return {...r,balance,reorder_point:reorder,days_cover:r.daily_use>0?balance/r.daily_use:null};
+        })
         .sort((a, b) => a.product_name.localeCompare(b.product_name));
 
       setRows(result);
@@ -174,12 +193,12 @@ export function StockBalancesPage() {
                 <th className="p-3 text-left">Item</th>
                 <th className="p-3 text-right">Total In</th>
                 <th className="p-3 text-right">Total Out</th>
-                <th className="p-3 text-right">On Hand</th>
+                <th className="p-3 text-right">On Hand</th><th className="p-3 text-right">Daily use</th><th className="p-3 text-right">Days left</th><th className="p-3 text-right">Reorder point</th><th className="p-3 text-left">Signal</th>
               </tr>
             </thead>
             <tbody>
               {filteredRows.map((r) => {
-                const isLow = r.balance <= threshold;
+                const isLow = r.balance <= Math.max(threshold,r.reorder_point);
                 return (
                   <tr key={r.product_id} className="border-t">
                     <td className="p-3">{r.product_name}</td>
@@ -192,12 +211,13 @@ export function StockBalancesPage() {
                     >
                       {r.balance.toFixed(2)}
                     </td>
+                    <td className="p-3 text-right">{r.daily_use.toFixed(2)}</td><td className="p-3 text-right">{r.days_cover==null?'—':Math.max(0,r.days_cover).toFixed(1)}</td><td className="p-3 text-right">{r.reorder_point.toFixed(2)}</td><td className="p-3">{isLow?<span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-semibold text-amber-800">⚠ Reorder</span>:<span className="text-xs text-emerald-700">Adequate</span>}</td>
                   </tr>
                 );
               })}
               {filteredRows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="p-6 text-center text-slate-500">
+                  <td colSpan={8} className="p-6 text-center text-slate-500">
                     No stock items found for current filters.
                   </td>
                 </tr>

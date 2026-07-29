@@ -9,6 +9,8 @@ interface BusinessTypeRow {
   name: string;
   is_active?: boolean | null;
   sort_order?: number | null;
+  current_version: string;
+  available_versions?: string[] | null;
 }
 
 export function PlatformBusinessTypesPage() {
@@ -22,6 +24,7 @@ export function PlatformBusinessTypesPage() {
   const [name, setName] = useState("");
   const [sortOrder, setSortOrder] = useState("0");
   const [isActive, setIsActive] = useState(true);
+  const [currentVersion, setCurrentVersion] = useState("1.1");
 
   const load = async () => {
     setLoading(true);
@@ -29,7 +32,7 @@ export function PlatformBusinessTypesPage() {
     try {
       const res = await (supabase as any)
         .from("business_types")
-        .select("id,code,name,is_active,sort_order")
+        .select("id,code,name,is_active,sort_order,current_version,available_versions")
         .order("sort_order", { ascending: true })
         .order("name", { ascending: true });
       if (res.error) throw res.error;
@@ -57,6 +60,7 @@ export function PlatformBusinessTypesPage() {
     setName("");
     setSortOrder("0");
     setIsActive(true);
+    setCurrentVersion("1.1");
     setShowModal(true);
   };
 
@@ -66,12 +70,13 @@ export function PlatformBusinessTypesPage() {
     setName(row.name || "");
     setSortOrder(String(row.sort_order ?? 0));
     setIsActive(row.is_active !== false);
+    setCurrentVersion(row.current_version || "1.1");
     setShowModal(true);
   };
 
   const save = async () => {
-    if (!code.trim() || !name.trim()) {
-      alert("Code and name are required.");
+    if (!code.trim() || !name.trim() || !/^\d+(?:\.\d+){0,2}$/.test(currentVersion.trim())) {
+      alert("Code, name, and a valid version (for example 1.1) are required.");
       return;
     }
     setSaving(true);
@@ -81,18 +86,35 @@ export function PlatformBusinessTypesPage() {
         name: name.trim(),
         sort_order: Number(sortOrder || 0),
         is_active: isActive,
+        current_version: currentVersion.trim(),
+        available_versions: Array.from(
+          new Set([...(editing?.available_versions || ["1.0", "1.1"]), currentVersion.trim()])
+        ).sort((a, b) =>
+          a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+        ),
       };
       if (editing) {
+        // `code` is the stable key used by organizations and subscription plans.
+        // Keep it immutable while editing so a catalog row cannot collide with another type.
+        payload.code = editing.code;
         const res = await (supabase as any).from("business_types").update(payload).eq("id", editing.id);
         if (res.error) throw res.error;
       } else {
-        const res = await (supabase as any).from("business_types").insert(payload);
-        if (res.error) throw res.error;
+        const existing = rows.find((row) => row.code.trim().toLowerCase() === payload.code);
+        if (existing) {
+          const res = await (supabase as any).from("business_types").update(payload).eq("id", existing.id);
+          if (res.error) throw res.error;
+        } else {
+          const res = await (supabase as any).from("business_types").insert(payload);
+          if (res.error) throw res.error;
+        }
       }
       setShowModal(false);
       await load();
     } catch (e: unknown) {
-      alert(e instanceof Error ? e.message : String(e));
+      const failure = e as { message?: string; details?: string; code?: string } | null;
+      const detail = failure?.message || failure?.details || (e instanceof Error ? e.message : String(e));
+      alert(failure?.code === "23505" ? "That business type code already exists. Open its existing row to edit it." : detail);
     } finally {
       setSaving(false);
     }
@@ -143,6 +165,7 @@ export function PlatformBusinessTypesPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">Code</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Name</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Active</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Current version</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Sort</th>
                 <th className="p-3 w-28" />
               </tr>
@@ -153,6 +176,7 @@ export function PlatformBusinessTypesPage() {
                   <td className="p-3 font-mono text-xs">{r.code}</td>
                   <td className="p-3">{r.name}</td>
                   <td className="p-3">{r.is_active === false ? "No" : "Yes"}</td>
+                  <td className="p-3 font-mono text-xs">v{r.current_version || "1.1"}</td>
                   <td className="p-3">{r.sort_order ?? 0}</td>
                   <td className="p-3">
                     <div className="flex items-center gap-1 justify-end">
@@ -176,7 +200,7 @@ export function PlatformBusinessTypesPage() {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="p-6 text-center text-slate-500">
+                  <td colSpan={6} className="p-6 text-center text-slate-500">
                     No business types found.
                   </td>
                 </tr>
@@ -194,13 +218,25 @@ export function PlatformBusinessTypesPage() {
             </h2>
             <div className="space-y-3">
               <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Current application version</label>
+                <input
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2"
+                  value={currentVersion}
+                  onChange={(e) => setCurrentVersion(e.target.value)}
+                  placeholder="1.1"
+                />
+                <p className="mt-1 text-xs text-slate-500">This marks the available release; organizations stay pinned until upgraded.</p>
+              </div>
+              <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Code</label>
                 <input
                   className="w-full border border-slate-300 rounded-lg px-3 py-2"
                   value={code}
                   onChange={(e) => setCode(e.target.value)}
                   placeholder="e.g. hotel"
+                  disabled={Boolean(editing)}
                 />
+                {editing && <p className="mt-1 text-xs text-slate-500">The code is a permanent system identifier and cannot be changed after creation.</p>}
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Name</label>

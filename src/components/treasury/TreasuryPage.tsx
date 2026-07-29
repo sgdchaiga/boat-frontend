@@ -10,6 +10,7 @@ import { isCashEquivalentAccount } from "@/lib/cashFlowStatement";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { businessTodayISO } from "@/lib/timezone";
 import { canApprove } from "@/lib/approvalRights";
+import { approveExpenseAndPost } from "@/lib/treasuryWorkflow";
 
 type Status = "pending_approval" | "approved" | "rejected" | "disbursed";
 type TreasuryRequest = {
@@ -103,14 +104,15 @@ function MetricCard({ label, value, hint, icon: Icon }: { label: string; value: 
   );
 }
 
-export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
+export function TreasuryPage({ readOnly = false, initialTab = "overview" }: { readOnly?: boolean; initialTab?: TreasuryTab }) {
   const { user } = useAuth();
   const [requests, setRequests] = useState<TreasuryRequest[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TreasuryTab>("overview");
+  const [activeTab, setActiveTab] = useState<TreasuryTab>(initialTab);
+  useEffect(() => setActiveTab(initialTab), [initialTab]);
   const [sourceFilter, setSourceFilter] = useState<"all" | "expense" | "bill">("all");
   const [search, setSearch] = useState("");
   const [fundingAccounts, setFundingAccounts] = useState<FundingAccount[]>([]);
@@ -164,11 +166,7 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     }
     if (vendorPaymentRes.error) console.error("Unable to load Treasury supplier payments:", vendorPaymentRes.error);
     if (expenseRes.error) console.error("Unable to load Treasury expenses:", expenseRes.error);
-    setRequests(((requestRes.data || []) as TreasuryRequest[]).map((request) =>
-      request.source_type === "expense" && !["disbursed", "rejected"].includes(request.status)
-        ? { ...request, status: "disbursed" as const }
-        : request
-    ));
+    setRequests((requestRes.data || []) as TreasuryRequest[]);
     const loadedCollections = (collectionRes.data || []) as Collection[];
     const retailSaleIds = [...new Set(
       loadedCollections
@@ -458,7 +456,14 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
     setWorkingId(request.id);
     const now = new Date().toISOString();
     try {
-      if (status === "rejected" && request.source_type === "expense") {
+      if (status === "approved" && request.source_type === "expense") {
+        if (!user?.organization_id) throw new Error("Your account is not linked to an organization.");
+        await approveExpenseAndPost({
+          organizationId: user.organization_id,
+          expenseId: request.source_id,
+          approvedBy: user?.id ?? null,
+        });
+      } else if (status === "rejected" && request.source_type === "expense") {
         const reason = rejectionReason!.trim();
         const reversal = await reverseJournalEntriesByReference("expense", request.source_id, user?.id ?? null, reason);
         if (!reversal.ok) throw new Error(`Expense journal reversal failed: ${reversal.error}`);
@@ -761,13 +766,15 @@ export function TreasuryPage({ readOnly = false }: { readOnly?: boolean }) {
         <button type="button" onClick={() => { setDateFrom(""); setDateTo(""); }} disabled={!dateFrom && !dateTo} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50 disabled:opacity-40">Clear dates</button>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCard label="Posted cash-equivalent inflows" value={money.format(movementTotals.inflow)} hint="Debits posted to cash, bank, mobile money, wallet, and float accounts" icon={WalletCards} />
-        <MetricCard label="Gross outflows" value={money.format(grossOutflows)} hint="Spend Money, supplier payments, other cash outflows, and transfers out" icon={ArrowUpRight} />
-        {spendMoneyApprovalEnabled && <MetricCard label="Pending approvals" value={money.format(totals.pending)} hint="Spend Money requests awaiting review" icon={ShieldCheck} />}
-        <MetricCard label="Ready to release" value={money.format(totals.ready)} hint="Approved expenses and Buy Stock bills" icon={Banknote} />
-        <MetricCard label="Net cash equivalents added" value={money.format(netCashEquivalentChange)} hint="Posted inflows less external outflows; internal transfers have no net effect" icon={ReceiptText} />
-      </div>
+      {activeTab === "overview" && (
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          <MetricCard label="Posted cash-equivalent inflows" value={money.format(movementTotals.inflow)} hint="Debits posted to cash, bank, mobile money, wallet, and float accounts" icon={WalletCards} />
+          <MetricCard label="Gross outflows" value={money.format(grossOutflows)} hint="Spend Money, supplier payments, other cash outflows, and transfers out" icon={ArrowUpRight} />
+          {spendMoneyApprovalEnabled && <MetricCard label="Pending approvals" value={money.format(totals.pending)} hint="Spend Money requests awaiting review" icon={ShieldCheck} />}
+          <MetricCard label="Ready to release" value={money.format(totals.ready)} hint="Approved expenses and Buy Stock bills" icon={Banknote} />
+          <MetricCard label="Net cash equivalents added" value={money.format(netCashEquivalentChange)} hint="Posted inflows less external outflows; internal transfers have no net effect" icon={ReceiptText} />
+        </div>
+      )}
 
       {activeTab === "overview" ? (
         <>

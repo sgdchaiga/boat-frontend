@@ -9,6 +9,7 @@ export type SchoolFeeReceiptDetail = {
   orgName: string | null;
   /** Campus or mailing address; optional on organizations. */
   orgAddress: string | null;
+  orgLogoUrl: string | null;
   studentLabel: string;
   amount: number;
   method: string;
@@ -30,13 +31,15 @@ export function schoolFeeReceiptDetailFromPayment(
   issued_at: string,
   studentLabel: string,
   orgName: string | null,
-  orgAddress: string | null
+  orgAddress: string | null,
+  orgLogoUrl: string | null = null
 ): SchoolFeeReceiptDetail {
   return {
     receipt_number,
     issued_at,
     orgName,
     orgAddress,
+    orgLogoUrl,
     studentLabel,
     amount: Number(payment.amount),
     method: payment.method,
@@ -161,9 +164,9 @@ export async function loadSchoolFeeReceiptDetail(
     ? `${st.admission_number} — ${st.first_name} ${st.last_name}`
     : pay.student_id;
 
-  const { data: org } = await supabase.from("organizations").select("name,address").eq("id", orgId).maybeSingle();
+  const { data: org } = await supabase.from("organizations").select("name,address,logo_url").eq("id", orgId).maybeSingle();
 
-  const orgRow = org as { name?: string; address?: string | null } | null;
+  const orgRow = org as { name?: string; address?: string | null; logo_url?: string | null } | null;
 
   return {
     detail: {
@@ -171,6 +174,7 @@ export async function loadSchoolFeeReceiptDetail(
       issued_at: rec.issued_at,
       orgName: orgRow?.name ?? null,
       orgAddress: orgRow?.address?.trim() ? orgRow.address : null,
+      orgLogoUrl: orgRow?.logo_url?.trim() ? orgRow.logo_url : null,
       studentLabel,
       amount: Number(pay.amount),
       method: pay.method,

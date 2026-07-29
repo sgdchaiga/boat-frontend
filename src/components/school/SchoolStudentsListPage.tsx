@@ -11,6 +11,7 @@ type StudentRow = {
   last_name: string;
   class_name: string;
   is_boarding: boolean;
+  status: string;
 };
 
 type EditDraft = {
@@ -159,6 +160,22 @@ export function StudentsListPage() {
     await load();
   };
 
+  const markAsLeft = async (row: StudentRow) => {
+    if (!window.confirm(`Mark ${row.first_name} ${row.last_name} as having left the school?`)) return;
+    setError(null);
+    try {
+      if (canUseSchoolApi() && user?.organization_id) {
+        await updateSchoolRow<StudentRow>("students", user.organization_id, row.id, { status: "left" });
+      } else {
+        const { error: statusErr } = await supabase.from("students").update({ status: "left" }).eq("id", row.id);
+        if (statusErr) throw statusErr;
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update student status.");
+    }
+  };
+
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-bold">Students List</h1>
@@ -197,6 +214,7 @@ export function StudentsListPage() {
             <th>Name</th>
             <th>Class</th>
             <th>Type</th>
+            <th>Status</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -204,11 +222,11 @@ export function StudentsListPage() {
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={5} className="p-4 text-slate-500">Loading...</td>
+              <td colSpan={6} className="p-4 text-slate-500">Loading...</td>
             </tr>
           ) : filtered.length === 0 ? (
             <tr>
-              <td colSpan={5} className="p-4 text-slate-500">No students found.</td>
+              <td colSpan={6} className="p-4 text-slate-500">No students found.</td>
             </tr>
           ) : (
             filtered.map((r) =>
@@ -221,6 +239,7 @@ export function StudentsListPage() {
                       className="border p-2 rounded w-full"
                     />
                   </td>
+                  <td className="p-2 capitalize">{r.status || "active"}</td>
                   <td className="p-2">
                     <div className="grid grid-cols-2 gap-2">
                       <input
@@ -274,11 +293,17 @@ export function StudentsListPage() {
                   <td>{r.first_name} {r.last_name}</td>
                   <td>{r.class_name}</td>
                   <td>{r.is_boarding ? "Boarding" : "Day"}</td>
+                  <td className="capitalize">{r.status || "active"}</td>
                   <td>
                     <div className="flex items-center gap-3">
                       <button type="button" onClick={() => startEdit(r)} className="text-indigo-700 hover:text-indigo-900 text-xs font-medium">
                         Edit
                       </button>
+                      {r.status !== "left" && (
+                        <button type="button" onClick={() => void markAsLeft(r)} className="ml-5 border-l border-slate-300 pl-5 text-amber-700 hover:text-amber-900 text-xs font-medium">
+                          Mark as left
+                        </button>
+                      )}
                       <button
                         type="button"
                         disabled={!canDelete}

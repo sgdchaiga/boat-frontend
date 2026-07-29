@@ -4,7 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { supabase } from "@/lib/supabase";
 import { PageNotes } from "@/components/common/PageNotes";
-import { BookOpen } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, BookOpen, Search } from "lucide-react";
 import { SaccoReportToolbar } from "@/components/common/SaccoReportToolbar";
 import { downloadMemberSavingsPdf } from "@/lib/saccoReportPdf";
 
@@ -21,7 +21,9 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
   const { user } = useAuth();
   const { members, cashbook, formatCurrency } = useAppContext();
   const [memberId, setMemberId] = useState(memberIdFromNav ?? "");
+  const [memberSearch, setMemberSearch] = useState("");
   const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<{ key: "date" | "member" | "details" | "debit" | "credit" | "balance"; direction: "asc" | "desc" }>({ key: "date", direction: "desc" });
   const [orgHeader, setOrgHeader] = useState<{ name: string; address: string | null }>({
     name: "SACCO",
     address: null,
@@ -53,14 +55,48 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
     };
   }, [user?.organization_id]);
 
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
+  const normalize = (value: unknown) => String(value || "").trim().toLocaleLowerCase();
+
   const rows = useMemo(() => {
-    let list = cashbook.slice().sort((a, b) => b.date.localeCompare(a.date));
+    let list = cashbook.slice();
     const q = search.trim().toLowerCase();
     if (q)
       list = list.filter((e) => e.description?.toLowerCase().includes(q) || e.reference?.toLowerCase().includes(q));
     if (memberId) list = list.filter((e) => e.memberId === memberId);
+    const memberQuery = normalize(memberSearch);
+    if (memberQuery) {
+      list = list.filter((entry) => {
+        const member = entry.memberId ? memberById.get(entry.memberId) : undefined;
+        return normalize(`${entry.memberName || member?.name || ""} ${member?.accountNumber || ""}`).includes(memberQuery);
+      });
+    }
+    const direction = sort.direction === "asc" ? 1 : -1;
+    const compareText = (left: unknown, right: unknown) =>
+      String(left || "").localeCompare(String(right || ""), undefined, { sensitivity: "base", numeric: true });
+    list.sort((a, b) => {
+      let result = 0;
+      if (sort.key === "date") result = compareText(a.date, b.date);
+      else if (sort.key === "member") {
+        const memberA = a.memberId ? memberById.get(a.memberId) : undefined;
+        const memberB = b.memberId ? memberById.get(b.memberId) : undefined;
+        result = compareText(`${a.memberName || memberA?.name || ""} ${memberA?.accountNumber || ""}`, `${b.memberName || memberB?.name || ""} ${memberB?.accountNumber || ""}`);
+      } else if (sort.key === "details") result = compareText(`${a.description || ""} ${a.reference || ""}`, `${b.description || ""} ${b.reference || ""}`);
+      else result = Number(a[sort.key] || 0) - Number(b[sort.key] || 0);
+      return result === 0 ? compareText(a.id, b.id) : result * direction;
+    });
     return list;
-  }, [cashbook, memberId, search]);
+  }, [cashbook, memberById, memberId, memberSearch, search, sort]);
+
+  const filteredMembers = useMemo(() => {
+    const q = normalize(memberSearch);
+    return q ? members.filter((member) => normalize(`${member.name || ""} ${member.accountNumber || ""}`).includes(q)) : members;
+  }, [memberSearch, members]);
+  const toggleSort = (key: typeof sort.key) => setSort((current) => current.key === key
+    ? { key, direction: current.direction === "asc" ? "desc" : "asc" }
+    : { key, direction: key === "date" ? "desc" : "asc" });
+  const SortIcon = ({ column }: { column: typeof sort.key }) =>
+    sort.key !== column ? <ArrowUpDown size={13} /> : sort.direction === "asc" ? <ArrowUp size={13} /> : <ArrowDown size={13} />;
 
   const lastBalance =
     rows.length > 0
@@ -147,13 +183,29 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
       </div>
 
       <div className="flex flex-wrap gap-3 rounded-xl border border-slate-100 bg-white p-4 shadow-sm print:hidden">
+        <label className="relative min-w-[220px] flex-1">
+          <Search size={16} className="pointer-events-none absolute left-3 top-3 text-slate-400" />
+          <input
+            type="search"
+            placeholder="Search member or account number…"
+            value={memberSearch}
+            onChange={(e) => {
+              setMemberSearch(e.target.value);
+              setMemberId("");
+            }}
+            className="w-full rounded-lg border border-slate-200 py-2 pl-9 pr-3 text-sm"
+          />
+        </label>
         <select
           className="rounded-lg border border-slate-200 px-3 py-2 text-sm min-w-[200px]"
           value={memberId}
-          onChange={(e) => setMemberId(e.target.value)}
+          onChange={(e) => {
+            setMemberId(e.target.value);
+            setMemberSearch("");
+          }}
         >
           <option value="">All members</option>
-          {members.map((m) => (
+          {filteredMembers.map((m) => (
             <option key={m.id} value={m.id}>
               {m.name} ({m.accountNumber})
             </option>
@@ -190,12 +242,14 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
           <table className="statement-table w-full text-sm min-w-[720px]">
             <thead>
               <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-600 uppercase border-b border-slate-100">
-                <th className="col-date px-4 py-3">Date</th>
-                <th className="col-member px-4 py-3">Member</th>
-                <th className="col-details px-4 py-3">Details</th>
-                <th className="col-money px-4 py-3 text-right">Debit</th>
-                <th className="col-money px-4 py-3 text-right">Credit</th>
-                <th className="col-money px-4 py-3 text-right">Balance</th>
+                {([["date","Date","col-date"],["member","Member","col-member"],["details","Details","col-details"],["debit","Debit","col-money"],["credit","Credit","col-money"],["balance","Balance","col-money"]] as const).map(([key,label,width]) => {
+                  const numeric = ["debit","credit","balance"].includes(key);
+                  return <th key={key} className={`${width} px-4 py-3 ${numeric ? "text-right" : ""}`}>
+                    <button type="button" onClick={() => toggleSort(key)} className={`inline-flex items-center gap-1 hover:text-emerald-700 print:pointer-events-none ${numeric ? "ml-auto" : ""}`} title={`Sort by ${label}`}>
+                      {label}<span className="print:hidden"><SortIcon column={key}/></span>
+                    </button>
+                  </th>;
+                })}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-50">

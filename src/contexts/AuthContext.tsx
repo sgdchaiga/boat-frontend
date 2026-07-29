@@ -53,10 +53,13 @@ export type BusinessType =
   | "restaurant"
   | "clinic"
   | "sacco"
+  | "microfinance"
   | "school"
   | "manufacturing"
   | "agriculture"
   | "accounting_practice"
+  | "financial_modelling"
+  | "general_business"
   | "vsla"
   | "other";
 export type SubscriptionStatus = "trial" | "active" | "past_due" | "cancelled" | "expired" | "none";
@@ -93,6 +96,9 @@ interface AuthUser {
   /** When set, hospitality POS/orders/payments are limited to this branch (see hospitality_branches). */
   hospitality_branch_id?: string | null;
   business_type?: BusinessType | null;
+  sales_workflow?: "invoice" | "quick_sale" | "both";
+  /** BOAT application release pinned to this organization. */
+  app_version?: string;
   subscription_status?: SubscriptionStatus;
   subscription_plan_id?: string | null;
   subscription_plan_code?: string | null;
@@ -236,6 +242,11 @@ function clearPasswordResetUrl(): void {
 }
 
 function parseLocalBusinessType(value: string): BusinessType {
+  const normalized = value.trim().toLowerCase().replace(/[\s-]+/g, "_");
+  const aliases: Record<string, BusinessType> = {
+    micro_finance: "microfinance",
+    mfi: "microfinance",
+  };
   const allowed: BusinessType[] = [
     "hotel",
     "retail",
@@ -243,13 +254,18 @@ function parseLocalBusinessType(value: string): BusinessType {
     "restaurant",
     "clinic",
     "sacco",
+    "microfinance",
     "school",
     "manufacturing",
     "agriculture",
+    "accounting_practice",
+    "financial_modelling",
+    "general_business",
     "vsla",
     "other",
   ];
-  if ((allowed as string[]).includes(value)) return value as BusinessType;
+  if (aliases[normalized]) return aliases[normalized];
+  if ((allowed as string[]).includes(normalized)) return normalized as BusinessType;
   return "retail";
 }
 
@@ -268,6 +284,8 @@ function isLocalSuperAdminEmail(email: string): boolean {
 type TenantProfile = {
   organization_id: string | null;
   business_type: BusinessType | null;
+  sales_workflow: "invoice" | "quick_sale" | "both";
+  app_version: string;
   subscription_status: SubscriptionStatus;
   subscription_plan_id: string | null;
   subscription_plan_code: string | null;
@@ -355,6 +373,8 @@ function localTenantDefaults(): TenantProfile {
   return {
     organization_id: organizationId,
     business_type: businessType,
+    sales_workflow: "both",
+    app_version: "1.0",
     subscription_status: localSubscription?.status ?? "active",
     subscription_plan_id: "local-plan",
     subscription_plan_code: localSubscription?.plan_code ?? "desktop-local",
@@ -515,9 +535,11 @@ async function loadUserFlags(userId: string): Promise<{ isSuperAdmin: boolean; i
 }
 
 async function loadTenantProfile(userId: string, explicitOrganizationId?: string | null): Promise<TenantProfile> {
-  const empty = {
+  const empty: TenantProfile = {
     organization_id: null,
     business_type: null,
+    sales_workflow: "both",
+    app_version: "1.0",
     subscription_status: "none" as SubscriptionStatus,
     subscription_plan_id: null,
     subscription_plan_code: null,
@@ -573,7 +595,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -598,6 +620,8 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
 
     const org = orgRow as {
       business_type?: BusinessType | null;
+      sales_workflow?: "invoice" | "quick_sale" | "both" | null;
+      app_version?: string | null;
       desktop_device_limit?: number | null;
       enable_fixed_assets?: boolean | null;
       enable_asset_verification?: boolean | null;
@@ -639,7 +663,11 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
 
     const resolved: TenantProfile = {
       organization_id,
-      business_type: (org?.business_type ?? null) as BusinessType | null,
+      business_type: org?.business_type
+        ? parseLocalBusinessType(String(org.business_type))
+        : null,
+      sales_workflow: org?.sales_workflow || "both",
+      app_version: org?.app_version?.trim() || "1.0",
       subscription_status: effectiveSubscriptionStatus,
       subscription_plan_id: sub?.plan_id ?? null,
       subscription_plan_code: sub?.subscription_plans?.code ?? null,
@@ -792,7 +820,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
       writeStoredActiveOrganizationId(sessionUser.id, organizationId);
       const membership = memberList.find((m) => m.organization_id === organizationId) ?? null;
-      const [flags, tenant, refreshedMembers, staffBranchRes] = await Promise.all([
+      const [flags, loadedTenant, refreshedMembers, staffBranchRes] = await Promise.all([
         loadUserFlags(sessionUser.id),
         loadTenantProfile(sessionUser.id, organizationId),
         loadMembershipsForUser(sessionUser.id).catch(() => memberList),
@@ -804,6 +832,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           (staffBranchRes.data as { hospitality_branch_id?: string | null } | null)?.hospitality_branch_id ??
           null,
       };
+      const membershipBusinessType = membership?.organizations?.business_type;
+      const tenant: TenantProfile =
+        loadedTenant.business_type || !membershipBusinessType
+          ? loadedTenant
+          : {
+              ...loadedTenant,
+              business_type: parseLocalBusinessType(membershipBusinessType),
+            };
       setMemberships(refreshedMembers);
       setNeedsOrganizationPicker(false);
       setUser(buildAuthUser(sessionUser, flags, tenant, membership, branchMeta));
@@ -904,6 +940,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           ...flags,
           organization_id: null,
           business_type: null,
+          sales_workflow: "both",
           subscription_status: "none",
           subscription_plan_id: null,
           subscription_plan_code: null,
@@ -1126,22 +1163,45 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     let mounted = true;
     const handlingPasswordReset = isPasswordResetRedirect();
     passwordResetModeRef.current = handlingPasswordReset;
-    supabase.auth.getSession().then(({ data }: { data: { session: Session | null } }) => {
-      if (!mounted) return;
-      const sessionUser = data.session?.user;
-      if (handlingPasswordReset) {
-        setPendingPasswordReset(true);
+    supabase.auth
+      .getSession()
+      .then(({ data, error }: { data: { session: Session | null }; error?: Error | null }) => {
+        if (!mounted) return;
+        if (error) throw error;
+        const sessionUser = data.session?.user;
+        if (handlingPasswordReset) {
+          setPendingPasswordReset(true);
+          setUser(null);
+          setLoading(false);
+          return;
+        }
+        if (sessionUser) {
+          applySessionUser(sessionUser).finally(() => mounted && setLoading(false));
+        } else {
+          setUser(null);
+          setLoading(false);
+        }
+      })
+      .catch(async (error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error ?? "");
+        const invalidRefreshToken = /invalid refresh token|refresh token not found/i.test(message);
+        if (invalidRefreshToken) {
+          // The server no longer recognizes the saved refresh token. Remove only this
+          // browser's Supabase session so BOAT can cleanly return to the login screen.
+          try {
+            await supabase.auth.signOut({ scope: "local" });
+          } catch {
+            // Supabase may already have removed the invalid session while rejecting it.
+          }
+        } else {
+          console.error("[BOAT] Failed to restore the authentication session", error);
+        }
+        if (!mounted) return;
         setUser(null);
+        setMemberships([]);
+        setNeedsOrganizationPicker(false);
         setLoading(false);
-        return;
-      }
-      if (sessionUser) {
-        applySessionUser(sessionUser).finally(() => mounted && setLoading(false));
-      } else {
-        setUser(null);
-        setLoading(false);
-      }
-    });
+      });
     const { data: listener } = supabase.auth.onAuthStateChange((event: AuthChangeEvent, session: Session | null) => {
       const sessionUser = session?.user;
       if (event === "PASSWORD_RECOVERY") {

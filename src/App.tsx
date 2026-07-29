@@ -10,6 +10,7 @@ import {
 } from './lib/navRoleExperience';
 import { getRoleCapabilities } from './lib/roleCapabilities';
 import { SACCOPRO_HOME_PAGE, SACCOPRO_PAGE } from './lib/saccoproPages';
+import { MFI_HOME_PAGE, MFI_PAGE } from './lib/mfiPages';
 import { SCHOOL_HOME_PAGE, SCHOOL_PAGE } from './lib/schoolPages';
 import { VSLA_HOME_PAGE, VSLA_PAGE } from './lib/vslaPages';
 import { PAYROLL_PAGE } from './lib/payrollPages';
@@ -70,7 +71,11 @@ const DesktopServerConnectionPage = lazyNamed(() => import('./components/system/
 const SaccoSavingsStatementsPage = lazy(() => import('./components/sacco/SaccoSavingsStatementsPage'));
 
 const Dashboard = lazyNamed(() => import('./components/Dashboard'), 'Dashboard');
+const FinancialModellingStudio = lazyNamed(() => import('./components/financial-modelling/FinancialModellingStudio'), 'FinancialModellingStudio');
+const FinancialModelPortalPage = lazyNamed(() => import('./components/financial-modelling/FinancialModelPortalPage'), 'FinancialModelPortalPage');
 const RetailDashboard = lazyNamed(() => import('./components/RetailDashboard'), 'RetailDashboard');
+const GeneralBusinessDashboard = lazyNamed(() => import('./components/general-business/GeneralBusinessDashboard'), 'GeneralBusinessDashboard');
+const GeneralBusinessProjectsPage = lazyNamed(() => import('./components/general-business/GeneralBusinessProjectsPage'), 'GeneralBusinessProjectsPage');
 const RoomsPage = lazyNamed(() => import('./components/RoomsPage'), 'RoomsPage');
 const ReservationsPage = lazyNamed(() => import('./components/ReservationsPage'), 'ReservationsPage');
 const CheckInPage = lazyNamed(() => import('./components/CheckInPage'), 'CheckInPage');
@@ -134,6 +139,7 @@ const JournalEntriesPage = lazyNamed(() => import('./components/accounting/Journ
 const ManualJournalsPage = lazyNamed(() => import('./components/accounting/ManualJournalsPage'), 'ManualJournalsPage');
 const GeneralLedgerPage = lazyNamed(() => import('./components/accounting/GeneralLedgerPage'), 'GeneralLedgerPage');
 const BankReconciliationPage = lazyNamed(() => import('./components/accounting/BankReconciliationPage'), 'BankReconciliationPage');
+const FinanceOverviewPage = lazyNamed(() => import('./components/accounting/FinanceOverviewPage'), 'FinanceOverviewPage');
 const PracticeWorkspacePage = lazyNamed(() => import('./components/accounting-practice/PracticeWorkspacePage'), 'PracticeWorkspacePage');
 const PracticeStockTakePage = lazyNamed(() => import('./components/accounting-practice/PracticeStockTakePage'), 'PracticeStockTakePage');
 const PracticeHousekeepingAuditPage = lazyNamed(() => import('./components/accounting-practice/PracticeHousekeepingAuditPage'), 'PracticeHousekeepingAuditPage');
@@ -218,6 +224,7 @@ const SchoolFeePaymentsPage = lazyNamed(() => import('./components/school/School
 const SchoolOtherRevenuePage = lazyNamed(() => import('./components/school/SchoolOtherRevenuePage'), 'SchoolOtherRevenuePage');
 const SchoolCollectionsSummaryPage = lazyNamed(() => import('./components/school/SchoolCollectionsSummaryPage'), 'SchoolCollectionsSummaryPage');
 const SchoolFixedDepositPage = lazyNamed(() => import('./components/school/SchoolFixedDepositPage'), 'SchoolFixedDepositPage');
+const SchoolVoteBookPage = lazyNamed(() => import('./components/school/SchoolVoteBookPage'), 'SchoolVoteBookPage');
 const SchoolFeeCollectionsReportPage = lazyNamed(() => import('./components/school/reports/SchoolFeeCollectionsReportPage'), 'SchoolFeeCollectionsReportPage');
 const SchoolOutstandingBalancesReportPage = lazyNamed(() => import('./components/school/reports/SchoolOutstandingBalancesReportPage'), 'SchoolOutstandingBalancesReportPage');
 const SchoolEnrollmentByClassReportPage = lazyNamed(() => import('./components/school/reports/SchoolEnrollmentByClassReportPage'), 'SchoolEnrollmentByClassReportPage');
@@ -249,6 +256,9 @@ const ImageDocumentConverterPage = lazyNamed(() => import('./components/tools/Im
 const DataMigrationPage = lazyNamed(() => import('./components/DataMigrationPage'), 'DataMigrationPage');
 const IndustryIntelligencePage = lazyNamed(() => import('./components/IndustryIntelligencePage'), 'IndustryIntelligencePage');
 const SaccoAnnualAccountsPage = lazyNamed(() => import('./components/sacco/SaccoAnnualAccountsPage'), 'SaccoAnnualAccountsPage');
+const MfiWorkspacePage = lazyNamed(() => import('./components/mfi/MfiWorkspacePage'), 'MfiWorkspacePage');
+const MfiPortfolioManagementPage = lazyNamed(() => import('./components/mfi/MfiPortfolioManagementPage'), 'MfiPortfolioManagementPage');
+const MfiIntegrationPage = lazyNamed(() => import('./components/mfi/MfiIntegrationPage'), 'MfiIntegrationPage');
 const EcosystemPage = lazyNamed(() => import('./components/EcosystemPage'), 'EcosystemPage');
 
 function PageLoadingFallback() {
@@ -571,6 +581,8 @@ function AppContent() {
       setCurrentPage(
         user.business_type === "retail"
           ? "retail_dashboard"
+          : user.business_type === "general_business"
+            ? "general_business_dashboard"
           : user.business_type === "clinic"
             ? "clinic_dashboard"
             : user.business_type === "sacco"
@@ -584,8 +596,22 @@ function AppContent() {
       setPageState({});
       return;
     }
+    if (
+      user.business_type === "financial_modelling" &&
+      currentPage !== "financial_modelling_studio" &&
+      currentPage !== "admin" &&
+      currentPage !== "staff"
+    ) {
+      setCurrentPage("financial_modelling_studio");
+      setPageState({});
+      return;
+    }
     if (user.business_type === "retail" && currentPage === "dashboard") {
       setCurrentPage("retail_dashboard");
+      return;
+    }
+    if (user.business_type === "general_business" && (currentPage === "dashboard" || currentPage === "retail_dashboard")) {
+      setCurrentPage("general_business_dashboard");
       return;
     }
     if (user.business_type === "accounting_practice" && (currentPage === "dashboard" || currentPage === "retail_dashboard")) {
@@ -610,6 +636,10 @@ function AppContent() {
     }
     if (user.business_type === "sacco" && currentPage === "dashboard") {
       setCurrentPage(SACCOPRO_HOME_PAGE);
+      return;
+    }
+    if (user.business_type === "microfinance" && currentPage === "dashboard") {
+      setCurrentPage(MFI_HOME_PAGE);
       return;
     }
     if (user.business_type === "school" && currentPage === "dashboard") {
@@ -752,6 +782,9 @@ function AppContent() {
     };
   }, [user?.id]);
 
+  const financialPortalToken = new URLSearchParams(window.location.search).get("financial_model_token");
+  if (financialPortalToken) return pageSuspense(<FinancialModelPortalPage token={financialPortalToken}/>);
+
   if (checkingServerConnection) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center">
@@ -848,6 +881,9 @@ function AppContent() {
     if (user?.business_type === "sacco" && currentPage === "dashboard") {
       return <SaccoDashboard />;
     }
+    if (user?.business_type === "microfinance" && currentPage === "dashboard") {
+      return <MfiWorkspacePage section="dashboard" />;
+    }
     if (user?.business_type === "school" && currentPage === "dashboard") {
       return <SchoolDashboard onNavigate={navigate} />;
     }
@@ -916,7 +952,9 @@ function AppContent() {
 
     if (!access.visible) {
       const fallback =
-        user?.business_type === "retail" ? (
+        user?.business_type === "financial_modelling" ? (
+          <FinancialModellingStudio />
+        ) : user?.business_type === "retail" ? (
           <RetailDashboard onNavigate={navigate} />
         ) : user?.business_type === "clinic" ? (
           <ClinicDashboardPage onNavigate={navigate} />
@@ -975,6 +1013,8 @@ function AppContent() {
         );
       case 'dashboard':
         return <Dashboard onNavigate={navigate} />;
+      case 'financial_modelling_studio':
+        return <FinancialModellingStudio />;
       case 'practice_dashboard':
       case 'practice_clients':
         return <PracticeWorkspacePage section="clients" readOnly={access.readOnly} />;
@@ -1000,6 +1040,38 @@ function AppContent() {
         return <AssetVerificationPage readOnly={access.readOnly} />;
       case 'retail_dashboard':
         return <RetailDashboard onNavigate={navigate} />;
+      case 'general_business_dashboard':
+        return <GeneralBusinessDashboard onNavigate={navigate} />;
+      case 'general_business_projects':
+        return <GeneralBusinessProjectsPage />;
+      case MFI_PAGE.dashboard:
+        return <MfiWorkspacePage section="dashboard" readOnly={access.readOnly} />;
+      case MFI_PAGE.borrowers:
+        return <MfiWorkspacePage section="borrowers" readOnly={access.readOnly} />;
+      case MFI_PAGE.products:
+        return <MfiWorkspacePage section="products" readOnly={access.readOnly} />;
+      case MFI_PAGE.applications:
+        return <MfiWorkspacePage section="applications" readOnly={access.readOnly} />;
+      case MFI_PAGE.approvals:
+        return <MfiWorkspacePage section="approvals" readOnly={access.readOnly} />;
+      case MFI_PAGE.collections:
+        return <MfiWorkspacePage section="collections" readOnly={access.readOnly} />;
+      case MFI_PAGE.risk:
+        return <MfiWorkspacePage section="risk" readOnly={access.readOnly} />;
+      case MFI_PAGE.followups:
+        return <MfiPortfolioManagementPage section="followups" readOnly={access.readOnly} />;
+      case MFI_PAGE.servicing:
+        return <MfiPortfolioManagementPage section="servicing" readOnly={access.readOnly} />;
+      case MFI_PAGE.provisioning:
+        return <MfiPortfolioManagementPage section="provisioning" readOnly={access.readOnly} />;
+      case MFI_PAGE.restructures:
+        return <MfiPortfolioManagementPage section="restructures" readOnly={access.readOnly} />;
+      case MFI_PAGE.writeoffs:
+        return <MfiPortfolioManagementPage section="writeoffs" readOnly={access.readOnly} />;
+      case MFI_PAGE.integration:
+        return <MfiIntegrationPage readOnly={access.readOnly} />;
+      case MFI_PAGE.reports:
+        return <MfiWorkspacePage section="reports" readOnly={access.readOnly} />;
       case SACCOPRO_PAGE.dashboard:
         return <SaccoDashboard />;
       case SACCOPRO_PAGE.performanceDashboard:
@@ -1156,6 +1228,8 @@ function AppContent() {
         return <SchoolCollectionsSummaryPage readOnly={access.readOnly} />;
       case SCHOOL_PAGE.fixedDeposit:
         return <SchoolFixedDepositPage readOnly={access.readOnly} />;
+      case SCHOOL_PAGE.voteBook:
+        return <SchoolVoteBookPage readOnly={access.readOnly} />;
       case VSLA_PAGE.dashboard:
         return <VslaDashboardPage onNavigate={navigate} readOnly={access.readOnly} />;
       case VSLA_PAGE.members:
@@ -1477,7 +1551,9 @@ function AppContent() {
       case 'wallet':
         return <WalletPage readOnly={access.readOnly} />;
       case 'treasury':
-        return <TreasuryPage readOnly={access.readOnly} />;
+        return <TreasuryPage readOnly={access.readOnly} initialTab={(pageState?.treasuryTab as "overview" | "cash-control" | "movements" | "end-of-day" | "approvals" | "disbursements" | "collections" | "history" | undefined) ?? "overview"} />;
+      case 'finance_overview':
+        return <FinanceOverviewPage onNavigate={navigate} />;
       case 'staff':
         return <StaffPage readOnly={access.readOnly} />;
       case 'admin':

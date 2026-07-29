@@ -357,6 +357,9 @@ function registerIpc() {
   ipcMain.handle("boat:local-store:delete", (_event, payload) => {
     return dbApi.localStoreDelete(db, payload || {});
   });
+  ipcMain.handle("boat:local-store:rpc", (_event, payload) => {
+    return dbApi.localStoreRpc(db, payload || {});
+  });
 }
 
 app.whenReady().then(() => {

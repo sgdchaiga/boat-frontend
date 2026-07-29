@@ -68,6 +68,7 @@ import { fetchSaccoTillInsuredLimit, upsertSaccoTillInsuredLimit } from "@/lib/s
 import { downloadTellerReportPdf } from "@/lib/saccoReportPdf";
 import { SaccoTellerReportPreview } from "@/components/sacco/SaccoTellerReportPreview";
 import { SaccoTillOversightPanel } from "@/components/sacco/SaccoTillOversightPanel";
+import { SaccoWorkflowSteps } from "@/components/sacco/SaccoWorkflowSteps";
 import { SaccoEditTellerTransactionModal } from "@/components/sacco/SaccoEditTellerTransactionModal";
 import { canEditSaccoTransactions } from "@/lib/saccoTransactionEditAccess";
 import { isLocalAuthEnvEnabled } from "@/lib/saccoSavingsSettingsAccess";
@@ -488,6 +489,13 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
     () => pickSavingsAccounts.filter((a) => a.sacco_member_id === selectedMemberId),
     [pickSavingsAccounts, selectedMemberId]
   );
+  const tellerWorkflowStep = (() => {
+    if (taskAction === "cheque") return digitsOnly(chequeAmountStr) ? 4 : 3;
+    if (!selectedMemberId) return 1;
+    if (taskRequiresSavingsAccount(taskAction) && !selectedSavingsAccountId) return 2;
+    if (!digitsOnly(amountStr)) return 3;
+    return 4;
+  })();
 
   useEffect(() => {
     if (!taskRequiresSavingsAccount(taskAction)) return;
@@ -1142,6 +1150,11 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
       <div className="min-h-0 flex-1 space-y-4 pt-2">
       {mainTab === "transactions" && (
         <div className="space-y-5">
+          <SaccoWorkflowSteps
+            ariaLabel="Teller transaction progress"
+            currentStep={tellerWorkflowStep}
+            steps={["Find member", "Choose account", "Enter amount", "Review & confirm"]}
+          />
           <div className="rounded-2xl border border-slate-200 bg-white p-5 md:p-6 shadow-sm space-y-5">
             {initLoading || loading ? (
               <p className="text-sm text-slate-500 flex items-center gap-2">
@@ -1404,7 +1417,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                 onClick={() => requestCompleteTransaction()}
                 className="w-full rounded-2xl bg-emerald-600 py-4 text-center text-lg font-bold uppercase tracking-wide text-white shadow-lg hover:bg-emerald-700 disabled:opacity-50"
               >
-                {saving ? "Working…" : "Complete transaction"}
+                {saving ? "Working…" : "Review transaction"}
               </button>
               <p className="text-center text-[11px] leading-snug text-slate-500">
                 Large amounts may require supervisor approval after confirm.
@@ -1555,7 +1568,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
 
       {mainTab === "approvals" && (
         <div className="space-y-4">
-          <p className="text-sm text-slate-600">Review and approve or reject. Same screen works for tellers and supervisors.</p>
+          <p className="text-sm text-slate-600">An authorized officer may review and decide transactions entered by another staff member.</p>
           <div className="grid gap-3">
             {(snap?.pendingApprovals?.length ?? 0) === 0 ? (
               <div className="rounded-xl border border-slate-200 bg-white p-8 text-center text-slate-500">No items in the queue.</div>
@@ -1574,7 +1587,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                       <p className="text-sm text-slate-700 line-clamp-2">{t.member_ref || "—"}</p>
                       <p className="text-xs text-slate-500">{new Date(t.created_at).toLocaleString()}</p>
                       {t.narration ? <p className="text-xs text-slate-600 italic">{t.narration}</p> : null}
-                      {isMaker ? <p className="text-xs text-slate-500">You are the maker — you may still approve or reject here.</p> : null}
+                      {isMaker ? <p className="text-xs font-medium text-amber-800">You entered this transaction. Another authorized officer must approve or reject it.</p> : null}
                       {canEditTransactions ? (
                         <button
                           type="button"
@@ -1598,7 +1611,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                         <button
                           type="button"
                           className="flex-1 rounded-lg bg-emerald-600 text-white text-sm font-medium py-2"
-                          disabled={!canMutate || saving}
+                          disabled={!canMutate || saving || isMaker}
                           onClick={() => void handleApprovePending(t.id)}
                         >
                           Approve
@@ -1606,7 +1619,7 @@ export function SaccoTellerPage({ tellerDesk, tellerTask, tellerReportsTab, onDe
                         <button
                           type="button"
                           className="flex-1 rounded-lg border-2 border-red-200 bg-red-50 text-red-900 text-sm font-medium py-2"
-                          disabled={!canMutate || saving}
+                          disabled={!canMutate || saving || isMaker}
                           onClick={() => void handleRejectPending(t.id)}
                         >
                           Reject

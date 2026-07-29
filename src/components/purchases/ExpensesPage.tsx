@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import {
   createJournalForExpenseWithLines,
@@ -14,7 +14,7 @@ import { buildStoragePath, uploadSourceDocument, type SourceDocumentRef } from "
 import { loadJournalAccountSettings, resolveJournalAccountSettings } from "../../lib/journalAccountSettings";
 import { randomUuid } from "../../lib/randomUuid";
 import { loadHotelConfig } from "../../lib/hotelConfig";
-import { queueExpenseForTreasury } from "../../lib/treasuryWorkflow";
+import { approveExpenseAndPost, isSpendMoneyApprovalEnabled, queueExpenseForTreasury, setSpendMoneyApprovalEnabled } from "../../lib/treasuryWorkflow";
 
 const SIMPLE_EXPENSE_MODE_KEY = "boat.expenses.simple_mode";
 
@@ -390,6 +390,7 @@ interface Expense {
   paid_using_label?: string;
   source_documents?: unknown;
   status?: "active" | "cancelled";
+  approval_status?: "pending_approval" | "approved" | "rejected" | "disbursed" | null;
   cancellation_reason?: string | null;
 }
 
@@ -586,12 +587,50 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
   /** Form-level VAT for simple mode (default off). */
   const [simpleIncludeVat, setSimpleIncludeVat] = useState(false);
   const [showSimpleDetails, setShowSimpleDetails] = useState(false);
+  const [schoolBudgetByGl, setSchoolBudgetByGl] = useState<Map<string, number>>(new Map());
+  const [schoolSpentByGl, setSchoolSpentByGl] = useState<Map<string, number>>(new Map());
+  const [schoolBudgetGlId, setSchoolBudgetGlId] = useState("");
+  const [approvalEnabled, setApprovalEnabled] = useState(true);
+  const [approvalWorkingId, setApprovalWorkingId] = useState<string | null>(null);
 
   const orgId = user?.organization_id ?? null;
+  const canApproveSpendMoney = ["admin", "manager", "accountant"].includes(user?.role || "");
+  const canManageApprovalWorkflow = ["admin", "manager"].includes(user?.role || "");
   const isLocalDesktopMode =
     ((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "true" ||
       (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "1") &&
     (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase() === "lan";
+
+  useEffect(() => {
+    if (!orgId || String(user?.business_type || "").toLowerCase() !== "school") {
+      setSchoolBudgetByGl(new Map());
+      return;
+    }
+    void (async () => {
+      const today = localDateISO();
+      const { data: budgetRows } = await supabase.from("budgets").select("id,start_date,end_date").eq("organization_id", orgId).eq("is_active", true).lte("start_date", today).gte("end_date", today);
+      const typedBudgets = (budgetRows || []) as Array<{ id: string; start_date: string; end_date: string }>;
+      const ids = typedBudgets.map((b) => b.id);
+      if (!ids.length) { setSchoolBudgetByGl(new Map()); setSchoolSpentByGl(new Map()); return; }
+      const { data } = await supabase.from("budget_lines").select("gl_account_id,amount").in("budget_id", ids);
+      const totals = new Map<string, number>();
+      for (const row of (data || []) as Array<{ gl_account_id: string | null; amount: number }>) {
+        if (row.gl_account_id) totals.set(row.gl_account_id, (totals.get(row.gl_account_id) || 0) + Number(row.amount || 0));
+      }
+      setSchoolBudgetByGl(totals);
+      const from = typedBudgets.map((b) => b.start_date).sort()[0];
+      const sortedEndDates = typedBudgets.map((b) => b.end_date).sort();
+      const to = sortedEndDates[sortedEndDates.length - 1];
+      const { data: expenseRows } = await supabase.from("expenses").select("id,status").eq("organization_id", orgId).gte("expense_date", from).lte("expense_date", to).neq("status", "cancelled");
+      const expenseIds = (expenseRows || []).map((row: { id: string }) => row.id);
+      const spent = new Map<string, number>();
+      if (expenseIds.length) {
+        const { data: spentRows } = await supabase.from("expense_lines").select("expense_gl_account_id,amount,vat_amount").in("expense_id", expenseIds);
+        for (const row of (spentRows || []) as Array<{ expense_gl_account_id: string; amount: number; vat_amount: number | null }>) spent.set(row.expense_gl_account_id, (spent.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
+      }
+      setSchoolSpentByGl(spent);
+    })();
+  }, [orgId, user?.business_type, showModal]);
 
   const loadGlAccounts = useCallback(async () => {
     const { data, error } = await supabase
@@ -744,8 +783,21 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       const lineByExpense: Record<string, number> = {};
       const glNamesByExpense: Record<string, Set<string>> = {};
       const firstSourceGlByExpense: Record<string, string> = {};
+      const approvalByExpense = new Map<string, Expense["approval_status"]>();
       let glNameByIdForList = new Map<string, string>();
       if (ids.length > 0) {
+        const { data: requestRows, error: requestError } = await supabase
+          .from("treasury_requests")
+          .select("source_id,status")
+          .eq("organization_id", orgId)
+          .eq("source_type", "expense")
+          .in("source_id", ids);
+        if (requestError) console.error("Expense approval status:", requestError.message);
+        else {
+          for (const request of (requestRows || []) as Array<{ source_id: string; status: Expense["approval_status"] }>) {
+            approvalByExpense.set(request.source_id, request.status);
+          }
+        }
         const { data: lineRows, error: lineErr } = await supabase
           .from("expense_lines")
           .select("expense_id, expense_gl_account_id, source_cash_gl_account_id, sort_order")
@@ -809,6 +861,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
               ? [...glNamesByExpense[e.id]].sort().join(", ")
               : "—",
             paid_using_label: srcGl ? inferPaymentLabelFromGlName(srcName) : "—",
+            approval_status: approvalByExpense.get(e.id) || null,
             source_documents: e.source_documents,
           };
         })
@@ -826,6 +879,13 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
   useEffect(() => {
     void fetchData();
   }, [fetchData]);
+
+  useEffect(() => {
+    if (!orgId) return;
+    void isSpendMoneyApprovalEnabled(orgId).then(setApprovalEnabled).catch((error) => {
+      console.error("Spend Money approval setting:", error);
+    });
+  }, [orgId]);
 
   useEffect(() => {
     setPage(0);
@@ -917,7 +977,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
   const lineTotals = useMemo(() => {
     const rate = parseNum(vatRatePercent);
     return lines.map((r) => {
-      const net = round2(parseNum(r.amount));
+      const net = round2((Math.max(0, parseNum(r.quantity)) || 1) * parseNum(r.amount));
       const vat = r.vat_enabled ? round2(net * (rate / 100)) : 0;
       return { net, vat, rowTotal: round2(net + vat) };
     });
@@ -935,7 +995,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
   const simpleLineTotals = useMemo(() => {
     const rate = parseNum(vatRatePercent);
     return simpleLines.map((r) => {
-      const net = round2(parseNum(r.amount));
+      const net = round2((Math.max(0, parseNum(r.quantity)) || 1) * parseNum(r.amount));
       const vat = simpleIncludeVat ? round2(net * (rate / 100)) : 0;
       return { net, vat, rowTotal: round2(net + vat) };
     });
@@ -964,12 +1024,12 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
 
       for (let i = 0; i < simpleLines.length; i++) {
         const r = simpleLines[i];
-        const net = round2(parseNum(r.amount));
+        const net = simpleLineTotals[i]?.net ?? 0;
         const vat = simpleIncludeVat ? round2(net * (rate / 100)) : 0;
         const rowTotal = round2(net + vat);
         if (rowTotal <= 0) continue;
 
-        const expGl = mapCategoryToExpenseGlId(r.category, expenseGlOptions, r.item.trim());
+        const expGl = String(user?.business_type || "").toLowerCase() === "school" && schoolBudgetGlId ? schoolBudgetGlId : mapCategoryToExpenseGlId(r.category, expenseGlOptions, r.item.trim());
         const srcGl = mapPaymentMethodToGlId(r.payment_method, cashSourceOptions);
         if (!expGl || !srcGl) {
           alert(
@@ -1026,6 +1086,22 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
 
       if (journalRows.length === 0) {
         alert("Enter at least one line with a positive total (amount and/or VAT).");
+        return;
+      }
+    }
+
+    if (String(user?.business_type || "").toLowerCase() === "school") {
+      if (!schoolBudgetByGl.size) { alert("Expense blocked: no active approved budget is available for this date."); return; }
+      if (simpleExpenseMode && !schoolBudgetGlId) { alert("Select the approved budget line before saving this expense."); return; }
+      const requested = new Map<string, number>();
+      for (const row of journalRows) requested.set(row.expense_gl_account_id, (requested.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
+      const unbudgeted = [...requested.keys()].find((glId) => !schoolBudgetByGl.has(glId));
+      if (unbudgeted) { const account=glAccounts.find((a)=>a.id===unbudgeted); alert(`Expense blocked: ${account?.account_name || "this expense"} has no approved budget line.`); return; }
+      const exceeded = [...requested.entries()].find(([glId, amount]) => amount > Math.max(0, (schoolBudgetByGl.get(glId) || 0) - (schoolSpentByGl.get(glId) || 0)));
+      if (exceeded) {
+        const account = glAccounts.find((a) => a.id === exceeded[0]);
+        const remaining=Math.max(0,(schoolBudgetByGl.get(exceeded[0])||0)-(schoolSpentByGl.get(exceeded[0])||0));
+        alert(`Expense blocked: ${account?.account_name || "budget line"} only has ${remaining.toLocaleString()} remaining. Submit an exception under Budget & Vote Book for headteacher approval.`);
         return;
       }
     }
@@ -1116,8 +1192,11 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
         }
       }
 
-      const journal = await createJournalForExpenseWithLines(expenseId, expDate, journalRows, user?.id ?? null);
-      if (!journal.ok) throw new Error(`Expense was saved, but its cash journal could not be posted: ${journal.error}`);
+      const approvalEnabled = orgId ? await isSpendMoneyApprovalEnabled(orgId) : false;
+      if (!approvalEnabled) {
+        const journal = await createJournalForExpenseWithLines(expenseId, expDate, journalRows, user?.id ?? null);
+        if (!journal.ok) throw new Error(`Expense was saved, but its cash journal could not be posted: ${journal.error}`);
+      }
 
       await queueExpenseForTreasury({
         organizationId: user?.organization_id,
@@ -1204,6 +1283,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
     setSimpleLines([emptySimpleLine()]);
     setSimpleNotes("");
     setSimpleVendorId(null);
+    setSchoolBudgetGlId("");
     setSimpleIncludeVat(false);
     setShowSimpleDetails(false);
     setShowModal(true);
@@ -1234,6 +1314,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
     setSimpleLines([emptySimpleLine()]);
     setSimpleNotes("");
     setSimpleVendorId(null);
+    setSchoolBudgetGlId("");
     setSimpleIncludeVat(false);
     setShowSimpleDetails(false);
   };
@@ -1382,6 +1463,34 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
     }
   };
 
+  const toggleApprovalWorkflow = async () => {
+    if (!orgId || !canManageApprovalWorkflow) return;
+    const next = !approvalEnabled;
+    try {
+      await setSpendMoneyApprovalEnabled(orgId, next);
+      setApprovalEnabled(next);
+      alert(next
+        ? "Expense approvals enabled. New Spend Money entries will remain pending and unposted until approved."
+        : "Expense approvals disabled. New Spend Money entries will post immediately. Existing pending entries still require approval.");
+    } catch (error) {
+      alert(`Could not update the approval workflow: ${formatSupabaseError(error)}`);
+    }
+  };
+
+  const approveExpense = async (expense: Expense) => {
+    if (!orgId || !canApproveSpendMoney || expense.approval_status !== "pending_approval") return;
+    if (!window.confirm("Approve this spending entry and post it to the accounts?")) return;
+    setApprovalWorkingId(expense.id);
+    try {
+      await approveExpenseAndPost({ organizationId: orgId, expenseId: expense.id, approvedBy: user?.id ?? null });
+      await fetchData();
+    } catch (error) {
+      alert(`Expense approval failed: ${formatSupabaseError(error)}`);
+    } finally {
+      setApprovalWorkingId(null);
+    }
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between mb-8">
@@ -1394,6 +1503,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canManageApprovalWorkflow && <button type="button" onClick={() => void toggleApprovalWorkflow()} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${approvalEnabled ? "border-amber-300 bg-amber-50 text-amber-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>Approvals {approvalEnabled ? "on" : "off"}</button>}
           <div
             className="inline-flex rounded-lg border border-slate-300 bg-slate-50 p-0.5 text-xs font-medium"
             role="group"
@@ -1605,7 +1715,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                   {simpleExpenseMode ? (
                     <>
                       <td className="p-3 max-w-md truncate" title={displayWhatColumn(e.description ?? null)}>
-                        {displayWhatColumn(e.description ?? null)} {e.status === "cancelled" && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700" title={e.cancellation_reason || "Cancelled"}>Cancelled</span>}
+                        {displayWhatColumn(e.description ?? null)} {e.status === "cancelled" && <span className="ml-2 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold uppercase text-rose-700" title={e.cancellation_reason || "Cancelled"}>Cancelled</span>} {e.approval_status === "pending_approval" && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">Pending approval</span>} {e.approval_status === "disbursed" && <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-800">Approved · posted</span>}
                       </td>
                       <td className="p-3">{e.paid_using_label ?? "—"}</td>
                       <td className="p-3 text-right font-medium tabular-nums">
@@ -1619,23 +1729,23 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                         {e.expense_gl_labels || "—"}
                       </td>
                       <td className="p-3 max-w-md truncate" title={e.description || undefined}>
-                        {e.description || "—"}
+                        {e.description || "—"} {e.approval_status === "pending_approval" && <span className="ml-2 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-800">Pending approval</span>} {e.approval_status === "disbursed" && <span className="ml-2 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-800">Approved · posted</span>}
                       </td>
                       <td className="p-3 text-right">{e.line_count ?? 0}</td>
                       <td className="p-3 text-right font-medium">{Number(e.amount).toFixed(2)}</td>
                     </>
                   )}
                   <td className="p-3 text-right">
-                    <button
+                    <div className="flex justify-end gap-1">{canApproveSpendMoney && e.approval_status === "pending_approval" && <button type="button" onClick={() => void approveExpense(e)} disabled={approvalWorkingId === e.id} className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50" title="Approve and post this spending entry"><Check className="h-3.5 w-3.5"/>Approve</button>}<button
                       type="button"
                       onClick={() => void openEditModal(e.id)}
-                      disabled={e.status === "cancelled"}
+                      disabled={e.status === "cancelled" || e.approval_status === "pending_approval"}
                       className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      title={e.status === "cancelled" ? e.cancellation_reason || "Cancelled expenses cannot be edited" : "Edit expense"}
+                      title={e.status === "cancelled" ? e.cancellation_reason || "Cancelled expenses cannot be edited" : e.approval_status === "pending_approval" ? "Pending entries must be approved or rejected before editing" : "Edit expense"}
                     >
                       <Pencil className="w-3.5 h-3.5" />
                       Edit
-                    </button>
+                    </button></div>
                   </td>
                   {expenseAttachmentsSupported ? (
                     <td className="p-3 align-top">
@@ -1763,6 +1873,21 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                       ) : null}
                     </div>
 
+                    {String(user?.business_type || "").toLowerCase() === "school" && (
+                      <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
+                        <label className="block text-sm font-semibold text-slate-800 mb-1">Approved budget line *</label>
+                        <select value={schoolBudgetGlId} onChange={(e) => setSchoolBudgetGlId(e.target.value)} className="w-full rounded-lg border border-indigo-300 bg-white px-3 py-2 text-sm">
+                          <option value="">Select the budget this expense will use</option>
+                          {[...schoolBudgetByGl.entries()].map(([glId, budget]) => {
+                            const account=glAccounts.find((row)=>row.id===glId); const spent=schoolSpentByGl.get(glId)||0; const remaining=Math.max(0,budget-spent);
+                            return <option key={glId} value={glId}>{account ? `${account.account_code} - ${account.account_name}` : "Budget line"} · Remaining ${remaining.toLocaleString()}</option>;
+                          })}
+                        </select>
+                        {!schoolBudgetByGl.size && <p className="mt-2 text-xs font-medium text-red-700">No active approved budget is available. This expense cannot be saved.</p>}
+                        {schoolBudgetGlId && <p className="mt-2 text-xs text-indigo-800">Approved: {(schoolBudgetByGl.get(schoolBudgetGlId)||0).toLocaleString()} · Spent: {(schoolSpentByGl.get(schoolBudgetGlId)||0).toLocaleString()} · Remaining: {Math.max(0,(schoolBudgetByGl.get(schoolBudgetGlId)||0)-(schoolSpentByGl.get(schoolBudgetGlId)||0)).toLocaleString()}</p>}
+                      </div>
+                    )}
+
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">What you spent</p>
 
                     <div className="space-y-3 mb-3">
@@ -1803,7 +1928,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                 />
                               </div>
                               <div>
-                              <label className="block text-xs font-medium text-slate-600 mb-1">Total amount spent</label>
+                              <label className="block text-xs font-medium text-slate-600 mb-1">Rate / unit price</label>
                               <input
                                 type="text"
                                 inputMode="decimal"
@@ -2027,7 +2152,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                             <th className="text-center p-2 font-semibold w-14" title="Apply VAT for this line">
                               VAT
                             </th>
-                            <th className="text-right p-2 font-semibold w-28">Total net (ex VAT)</th>
+                            <th className="text-right p-2 font-semibold w-28">Rate / unit price</th>
                             <th className="text-right p-2 font-semibold w-24">VAT amt</th>
                             <th className="text-right p-2 font-semibold w-24">Total</th>
                             <th className="text-left p-2 font-semibold min-w-[160px]">VAT GL</th>
@@ -2088,6 +2213,9 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
                                       options={expenseGlOptions}
                                       placeholder="Type code or name…"
                                     />
+                                    {schoolBudgetByGl.has(row.expense_gl_account_id) && (
+                                      <p className="mt-1 text-xs font-medium text-indigo-700">Budget: {(schoolBudgetByGl.get(row.expense_gl_account_id) || 0).toLocaleString()}</p>
+                                    )}
                                   </td>
                                   <td className="p-2 text-center align-middle">
                                     <input

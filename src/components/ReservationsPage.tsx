@@ -24,6 +24,7 @@ type Room = {
   room_number: string;
   status?: string;
 };
+type RatePlan = { id: string; code: string; name: string; includes_breakfast: boolean };
 
 export function ReservationsPage() {
 
@@ -34,6 +35,7 @@ export function ReservationsPage() {
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [hotelCustomers, setHotelCustomers] = useState<PropertyCustomer[]>([]);
   const [rooms, setRooms] = useState<Room[]>([]);
+  const [ratePlans, setRatePlans] = useState<RatePlan[]>([]);
 
   const [loading, setLoading] = useState(true);
 
@@ -48,10 +50,31 @@ export function ReservationsPage() {
     status: "confirmed",
     room_discount_amount: "",
     room_discount_reason: "",
+    rate_plan_id: "",
+    number_of_adults: "1",
+    number_of_children: "0",
   });
 
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [savingReservation, setSavingReservation] = useState(false);
+
+  const createBedBreakfastRatePlan = async () => {
+    if (!orgId) return;
+    const name = window.prompt("Bed & Breakfast rate plan name", "Bed & Breakfast");
+    if (!name?.trim()) return;
+    const code = window.prompt("Rate plan code", "BB");
+    if (!code?.trim()) return;
+    const adultAllocation = Number(window.prompt("Breakfast revenue allocation per eligible adult", "0") || 0);
+    const childAllocation = Number(window.prompt("Breakfast revenue allocation per eligible child", "0") || 0);
+    if (adultAllocation < 0 || childAllocation < 0) return alert("Allocations cannot be negative.");
+    const { data, error } = await (supabase as any).from("hotel_rate_plans").insert({
+      organization_id: orgId, code: code.trim().toUpperCase(), name: name.trim(), includes_breakfast: true,
+      breakfast_allocation_adult: adultAllocation, breakfast_allocation_child: childAllocation,
+      adults_eligible: true, children_eligible: true, created_by: user?.id ?? null,
+    }).select("id,code,name,includes_breakfast").single();
+    if (error) return alert(error.message || "Could not create rate plan.");
+    setRatePlans((plans) => [...plans, data as RatePlan].sort((a,b) => a.name.localeCompare(b.name)));
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -65,7 +88,7 @@ export function ReservationsPage() {
           return;
         }
         const today = new Date().toISOString().slice(0, 10);
-        const [resRes, custRes] = await Promise.all([
+        const [resRes, custRes, plansRes] = await Promise.all([
           filterByOrganizationId(
             supabase
               .from("reservations")
@@ -77,6 +100,9 @@ export function ReservationsPage() {
         check_in_date,
         check_out_date,
         status,
+        rate_plan_id,
+        number_of_adults,
+        number_of_children,
         room_discount_amount,
         room_discount_reason,
         created_at,
@@ -95,12 +121,18 @@ export function ReservationsPage() {
             orgId,
             superAdmin
           ),
+          filterByOrganizationId(
+            (supabase as any).from("hotel_rate_plans").select("id,code,name,includes_breakfast").eq("is_active", true).order("name"),
+            orgId,
+            superAdmin
+          ),
         ]);
         if (cancelled) return;
         if (resRes.error) throw resRes.error;
         const resData = (resRes.data || []) as Reservation[];
         setReservations(resData);
         setHotelCustomers(custRes.data || []);
+        setRatePlans((plansRes.data || []) as RatePlan[]);
 
         const reservedRoomIds = new Set<string>();
         for (const r of resData) {
@@ -158,6 +190,9 @@ export function ReservationsPage() {
         check_in_date,
         check_out_date,
         status,
+        rate_plan_id,
+        number_of_adults,
+        number_of_children,
         room_discount_amount,
         room_discount_reason,
         created_at,
@@ -232,6 +267,9 @@ export function ReservationsPage() {
       status: "confirmed",
       room_discount_amount: "",
       room_discount_reason: "",
+      rate_plan_id: "",
+      number_of_adults: "1",
+      number_of_children: "0",
     });
 
     setShowForm(true);
@@ -253,6 +291,9 @@ export function ReservationsPage() {
       status: reservation.status,
       room_discount_amount: reservation.room_discount_amount ? String(reservation.room_discount_amount) : "",
       room_discount_reason: reservation.room_discount_reason ?? "",
+      rate_plan_id: String((reservation as any).rate_plan_id || ""),
+      number_of_adults: String((reservation as any).number_of_adults ?? 1),
+      number_of_children: String((reservation as any).number_of_children ?? 0),
     });
 
     setShowForm(true);
@@ -282,6 +323,9 @@ export function ReservationsPage() {
         status: form.status,
         room_discount_amount: discountAmount,
         room_discount_reason: form.room_discount_reason.trim() || null,
+        rate_plan_id: form.rate_plan_id || null,
+        number_of_adults: Math.max(0, Number.parseInt(form.number_of_adults, 10) || 0),
+        number_of_children: Math.max(0, Number.parseInt(form.number_of_children, 10) || 0),
       };
 
       if (editingReservation) {
@@ -338,6 +382,7 @@ export function ReservationsPage() {
         check_in_time: new Date().toISOString(),
         room_discount_amount: Math.max(0, Number(reservation.room_discount_amount || 0) || 0),
         room_discount_reason: reservation.room_discount_reason ?? null,
+        rate_plan_id: (reservation as any).rate_plan_id ?? null,
         organization_id: orgId ?? null,
       };
       const { data: staffRow } = await supabase
@@ -411,13 +456,16 @@ export function ReservationsPage() {
           </div>
         </div>
 
-        <button
-          onClick={openNewReservation}
-          className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
-        >
-          <Plus size={18} />
-          New Reservation
-        </button>
+        <div className="flex gap-2">
+          <button onClick={() => void createBedBreakfastRatePlan()} className="border border-amber-600 text-amber-800 px-4 py-2 rounded-lg">Create B&amp;B Rate Plan</button>
+          <button
+            onClick={openNewReservation}
+            className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
+          >
+            <Plus size={18} />
+            New Reservation
+          </button>
+        </div>
 
       </div>
 
@@ -451,6 +499,12 @@ export function ReservationsPage() {
               <p className="text-sm text-slate-500">
                 Status: {reservation.status}
               </p>
+              {(reservation as any).rate_plan_id ? (
+                <p className="text-sm text-amber-700">
+                  Rate plan: {ratePlans.find((p) => p.id === (reservation as any).rate_plan_id)?.name || "Package"}
+                  {ratePlans.find((p) => p.id === (reservation as any).rate_plan_id)?.includes_breakfast ? " · Breakfast included" : ""}
+                </p>
+              ) : null}
 
               {Number(reservation.room_discount_amount || 0) > 0 ? (
                 <p className="text-sm text-emerald-700">
@@ -537,6 +591,16 @@ export function ReservationsPage() {
                 </option>
               ))}
             </select>
+
+            <select value={form.rate_plan_id} onChange={(e) => setForm({ ...form, rate_plan_id: e.target.value })} className="w-full border p-2 rounded">
+              <option value="">Room only / no rate plan</option>
+              {ratePlans.map((plan) => <option key={plan.id} value={plan.id}>{plan.code} · {plan.name}{plan.includes_breakfast ? " (Breakfast included)" : ""}</option>)}
+            </select>
+
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs text-slate-600">Adults<input type="number" min="0" value={form.number_of_adults} onChange={(e) => setForm({ ...form, number_of_adults: e.target.value })} className="mt-1 w-full border p-2 rounded" /></label>
+              <label className="text-xs text-slate-600">Children<input type="number" min="0" value={form.number_of_children} onChange={(e) => setForm({ ...form, number_of_children: e.target.value })} className="mt-1 w-full border p-2 rounded" /></label>
+            </div>
 
             {/* DATES */}
 

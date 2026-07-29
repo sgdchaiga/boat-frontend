@@ -73,6 +73,10 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
   const [reportType, setReportType] = useState<LoanReportTabId>(() =>
     loanReportTab && VALID_TABS.has(loanReportTab) ? loanReportTab : 'summary'
   );
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [productFilter, setProductFilter] = useState('all');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
 
   useEffect(() => {
     const next = loanReportTab && VALID_TABS.has(loanReportTab) ? loanReportTab : 'summary';
@@ -84,10 +88,41 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
     navigate?.(SACCOPRO_PAGE.loanReports, { loanReportTab: id });
   };
 
-  const active = loans.filter(l => l.status === 'disbursed');
-  const totalDisbursed = loans.filter(l => ['disbursed', 'closed'].includes(l.status)).reduce((s, l) => s + l.amount, 0);
+  const reportLoans = useMemo(() => loans.filter((loan) => {
+    const date = (loan.disbursementDate || loan.applicationDate || '').slice(0, 10);
+    return (statusFilter === 'all' || loan.status === statusFilter)
+      && (productFilter === 'all' || loan.loanType === productFilter)
+      && (!dateFrom || date >= dateFrom)
+      && (!dateTo || date <= dateTo);
+  }), [dateFrom, dateTo, loans, productFilter, statusFilter]);
+  const productOptions = useMemo(() => Array.from(new Set(loans.map((loan) => loan.loanType))).sort(), [loans]);
+  const active = reportLoans.filter(l => l.status === 'disbursed');
+  const totalDisbursed = reportLoans.filter(l => ['disbursed', 'closed'].includes(l.status)).reduce((s, l) => s + l.amount, 0);
   const totalOutstanding = active.reduce((s, l) => s + l.balance, 0);
-  const totalCollected = loans.reduce((s, l) => s + l.paidAmount, 0);
+  const totalCollected = reportLoans.reduce((s, l) => s + l.paidAmount, 0);
+
+  const exportExcel = () => {
+    const cells = [
+      ['Loan number', 'Member', 'Product', 'Status', 'Application date', 'Disbursement date', 'Original amount', 'Outstanding', 'Collected'],
+      ...reportLoans.map((loan) => [
+        loan.loanNumber || loan.id,
+        loan.memberName,
+        loan.loanType,
+        loan.status,
+        loan.applicationDate,
+        loan.disbursementDate || '',
+        loan.amount,
+        loan.balance,
+        loan.paidAmount,
+      ]),
+    ];
+    const csv = cells.map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(new Blob([`\uFEFF${csv}`], { type: 'text/csv;charset=utf-8' }));
+    link.download = `sacco-loans-${new Date().toISOString().slice(0, 10)}.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   const { aging, agingTotalAmount } = useMemo(() => {
     const r = computeAgingFromLoans(active);
@@ -124,10 +159,32 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
           onPrint={() => window.print()}
           onPdf={() => {
             const today = new Date().toISOString().slice(0, 10);
-            void downloadLoanReportPdf(reportType, loans, { dateFrom: today, dateTo: today, organizationId: user?.organization_id });
+            void downloadLoanReportPdf(reportType, reportLoans, { dateFrom: dateFrom || today, dateTo: dateTo || today, organizationId: user?.organization_id });
           }}
+          onExcel={exportExcel}
         />
       </div>
+
+      <section className="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Loan report filters">
+        <label className="text-xs font-medium text-slate-700">From date
+          <input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <label className="text-xs font-medium text-slate-700">To date
+          <input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        </label>
+        <label className="text-xs font-medium text-slate-700">Loan product
+          <select value={productFilter} onChange={(event) => setProductFilter(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            <option value="all">All products</option>
+            {productOptions.map((product) => <option key={product} value={product}>{product}</option>)}
+          </select>
+        </label>
+        <label className="text-xs font-medium text-slate-700">Status
+          <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            <option value="all">All statuses</option>
+            {['pending', 'approved', 'disbursed', 'defaulted', 'closed', 'written_off', 'rejected'].map((status) => <option key={status} value={status}>{status.replace(/_/g, ' ')}</option>)}
+          </select>
+        </label>
+      </section>
 
       {/* Report Tabs */}
       <div className="bg-white rounded-xl shadow-sm border border-slate-100">
@@ -149,10 +206,10 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                 {[
-                  { label: 'Total Loans Issued', value: loans.length },
+                  { label: 'Total Loans Issued', value: reportLoans.length },
                   { label: 'Active Loans', value: active.length },
-                  { label: 'Closed Loans', value: loans.filter(l => l.status === 'closed').length },
-                  { label: 'Pending Approval', value: loans.filter(l => l.status === 'pending').length },
+                  { label: 'Closed Loans', value: reportLoans.filter(l => l.status === 'closed').length },
+                  { label: 'Pending Approval', value: reportLoans.filter(l => l.status === 'pending').length },
                 ].map((s, i) => (
                   <div key={i} className="p-4 bg-slate-50 rounded-lg text-center">
                     <p className="text-2xl font-bold text-slate-900">{s.value}</p>
@@ -164,7 +221,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                 <thead>
                   <tr className="border-b border-slate-200">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Metric</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600">Amount (KES)</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600">Amount</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
@@ -172,8 +229,6 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                     ['Total Amount Disbursed', totalDisbursed],
                     ['Total Outstanding Balance', totalOutstanding],
                     ['Total Amount Collected', totalCollected],
-                    ['Total Interest Earned', 0],
-                    ['Provision for Bad Debts', 0],
                     ['Net Loan Portfolio', totalOutstanding],
                   ].map(([l, v]) => (
                     <tr key={l as string} className="hover:bg-slate-50/50">
@@ -196,7 +251,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                   </thead>
                   <tbody className="divide-y divide-slate-50">
                     {['Normal Loan', 'Emergency Loan', 'Development Loan', 'Education Loan'].map(type => {
-                      const tl = loans.filter(l => l.loanType === type);
+                      const tl = reportLoans.filter(l => l.loanType === type);
                       return (
                         <tr key={type}>
                           <td className="px-4 py-2 text-sm">{type}</td>
@@ -233,7 +288,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                   <tr className="bg-slate-50 border-b border-slate-200">
                     <th className="px-4 py-3 text-left text-xs font-semibold text-slate-600">Age Bracket</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600">No. of Loans</th>
-                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600">Amount (KES)</th>
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600">Amount</th>
                     <th className="px-4 py-3 text-right text-xs font-semibold text-slate-600">% of Portfolio</th>
                   </tr>
                 </thead>
@@ -283,7 +338,7 @@ const LoanReports: React.FC<LoanReportsProps> = ({ loanReportTab, navigate }) =>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-50">
-                  {loans.filter(l => l.disbursementDate).map(l => (
+                  {reportLoans.filter(l => l.disbursementDate).map(l => (
                     <tr key={l.id} className="hover:bg-slate-50/50">
                       <td className="px-3 py-2 text-sm font-mono">{l.id}</td>
                       <td className="px-3 py-2 text-sm">{l.memberName}</td>

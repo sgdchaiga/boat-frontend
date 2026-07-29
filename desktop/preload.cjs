@@ -55,5 +55,6 @@ contextBridge.exposeInMainWorld("boatDesktop", {
     upsert: (payload) => ipcRenderer.invoke("boat:local-store:upsert", payload),
     update: (payload) => ipcRenderer.invoke("boat:local-store:update", payload),
     delete: (payload) => ipcRenderer.invoke("boat:local-store:delete", payload),
+    rpc: (payload) => ipcRenderer.invoke("boat:local-store:rpc", payload),
   },
 });

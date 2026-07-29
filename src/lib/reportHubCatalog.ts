@@ -49,6 +49,38 @@ export function getSimpleOrgReportHubCategories(
   businessType: BusinessType | null | undefined,
   canShowPage: (page: string) => boolean
 ): ReportHubCategory[] {
+  if (businessType === "school") {
+    const categories: ReportHubCategory[] = [
+      { id: "fees", label: "Fees & collections", items: [
+        { name: "Fee collections", page: "reports_school_fee_collections" },
+        { name: "Outstanding balances", page: "reports_school_outstanding" },
+        { name: "Daily cash", page: "reports_school_daily_cash" },
+        { name: "Fee payment trends", page: "reports_school_fee_trends" },
+        { name: "Top defaulters", page: "reports_school_top_defaulters" },
+      ] },
+      { id: "students", label: "Students & enrollment", items: [
+        { name: "Enrollment statistics", page: "reports_school_enrollment" },
+        { name: "Term billing performance", page: "reports_school_term_performance" },
+      ] },
+      { id: "purchases", label: "Purchases & inventory", items: [
+        { name: "Purchases summary", page: "reports_daily_purchases_summary" },
+        { name: "Purchases by item", page: "reports_purchases_by_item" },
+        { name: "Stock summary", page: "reports_stock_summary" },
+        { name: "Stock movement", page: "reports_stock_movement" },
+        { name: "Inventory adjustments", page: "reports_stock_adjustments" },
+      ] },
+      { id: "financial", label: "Financial statements", items: [
+        { name: "Income & expenditure", page: "reports_school_income_expenditure" },
+        { name: "Trial balance", page: "accounting_trial" },
+        { name: "Income statement", page: "accounting_income" },
+        { name: "Statement of financial position", page: "accounting_balance" },
+        { name: "Cash flow", page: "accounting_cashflow" },
+        { name: "Bank reconciliation", page: "accounting_bank_reconciliation" },
+        { name: "Budget variance", page: "reports_budget_variance" },
+      ] },
+    ];
+    return categories.map((category) => ({ ...category, items: category.items.filter((item) => canShowPage(item.page)) })).filter((category) => category.items.length > 0);
+  }
   const raw = getSimpleOrgReportNavChildren({ businessType });
   const leaves: ReportHubLeaf[] = [];
   for (const c of raw) {

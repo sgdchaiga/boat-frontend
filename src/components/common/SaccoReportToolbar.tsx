@@ -1,8 +1,9 @@
-import { FileDown, Printer } from "lucide-react";
+import { FileDown, Printer, Sheet } from "lucide-react";
 
 type Props = {
   onPrint?: () => void;
   onPdf: () => void;
+  onExcel?: () => void;
   printLabel?: string;
   pdfLabel?: string;
   className?: string;
@@ -12,6 +13,7 @@ type Props = {
 export function SaccoReportToolbar({
   onPrint,
   onPdf,
+  onExcel,
   printLabel = "Print",
   pdfLabel = "Download PDF",
   className = "",
@@ -26,6 +28,16 @@ export function SaccoReportToolbar({
         >
           <Printer size={16} aria-hidden />
           {printLabel}
+        </button>
+      ) : null}
+      {onExcel ? (
+        <button
+          type="button"
+          onClick={onExcel}
+          className="inline-flex items-center gap-2 px-4 py-2 border border-emerald-200 rounded-lg text-sm font-medium text-emerald-700 hover:bg-emerald-50"
+        >
+          <Sheet size={16} aria-hidden />
+          Export Excel
         </button>
       ) : null}
       <button

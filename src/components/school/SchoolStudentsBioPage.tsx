@@ -4,13 +4,16 @@ import { useAuth } from "@/contexts/AuthContext";
 import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
 
 type CatRow = { id: string; name: string };
-type ParentRow = { id: string; full_name: string };
+type ParentRow = { id: string; full_name: string; email?: string | null; phone?: string | null; phone_alt?: string | null };
 
 type StudentRow = {
   id: string;
   admission_number: string;
   first_name: string;
   last_name: string;
+  other_names: string | null;
+  school_pay_number: string | null;
+  learner_id: string | null;
   class_name: string;
   stream: string | null;
   class_id: string | null;
@@ -33,11 +36,17 @@ export function SchoolStudentsBioPage() {
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+  const [showNewParent, setShowNewParent] = useState(false);
+  const [savingParent, setSavingParent] = useState(false);
+  const [parentForm, setParentForm] = useState({ full_name: "", phone: "", email: "" });
 
   const [form, setForm] = useState({
     admission_number: "",
     first_name: "",
     last_name: "",
+    other_names: "",
+    school_pay_number: "",
+    learner_id: "",
     class_id: "",
     stream_id: "",
     parent_id: "",
@@ -87,6 +96,35 @@ export function SchoolStudentsBioPage() {
     load();
   }, [load]);
 
+  const addParent = async () => {
+    const orgId = user?.organization_id;
+    if (!orgId || !parentForm.full_name.trim()) {
+      setErrorMsg("Enter the parent or guardian's full name.");
+      return;
+    }
+    setSavingParent(true); setErrorMsg(null);
+    try {
+      const payload = { full_name: parentForm.full_name.trim(), phone: parentForm.phone.trim() || null, email: parentForm.email.trim() || null, phone_alt: null };
+      let created: ParentRow;
+      if (canUseSchoolApi()) {
+        created = await createSchoolRow<ParentRow>("parents", orgId, payload);
+      } else {
+        const { data, error } = await supabase.from("parents").insert({ organization_id: orgId, ...payload }).select("id,full_name,email,phone,phone_alt").single();
+        if (error || !data) throw error || new Error("Failed to create parent or guardian.");
+        created = data as ParentRow;
+      }
+      setParents((current) => [...current, created].sort((a, b) => a.full_name.localeCompare(b.full_name)));
+      setForm((current) => ({ ...current, parent_id: created.id }));
+      setParentForm({ full_name: "", phone: "", email: "" });
+      setShowNewParent(false);
+      setSuccessMsg(`${created.full_name} was added and selected as the parent/guardian.`);
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : "Failed to create parent or guardian.");
+    } finally {
+      setSavingParent(false);
+    }
+  };
+
   // SAVE
   const save = async () => {
     setErrorMsg(null);
@@ -119,6 +157,9 @@ export function SchoolStudentsBioPage() {
         admission_number: form.admission_number.trim(),
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
+        other_names: form.other_names.trim() || null,
+        school_pay_number: form.school_pay_number.trim() || null,
+        learner_id: form.learner_id.trim() || null,
         class_id: form.class_id || null,
         stream_id: form.stream_id || null,
         parent_id: form.parent_id || null,
@@ -136,6 +177,9 @@ export function SchoolStudentsBioPage() {
           admission_number: "",
           first_name: "",
           last_name: "",
+          other_names: "",
+          school_pay_number: "",
+          learner_id: "",
           class_id: "",
           stream_id: "",
           parent_id: "",
@@ -172,6 +216,9 @@ export function SchoolStudentsBioPage() {
         admission_number: "",
         first_name: "",
         last_name: "",
+        other_names: "",
+        school_pay_number: "",
+        learner_id: "",
         class_id: "",
         stream_id: "",
         parent_id: "",
@@ -213,6 +260,21 @@ export function SchoolStudentsBioPage() {
           onChange={e => setForm({ ...form, last_name: e.target.value })}
           className="border p-2 rounded" />
 
+        <input placeholder="Other names"
+          value={form.other_names}
+          onChange={e => setForm({ ...form, other_names: e.target.value })}
+          className="border p-2 rounded" />
+
+        <input placeholder="SchoolPay number"
+          value={form.school_pay_number}
+          onChange={e => setForm({ ...form, school_pay_number: e.target.value })}
+          className="border p-2 rounded" />
+
+        <input placeholder="Learner ID"
+          value={form.learner_id}
+          onChange={e => setForm({ ...form, learner_id: e.target.value })}
+          className="border p-2 rounded" />
+
         {/* CLASS */}
         <select value={form.class_id}
           onChange={e => setForm({ ...form, class_id: e.target.value })}
@@ -230,12 +292,25 @@ export function SchoolStudentsBioPage() {
         </select>
 
         {/* PARENT */}
-        <select value={form.parent_id}
-          onChange={e => setForm({ ...form, parent_id: e.target.value })}
-          className="border p-2 rounded">
-          <option value="">Parent / Guardian</option>
-          {parents.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
-        </select>
+        <div className="flex gap-2">
+          <select value={form.parent_id}
+            onChange={e => setForm({ ...form, parent_id: e.target.value })}
+            className="min-w-0 flex-1 border p-2 rounded">
+            <option value="">Parent / Guardian</option>
+            {parents.map(p => <option key={p.id} value={p.id}>{p.full_name}</option>)}
+          </select>
+          <button type="button" onClick={() => setShowNewParent((open) => !open)} className="shrink-0 rounded border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 hover:bg-indigo-100">+ Add parent</button>
+        </div>
+
+        {showNewParent && <div className="md:col-span-3 rounded-lg border border-indigo-200 bg-indigo-50/50 p-3">
+          <p className="mb-2 text-sm font-semibold text-slate-800">New parent / guardian</p>
+          <div className="grid gap-2 md:grid-cols-3">
+            <input value={parentForm.full_name} onChange={(e) => setParentForm((p) => ({ ...p, full_name: e.target.value }))} placeholder="Full name *" className="rounded border border-slate-300 bg-white px-3 py-2 text-sm" />
+            <input value={parentForm.phone} onChange={(e) => setParentForm((p) => ({ ...p, phone: e.target.value }))} placeholder="Phone number" className="rounded border border-slate-300 bg-white px-3 py-2 text-sm" />
+            <input type="email" value={parentForm.email} onChange={(e) => setParentForm((p) => ({ ...p, email: e.target.value }))} placeholder="Email address" className="rounded border border-slate-300 bg-white px-3 py-2 text-sm" />
+          </div>
+          <div className="mt-3 flex gap-2"><button type="button" disabled={savingParent} onClick={() => void addParent()} className="rounded bg-indigo-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{savingParent ? "Adding…" : "Add and select parent"}</button><button type="button" onClick={() => setShowNewParent(false)} className="rounded border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700">Cancel</button></div>
+        </div>}
 
         {/* DOB */}
         <div>
