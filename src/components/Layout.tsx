@@ -32,6 +32,7 @@ import {
   Landmark,
   Briefcase,
   PackageCheck,
+  Plus,
   FileUp,
   Lightbulb,
   Calculator,
@@ -59,6 +60,7 @@ import {
 import { desktopApi } from '@/lib/desktopApi';
 import { organizationMembershipLabel } from '@/lib/orgMembership';
 import { canRunLocalSyncWorker, localSyncStatusEventName, readLocalSyncStatus } from '@/lib/localSyncStatus';
+import { useGeneralBusinessMode } from '@/lib/generalBusinessMode';
 import { TerminalLockOverlay } from './system/TerminalLockOverlay';
 import { WorkspaceGuide } from './WorkspaceGuide';
 import { MobileLiteCenter } from './mobile/MobileLiteCenter';
@@ -236,6 +238,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     useAuth();
   const [orgSwitching, setOrgSwitching] = useState(false);
   const businessType = user?.business_type ?? null;
+  const { mode: generalBusinessMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
   const organizationAppVersion = user?.app_version || "1.0";
   const usesVersionedLayout = organizationAppVersion
     .split(".")
@@ -344,8 +347,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const saccoCanApprove = Boolean(isSuperAdmin || ["admin", "manager", "accountant"].includes(saccoRole));
 
   const simpleNavigation: NavItem[] = useMemo(
-    () =>
-      buildSimpleOrgNavigation({
+    () => {
+      const fullNavigation = buildSimpleOrgNavigation({
         businessType,
         dashboardPage:
           businessType === "manufacturing"
@@ -364,9 +367,36 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         allowFixedAssets: enableFixedAssets,
         salesWorkflow: user?.sales_workflow || "both",
         canManageAccounting: Boolean(
-          isSuperAdmin || ["admin", "manager", "accountant"].includes(String(user?.role || "").toLowerCase())
+          isSuperAdmin || ["admin", "manager", "accountant"].includes(String(user?.role || "").trim().toLowerCase())
         ),
-      }),
+      });
+      if (businessType !== 'general_business' || generalBusinessMode !== 'cashbook') return fullNavigation;
+      return [
+        { name: 'Cashbook register', icon: BookOpen, page: 'general_business_cashbook' },
+        { name: 'Data entry', icon: Plus, children: [
+          { name: 'Cashbook entry', page: 'general_business_cashbook_entry' },
+          { name: 'Receive money', page: 'cash_receipts' },
+          { name: 'Spend money', page: 'purchases_expenses' },
+          { name: user?.sales_workflow === 'quick_sale' ? 'Record sale / POS' : 'Issue sales invoice', page: user?.sales_workflow === 'quick_sale' ? 'retail_pos' : 'retail_credit_invoices' },
+          { name: 'Record supplier bill', page: 'purchases_bills' },
+          { name: 'Transfer money', page: 'treasury', state: { treasuryTab: 'movements' } },
+          ...(user?.enable_inventory !== false ? [{ name: 'Add stock', page: 'purchases_orders' }] : []),
+        ] },
+        { name: 'Daily summary', icon: BarChart3, page: 'general_business_daily_summary' },
+        { name: 'Master data', icon: UsersRound, children: [
+          { name: 'Customers', page: 'retail_customers' },
+          { name: 'Suppliers', page: 'purchases_vendors' },
+          ...(user?.enable_inventory !== false ? [{ name: 'Items & stock', page: 'Products' }] : []),
+        ] },
+        { name: 'Cashbook reports', icon: TrendingUp, children: [
+          { name: 'Income statement', page: 'accounting_income' },
+          { name: 'Cash flow', page: 'accounting_cashflow' },
+          { name: 'Daily sales', page: 'reports_daily_sales' },
+          { name: 'Daily purchases', page: 'reports_daily_purchases_summary' },
+        ] },
+        { name: 'Switch to Modern workspace', icon: LayoutDashboard, page: 'general_business_dashboard' },
+      ] as NavItem[];
+    },
     [
       businessType,
       retailOnly,
@@ -379,6 +409,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.enable_inventory,
       enableFixedAssets,
       user?.sales_workflow,
+      user?.enable_inventory,
+      generalBusinessMode,
       user?.role,
       isSuperAdmin,
     ]
@@ -1069,10 +1101,41 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ] },
   ];
 
+  const cashbookModeNavigation: NavItem[] | null = generalBusinessMode !== 'cashbook' ? null
+    : businessType === 'sacco'
+      ? [
+          { name: 'Cashbook register', icon: BookOpen, page: 'sacco_cashbook_register' },
+          { name: 'Data entry', icon: Plus, children: [
+            { name: 'Cashbook entry', page: 'sacco_cashbook_entry' },
+            { name: 'Receive / pay money', page: SACCOPRO_PAGE.teller },
+            { name: 'Loan disbursement', page: SACCOPRO_PAGE.loanDisbursement },
+          ] },
+          { name: 'Daily summary', icon: BarChart3, page: 'sacco_cashbook_daily' },
+          { name: 'Members', icon: UsersRound, page: SACCOPRO_PAGE.members },
+          { name: 'General ledger', icon: Landmark, page: 'accounting_gl' },
+          { name: 'Switch to Modern workspace', icon: LayoutDashboard, page: SACCOPRO_PAGE.dashboard },
+        ]
+      : businessType === 'microfinance'
+        ? [
+            { name: 'Cashbook register', icon: BookOpen, page: 'microfinance_cashbook_register' },
+            { name: 'Data entry', icon: Plus, children: [
+              { name: 'Cashbook entry', page: 'microfinance_cashbook_entry' },
+              { name: 'Record repayment', page: MFI_PAGE.collections },
+              { name: 'Loan approval & disbursement', page: MFI_PAGE.approvals },
+            ] },
+            { name: 'Daily summary', icon: BarChart3, page: 'microfinance_cashbook_daily' },
+            { name: 'Borrowers', icon: UsersRound, page: MFI_PAGE.borrowers },
+            { name: 'General ledger', icon: Landmark, page: 'accounting_gl' },
+            { name: 'Switch to Modern workspace', icon: LayoutDashboard, page: MFI_PAGE.dashboard },
+          ]
+        : null;
+
   const baseNavigation: NavItem[] = businessType === 'financial_modelling'
     ? financialModellingNavigation
     : businessType === 'accounting_practice'
     ? practiceNavigation
+    : cashbookModeNavigation
+    ? cashbookModeNavigation
     : useRoleScopedNav
     ? roleScopedNav
     : businessType === 'sacco'
@@ -1133,13 +1196,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const homePage = businessType === 'retail'
     ? 'retail_dashboard'
     : businessType === 'general_business'
-      ? 'general_business_dashboard'
+      ? generalBusinessMode === 'cashbook' ? 'general_business_cashbook' : 'general_business_dashboard'
     : businessType === 'clinic'
       ? 'clinic_dashboard'
       : businessType === 'sacco'
-        ? SACCOPRO_PAGE.dashboard
+        ? generalBusinessMode === 'cashbook' ? 'sacco_cashbook_register' : SACCOPRO_PAGE.dashboard
         : businessType === 'microfinance'
-          ? MFI_PAGE.dashboard
+          ? generalBusinessMode === 'cashbook' ? 'microfinance_cashbook_register' : MFI_PAGE.dashboard
         : businessType === 'school'
           ? SCHOOL_PAGE.dashboard
           : businessType === 'vsla'

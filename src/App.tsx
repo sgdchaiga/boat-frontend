@@ -76,6 +76,7 @@ const FinancialModelPortalPage = lazyNamed(() => import('./components/financial-
 const RetailDashboard = lazyNamed(() => import('./components/RetailDashboard'), 'RetailDashboard');
 const GeneralBusinessDashboard = lazyNamed(() => import('./components/general-business/GeneralBusinessDashboard'), 'GeneralBusinessDashboard');
 const GeneralBusinessProjectsPage = lazyNamed(() => import('./components/general-business/GeneralBusinessProjectsPage'), 'GeneralBusinessProjectsPage');
+const GeneralBusinessCashbookPage = lazyNamed(() => import('./components/general-business/GeneralBusinessCashbookPage'), 'GeneralBusinessCashbookPage');
 const RoomsPage = lazyNamed(() => import('./components/RoomsPage'), 'RoomsPage');
 const ReservationsPage = lazyNamed(() => import('./components/ReservationsPage'), 'ReservationsPage');
 const CheckInPage = lazyNamed(() => import('./components/CheckInPage'), 'CheckInPage');
@@ -180,6 +181,7 @@ const SaccoBulkImportPage = lazyNamed(() => import('./components/sacco/SaccoBulk
 const SaccoPermissionsPage = lazyNamed(() => import('./components/sacco/SaccoPermissionsPage'), 'SaccoPermissionsPage');
 const SaccoLoansPage = lazyNamed(() => import('./components/sacco/SaccoLoansPage'), 'SaccoLoansPage');
 const SaccoCashbookPage = lazyNamed(() => import('./components/sacco/SaccoCashbookPage'), 'SaccoCashbookPage');
+const SaccoTerekaCashbookPage = lazyNamed(() => import('./components/sacco/SaccoTerekaCashbookPage'), 'SaccoTerekaCashbookPage');
 const SaccoTellerPage = lazyNamed(() => import('./components/sacco/SaccoTellerPage'), 'SaccoTellerPage');
 const SaccoLoanList = lazy(() => import('./components/sacco/SaccoLoanList'));
 const SacoLoanInput = lazy(() => import('./components/sacco/SacoLoanInput'));
@@ -878,6 +880,9 @@ function AppContent() {
     if (user?.business_type === "clinic" && currentPage === "dashboard") {
       return <ClinicDashboardPage onNavigate={navigate} />;
     }
+    if (user?.business_type === "general_business" && currentPage === "dashboard") {
+      return <GeneralBusinessDashboard onNavigate={navigate} />;
+    }
     if (user?.business_type === "sacco" && currentPage === "dashboard") {
       return <SaccoDashboard />;
     }
@@ -958,6 +963,8 @@ function AppContent() {
           <RetailDashboard onNavigate={navigate} />
         ) : user?.business_type === "clinic" ? (
           <ClinicDashboardPage onNavigate={navigate} />
+        ) : user?.business_type === "general_business" ? (
+          <GeneralBusinessDashboard onNavigate={navigate} />
         ) : user?.business_type === "sacco" ? (
           <SaccoDashboard />
         ) : user?.business_type === "school" ? (
@@ -1012,7 +1019,9 @@ function AppContent() {
           />
         );
       case 'dashboard':
-        return <Dashboard onNavigate={navigate} />;
+        return user?.business_type === 'general_business'
+          ? <GeneralBusinessDashboard onNavigate={navigate} />
+          : <Dashboard onNavigate={navigate} />;
       case 'financial_modelling_studio':
         return <FinancialModellingStudio />;
       case 'practice_dashboard':
@@ -1042,6 +1051,24 @@ function AppContent() {
         return <RetailDashboard onNavigate={navigate} />;
       case 'general_business_dashboard':
         return <GeneralBusinessDashboard onNavigate={navigate} />;
+      case 'general_business_cashbook':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="register" />;
+      case 'general_business_cashbook_entry':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" />;
+      case 'general_business_daily_summary':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="daily" />;
+      case 'sacco_cashbook_register':
+        return <SaccoTerekaCashbookPage navigate={navigate} view="register" />;
+      case 'sacco_cashbook_entry':
+        return <SaccoTerekaCashbookPage navigate={navigate} view="entry" />;
+      case 'sacco_cashbook_daily':
+        return <SaccoTerekaCashbookPage navigate={navigate} view="daily" />;
+      case 'microfinance_cashbook_register':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="register" workspaceLabel="Microfinance" routes={{ dashboard: MFI_PAGE.dashboard, register: 'microfinance_cashbook_register', entry: 'microfinance_cashbook_entry', daily: 'microfinance_cashbook_daily' }} />;
+      case 'microfinance_cashbook_entry':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" workspaceLabel="Microfinance" routes={{ dashboard: MFI_PAGE.dashboard, register: 'microfinance_cashbook_register', entry: 'microfinance_cashbook_entry', daily: 'microfinance_cashbook_daily' }} />;
+      case 'microfinance_cashbook_daily':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="daily" workspaceLabel="Microfinance" routes={{ dashboard: MFI_PAGE.dashboard, register: 'microfinance_cashbook_register', entry: 'microfinance_cashbook_entry', daily: 'microfinance_cashbook_daily' }} />;
       case 'general_business_projects':
         return <GeneralBusinessProjectsPage />;
       case MFI_PAGE.dashboard:
@@ -1358,6 +1385,7 @@ function AppContent() {
             onNavigate={navigate}
             invoiceTab={pageState?.invoiceTab as "invoices" | "credit" | undefined}
             highlightSaleId={pageState?.highlightSaleId as string | undefined}
+            cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined}
           />
         );
       case 'retail_credit_sales_report':
@@ -1551,7 +1579,7 @@ function AppContent() {
       case 'wallet':
         return <WalletPage readOnly={access.readOnly} />;
       case 'treasury':
-        return <TreasuryPage readOnly={access.readOnly} initialTab={(pageState?.treasuryTab as "overview" | "cash-control" | "movements" | "end-of-day" | "approvals" | "disbursements" | "collections" | "history" | undefined) ?? "overview"} />;
+        return <TreasuryPage readOnly={access.readOnly} initialTab={(pageState?.treasuryTab as "overview" | "cash-control" | "movements" | "end-of-day" | "approvals" | "disbursements" | "collections" | "history" | undefined) ?? "overview"} cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined} />;
       case 'finance_overview':
         return <FinanceOverviewPage onNavigate={navigate} />;
       case 'staff':
@@ -1580,11 +1608,11 @@ function AppContent() {
       case 'purchases_vendors':
         return <VendorsPage highlightVendorId={pageState?.highlightVendorId as string | undefined} />;
       case 'purchases_expenses':
-        return <ExpensesPage onNavigate={navigate} />;
+        return <ExpensesPage onNavigate={navigate} pageState={pageState} />;
       case 'purchases_orders':
         return <PurchaseOrdersPage onNavigate={navigate} readOnly={access.readOnly} />;
       case 'purchases_bills':
-        return <BillsPage highlightBillId={pageState?.highlightBillId as string | undefined} onNavigate={navigate} readOnly={access.readOnly} />;
+        return <BillsPage highlightBillId={pageState?.highlightBillId as string | undefined} onNavigate={navigate} readOnly={access.readOnly} cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined} />;
       case 'purchases_payments':
         return (
           <VendorPaymentsPage

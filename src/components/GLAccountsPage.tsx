@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { canApprove } from "../lib/approvalRights";
 import { PageNotes } from "./common/PageNotes";
-import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { isGlAccountRelevantForBusinessType } from "../lib/glAccountBusinessScope";
 
 type GLAccount = {
   id: string;
@@ -44,7 +44,9 @@ export function GLAccountsPage() {
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const roleKey = String(user?.role || "").toLowerCase();
   const localDesktopRoleCanManage = localAuthEnabled && ["admin", "manager", "accountant"].includes(roleKey);
-  const canManageChartOfAccounts = localAuthEnabled || localDesktopRoleCanManage || canApprove("chart_of_accounts", user?.role);
+  const canManageChartOfAccounts = Boolean(
+    user?.isSuperAdmin || ["admin", "super_admin"].includes(roleKey) || localAuthEnabled || localDesktopRoleCanManage || canApprove("chart_of_accounts", user?.role)
+  );
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -72,9 +74,9 @@ export function GLAccountsPage() {
       .from("gl_accounts")
       .select("*")
       .order("account_code");
-    if (!localAuthEnabled) {
-      q = filterByOrganizationId(q, orgId, superAdmin);
-    }
+    // The active organization is authoritative even for platform super admins.
+    // Without this scope, switching business type exposes every tenant's chart.
+    if (orgId) q = q.eq("organization_id", orgId);
     const { data, error } = await q;
 
     if (error) {
@@ -99,12 +101,16 @@ export function GLAccountsPage() {
         created_at: String(row.created_at ?? new Date().toISOString()),
       } as GLAccount;
     });
-    setAccounts(normalized);
+    setAccounts(normalized.filter((account) => isGlAccountRelevantForBusinessType(account, user?.business_type)));
     setLoading(false);
   };
 
   const openNew = () => {
     if (!canManageChartOfAccounts) return;
+    if (!orgId) {
+      alert("Select an organization before adding an organization-specific GL account.");
+      return;
+    }
     setEditing(null);
     setForm({
       account_code: "",
@@ -163,8 +169,9 @@ export function GLAccountsPage() {
       }
     } else {
       const { error } = await supabase.from("gl_accounts").insert({
-        ...payload,
-        organization_id: orgId ?? null,
+      ...payload,
+      organization_id: orgId ?? null,
+      business_type: user?.business_type ?? null,
       });
       if (error) {
         console.error(error);

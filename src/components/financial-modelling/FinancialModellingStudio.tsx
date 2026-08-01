@@ -14,21 +14,27 @@ import { PhaseOneStatements } from "@/components/financial-modelling/PhaseOneSta
 import { PhaseTwoValuation } from "@/components/financial-modelling/PhaseTwoValuation";
 import { buildValuationSensitivity, calculateDcfValuation, type ValuationAssumptions } from "@/lib/phase2ValuationEngine";
 import { PhaseTwoScenarios } from "@/components/financial-modelling/PhaseTwoScenarios";
-import { buildOperationalScenarios, DEFAULT_SCENARIO_CONFIGURATION, type ScenarioConfiguration, type ScenarioDriverSet } from "@/lib/phase2ScenarioEngine";
+import { buildDriverBasedOperationalScenarios, DEFAULT_SCENARIO_CONFIGURATION, type ScenarioConfiguration, type ScenarioDriverSet } from "@/lib/phase2ScenarioEngine";
 import { PhaseTwoTaxPack } from "@/components/financial-modelling/PhaseTwoTaxPack";
 import { getCountryTaxPack, type CountryTaxProfile } from "@/lib/countryTaxPacks";
 import { PhaseTwoAiAssistant } from "@/components/financial-modelling/PhaseTwoAiAssistant";
 import { PhaseThreeWorkflow } from "@/components/financial-modelling/PhaseThreeWorkflow";
 import { PhaseThreeEnterpriseControls } from "@/components/financial-modelling/PhaseThreeEnterpriseControls";
+import { parseEdTechWorkbook, type EdTechImportPreview } from "@/lib/edTechWorkbookImport";
+import { PhaseFiveVersionHistory } from "@/components/financial-modelling/PhaseFiveVersionHistory";
+import { calculateCapitalAssetSchedule, type CapitalAsset } from "@/lib/capitalAssetSchedule";
+import { MonthlyActualsForecast, type MonthlyActuals } from "@/components/financial-modelling/MonthlyActualsForecast";
+import { AdoptModelAsBudget } from "@/components/financial-modelling/AdoptModelAsBudget";
 import * as XLSX from "xlsx";
 
 const industries = FINANCIAL_MODEL_TEMPLATES.map(template => template.name);
 const steps = ["Business profile", "Project setup", "Revenue drivers", "Cost drivers", "Customers & sales", "Pricing", "Operating costs", "Personnel costs", "Capital expenditure", "Existing investment", "Funding requirement", "Financing terms", "Tax & accounting", "Scenarios", "Review & validate"];
 const defaults: FinancialModelInputs = getFinancialModelTemplate("Education Technology").defaults;
 const defaultUses = [{ name: "Product development", value: 0 }, { name: "Working capital", value: 0 }, { name: "Marketing & growth", value: 0 }, { name: "Regional expansion", value: 0 }, { name: "Infrastructure", value: 0 }, { name: "Recruitment", value: 0 }, { name: "Content development", value: 0 }, { name: "AI development", value: 0 }, { name: "Contingency", value: 0 }];
-const blankProject = (id = "project-1"): ModelProject => ({ id, name: "", businessType: "education-technology", enabled: true, startingUnits: 0, annualGrowth: 0, revenuePerUnit: 0, directCostRate: 0, annualFixedCosts: 0, startYear: 1, revenueDrivers: [], costDrivers: [] });
+const blankProject = (id = "project-1"): ModelProject => ({ id, name: "", businessType: "education-technology", enabled: true, startingUnits: 0, annualGrowth: 0, revenuePerUnit: 0, directCostRate: 0, annualFixedCosts: 0, startYear: 1, subscriptionChurnRate:0, importDutyRate:0, warrantyRate:0, replacementRate:0, governmentContractProbability:100, governmentRetentionRate:0, governmentPaymentDelayDays:0, receivableDays:0,inventoryDays:0,payableDays:0,procurementLeadTimeDays:0, revenueDrivers: [], costDrivers: [] });
 type PersonnelRole = { id:string; jobTitle:string; lowerSalary:number; upperSalary:number; annualSalaryGrowth:number; positions:Record<number,number> };
 const blankPersonnelRole = (): PersonnelRole => ({ id:`role-${Date.now()}-${Math.random()}`, jobTitle:"", lowerSalary:0, upperSalary:0, annualSalaryGrowth:0, positions:{1:1} });
+const blankCapitalAsset=():CapitalAsset=>({id:`asset-${Date.now()}-${Math.random()}`,name:"",assetClass:"Technology equipment",purchaseYear:1,cost:0,usefulLifeYears:5,residualValue:0,maintenanceRate:2,capitalAllowanceRate:20});
 
 export function FinancialModellingStudio() {
   const { user } = useAuth();
@@ -53,6 +59,11 @@ export function FinancialModellingStudio() {
   const [selectedProjectId, setSelectedProjectId] = useState("project-1");
   const [personnelRoles, setPersonnelRoles] = useState<PersonnelRole[]>([]);
   const [workbookImportMessage, setWorkbookImportMessage] = useState("");
+  const [workbookImportPreview, setWorkbookImportPreview] = useState<EdTechImportPreview|null>(null);
+  const [versionRefreshKey,setVersionRefreshKey]=useState(0);
+  const [capitalAssets,setCapitalAssets]=useState<CapitalAsset[]>([]);
+  const [forecastStartYear,setForecastStartYear]=useState(new Date().getFullYear());
+  const [monthlyActuals,setMonthlyActuals]=useState<MonthlyActuals>({});
   useEffect(() => {
     const organizationId = user?.organization_id;
     if (!organizationId) return;
@@ -84,6 +95,9 @@ export function FinancialModellingStudio() {
       if (draft.scenarioConfiguration && typeof draft.scenarioConfiguration === "object") setScenarioConfiguration(draft.scenarioConfiguration);
       if (draft.taxProfile && typeof draft.taxProfile === "object") setTaxProfile(draft.taxProfile);
       if (Array.isArray(draft.personnelRoles)) setPersonnelRoles(draft.personnelRoles);
+      if (Array.isArray(draft.capitalAssets)) setCapitalAssets(draft.capitalAssets);
+      if (Number.isFinite(draft.forecastStartYear)) setForecastStartYear(draft.forecastStartYear);
+      if (draft.monthlyActuals&&typeof draft.monthlyActuals==="object") setMonthlyActuals(draft.monthlyActuals);
     };
     try { applyDraft(JSON.parse(localStorage.getItem(localKey) ?? "null")); } catch { /* ignore an invalid offline draft */ }
     void (supabase as any).from("financial_models").select("id,name,industry,currency,status,model_data").eq("organization_id", organizationId).neq("status", "archived").order("updated_at", { ascending: false }).limit(1).maybeSingle().then((result: any) => {
@@ -115,14 +129,18 @@ export function FinancialModellingStudio() {
   const projections = useMemo(() => calculateFinancialModel(inputs, scenario, customerOverrides, personnelRoles.length?payrollByYear:{}), [inputs, scenario, customerOverrides, payrollByYear, personnelRoles.length]);
   useEffect(()=>{if(personnelRoles.length)setInputs(current=>({...current,annualPayroll:payrollByYear[1]??0}));},[payrollByYear,personnelRoles.length]);
   const loanSchedule = useMemo(() => buildLoanSchedule(inputs), [inputs]);
+  const capitalAssetSchedule=useMemo(()=>calculateCapitalAssetSchedule(capitalAssets,inputs.years),[capitalAssets,inputs.years]);
   const projectRows = useMemo(() => calculateProjectPortfolio(projects, inputs.years), [projects, inputs.years]);
   const portfolio = useMemo(() => consolidateProjectPortfolio(projectRows, inputs.years), [projectRows, inputs.years]);
   const modelProjections = useMemo(() => {
-    if (!hasConfiguredProjects(projects)) return projections;
-    const depreciation = inputs.capex / Math.max(inputs.years, 5);
+    if (!hasConfiguredProjects(projects)) return projections.map((row,index)=>{const assetYear=capitalAssetSchedule[index];if(!capitalAssets.length||!assetYear)return row;const operatingExpenses=row.operatingExpenses+assetYear.maintenance,ebitda=row.grossProfit-operatingExpenses,ebit=ebitda-assetYear.depreciation;return {...row,operatingExpenses,ebitda,depreciation:assetYear.depreciation,ebit,capexPurchases:assetYear.purchases,netPpeBalance:assetYear.closingNetBookValue,capitalAllowance:assetYear.capitalAllowance,ebitdaMargin:row.revenue?ebitda/row.revenue*100:0};});
     return portfolio.map((projectYear, index) => {
-      const operatingExpenses = projectYear.fixedCosts;
-      const ebitda = projectYear.ebitda;
+      const payroll = personnelRoles.length ? payrollByYear[index + 1] ?? 0 : inputs.annualPayroll * Math.pow(1 + inputs.opexInflation / 100, index);
+      const overheads = inputs.annualOverheads * Math.pow(1 + inputs.opexInflation / 100, index);
+      const assetYear=capitalAssetSchedule[index];
+      const operatingExpenses = projectYear.fixedCosts + payroll + overheads + (assetYear?.maintenance??0);
+      const ebitda = projectYear.revenue - projectYear.directCosts - operatingExpenses;
+      const depreciation = capitalAssets.length ? assetYear?.depreciation??0 : inputs.capex / Math.max(inputs.years, 5);
       const ebit = ebitda - depreciation;
       const interest = loanSchedule[index]?.interest ?? 0;
       const tax = Math.max(0, ebit - interest) * inputs.taxRate / 100;
@@ -130,9 +148,9 @@ export function FinancialModellingStudio() {
       return { year: projectYear.year, customers: 0, revenue: projectYear.revenue, costOfSales: projectYear.directCosts,
         grossProfit: projectYear.revenue - projectYear.directCosts, operatingExpenses, ebitda, depreciation, ebit,
         interest, tax, netProfit, operatingCashFlow: 0, closingCash: 0, debtBalance: loanSchedule[index]?.closingBalance ?? 0,
-        dscr: 0, ebitdaMargin: projectYear.revenue ? ebitda / projectYear.revenue * 100 : 0 };
+        dscr: 0, ebitdaMargin: projectYear.revenue ? ebitda / projectYear.revenue * 100 : 0,receivablesBalance:projectYear.receivables,inventoryBalance:projectYear.inventory,payablesBalance:projectYear.payables,capexPurchases:assetYear?.purchases,netPpeBalance:assetYear?.closingNetBookValue,capitalAllowance:assetYear?.capitalAllowance };
     });
-  }, [inputs, loanSchedule, portfolio, projects, projections]);
+  }, [capitalAssetSchedule, capitalAssets.length, inputs, loanSchedule, payrollByYear, personnelRoles.length, portfolio, projects, projections]);
   const statements = useMemo(() => buildLinkedStatements(inputs, modelProjections), [inputs, modelProjections]);
   const allocated = uses.reduce((a, b) => a + b.value, 0);
   const validations = useMemo(() => {
@@ -143,13 +161,16 @@ export function FinancialModellingStudio() {
     if (statements.some(row => row.currentRatio > 0 && row.currentRatio < 1)) extra.push({ level:"warning", title:"Weak short-term liquidity", detail:"Current assets fall below current liabilities in at least one year." });
     if (statements.some(row => row.dscr > 0 && row.dscr < 1.2)) extra.push({ level:"warning", title:"Debt service pressure", detail:"DSCR falls below the common lender comfort threshold of 1.20x." });
     if (statements.some(row => row.debtToEbitda > 4)) extra.push({ level:"warning", title:"High financial leverage", detail:"Debt exceeds 4.0x EBITDA in at least one year; confirm lender appetite and repayment capacity." });
+    if (projects.some(project=>project.businessType==="subscription"&&((project.subscriptionChurnRate??0)<0||(project.subscriptionChurnRate??0)>100))) extra.push({level:"critical",title:"Invalid subscription churn",detail:"Subscription churn must remain between 0% and 100%."});
+    if (projects.some(project=>project.businessType==="hardware"&&(project.directCostRate+(project.importDutyRate??0)+(project.warrantyRate??0)+(project.replacementRate??0)>100))) extra.push({level:"warning",title:"Hardware cost rates exceed revenue",detail:"Base direct costs, duties, warranty and replacement provisions total more than 100% of hardware revenue."});
+    if (projects.some(project=>project.businessType==="government"&&((project.governmentContractProbability??100)<0||(project.governmentContractProbability??100)>100))) extra.push({level:"critical",title:"Invalid government award probability",detail:"Contract award probability must remain between 0% and 100%."});
     const combined = [...base, ...extra].filter((item,index,all)=>all.findIndex(other=>other.title===item.title)===index);
     return combined.length ? combined : [{ level:"good" as const, title:"Core checks passed", detail:"Funding, statements, liquidity and debt-service assumptions are internally consistent." }];
-  }, [allocated, inputs, modelProjections, statements]);
+  }, [allocated, inputs, modelProjections, projects, statements]);
   const last = statements[statements.length - 1]!;
   const valuation = useMemo(() => calculateDcfValuation(statements, valuationAssumptions), [statements, valuationAssumptions]);
   const valuationSensitivity = useMemo(() => buildValuationSensitivity(statements, valuationAssumptions), [statements, valuationAssumptions]);
-  const operationalScenarios = useMemo(() => buildOperationalScenarios(inputs, modelProjections, scenarioConfiguration), [inputs, modelProjections, scenarioConfiguration]);
+  const operationalScenarios = useMemo(() => buildDriverBasedOperationalScenarios(inputs, modelProjections, projects, scenarioConfiguration, payrollByYear), [inputs, modelProjections, payrollByYear, projects, scenarioConfiguration]);
   const update = (key: keyof FinancialModelInputs, value: string) => setInputs(p => ({ ...p, [key]: Number(value) || 0 }));
   const changeIndustry = (name: string) => { setIndustry(name); setInputs({ ...getFinancialModelTemplate(name).defaults }); setEarlyYearCustomers({ 2: "", 3: "" }); };
   const toggleProject = (id: string) => setProjects(current => current.map(project => project.id === id ? { ...project, enabled: !project.enabled } : project));
@@ -171,72 +192,31 @@ export function FinancialModellingStudio() {
     setWorkbookImportMessage("Importing workbook...");
     try {
       const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellFormula: true, cellNF: true });
-      const required = ["Subscription Econ","Carts Economics","Tablet Economics","Tablet Costs","Human Capital","Capex Investment","Financing","Government"];
-      const missing = required.filter(name => !workbook.Sheets[name]);
-      if (missing.length) throw new Error(`Workbook not recognised. Missing sheets: ${missing.join(", ")}.`);
-      const value = (sheet:string, cell:string) => {
-        const raw = workbook.Sheets[sheet]?.[cell]?.v;
-        return typeof raw === "number" && Number.isFinite(raw) ? Math.abs(raw) : 0;
-      };
-      const id = (name:string) => `${name}-${Date.now()}-${Math.random().toString(36).slice(2,7)}`;
-      const tabletRevenueId=id("tablet-revenue"), cartRevenueId=id("cart-revenue"), subscriptionRevenueId=id("subscription-revenue");
-      const tabletQuantity=value("Tablet Costs","B6")||value("Tablet Costs","B29");
-      const tabletPrice=value("Tablet Economics","B5");
-      const tabletCost=value("Tablet Costs","B49")||value("Tablet Economics","B9");
-      const cartQuantity=value("Tablet Costs","C6")||20;
-      const cartPrice=value("Carts Economics","B5");
-      const cartCost=value("Carts Economics","B12")||value("Tablet Costs","C20");
-      const importedProjects:ModelProject[]=[
-        { ...blankProject(id("project")), name:"EdTechPAD Tablets", businessType:"hardware", startingUnits:0, revenuePerUnit:0,
-          revenueDrivers:[{id:tabletRevenueId,name:"Tablet and device sales",amount:0,quantity:tabletQuantity,unitAmount:tabletPrice,frequency:"annual"}],
-          costDrivers:[{id:id("cost"),name:"Tablet landed and configuration cost",amount:0,quantity:tabletQuantity,unitAmount:tabletCost,frequency:"annual",linkedDriverId:tabletRevenueId,linkedUnitsPerUnit:1}] },
-        { ...blankProject(id("project")), name:"Charging Carts", businessType:"hardware", startingUnits:0, revenuePerUnit:0,
-          revenueDrivers:[{id:cartRevenueId,name:"Charging cart sales",amount:0,quantity:cartQuantity,unitAmount:cartPrice,frequency:"annual"}],
-          costDrivers:[{id:id("cost"),name:"Charging cart landed cost",amount:0,quantity:cartQuantity,unitAmount:cartCost,frequency:"annual",linkedDriverId:cartRevenueId,linkedUnitsPerUnit:1}] },
-        { ...blankProject(id("project")), name:"EdTechPAD Subscriptions", businessType:"subscription", startingUnits:0, revenuePerUnit:0,
-          revenueDrivers:[{id:subscriptionRevenueId,name:"Learner subscriptions",amount:0,quantity:value("Government","B5")||1203000,unitAmount:value("Government","C5")||12000,frequency:"annual"}],
-          costDrivers:[{id:id("cost"),name:"NCDC content share",amount:0,quantity:value("Government","B5")||1203000,unitAmount:(value("Government","C5")||12000)*.2,frequency:"annual",linkedDriverId:subscriptionRevenueId,linkedUnitsPerUnit:1}] },
-        { ...blankProject(id("project")), name:"Training and Onboarding", businessType:"services", startingUnits:0, revenuePerUnit:0,
-          costDrivers:["Staff allowance","Meals","Accommodation","Transport and fuel"].map((name,index)=>({id:id("cost"),name,amount:0,quantity:1,unitAmount:value("Training &Onboarding",`J${[13,14,15,18][index]}`),frequency:"annual" as const})) },
-        { ...blankProject(id("project")), name:"Government Digital Learning", businessType:"government", startingUnits:0, revenuePerUnit:0, enabled:false,
-          revenueDrivers:[
-            {id:id("revenue"),name:"Government tablet deployment",amount:0,quantity:value("Government","B3"),unitAmount:value("Government","C3"),frequency:"one-off"},
-            {id:id("revenue"),name:"Government subscriptions",amount:0,quantity:value("Government","B5"),unitAmount:value("Government","C5"),frequency:"annual"}
-          ],
-          costDrivers:[3,4,6,7,8,9,10,11,12,13,14].map(row=>({id:id("cost"),name:String(workbook.Sheets["Government"]?.[`A${row}`]?.v||`Government cost ${row}`),amount:0,quantity:value("Government",`B${row}`)||1,unitAmount:value("Government",`C${row}`)||value("Government",`D${row}`),frequency:row===5?"annual":"one-off"})) }
-      ];
-      const humanSheet=workbook.Sheets["Human Capital"];
-      const importedRoles:PersonnelRole[]=[];
-      for(let row=6;row<=70;row++){
-        const jobTitle=String(humanSheet?.[`B${row}`]?.v??"").trim();
-        const count=Number(humanSheet?.[`C${row}`]?.v)||0;
-        const lower=Number(humanSheet?.[`D${row}`]?.v)||0;
-        const upper=Number(humanSheet?.[`E${row}`]?.v)||0;
-        if(!jobTitle||(!lower&&!upper))continue;
-        importedRoles.push({id:id("role"),jobTitle,lowerSalary:Math.abs(lower)*12,upperSalary:Math.abs(upper)*12,annualSalaryGrowth:5,positions:Object.fromEntries(Array.from({length:inputs.years},(_,i)=>[i+1,count]))});
-      }
-      const capexSheet=workbook.Sheets["Capex Investment"];
-      let capex=0;
-      for(let row=1;row<=139;row++) for(const column of ["D","E","F"]){const amount=Number(capexSheet?.[`${column}${row}`]?.v);if(Number.isFinite(amount)&&amount>0)capex+=amount;}
-      const debt=value("Financing","B4")+value("Financing","B5");
-      const rate=((value("Financing","C4")||.18)*100);
-      setProjects(importedProjects); setSelectedProjectId(importedProjects[0].id); setPersonnelRoles(importedRoles);
-      setIndustry("Education Technology"); setCurrency("UGX");
-      setInputs(current=>({...current,capex:capex||current.capex,fundingRequired:debt||current.fundingRequired,debtShare:debt?100:current.debtShare,interestRate:rate,annualPayroll:importedRoles.reduce((sum,role)=>sum+((role.lowerSalary+role.upperSalary)/2)*(role.positions[1]??0),0)}));
-      setWorkbookImportMessage(`Imported ${importedProjects.length} projects and ${importedRoles.length} personnel roles from ${file.name}. Review each page before saving.`);
+      const preview=parseEdTechWorkbook(workbook,file.name,inputs.years);
+      setWorkbookImportPreview(preview);
+      setWorkbookImportMessage(`Review required: ${preview.summary.projectCount} projects and ${preview.summary.personnelCount} personnel roles detected.`);
     } catch(error) {
       setWorkbookImportMessage(error instanceof Error?error.message:"The workbook could not be imported.");
     }
   };
+  const applyEdTechWorkbookImport=()=>{
+    if(!workbookImportPreview)return;
+    const preview=workbookImportPreview;
+    setProjects(preview.projects);setSelectedProjectId(preview.projects[0].id);setPersonnelRoles(preview.personnelRoles);
+    setIndustry("Education Technology");setCurrency("UGX");
+    setInputs(current=>({...current,capex:preview.capex||current.capex,fundingRequired:preview.debt||current.fundingRequired,debtShare:preview.debt?100:current.debtShare,interestRate:preview.interestRate||current.interestRate,annualPayroll:preview.annualPayroll}));
+    setWorkbookImportMessage(`Imported ${preview.summary.projectCount} projects and ${preview.summary.personnelCount} personnel roles from ${preview.sourceName}. Review each modelling page before saving.`);
+    setWorkbookImportPreview(null);
+  };
   const renderStep = () => {
     if (activeStep === 0) return <><label className="block"><span className="mb-1.5 block text-sm font-semibold">Company name</span><input value={company} onChange={e=>setCompany(e.target.value)} className="w-full rounded-xl border border-slate-200 px-3.5 py-3"/></label><label className="block"><span className="mb-1.5 block text-sm font-semibold">Industry template</span><select value={industry} onChange={e=>changeIndustry(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3">{industries.map(x=><option key={x}>{x}</option>)}</select><span className="mt-1.5 block text-xs text-slate-400">{template.description}</span></label><Field label="Projection period" value={inputs.years} suffix="years" onChange={v=>update("years",v)}/></>;
-    if (activeStep === 1) return <><div className="rounded-xl border-2 border-emerald-200 bg-emerald-50/40 p-4"><div className="mb-4 flex items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Project setup</p><p className="mt-1 text-sm text-slate-600">Create projects and switch each one into or out of the consolidated model.</p></div><button type="button" onClick={addProject} className="flex shrink-0 items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><Plus size={14}/> Add project</button></div><label className="mb-4 block"><span className="mb-1 block text-xs font-bold">Select project</span><select value={selectedProjectId} onChange={e=>setSelectedProjectId(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5">{projects.map((project,index)=><option key={project.id} value={project.id}>{project.name||`Untitled project ${index+1}`}</option>)}</select></label><div className="grid gap-4 sm:grid-cols-2"><label><span className="mb-1 block text-xs font-bold">Project name</span><input value={selectedProject.name} onChange={e=>updateProject({name:e.target.value})} placeholder="Enter project name" className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5"/></label><label><span className="mb-1 block text-xs font-bold">Type of business</span><select value={selectedProject.businessType} onChange={e=>updateProject({businessType:e.target.value as ModelProject["businessType"]})} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5"><option value="education-technology">Education Technology</option><option value="services">Services</option><option value="hardware">Hardware / product sales</option><option value="subscription">Subscription</option><option value="fintech">Fintech</option><option value="agritech">Agritech</option><option value="government">Government contract</option><option value="social-impact">Social impact</option></select></label></div><button type="button" onClick={()=>toggleProject(selectedProject.id)} className={`mt-4 flex w-full items-center justify-between rounded-lg px-4 py-3 text-sm font-bold ${selectedProject.enabled?"bg-emerald-700 text-white":"bg-slate-200 text-slate-600"}`}><span>Project switch</span><span>{selectedProject.enabled?"ON · Included in model":"OFF · Excluded from model"}</span></button></div><Guidance title={`${industry} project model`} text={template.guidance}/></>;
+    if (activeStep === 1) return <><div className="rounded-xl border-2 border-emerald-200 bg-emerald-50/40 p-4"><div className="mb-4 flex items-center justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-emerald-700">Project setup</p><p className="mt-1 text-sm text-slate-600">Create projects and switch each one into or out of the consolidated model.</p></div><button type="button" onClick={addProject} className="flex shrink-0 items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><Plus size={14}/> Add project</button></div><label className="mb-4 block"><span className="mb-1 block text-xs font-bold">Select project</span><select value={selectedProjectId} onChange={e=>setSelectedProjectId(e.target.value)} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5">{projects.map((project,index)=><option key={project.id} value={project.id}>{project.name||`Untitled project ${index+1}`}</option>)}</select></label><div className="grid gap-4 sm:grid-cols-2"><label><span className="mb-1 block text-xs font-bold">Project name</span><input value={selectedProject.name} onChange={e=>updateProject({name:e.target.value})} placeholder="Enter project name" className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5"/></label><label><span className="mb-1 block text-xs font-bold">Type of business</span><select value={selectedProject.businessType} onChange={e=>updateProject({businessType:e.target.value as ModelProject["businessType"]})} className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2.5"><option value="education-technology">Education Technology</option><option value="services">Services</option><option value="hardware">Hardware / product sales</option><option value="subscription">Subscription</option><option value="fintech">Fintech</option><option value="agritech">Agritech</option><option value="government">Government contract</option><option value="social-impact">Social impact</option></select></label></div><button type="button" onClick={()=>toggleProject(selectedProject.id)} className={`mt-4 flex w-full items-center justify-between rounded-lg px-4 py-3 text-sm font-bold ${selectedProject.enabled?"bg-emerald-700 text-white":"bg-slate-200 text-slate-600"}`}><span>Project switch</span><span>{selectedProject.enabled?"ON · Included in model":"OFF · Excluded from model"}</span></button></div><EdTechOperatingAssumptions project={selectedProject} onChange={updateProject}/><WorkingCapitalAssumptions project={selectedProject} onChange={updateProject}/><Guidance title={`${industry} project model`} text={template.guidance}/></>;
     if (activeStep === 2 || activeStep === 3) return <><label className="block"><span className="mb-1.5 block text-sm font-semibold">Project</span><select value={selectedProjectId} onChange={e=>setSelectedProjectId(e.target.value)} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3">{projects.map((project,index)=><option key={project.id} value={project.id}>{project.name||`Untitled project ${index+1}`}</option>)}</select></label><ProjectDriverBuilder mode={activeStep===2?"revenue":"cost"} years={inputs.years} project={selectedProject} currency={currency} suggestions={PROJECT_BUSINESS_SUGGESTIONS[selectedProject.businessType]} onAdd={addDriver} onChange={updateDriver}/></>;
     if (activeStep === 4) return <><div className="grid gap-4 sm:grid-cols-2"><Field label={template.customerLabel} value={inputs.startingCustomers} onChange={v=>update("startingCustomers",v)}/><Field label="Annual growth" value={inputs.annualCustomerGrowth} suffix="%" onChange={v=>update("annualCustomerGrowth",v)}/><Field label="Churn / attrition" value={inputs.churnRate} suffix="%" onChange={v=>update("churnRate",v)}/></div><div className="rounded-xl border border-blue-100 bg-blue-50 p-4"><p className="mb-3 text-sm font-bold text-blue-950">Early-year volume ramp</p><div className="grid gap-3 sm:grid-cols-3"><ReadOnlyYearField label="Year 1" value={inputs.startingCustomers}/>{[2,3].map(year=><label key={year}><span className="mb-1 block text-xs font-bold text-blue-900">Year {year}</span><input type="number" min="0" value={earlyYearCustomers[year]??""} onChange={e=>setEarlyYearCustomers(c=>({...c,[year]:e.target.value}))} placeholder="Use growth" className="w-full rounded-lg border border-blue-200 bg-white px-3 py-2.5"/></label>)}</div></div></>;
     if (activeStep === 5) return <div className="grid gap-4 sm:grid-cols-2"><Field label={template.priceLabel} value={inputs.annualPrice} prefix={currency} onChange={v=>update("annualPrice",v)}/><Field label="Gross margin" value={inputs.grossMargin} suffix="%" onChange={v=>update("grossMargin",v)}/></div>;
     if (activeStep === 6) return <div className="grid gap-4 sm:grid-cols-2"><Field label="Other annual overheads" value={inputs.annualOverheads} prefix={currency} onChange={v=>update("annualOverheads",v)}/><Field label="General cost inflation" value={inputs.opexInflation} suffix="%" onChange={v=>update("opexInflation",v)}/>{!personnelRoles.length&&<Field label="Annual payroll (quick estimate)" value={inputs.annualPayroll} prefix={currency} onChange={v=>update("annualPayroll",v)}/>}</div>;
     if (activeStep === 7) return <PersonnelCostBuilder roles={personnelRoles} years={inputs.years} currency={currency} payrollByYear={payrollByYear} onChange={setPersonnelRoles}/>;
-    if (activeStep === 8) return <Field label="Initial capital expenditure" value={inputs.capex} prefix={currency} onChange={v=>update("capex",v)}/>;
+    if (activeStep === 8) return <CapitalAssetBuilder assets={capitalAssets} years={inputs.years} currency={currency} fallbackCapex={inputs.capex} schedule={capitalAssetSchedule} onChange={assets=>{setCapitalAssets(assets);if(assets.length)setInputs(current=>({...current,capex:assets.reduce((sum,asset)=>sum+asset.cost,0)}));}} onFallbackChange={value=>setInputs(current=>({...current,capex:value}))}/>;
     if (activeStep === 9) return <><Field label="Existing founder and business investment" value={existingInvestment} prefix={currency} onChange={v=>setExistingInvestment(Number(v)||0)}/><Guidance title="Valuation evidence" text="Include cash, equipment, software, intellectual property, licences and documented founder effort at supportable values."/></>;
     if (activeStep === 10) return <><Field label="Funding required" value={inputs.fundingRequired} prefix={currency} onChange={v=>update("fundingRequired",v)}/><div className="space-y-2"><p className="text-sm font-bold">Allocate use of funds</p>{uses.map((item,index)=><label key={item.name} className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50 p-2"><span className="min-w-0 flex-1 text-xs font-semibold">{item.name}</span><span className="text-[10px] font-bold text-slate-400">{currency}</span><input type="number" min="0" value={item.value} onChange={e=>setUses(current=>current.map((row,i)=>i===index?{...row,value:Number(e.target.value)||0}:row))} className="w-36 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-right text-sm"/></label>)}<p className={`text-xs font-bold ${Math.abs(allocated-inputs.fundingRequired)<1?"text-emerald-700":"text-red-600"}`}>Allocated {money(allocated)} of {money(inputs.fundingRequired)} required</p></div></>;
     if (activeStep === 11) return <div className="grid gap-4 sm:grid-cols-2"><Field label="Debt portion" value={inputs.debtShare} suffix="%" onChange={v=>update("debtShare",v)}/><Field label="Interest rate" value={inputs.interestRate} suffix="%" onChange={v=>update("interestRate",v)}/><Field label="Loan term" value={inputs.loanTerm} suffix="years" onChange={v=>update("loanTerm",v)}/><Field label="Principal grace period" value={inputs.gracePeriod??0} suffix="years" onChange={v=>update("gracePeriod",v)}/><label><span className="mb-1.5 block text-sm font-semibold">Repayment method</span><select value={inputs.repaymentMethod??"equal-principal"} onChange={e=>setInputs(p=>({...p,repaymentMethod:e.target.value as FinancialModelInputs["repaymentMethod"]}))} className="w-full rounded-xl border border-slate-200 bg-white px-3.5 py-3"><option value="equal-principal">Equal principal</option><option value="annuity">Equal total payment (annuity)</option><option value="interest-only">Interest only, principal at maturity</option><option value="balloon">Balloon repayment</option></select></label>{inputs.repaymentMethod==="balloon"&&<Field label="Balloon at maturity" value={inputs.balloonPercent??30} suffix="%" onChange={v=>update("balloonPercent",v)}/>}</div>;
@@ -250,13 +230,13 @@ export function FinancialModellingStudio() {
     const body = statements.map(r => [r.year,"",r.revenue,r.grossProfit,r.ebitda,r.netProfit,r.closingCash,r.debt,r.dscr.toFixed(2)].join(",")).join("\n");
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([head + body], { type: "text/csv" })); a.download = `${company.replace(/\W+/g,"-").toLowerCase()}-financial-model.csv`; a.click(); URL.revokeObjectURL(a.href);
   };
-  const exportWorkbook = () => downloadFinancialModelWorkbook({ company, currency, inputs, statements, loan: loanSchedule });
+  const exportWorkbook = () => downloadFinancialModelWorkbook({ company, currency, inputs, statements, loan: loanSchedule, projects, personnelRoles, capitalAssets, uses, taxProfile, forecastStartYear, monthlyActuals });
   const exportPdf = () => downloadFinancialModelPdf({ company, industry, currency, inputs, statements, loan: loanSchedule, projects, projectRows, findings: validations });
   const exportPresentation = () => void downloadFinancialModelPresentation({ company, industry, currency, inputs, statements, projects, projectRows, uses, findings: validations });
   const saveDraft = async () => {
     if (modelStatus === "submitted") { setSaveError("This model is locked while independent review is pending."); return; }
     const organizationId = user?.organization_id;
-    const draft = { company, industry, inputs, earlyYearCustomers, projects, personnelRoles, existingInvestment, uses, valuationAssumptions, scenarioConfiguration, taxProfile,
+    const draft = { company, industry, inputs, earlyYearCustomers, projects, personnelRoles, capitalAssets, forecastStartYear, monthlyActuals, existingInvestment, uses, valuationAssumptions, scenarioConfiguration, taxProfile,
       publishedOutputs: { statements, loanSchedule, valuation, validations, projectRows } };
     const localKey = `boat-financial-model:${organizationId ?? "offline"}`;
     localStorage.setItem(localKey, JSON.stringify(draft));
@@ -274,6 +254,9 @@ export function FinancialModellingStudio() {
     if (result.error) { setSaveError("Saved offline. Cloud sync will be available after the financial-model migration is applied."); return; }
     setModelId(result.data.id);
     if (user?.id) await (supabase as any).from("financial_model_collaborators").upsert({ model_id:result.data.id, organization_id:organizationId, user_id:user.id, role:"owner" },{onConflict:"model_id,user_id"});
+    const criticalCount=validations.filter(item=>item.level==="critical").length;
+    const versionResult=await (supabase as any).rpc("create_financial_model_version",{p_model_id:result.data.id,p_change_summary:`Manual save · ${projects.length} projects · ${inputs.years} years · ${criticalCount} critical check${criticalCount===1?"":"s"}`});
+    if(!versionResult.error)setVersionRefreshKey(value=>value+1);
     setModelStatus(nextStatus); setSaved(true); setTimeout(()=>setSaved(false),1600);
   };
 
@@ -285,6 +268,7 @@ export function FinancialModellingStudio() {
       </div>
     </div>
     {workbookImportMessage&&<div className={`border-b px-5 py-2 text-center text-xs font-semibold ${workbookImportMessage.startsWith("Imported")?"border-emerald-200 bg-emerald-50 text-emerald-800":"border-amber-200 bg-amber-50 text-amber-800"}`}>{workbookImportMessage}</div>}
+    {workbookImportPreview&&<div className="border-b border-amber-200 bg-amber-50 px-5 py-4"><div className="mx-auto max-w-[1500px]"><div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-start"><div><p className="text-sm font-bold text-amber-950">Review EdTech workbook import before applying</p><p className="mt-1 text-xs text-amber-800">{workbookImportPreview.sourceName} · {workbookImportPreview.layoutVersion}. Existing model data remains unchanged until this preview is applied.</p><div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 lg:grid-cols-6">{[["Projects",workbookImportPreview.summary.projectCount],["Personnel",workbookImportPreview.summary.personnelCount],["Year 1 revenue",money(workbookImportPreview.summary.yearOneRevenue,true)],["Year 1 direct costs",money(workbookImportPreview.summary.yearOneDirectCosts,true)],["Capex",money(workbookImportPreview.capex,true)],["Debt",money(workbookImportPreview.debt,true)]].map(([label,value])=><div key={String(label)} className="rounded-lg border border-amber-200 bg-white px-3 py-2"><p className="text-[10px] font-bold uppercase text-amber-600">{label}</p><p className="mt-1 font-bold text-slate-900">{value}</p></div>)}</div>{workbookImportPreview.warnings.length>0&&<details className="mt-3"><summary className="cursor-pointer text-xs font-bold text-amber-900">{workbookImportPreview.warnings.length} validation warning{workbookImportPreview.warnings.length===1?"":"s"}</summary><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-800">{workbookImportPreview.warnings.map((warning,index)=><li key={`${warning}-${index}`}>{warning}</li>)}</ul></details>}</div><div className="flex shrink-0 gap-2"><button type="button" onClick={()=>{setWorkbookImportPreview(null);setWorkbookImportMessage("Import cancelled. The current model was not changed.");}} className="rounded-lg border border-amber-300 bg-white px-4 py-2 text-xs font-bold text-amber-900">Cancel</button><button type="button" onClick={applyEdTechWorkbookImport} disabled={!workbookImportPreview.summary.yearOneRevenue||workbookImportPreview.interestRate<0||workbookImportPreview.interestRate>100} className="rounded-lg bg-emerald-700 px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40">Apply validated import</button></div></div></div></div>}
 
     <div className="mx-auto grid max-w-[1500px] lg:grid-cols-[260px_1fr]">
       <aside className="hidden min-h-[calc(100vh-65px)] border-r border-slate-200 bg-white p-5 lg:block">
@@ -326,11 +310,14 @@ export function FinancialModellingStudio() {
           {activeStep===steps.length-1&&<>
           <PhaseOneStatements statements={statements} money={money}/>
           <PhaseTwoValuation assumptions={valuationAssumptions} result={valuation} sensitivity={valuationSensitivity} currency={currency} money={money} onChange={(key,value)=>setValuationAssumptions(current=>({...current,[key]:value}))}/>
-          <PhaseTwoScenarios configuration={scenarioConfiguration} cases={operationalScenarios} money={money} onChange={(caseName,key,value)=>setScenarioConfiguration(current=>({...current,[caseName]:{...current[caseName],[key]:value} as ScenarioDriverSet}))}/>
+           <PhaseTwoScenarios configuration={scenarioConfiguration} cases={operationalScenarios} money={money} onChange={(caseName,key,value)=>setScenarioConfiguration(current=>({...current,[caseName]:{...current[caseName],[key]:value} as ScenarioDriverSet}))}/>
+           <MonthlyActualsForecast statements={statements} startYear={forecastStartYear} actuals={monthlyActuals} currency={currency} onStartYear={setForecastStartYear} onChange={setMonthlyActuals}/>
+           <AdoptModelAsBudget organizationId={user?.organization_id ?? undefined} company={company} scenario={scenario} forecastStartYear={forecastStartYear} statements={statements} projections={modelProjections} projectRows={projectRows} currency={currency} money={money}/>
           <PhaseTwoTaxPack profile={taxProfile} onSelect={profile=>{setTaxProfile(profile);setInputs(current=>({...current,taxRate:profile.corporateIncomeTaxRate,opexInflation:profile.inflationRate}));}} onChange={(key,value)=>{setTaxProfile(current=>({...current,[key]:value}));if(key==="corporateIncomeTaxRate")setInputs(current=>({...current,taxRate:value}));if(key==="inflationRate")setInputs(current=>({...current,opexInflation:value}));}}/>
           <PhaseTwoAiAssistant organizationId={user?.organization_id} company={company} industry={industry} currency={currency} inputs={inputs} statements={statements} projects={projects} onApply={(target,value)=>setInputs(current=>({...current,[target]:value}))}/>
           <PhaseThreeWorkflow modelId={modelId} currentUserId={user?.id} status={modelStatus} onStatus={setModelStatus}/>
-          <PhaseThreeEnterpriseControls organizationId={user?.organization_id} modelId={modelId} status={modelStatus}/>
+           <PhaseThreeEnterpriseControls organizationId={user?.organization_id} modelId={modelId} status={modelStatus}/>
+           <PhaseFiveVersionHistory modelId={modelId} refreshKey={versionRefreshKey}/>
           </>}
           {activeStep===1&&
           <section className="mt-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
@@ -348,8 +335,18 @@ export function FinancialModellingStudio() {
 function Field({label,value,onChange,prefix,suffix}:{label:string;value:number;onChange:(v:string)=>void;prefix?:string;suffix?:string}) { return <label><span className="mb-1.5 block text-sm font-semibold">{label}</span><div className="flex rounded-xl border border-slate-200 focus-within:border-emerald-600 focus-within:ring-2 focus-within:ring-emerald-100">{prefix&&<span className="grid place-items-center border-r border-slate-200 px-3 text-xs font-bold text-slate-400">{prefix}</span>}<input type="number" value={value} onChange={e=>onChange(e.target.value)} className="min-w-0 flex-1 rounded-xl px-3 py-2.5 outline-none"/>{suffix&&<span className="grid place-items-center px-3 text-sm font-bold text-slate-400">{suffix}</span>}</div></label> }
 function DriverList({title,items}:{title:string;items:string[]}) { return <div className="rounded-xl border border-slate-200 p-3"><p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-400">{title}</p><div className="flex flex-wrap gap-1.5">{items.map(item=><span key={item} className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-600">{item}</span>)}</div></div> }
 function Guidance({title,text}:{title:string;text:string}) { return <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-4"><div className="flex gap-3"><Lightbulb className="mt-0.5 shrink-0 text-emerald-700" size={18}/><div><p className="text-sm font-bold text-emerald-900">{title}</p><p className="mt-1 text-xs leading-5 text-emerald-800">{text}</p></div></div></div> }
+function EdTechOperatingAssumptions({project,onChange}:{project:ModelProject;onChange:(patch:Partial<ModelProject>)=>void}) {
+  const field=(label:string,key:keyof ModelProject,suffix="%")=><ProjectField label={label} value={Number(project[key]??0)} suffix={suffix} onChange={value=>onChange({[key]:value})}/>;
+  if(project.businessType==="subscription")return <div className="rounded-xl border border-violet-200 bg-violet-50 p-4"><p className="text-xs font-bold uppercase tracking-wide text-violet-700">Subscription cohort schedule</p><p className="mt-1 text-xs text-violet-800">Each year adds a new cohort while existing subscribers roll forward after churn.</p><div className="mt-3 grid gap-3 sm:grid-cols-3">{field("Annual subscriber churn","subscriptionChurnRate")}{field("Starting new subscribers","startingUnits","")}{field("New-cohort growth","annualGrowth")}</div></div>;
+  if(project.businessType==="hardware")return <div className="rounded-xl border border-orange-200 bg-orange-50 p-4"><p className="text-xs font-bold uppercase tracking-wide text-orange-700">Hardware landed-cost schedule</p><p className="mt-1 text-xs text-orange-800">These risk costs are added to the base direct-cost rate and remain separately visible in projections.</p><div className="mt-3 grid gap-3 sm:grid-cols-3">{field("Import duties and freight","importDutyRate")}{field("Warranty provision","warrantyRate")}{field("Replacement / returns","replacementRate")}</div></div>;
+  if(project.businessType==="government")return <div className="rounded-xl border border-blue-200 bg-blue-50 p-4"><p className="text-xs font-bold uppercase tracking-wide text-blue-700">Government contract schedule</p><p className="mt-1 text-xs text-blue-800">Revenue and delivery costs are probability-weighted; retention and payment delay are disclosed for cash-planning review.</p><div className="mt-3 grid gap-3 sm:grid-cols-3">{field("Contract award probability","governmentContractProbability")}{field("Payment retention","governmentRetentionRate")}{field("Payment delay","governmentPaymentDelayDays","days")}</div></div>;
+  return null;
+}
+function WorkingCapitalAssumptions({project,onChange}:{project:ModelProject;onChange:(patch:Partial<ModelProject>)=>void}) {const field=(label:string,key:keyof ModelProject)=><ProjectField label={label} value={Number(project[key]??0)} suffix="days" onChange={value=>onChange({[key]:value})}/>;return <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-4"><p className="text-xs font-bold uppercase tracking-wide text-cyan-700">Project working capital</p><p className="mt-1 text-xs text-cyan-800">Project-specific collection, inventory and supplier terms override the generic consolidated assumptions.</p><div className="mt-3 grid gap-3 sm:grid-cols-4">{field("Receivable days","receivableDays")}{field("Inventory days","inventoryDays")}{field("Payable days","payableDays")}{field("Procurement lead time","procurementLeadTimeDays")}</div></div>}
 function ReadOnlyYearField({label,value}:{label:string;value:number}) { return <label><span className="mb-1 block text-xs font-bold text-blue-900">{label}</span><input type="number" value={value} readOnly className="w-full rounded-lg border border-blue-100 bg-blue-100/50 px-3 py-2.5 text-sm font-semibold text-blue-950"/></label> }
 function ProjectField({label,value,onChange,prefix,suffix}:{label:string;value:number;onChange:(value:number)=>void;prefix?:string;suffix?:string}) { return <label><span className="mb-1 block text-xs font-bold">{label}</span><div className="flex rounded-lg border border-slate-200 bg-white">{prefix&&<span className="grid place-items-center border-r border-slate-200 px-2 text-[10px] font-bold text-slate-400">{prefix}</span>}<input type="number" min="0" value={value} onChange={e=>onChange(Number(e.target.value)||0)} className="min-w-0 flex-1 rounded-lg px-3 py-2.5 outline-none"/>{suffix&&<span className="grid place-items-center px-2 text-xs font-bold text-slate-400">{suffix}</span>}</div></label> }
+function CapitalAssetBuilder({assets,years,currency,fallbackCapex,schedule,onChange,onFallbackChange}:{assets:CapitalAsset[];years:number;currency:string;fallbackCapex:number;schedule:ReturnType<typeof calculateCapitalAssetSchedule>;onChange:(assets:CapitalAsset[])=>void;onFallbackChange:(value:number)=>void}){const patch=(id:string,change:Partial<CapitalAsset>)=>onChange(assets.map(asset=>asset.id===id?{...asset,...change}:asset));return <div className="space-y-4"><div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><div><p className="font-bold text-emerald-950">Asset-level capital expenditure</p><p className="mt-1 text-xs text-emerald-800">Purchase timing drives investing cash flow, depreciation, maintenance, capital allowances and closing net book value.</p></div><button type="button" onClick={()=>onChange([...assets,blankCapitalAsset()])} className="flex items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-xs font-bold text-white"><Plus size={14}/> Add asset</button></div></div>{!assets.length?<Field label="Initial capital expenditure" value={fallbackCapex} prefix={currency} onChange={value=>onFallbackChange(Number(value)||0)}/>:<><div className="space-y-3">{assets.map(asset=><div key={asset.id} className="rounded-xl border border-slate-200 bg-white p-4"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><label><span className="mb-1 block text-xs font-bold">Asset name</span><input value={asset.name} onChange={e=>patch(asset.id,{name:e.target.value})} className="w-full rounded-lg border border-slate-200 px-3 py-2.5"/></label><label><span className="mb-1 block text-xs font-bold">Asset class</span><input value={asset.assetClass} onChange={e=>patch(asset.id,{assetClass:e.target.value})} className="w-full rounded-lg border border-slate-200 px-3 py-2.5"/></label><ProjectField label="Purchase year" value={asset.purchaseYear} onChange={value=>patch(asset.id,{purchaseYear:Math.min(years,Math.max(1,Math.round(value)))})}/><ProjectField label="Cost" value={asset.cost} prefix={currency} onChange={value=>patch(asset.id,{cost:value})}/><ProjectField label="Useful life" value={asset.usefulLifeYears} suffix="years" onChange={value=>patch(asset.id,{usefulLifeYears:Math.max(1,value)})}/><ProjectField label="Residual value" value={asset.residualValue} prefix={currency} onChange={value=>patch(asset.id,{residualValue:value})}/><ProjectField label="Maintenance" value={asset.maintenanceRate} suffix="%" onChange={value=>patch(asset.id,{maintenanceRate:value})}/><ProjectField label="Capital allowance" value={asset.capitalAllowanceRate} suffix="%" onChange={value=>patch(asset.id,{capitalAllowanceRate:value})}/><button type="button" onClick={()=>onChange(assets.filter(item=>item.id!==asset.id))} className="self-end rounded-lg border border-red-200 px-3 py-2.5 text-xs font-bold text-red-600">Remove asset</button></div></div>)}</div><div className="overflow-x-auto rounded-xl border border-slate-200 bg-white"><table className="w-full min-w-[720px] text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Asset schedule</th>{schedule.map(row=><th key={row.year} className="p-3 text-right">Year {row.year}</th>)}</tr></thead><tbody>{[["Purchases","purchases"],["Depreciation","depreciation"],["Maintenance","maintenance"],["Capital allowance","capitalAllowance"],["Closing NBV","closingNetBookValue"]].map(([label,key])=><tr key={key} className="border-t border-slate-100"><td className="p-3 font-semibold">{label}</td>{schedule.map(row=><td key={row.year} className="p-3 text-right">{moneyValue(currency,Number(row[key as keyof typeof row]))}</td>)}</tr>)}</tbody></table></div></>}</div>}
+function moneyValue(currency:string,value:number){return `${currency} ${value.toLocaleString(undefined,{maximumFractionDigits:0})}`;}
 function PersonnelCostBuilder({roles,years,currency,payrollByYear,onChange}:{roles:PersonnelRole[];years:number;currency:string;payrollByYear:Record<number,number>;onChange:(roles:PersonnelRole[])=>void}) {
   const [importMessage,setImportMessage]=useState("");
   const yearList=Array.from({length:years},(_,i)=>i+1);

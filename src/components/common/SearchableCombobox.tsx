@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Check, ChevronDown } from "lucide-react";
+import { Check, ChevronDown, X } from "lucide-react";
 
 export type ComboboxOption = { id: string; label: string };
 
@@ -13,6 +13,7 @@ type SearchableComboboxProps = {
   disabled?: boolean;
   className?: string;
   inputAriaLabel?: string;
+  clearable?: boolean;
 };
 
 export function SearchableCombobox({
@@ -24,6 +25,7 @@ export function SearchableCombobox({
   disabled = false,
   className = "",
   inputAriaLabel = "Search and select",
+  clearable = false,
 }: SearchableComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -58,7 +60,17 @@ export function SearchableCombobox({
     ) {
       return options;
     }
-    return options.filter((o) => o.label.toLowerCase().includes(q));
+    return options
+      .filter((o) => o.label.toLowerCase().includes(q))
+      .sort((a, b) => {
+        const rank = (label: string) => {
+          const normalized = label.toLowerCase();
+          if (normalized.startsWith(q)) return 0;
+          if (normalized.split(/[^a-z0-9]+/).some((word) => word.startsWith(q))) return 1;
+          return 2;
+        };
+        return rank(a.label) - rank(b.label) || a.label.localeCompare(b.label);
+      });
   }, [options, search, emptyOption, value]);
 
   const showEmptyRow =
@@ -215,10 +227,27 @@ export function SearchableCombobox({
           aria-label={inputAriaLabel}
           autoComplete="off"
           spellCheck={false}
-          className={`w-full border border-slate-300 rounded-lg pl-3 pr-9 py-2 text-sm bg-white hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed min-h-[42px] ${
+          className={`w-full border border-slate-300 rounded-lg pl-3 ${clearable ? "pr-16" : "pr-9"} py-2 text-sm bg-white hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-1 disabled:opacity-50 disabled:cursor-not-allowed min-h-[42px] ${
             showPlaceholderStyle && !open ? "text-slate-400" : "text-slate-900"
           }`}
         />
+        {clearable && inputDisplay && (
+          <button
+            type="button"
+            aria-label="Clear selection and search"
+            title="Clear"
+            className="absolute right-8 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            onClick={() => {
+              onChange("");
+              setSearch("");
+              setOpen(true);
+              inputRef.current?.focus();
+            }}
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
         <ChevronDown
           className={`pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500 transition ${open ? "rotate-180" : ""}`}
         />

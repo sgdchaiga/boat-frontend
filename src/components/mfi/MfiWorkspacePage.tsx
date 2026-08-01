@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Banknote, Briefcase, Plus, RefreshCw, UsersRound } from "lucide-react";
+import { AlertTriangle, Banknote, BookOpen, Briefcase, Plus, RefreshCw, UsersRound } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useAppContext } from "@/contexts/AppContext";
+import { useGeneralBusinessMode } from "@/lib/generalBusinessMode";
 import { supabase } from "@/lib/supabase";
 import { generateMfiSchedule, portfolioAtRisk } from "@/lib/mfiFinance";
 import { downloadCsv, downloadXlsx, exportAccountingPdf } from "@/lib/accountingReportExport";
@@ -25,7 +27,9 @@ const money = (value: unknown) => Number(value || 0).toLocaleString(undefined, {
 
 export function MfiWorkspacePage({ section, readOnly = false }: { section: Section; readOnly?: boolean }) {
   const { user } = useAuth();
+  const { setCurrentPage } = useAppContext();
   const organizationId = user?.organization_id;
+  const { mode, setMode } = useGeneralBusinessMode(user?.id, organizationId);
   const [borrowers, setBorrowers] = useState<Row[]>([]);
   const [products, setProducts] = useState<Row[]>([]);
   const [productCharges, setProductCharges] = useState<Row[]>([]);
@@ -209,7 +213,13 @@ export function MfiWorkspacePage({ section, readOnly = false }: { section: Secti
             <h1 className="text-2xl font-bold text-slate-900">{sectionTitle[section]}</h1>
             <p className="text-sm text-slate-500">Separate lending subledger for borrowers, loans, collections and portfolio risk.</p>
           </div>
-          <button className="rounded-lg border border-slate-300 bg-white p-2 text-slate-600" onClick={() => void refresh()} title="Refresh"><RefreshCw size={18} /></button>
+            <div className="flex flex-wrap items-center gap-2">
+              {section === "dashboard" && <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 text-sm" aria-label="Microfinance workspace mode">
+                <button type="button" onClick={() => setMode("modern")} className={`rounded-md px-3 py-1.5 font-semibold ${mode === "modern" ? "bg-emerald-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}>Modern</button>
+                <button type="button" onClick={() => { setMode("cashbook"); setCurrentPage("microfinance_cashbook_register"); }} className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 font-semibold ${mode === "cashbook" ? "bg-emerald-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}><BookOpen size={16} />Cashbook</button>
+              </div>}
+              <button className="rounded-lg border border-slate-300 bg-white p-2 text-slate-600" onClick={() => void refresh()} title="Refresh"><RefreshCw size={18} /></button>
+            </div>
         </div>
         {message && <div className={`rounded-lg border px-4 py-3 text-sm ${message.includes("success") ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-amber-200 bg-amber-50 text-amber-800"}`}>{message}</div>}
         {loading ? <div className="rounded-xl border bg-white p-10 text-center text-slate-500">Loading microfinance workspace…</div> : null}

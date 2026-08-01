@@ -21,6 +21,7 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
 import { randomUuid } from "../../lib/randomUuid";
+import { clearCashbookDraft } from "../../lib/cashbookDraft";
 
 interface Bill {
   id: string;
@@ -66,6 +67,7 @@ interface BillsPageProps {
   highlightBillId?: string;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
   readOnly?: boolean;
+  cashbookDraft?: Record<string, unknown>;
 }
 
 function formatBillStatusLabel(status: string | null | undefined): string {
@@ -196,7 +198,7 @@ function normalizeNumericInput(value: string): string {
   return Number(parsed.toFixed(6)).toString();
 }
 
-export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: BillsPageProps = {}) {
+export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashbookDraft }: BillsPageProps = {}) {
   const { user } = useAuth();
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const canApproveBills = canApprove("bills", user?.role);
@@ -233,6 +235,19 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
   const [billDateToFilter, setBillDateToFilter] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatusFilter>("all");
   const [showPaymentGapDrilldown, setShowPaymentGapDrilldown] = useState(false);
+
+  useEffect(() => {
+    if (cashbookDraft?.type !== "purchase" || readOnly) return;
+    setEditingBill(null);
+    const date = String(cashbookDraft.date || new Date().toISOString().slice(0, 10));
+    setBillDate(date);
+    setDueDate(date);
+    setAmount(String(cashbookDraft.amount || ""));
+    setDescription([cashbookDraft.description, cashbookDraft.reference].filter(Boolean).join(" · "));
+    const party = String(cashbookDraft.party || "").trim().toLowerCase();
+    setVendorId(vendors.find((vendor) => vendor.name.trim().toLowerCase() === party)?.id || "");
+    setShowModal(true);
+  }, [cashbookDraft, readOnly, vendors]);
 
   const detailPaidTotal = useMemo(() => {
     if (!detailBill) return 0;
@@ -1286,6 +1301,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false }: Bil
         }
         // Pending bills do not affect the ledger. Approval posts the bill journal.
       }
+      if (cashbookDraft?.type === "purchase") clearCashbookDraft(user?.organization_id, user?.id);
       closeModal();
       fetchData();
     } catch (e) {

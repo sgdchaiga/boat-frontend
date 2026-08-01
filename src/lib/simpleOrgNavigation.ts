@@ -135,8 +135,8 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
       { name: "Sales reports", page: "reports_daily_sales" },
     ];
     const accounting: NavChild[] = [
+      { name: "Chart of accounts", page: "gl_accounts" },
       ...(canManageAccounting ? [
-        { name: "Chart of accounts", page: "gl_accounts" } as NavChild,
         { name: "Journal entries", page: "accounting_journal" } as NavChild,
       ] : []),
       { name: "General ledger", page: "accounting_gl" },
@@ -149,6 +149,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     ];
     return [
       { name: "Dashboard", icon: LayoutDashboard, page: "general_business_dashboard" },
+      { name: "Cashbook", icon: Banknote, page: "general_business_cashbook" },
       { name: "Projects", icon: Briefcase, page: "general_business_projects" },
       { name: "Sales", icon: ShoppingCart, children: sales },
       {

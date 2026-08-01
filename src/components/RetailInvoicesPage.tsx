@@ -23,6 +23,7 @@ import {
 import type { BusinessType } from "../contexts/AuthContext";
 import { useAuth } from "../contexts/AuthContext";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
+import { clearCashbookDraft } from "../lib/cashbookDraft";
 import { PageNotes } from "./common/PageNotes";
 import { ModuleMessagingToolbar, SendWhatsAppButton } from "@/components/communications/ModuleMessagingButtons";
 import type { RetailCustomerRow } from "./RetailCustomersPage";
@@ -221,6 +222,7 @@ export function RetailInvoicesPage({
   onNavigate,
   invoiceTab,
   highlightSaleId,
+  cashbookDraft,
 }: {
   readOnly?: boolean;
   /** Navigate to another app page (e.g. Sales → Customers). */
@@ -228,6 +230,7 @@ export function RetailInvoicesPage({
   /** Deep-link from Credit Sales Report etc. */
   invoiceTab?: "invoices" | "credit";
   highlightSaleId?: string;
+  cashbookDraft?: Record<string, unknown>;
 }) {
   const { user } = useAuth();
   const communicationsEnabled = user?.enable_communications !== false;
@@ -612,6 +615,18 @@ export function RetailInvoicesPage({
     setShowModal(true);
   };
 
+  useEffect(() => {
+    if (cashbookDraft?.type !== "sale") return;
+    void openNew().then(() => {
+      setIssueDate(String(cashbookDraft.date || new Date().toISOString().slice(0, 10)));
+      setCustomerName(String(cashbookDraft.party || ""));
+      const party = String(cashbookDraft.party || "").trim().toLowerCase();
+      setSelectedCustomerId(customers.find((customer) => customer.name.trim().toLowerCase() === party)?.id || "");
+      setNotes(String(cashbookDraft.reference || ""));
+      setLines([{ ...newLineDraft(), description: String(cashbookDraft.description || ""), quantity: "1", unit_price: String(cashbookDraft.amount || "") }]);
+    });
+  }, [cashbookDraft, customers]);
+
   const openEdit = (inv: DbInvoice) => {
     setEditingId(inv.id);
     setInvoiceNumber(inv.invoice_number);
@@ -785,6 +800,7 @@ export function RetailInvoicesPage({
       }
 
       setShowModal(false);
+      if (cashbookDraft?.type === "sale") clearCashbookDraft(orgId, user?.id);
       await loadDbInvoices();
     } catch (e: unknown) {
       const pe = e as { message?: string; details?: string; hint?: string; code?: string };

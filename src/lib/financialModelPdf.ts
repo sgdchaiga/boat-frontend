@@ -57,7 +57,7 @@ export function downloadFinancialModelPdf(args: {
   const statementRows: [string, keyof StatementYear][] = [["Revenue","revenue"],["Cost of sales","costOfSales"],["Gross profit","grossProfit"],["Operating expenses","operatingExpenses"],["EBITDA","ebitda"],["Depreciation","depreciation"],["EBIT","ebit"],["Interest","interest"],["Tax","tax"],["Net profit","netProfit"]];
   table([[`Metric (${currency})`, ...years]], statementRows.map(([label, key]) => [label, ...statements.map(row => compact(Number(row[key])))]), { startY: 29 });
   heading("Balance sheet");
-  const balanceRows: [string, keyof StatementYear][] = [["Cash","cash"],["Receivables","receivables"],["Net PPE","netPpe"],["Total assets","totalAssets"],["Payables","payables"],["Debt","debt"],["Equity","equity"],["Balance check","balanceCheck"]];
+  const balanceRows: [string, keyof StatementYear][] = [["Cash","cash"],["Receivables","receivables"],["Net PPE","netPpe"],["Total assets","totalAssets"],["Payables","payables"],["Debt","debt"],["Contributed capital","contributedCapital"],["Retained earnings","retainedEarnings"],["Total equity","equity"],["Balance check","balanceCheck"]];
   table([[`Metric (${currency})`, ...years]], balanceRows.map(([label, key]) => [label, ...statements.map(row => compact(Number(row[key])))]));
   heading("Cash flow and lender ratios");
   const cashRows: [string, keyof StatementYear][] = [["Operating cash flow","operatingCashFlow"],["Investing cash flow","investingCashFlow"],["Financing cash flow","financingCashFlow"],["Closing cash","closingCash"]];

@@ -1,0 +1,6 @@
+export type CapitalAsset={id:string;name:string;assetClass:string;purchaseYear:number;cost:number;usefulLifeYears:number;residualValue:number;maintenanceRate:number;capitalAllowanceRate:number};
+export type CapitalAssetYear={year:number;purchases:number;depreciation:number;maintenance:number;capitalAllowance:number;closingNetBookValue:number};
+
+export function calculateCapitalAssetSchedule(assets:CapitalAsset[],years:number):CapitalAssetYear[]{
+  return Array.from({length:years},(_,index)=>{const year=index+1;let purchases=0,depreciation=0,maintenance=0,capitalAllowance=0,closingNetBookValue=0;for(const asset of assets){const purchaseYear=Math.max(1,Math.round(asset.purchaseYear));if(year===purchaseYear)purchases+=Math.max(0,asset.cost);if(year<purchaseYear)continue;const usefulLife=Math.max(1,asset.usefulLifeYears),depreciable=Math.max(0,asset.cost-asset.residualValue),annualDepreciation=depreciable/usefulLife,age=year-purchaseYear+1;depreciation+=age<=usefulLife?annualDepreciation:0;maintenance+=Math.max(0,asset.cost)*Math.max(0,asset.maintenanceRate)/100;capitalAllowance+=age<=usefulLife?Math.max(0,asset.cost)*Math.max(0,asset.capitalAllowanceRate)/100:0;closingNetBookValue+=Math.max(asset.residualValue,asset.cost-annualDepreciation*age);}return {year,purchases,depreciation,maintenance,capitalAllowance,closingNetBookValue};});
+}

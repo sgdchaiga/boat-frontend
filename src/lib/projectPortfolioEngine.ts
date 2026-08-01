@@ -49,6 +49,10 @@ export type ModelProject = {
   id: string; name: string; businessType: ProjectBusinessType; enabled: boolean;
   startingUnits: number; annualGrowth: number; revenuePerUnit: number;
   directCostRate: number; annualFixedCosts: number; startYear: number;
+  subscriptionChurnRate?: number;
+  importDutyRate?: number; warrantyRate?: number; replacementRate?: number;
+  governmentContractProbability?: number; governmentRetentionRate?: number; governmentPaymentDelayDays?: number;
+  receivableDays?: number; inventoryDays?: number; payableDays?: number; procurementLeadTimeDays?: number;
   revenueDrivers?: ProjectDriver[]; costDrivers?: ProjectDriver[];
 };
 
@@ -65,7 +69,9 @@ export const PROJECT_BUSINESS_SUGGESTIONS: Record<ProjectBusinessType, { revenue
 
 export type ProjectProjection = {
   projectId: string; name: string; businessType: ProjectBusinessType; year: number;
-  units: number; revenue: number; directCosts: number; fixedCosts: number; ebitda: number;
+  units: number; newUnits: number; retainedUnits: number; grossRevenue: number; probabilityAdjustedRevenue: number;
+  revenue: number; baseDirectCosts: number; edtechRiskCosts: number; directCosts: number; fixedCosts: number; ebitda: number;
+  receivables: number; inventory: number; payables: number;
 };
 
 export const EDTECH_PROJECT_PORTFOLIO: ModelProject[] = [
@@ -85,7 +91,9 @@ export function calculateProjectPortfolio(projects: ModelProject[], years: numbe
     const year = index + 1;
     const activeYears = year - project.startYear;
     const active = project.enabled && activeYears >= 0;
-    const units = active ? project.startingUnits * Math.pow(1 + project.annualGrowth / 100, activeYears) : 0;
+    const newUnits = active ? project.startingUnits * Math.pow(1 + project.annualGrowth / 100, activeYears) : 0;
+    const retainedUnits = active && project.businessType === "subscription" ? Array.from({length:activeYears},(_,cohort)=>project.startingUnits*Math.pow(1+project.annualGrowth/100,cohort)*Math.pow(1-(project.subscriptionChurnRate??0)/100,activeYears-cohort)).reduce((sum,value)=>sum+value,0) : 0;
+    const units = project.businessType === "subscription" ? newUnits + retainedUnits : newUnits;
     const revenueDrivers = project.revenueDrivers ?? [];
     const revenueQuantity = (driver: ProjectDriver, visiting = new Set<string>()): number => {
       if (visiting.has(driver.id)) return 0;
@@ -102,8 +110,14 @@ export function calculateProjectPortfolio(projects: ModelProject[], years: numbe
       const linkedQuantity = source ? revenueQuantity(source, new Set([driver.id])) : undefined;
       return sum + driverAmountForProjectYear(driver, activeYears, linkedQuantity);
     }, 0);
-    const revenue = active ? units * project.revenuePerUnit + driverRevenue : 0;
-    const directCosts = revenue * project.directCostRate / 100;
+    const grossRevenue = active ? units * project.revenuePerUnit + driverRevenue : 0;
+    const probability = project.businessType === "government" ? Math.min(100,Math.max(0,project.governmentContractProbability??100))/100 : 1;
+    const probabilityAdjustedRevenue = grossRevenue * probability;
+    const revenue = probabilityAdjustedRevenue;
+    const baseDirectCosts = revenue * project.directCostRate / 100;
+    const edtechRiskRate = project.businessType === "hardware" ? (project.importDutyRate??0)+(project.warrantyRate??0)+(project.replacementRate??0) : 0;
+    const edtechRiskCosts = revenue * edtechRiskRate / 100;
+    const directCosts = baseDirectCosts + edtechRiskCosts;
     const fixedCosts = active ? project.annualFixedCosts + (project.costDrivers ?? []).reduce((sum, driver) => {
       const linkedId = driver.linkedDriverId ?? driver.linkedRevenueDriverId;
       const linkedRevenue = revenueDrivers.find(item => item.id === linkedId);
@@ -112,8 +126,14 @@ export function calculateProjectPortfolio(projects: ModelProject[], years: numbe
         : undefined;
       return sum + driverAmountForProjectYear(driver, activeYears, linkedQuantity);
     }, 0) : 0;
+    const collectionDays=(project.receivableDays??0)+(project.businessType==="government"?(project.governmentPaymentDelayDays??0):0);
+    const retentionBalance=project.businessType==="government"?revenue*(project.governmentRetentionRate??0)/100:0;
+    const receivables=revenue*collectionDays/365+retentionBalance;
+    const inventory=directCosts*((project.inventoryDays??0)+(project.businessType==="hardware"?(project.procurementLeadTimeDays??0):0))/365;
+    const payables=directCosts*(project.payableDays??0)/365;
     return { projectId: project.id, name: project.name, businessType: project.businessType, year,
-      units: Math.round(units), revenue, directCosts, fixedCosts, ebitda: revenue - directCosts - fixedCosts };
+      units: Math.round(units), newUnits:Math.round(newUnits), retainedUnits:Math.round(retainedUnits), grossRevenue, probabilityAdjustedRevenue,
+      revenue, baseDirectCosts, edtechRiskCosts, directCosts, fixedCosts, ebitda: revenue - directCosts - fixedCosts,receivables,inventory,payables };
   }));
 }
 
@@ -123,7 +143,8 @@ export function consolidateProjectPortfolio(rows: ProjectProjection[], years: nu
     return { year, revenue: selected.reduce((sum, row) => sum + row.revenue, 0),
       directCosts: selected.reduce((sum, row) => sum + row.directCosts, 0),
       fixedCosts: selected.reduce((sum, row) => sum + row.fixedCosts, 0),
-      ebitda: selected.reduce((sum, row) => sum + row.ebitda, 0) };
+      ebitda: selected.reduce((sum, row) => sum + row.ebitda, 0),
+      receivables:selected.reduce((sum,row)=>sum+row.receivables,0),inventory:selected.reduce((sum,row)=>sum+row.inventory,0),payables:selected.reduce((sum,row)=>sum+row.payables,0) };
   });
 }
 

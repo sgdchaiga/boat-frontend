@@ -92,6 +92,8 @@ export function CashReceiptsPage({
   const canReverse = canEditCashReceiptsByRole;
 
   const isHotelCheckout = String(pageState?.crSource ?? "") === "hotel_checkout";
+  const cashbookDraft = pageState?.cashbookDraft as Record<string, unknown> | undefined;
+  const isCashbookQuick = cashbookDraft?.type === "money_in";
 
   const [hotelAmount, setHotelAmount] = useState("");
   const [hotelMethod, setHotelMethod] = useState<PaymentMethodCode>("cash");
@@ -125,6 +127,54 @@ export function CashReceiptsPage({
     pageState?.crGuestName,
     pageState?.crStayId,
   ]);
+
+  useEffect(() => {
+    if (!isCashbookQuick) return;
+    setHotelGuestName(String(cashbookDraft?.party ?? ""));
+    setHotelAmount(String(cashbookDraft?.amount ?? ""));
+    setHotelReference(String(cashbookDraft?.reference ?? ""));
+    setHotelDescription(String(cashbookDraft?.description ?? ""));
+    setHotelDate(String(cashbookDraft?.date ?? new Date().toISOString().slice(0, 10)));
+    setHotelMethod(String(cashbookDraft?.method ?? "cash") as PaymentMethodCode);
+  }, [cashbookDraft, isCashbookQuick]);
+
+  const saveCashbookPayment = async () => {
+    if (readOnly || !onNavigate || hotelReceiptInFlightRef.current) return;
+    const amount = Number(hotelAmount);
+    if (!Number.isFinite(amount) || amount <= 0) return alert("Enter a valid amount.");
+    hotelReceiptInFlightRef.current = true;
+    setHotelSaving(true);
+    try {
+      const date = hotelDate || new Date().toISOString().slice(0, 10);
+      const paidAt = new Date(`${date}T12:00:00`).toISOString();
+      const party = hotelGuestName.trim();
+      const { data: matchedCustomer } = party && orgId
+        ? await supabase.from("retail_customers").select("id").eq("organization_id", orgId).ilike("name", party).limit(1).maybeSingle()
+        : { data: null };
+      const payload: Record<string, unknown> = {
+        ...(orgId ? { organization_id: orgId } : {}),
+        amount,
+        payment_status: "completed",
+        payment_source: "debtor",
+        paid_at: paidAt,
+        transaction_id: hotelReference.trim() || `${buildDebtorTransactionNumber(date)}-${hotelDescription.trim().slice(0, 32).replace(/\s+/g, "-")}`,
+        retail_customer_id: matchedCustomer?.id || null,
+        processed_by: user?.id ?? null,
+      };
+      const { data, error } = await insertPaymentWithMethodCompat(supabase, payload, hotelMethod);
+      if (error) throw error;
+      if (!data?.id) throw new Error("Payment insert returned no row.");
+      const journal = await createJournalForPayment(String(data.id), amount, paidAt, user?.id ?? null);
+      if (!journal.ok) alert(`Payment saved but journal was not posted: ${journal.error}`);
+      if (orgId && user?.id) window.localStorage.removeItem(`boat.cashbook.draft.${orgId}.${user.id}`);
+      onNavigate("general_business_cashbook", {});
+    } catch (error) {
+      alert(`Could not save payment: ${formatSupabaseError(error)}`);
+    } finally {
+      hotelReceiptInFlightRef.current = false;
+      setHotelSaving(false);
+    }
+  };
 
   const clearHotelCheckoutState = () => {
     onNavigate?.("cash_receipts", {});
@@ -627,6 +677,20 @@ export function CashReceiptsPage({
           ) : null}
         </div>
       </div>
+
+      {isCashbookQuick ? (
+        <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 md:p-5">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-800">Cashbook money in</p>
+          <h2 className="mt-1 text-lg font-semibold text-slate-900">{hotelDescription || "Money received"}</h2>
+          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="text-xs font-medium text-slate-600">Amount<input type="number" min="0" value={hotelAmount} onChange={(event) => setHotelAmount(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+            <label className="text-xs font-medium text-slate-600">Method<select value={hotelMethod} onChange={(event) => setHotelMethod(event.target.value as PaymentMethodCode)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{PAYMENT_METHOD_SELECT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
+            <label className="text-xs font-medium text-slate-600">Date<input type="date" value={hotelDate} onChange={(event) => setHotelDate(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+            <label className="text-xs font-medium text-slate-600">Reference<input value={hotelReference} onChange={(event) => setHotelReference(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+          </div>
+          <button type="button" disabled={hotelSaving || readOnly} onClick={() => void saveCashbookPayment()} className="app-btn-primary mt-4">{hotelSaving ? "Saving…" : "Post money in"}</button>
+        </div>
+      ) : null}
 
       {isHotelCheckout ? (
         <div className="mb-6 rounded-xl border border-emerald-200 bg-emerald-50/80 p-4 md:p-5">

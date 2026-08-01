@@ -618,6 +618,11 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === SCHOOL_PAGE.fixedDeposit) return "school_fixed_deposit";
   if (SCHOOL_PAGE_VALUES.has(page)) return "school";
   if (page === "general_business_dashboard") return "general_business_dashboard";
+  // Cashbook mode is a core General Business workspace. Individual treasury
+  // actions remain feature-gated, but the entry register itself must not vanish.
+  if (["general_business_cashbook", "general_business_cashbook_entry", "general_business_daily_summary"].includes(page)) return "general_business_dashboard";
+  if (["sacco_cashbook_register", "sacco_cashbook_entry", "sacco_cashbook_daily"].includes(page)) return "sacco";
+  if (["microfinance_cashbook_register", "microfinance_cashbook_entry", "microfinance_cashbook_daily"].includes(page)) return "microfinance";
   if (page === "general_business_projects") return "general_business_projects";
   if (["dashboard"].includes(page)) return "dashboard";
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return "accounting";

@@ -4,7 +4,8 @@ export type StatementYear = {
   year: number; revenue: number; costOfSales: number; grossProfit: number; operatingExpenses: number;
   ebitda: number; depreciation: number; ebit: number; interest: number; tax: number; netProfit: number;
   receivables: number; inventory: number; cash: number; netPpe: number; totalAssets: number; payables: number; debt: number;
-  totalLiabilities: number; equity: number; totalLiabilitiesAndEquity: number; balanceCheck: number;
+  totalLiabilities: number; contributedCapital: number; retainedEarnings: number; equity: number;
+  totalLiabilitiesAndEquity: number; balanceCheck: number;
   operatingCashFlow: number; investingCashFlow: number; financingCashFlow: number; netCashMovement: number;
   openingCash: number; closingCash: number; currentRatio: number; debtToEquity: number; interestCover: number; dscr: number;
   quickRatio: number; cashRatio: number; grossMargin: number; ebitdaMargin: number; operatingMargin: number;
@@ -51,22 +52,23 @@ export function buildLinkedStatements(input: FinancialModelInputs, projections: 
     const tax = Math.max(0, row.ebit - interest) * input.taxRate / 100;
     const netProfit = row.ebit - interest - tax;
     accumulatedProfit += netProfit;
-    const receivables = row.revenue * input.receivableDays / 365;
-    const payables = row.costOfSales * input.payableDays / 365;
-    const inventory = row.costOfSales * (input.inventoryDays ?? 0) / 365;
+    const receivables = row.receivablesBalance ?? row.revenue * input.receivableDays / 365;
+    const payables = row.payablesBalance ?? row.costOfSales * input.payableDays / 365;
+    const inventory = row.inventoryBalance ?? row.costOfSales * (input.inventoryDays ?? 0) / 365;
     const workingCapital = receivables + inventory - payables;
     const workingCapitalMovement = workingCapital - previousWorkingCapital;
     const operatingCashFlow = netProfit + row.depreciation - workingCapitalMovement;
-    const netPpe = Math.max(0, input.capex - row.depreciation * (index + 1));
-    const investingCashFlow = index === 0 ? -input.capex : 0;
+    const netPpe = row.netPpeBalance ?? Math.max(0, input.capex - row.depreciation * (index + 1));
+    const investingCashFlow = -(row.capexPurchases ?? (index === 0 ? input.capex : 0));
     const financingCashFlow = index === 0 ? input.fundingRequired - debtYear.principal : -debtYear.principal;
     const closingCash = openingCash + operatingCashFlow + investingCashFlow + financingCashFlow;
     const totalAssets = closingCash + receivables + inventory + netPpe;
     const totalLiabilities = payables + debtYear.closingBalance;
-    // Retained earnings and contributed capital reconcile through a transparent equity bridge.
-    const calculatedEquity = initialEquityFunding + accumulatedProfit;
-    const reconciliationReserve = totalAssets - totalLiabilities - calculatedEquity;
-    const equity = calculatedEquity + reconciliationReserve;
+    // Equity is derived only from explicit financing and accumulated earnings.
+    // Any omitted opening balance or cash-flow movement must remain visible in balanceCheck.
+    const contributedCapital = initialEquityFunding;
+    const retainedEarnings = accumulatedProfit;
+    const equity = contributedCapital + retainedEarnings;
     const totalLiabilitiesAndEquity = totalLiabilities + equity;
     const netCashMovement = closingCash - openingCash;
     const currentAssets = closingCash + receivables + inventory;
@@ -76,7 +78,7 @@ export function buildLinkedStatements(input: FinancialModelInputs, projections: 
       grossProfit: row.grossProfit, operatingExpenses: row.operatingExpenses, ebitda: row.ebitda,
       depreciation: row.depreciation, ebit: row.ebit, interest, tax,
       netProfit, receivables, inventory, cash: closingCash, netPpe, totalAssets, payables,
-      debt: debtYear.closingBalance, totalLiabilities, equity, totalLiabilitiesAndEquity,
+      debt: debtYear.closingBalance, totalLiabilities, contributedCapital, retainedEarnings, equity, totalLiabilitiesAndEquity,
       balanceCheck: totalAssets - totalLiabilitiesAndEquity, operatingCashFlow,
       investingCashFlow, financingCashFlow, netCashMovement, openingCash, closingCash,
       currentRatio: currentLiabilities ? currentAssets / currentLiabilities : 0,

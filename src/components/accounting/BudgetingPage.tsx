@@ -534,6 +534,15 @@ export function BudgetingPage({ readOnly }: Props) {
     }
   };
 
+  const setBudgetActive = async (budget: BudgetRow, isActive: boolean) => {
+    if (readOnly || hasUnsavedLineChanges) return;
+    if (isActive && !confirm("Activate this budget? It will become available to budget-versus-actual reporting and any configured spending controls.")) return;
+    setErr(null);
+    const { error } = await supabase.from("budgets").update({ is_active: isActive }).eq("id", budget.id);
+    if (error) setErr(error.message);
+    else await loadBudgets();
+  };
+
   const displayLines = editingLines ? editedLines : lines;
   const showReadOnlyLines = readOnly || !editingLines;
 
@@ -606,7 +615,7 @@ export function BudgetingPage({ readOnly }: Props) {
                       onClick={() => setSelectedId(b.id)}
                       className={`flex-1 text-left text-sm ${selectedId === b.id ? "text-indigo-800 font-medium" : "text-slate-800"}`}
                     >
-                      <span className="block">{b.name}</span>
+                      <span className="flex items-center gap-2"><span>{b.name}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${b.is_active ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{b.is_active ? "Active" : "Draft"}</span></span>
                       {b.period_label && <span className="text-xs text-slate-500">{b.period_label}</span>}
                     </button>
                     {!readOnly && (
@@ -632,6 +641,7 @@ export function BudgetingPage({ readOnly }: Props) {
             <div className="flex flex-wrap items-center gap-2 justify-end">
               {selectedBudget && !readOnly && (
                 <>
+                  {!editingLines && <button type="button" onClick={() => void setBudgetActive(selectedBudget, !selectedBudget.is_active)} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${selectedBudget.is_active ? "border border-slate-300 bg-white text-slate-700" : "bg-emerald-700 text-white"}`}>{selectedBudget.is_active ? "Return to draft" : "Activate budget"}</button>}
                   {!editingLines ? (
                     <button
                       type="button"

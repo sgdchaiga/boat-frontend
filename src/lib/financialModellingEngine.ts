@@ -29,6 +29,8 @@ export type ProjectionYear = {
   operatingExpenses: number; ebitda: number; depreciation: number; ebit: number; interest: number;
   tax: number; netProfit: number; operatingCashFlow: number; closingCash: number; debtBalance: number;
   dscr: number; ebitdaMargin: number;
+  receivablesBalance?: number; inventoryBalance?: number; payablesBalance?: number;
+  capexPurchases?: number; netPpeBalance?: number; capitalAllowance?: number;
 };
 
 const scenarioFactor = {

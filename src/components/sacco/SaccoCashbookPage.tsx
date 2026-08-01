@@ -6,6 +6,7 @@ import { PageNotes } from "@/components/common/PageNotes";
 import { useAppContext } from "@/contexts/AppContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { useAuth } from "@/contexts/AuthContext";
+import { normalizeSaccoTransactionType, saccoMemberDisplay } from "@/lib/saccoCashbookDisplay";
 
 export type CashbookSacView = "journal" | "reconciliation";
 
@@ -17,7 +18,9 @@ export function SaccoCashbookPage({
   navigate?: (page: string, state?: Record<string, unknown>) => void;
 }) {
   const { user } = useAuth();
-  const { cashbook, formatCurrency, saccoLoading } = useAppContext();
+  const { cashbook, members, formatCurrency, saccoLoading } = useAppContext();
+
+  const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
 
   const sorted = useMemo(
     () => cashbook.slice().sort((a, b) => a.date.localeCompare(b.date)),
@@ -97,6 +100,7 @@ export function SaccoCashbookPage({
                   <tr className="bg-slate-50 text-left text-xs font-semibold text-slate-600 border-b border-slate-100">
                     <th className="px-4 py-2">Date</th>
                     <th className="px-4 py-2">Member</th>
+                    <th className="px-4 py-2">Transaction type</th>
                     <th className="px-4 py-2">Description</th>
                     <th className="px-4 py-2 text-right">Debit</th>
                     <th className="px-4 py-2 text-right">Credit</th>
@@ -106,7 +110,7 @@ export function SaccoCashbookPage({
                 <tbody className="divide-y divide-slate-50">
                   {sorted.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-10 text-center text-slate-500">
+                      <td colSpan={7} className="px-4 py-10 text-center text-slate-500">
                         No cashbook lines synced yet.
                       </td>
                     </tr>
@@ -114,7 +118,8 @@ export function SaccoCashbookPage({
                     sorted.map((e) => (
                       <tr key={e.id} className="hover:bg-slate-50/80">
                         <td className="px-4 py-2 whitespace-nowrap text-slate-600">{e.date}</td>
-                        <td className="px-4 py-2">{e.memberName ?? "—"}</td>
+                        <td className="px-4 py-2">{saccoMemberDisplay(e.memberName ?? memberById.get(e.memberId ?? "")?.name, memberById.get(e.memberId ?? "")?.accountNumber)}</td>
+                        <td className="px-4 py-2">{normalizeSaccoTransactionType(e.category, e.debit, e.credit)}</td>
                         <td className="px-4 py-2 max-w-[280px]">
                           <div className="line-clamp-2">{e.description}</div>
                           {e.reference && (

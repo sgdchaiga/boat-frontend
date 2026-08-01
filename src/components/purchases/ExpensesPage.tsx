@@ -15,6 +15,7 @@ import { loadJournalAccountSettings, resolveJournalAccountSettings } from "../..
 import { randomUuid } from "../../lib/randomUuid";
 import { loadHotelConfig } from "../../lib/hotelConfig";
 import { approveExpenseAndPost, isSpendMoneyApprovalEnabled, queueExpenseForTreasury, setSpendMoneyApprovalEnabled } from "../../lib/treasuryWorkflow";
+import { clearCashbookDraft } from "../../lib/cashbookDraft";
 
 const SIMPLE_EXPENSE_MODE_KEY = "boat.expenses.simple_mode";
 
@@ -549,9 +550,10 @@ function isMissingSourceDocumentsColumnError(err: unknown): boolean {
 type ExpensesPageProps = {
   /** Jump to Buy stock / purchase orders without duplicating flows */
   onNavigate?: (page: string) => void;
+  pageState?: Record<string, unknown>;
 };
 
-export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
+export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) {
   const { user } = useAuth();
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
@@ -1264,6 +1266,7 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       setSimpleIncludeVat(false);
       setShowSimpleDetails(false);
       setExpenseAttachmentFiles([]);
+      if ((pageState?.cashbookDraft as Record<string, unknown> | undefined)?.type === "money_out") clearCashbookDraft(orgId, user?.id);
       void fetchData();
     } catch (e) {
       console.error("Error adding expense:", e);
@@ -1318,6 +1321,21 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
     setSimpleIncludeVat(false);
     setShowSimpleDetails(false);
   };
+
+  useEffect(() => {
+    const draft = pageState?.cashbookDraft as Record<string, unknown> | undefined;
+    if (draft?.type !== "money_out") return;
+    setEditingExpenseId(null);
+    setSimpleExpenseMode(true);
+    setExpenseDate(String(draft.date || localDateISO()));
+    setSimpleNotes(String(draft.reference || ""));
+    const party = String(draft.party || "").trim().toLowerCase();
+    setSimpleVendorId(vendors.find((vendor) => vendor.name.trim().toLowerCase() === party)?.id || null);
+    const rawMethod = String(draft.method || "cash");
+    const method: PaymentMethodSimple = rawMethod.includes("mobile") ? "mobile" : rawMethod.includes("bank") ? "bank" : rawMethod.includes("wallet") ? "wallet" : "cash";
+    setSimpleLines([{ ...emptySimpleLine(), item: String(draft.description || ""), amount: String(draft.amount || ""), payment_method: method }]);
+    setShowModal(true);
+  }, [pageState?.cashbookDraft, vendors]);
 
   const openEditModal = async (expenseId: string) => {
     setShowModal(true);
@@ -1462,6 +1480,13 @@ export function ExpensesPage({ onNavigate }: ExpensesPageProps = {}) {
       setEditModalLoading(false);
     }
   };
+
+  useEffect(() => {
+    const expenseId = String(pageState?.highlightExpenseId || "");
+    if (expenseId) void openEditModal(expenseId);
+    // Open once for navigation state; form dependencies intentionally do not retrigger it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pageState?.highlightExpenseId]);
 
   const toggleApprovalWorkflow = async () => {
     if (!orgId || !canManageApprovalWorkflow) return;

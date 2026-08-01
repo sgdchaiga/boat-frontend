@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useAppContext } from "@/contexts/AppContext";
+import { normalizeSaccoTransactionType, saccoMemberDisplay } from "@/lib/saccoCashbookDisplay";
 import { useAuth } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { supabase } from "@/lib/supabase";
@@ -263,8 +264,9 @@ const SaccoSavingsStatementsPage: React.FC<Props> = ({ navigate, heading = "Savi
                 rows.map((e) => (
                   <tr key={e.id} className="hover:bg-slate-50/50">
                     <td className="px-4 py-2 whitespace-nowrap text-slate-600">{e.date}</td>
-                    <td className="px-4 py-2">{e.memberName ?? "—"}</td>
+                    <td className="px-4 py-2">{saccoMemberDisplay(e.memberName ?? memberById.get(e.memberId ?? "")?.name, memberById.get(e.memberId ?? "")?.accountNumber)}</td>
                     <td className="px-4 py-2 max-w-[320px]">
+                      <span className="mb-0.5 block text-[11px] font-semibold uppercase tracking-wide text-emerald-700">{normalizeSaccoTransactionType(e.category, e.debit, e.credit)}</span>
                       <span className="line-clamp-2">{e.description}</span>
                       {e.reference && (
                         <span className="block text-[11px] text-slate-400">Ref {e.reference}</span>

@@ -11,6 +11,7 @@ import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { businessTodayISO } from "@/lib/timezone";
 import { canApprove } from "@/lib/approvalRights";
 import { approveExpenseAndPost } from "@/lib/treasuryWorkflow";
+import { clearCashbookDraft } from "@/lib/cashbookDraft";
 
 type Status = "pending_approval" | "approved" | "rejected" | "disbursed";
 type TreasuryRequest = {
@@ -104,7 +105,7 @@ function MetricCard({ label, value, hint, icon: Icon }: { label: string; value: 
   );
 }
 
-export function TreasuryPage({ readOnly = false, initialTab = "overview" }: { readOnly?: boolean; initialTab?: TreasuryTab }) {
+export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbookDraft }: { readOnly?: boolean; initialTab?: TreasuryTab; cashbookDraft?: Record<string, unknown> }) {
   const { user } = useAuth();
   const [requests, setRequests] = useState<TreasuryRequest[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
@@ -139,6 +140,11 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview" }: { re
     reference: "",
     memo: "",
   });
+  useEffect(() => {
+    if (cashbookDraft?.type !== "transfer") return;
+    setActiveTab("movements");
+    setTransferForm((current) => ({ ...current, amount: String(cashbookDraft.amount || ""), date: String(cashbookDraft.date || businessTodayISO()), reference: String(cashbookDraft.reference || ""), memo: [cashbookDraft.description, cashbookDraft.party].filter(Boolean).join(" · ") }));
+  }, [cashbookDraft]);
   const [accountFormOpen, setAccountFormOpen] = useState(false);
   const [editingCashAccount, setEditingCashAccount] = useState<CashAccount | null>(null);
   const [cashAccountForm, setCashAccountForm] = useState<CashAccountForm>({ account_code: "", account_name: "", is_active: true });
@@ -550,6 +556,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview" }: { re
         ],
       });
       if (!result.ok) throw new Error(result.error);
+      if (cashbookDraft?.type === "transfer") clearCashbookDraft(user?.organization_id, user?.id);
       setTransferForm({
         fromAccountId: "",
         toAccountId: "",

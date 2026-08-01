@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Banknote, FileText, Receipt, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
+import { ArrowRight, Banknote, BookOpen, FileText, Receipt, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
+import { useGeneralBusinessMode } from "@/lib/generalBusinessMode";
 
 type Props = { onNavigate: (page: string, state?: Record<string, unknown>) => void };
 type Summary = { sales: number; expenses: number; receivables: number; payables: number; overdueCustomers: number; overdueSuppliers: number };
@@ -10,8 +11,13 @@ const money = (value: number) => new Intl.NumberFormat("en-UG", { maximumFractio
 
 export function GeneralBusinessDashboard({ onNavigate }: Props) {
   const { user } = useAuth();
+  const { mode, setMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
   const [summary, setSummary] = useState(EMPTY);
   const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    if (mode !== "modern") setMode("modern");
+  }, [mode, setMode]);
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +61,13 @@ export function GeneralBusinessDashboard({ onNavigate }: Props) {
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">General Business</p><h1 className="mt-1 text-3xl font-bold text-slate-900">{user?.organization_name || "Business dashboard"}</h1><p className="mt-1 text-sm text-slate-600">Sales, spending, money owed and accounting in one shared workspace.</p></div>
-        <button type="button" className="app-btn-primary" onClick={() => onNavigate(primarySalesPage)}><FileText className="h-4 w-4" />{user?.sales_workflow === "quick_sale" ? "New quick sale" : "New sales invoice"}</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 text-sm" aria-label="General Business mode">
+            <button type="button" onClick={() => setMode("modern")} className={`rounded-md px-3 py-1.5 font-semibold ${mode === "modern" ? "bg-brand-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}>Modern</button>
+            <button type="button" onClick={() => { setMode("cashbook"); onNavigate("general_business_cashbook"); }} className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 font-semibold ${mode === "cashbook" ? "bg-brand-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}><BookOpen className="h-4 w-4" />Cashbook</button>
+          </div>
+          <button type="button" className="app-btn-primary" onClick={() => onNavigate(primarySalesPage)}><FileText className="h-4 w-4" />{user?.sales_workflow === "quick_sale" ? "New quick sale" : "New sales invoice"}</button>
+        </div>
       </header>
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {cards.map(({ label, value, icon: Icon, page }) => <button key={label} type="button" onClick={() => onNavigate(page)} className="rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:border-brand-300 hover:shadow-md"><div className="flex items-center justify-between text-slate-500"><span className="text-xs font-semibold uppercase tracking-wide">{label}</span><Icon className="h-5 w-5 text-brand-700" /></div><p className="mt-3 text-2xl font-bold text-slate-900">{loading ? "—" : money(value)}</p></button>)}

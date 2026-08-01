@@ -9,9 +9,10 @@ import {
 import { supabase } from '@/lib/supabase';
 import {
   Users, CreditCard, PiggyBank, TrendingUp,
-  ArrowUpRight, ArrowDownRight, DollarSign, AlertTriangle, CheckCircle
+  ArrowUpRight, ArrowDownRight, DollarSign, AlertTriangle, CheckCircle, BookOpen
 } from 'lucide-react';
 import { PageNotes } from '@/components/common/PageNotes';
+import { useGeneralBusinessMode } from '@/lib/generalBusinessMode';
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend, AreaChart, Area } from 'recharts';
 
@@ -24,6 +25,7 @@ const EMPTY_CHARTS: SaccoDashboardCharts = {
 const Dashboard: React.FC = () => {
   const { user, isSuperAdmin } = useAuth();
   const organizationId = user?.organization_id ?? null;
+  const { mode, setMode } = useGeneralBusinessMode(user?.id, organizationId);
 
   const {
     members,
@@ -175,7 +177,11 @@ const Dashboard: React.FC = () => {
             <p className="text-xs text-slate-500 mt-1">{chartScopeLabel}</p>
           )}
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 text-sm" aria-label="SACCO workspace mode">
+            <button type="button" onClick={() => setMode('modern')} className={`rounded-md px-3 py-1.5 font-semibold ${mode === 'modern' ? 'bg-violet-700 text-white' : 'text-slate-600 hover:bg-slate-50'}`}>Full System</button>
+            <button type="button" onClick={() => { setMode('cashbook'); setCurrentPage('sacco_cashbook_register'); }} className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 font-semibold ${mode === 'cashbook' ? 'bg-violet-700 text-white' : 'text-slate-600 hover:bg-slate-50'}`}><BookOpen size={16} />Cashbook</button>
+          </div>
           <span className="px-3 py-1.5 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-full border border-emerald-200">
             System Online
           </span>
