@@ -1795,7 +1795,7 @@ export async function createJournalForManufacturingCostingEntry(
   if (scrapCost > 0 && !s.manufacturing_scrap_inventory_id) {
     return {
       ok: false,
-      error: "Set the Manufacturing — scrap metal inventory GL account under Admin → Journal account settings.",
+      error: "Set the Manufacturing — scrap / by-product inventory GL account under Admin → Journal account settings.",
     };
   }
   const date = toBusinessDateString(entryDate);
@@ -1835,7 +1835,7 @@ export async function createJournalForManufacturingCostingEntry(
           gl_account_id: s.manufacturing_scrap_inventory_id!,
           debit: scrapCost,
           credit: 0,
-          line_description: `${label} — scrap metal inventory`,
+          line_description: `${label} — scrap / by-product inventory`,
         }]
       : []),
     {

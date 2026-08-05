@@ -17,6 +17,7 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.app.json",
     "test:sacco": "node --test tests/sacco-controls.test.mjs",
+    "test:cashbook": "node --test tests/cashbook-controls.test.mjs",
     "test:financial-model": "node --test tests/financial-model-controls.test.mjs",
     "ci": "npm run typecheck && npm run build",
     "server:dev": "npm run dev --prefix server",

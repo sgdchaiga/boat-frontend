@@ -1019,7 +1019,7 @@ export const JOURNAL_ACCOUNT_ROLES: { id: JournalAccountRole; label: string; acc
   },
   {
     id: "manufacturing_scrap_inventory",
-    label: "Manufacturing — scrap metal inventory (from production entries)",
+    label: "Manufacturing — scrap / by-product inventory (from production entries)",
     accountType: "asset",
   },
   {

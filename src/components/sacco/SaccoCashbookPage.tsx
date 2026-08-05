@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { BookMarked, Scale } from "lucide-react";
+import { ArrowRight, BookMarked, Scale } from "lucide-react";
 import { SaccoReportToolbar } from "@/components/common/SaccoReportToolbar";
 import { downloadCashbookPdf } from "@/lib/saccoReportPdf";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -140,17 +140,12 @@ export function SaccoCashbookPage({
       )}
 
       {cashbookView === "reconciliation" && (
-        <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-6 flex gap-4">
-          <Scale className="text-amber-700 shrink-0" size={24} />
-          <div className="text-sm text-amber-950 space-y-2">
-            <p className="font-semibold">Reconciliation workspace</p>
-            <p>
-              Use this area for scheduled bank-vs-book checks and investigator notes. Drill into <strong>Journal view</strong> for detail
-              lines; compare against your bank statements and vault counts.
-            </p>
-            <p className="text-xs text-amber-900/80">
-              Automated bank reconciliation and GL stamping can be layered on when treasury feeds are connected.
-            </p>
+        <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-6 flex gap-4">
+          <Scale className="text-emerald-700 shrink-0" size={24} />
+          <div className="flex-1 text-sm text-emerald-950 space-y-3">
+            <div><p className="font-semibold">Automated cash and bank reconciliation</p><p className="mt-1">Import statement lines, auto-match them against posted GL activity, review exceptions, and complete a standard reconciliation statement. The same workspace supports bank, cash, mobile-money and float accounts.</p></div>
+            <div className="grid gap-2 sm:grid-cols-3"><div className="rounded-lg bg-white/80 p-3"><span className="block text-xs text-slate-500">Cashbook lines</span><b>{sorted.length}</b></div><div className="rounded-lg bg-white/80 p-3"><span className="block text-xs text-slate-500">Period start</span><b>{sorted[0]?.date || "—"}</b></div><div className="rounded-lg bg-white/80 p-3"><span className="block text-xs text-slate-500">Period end</span><b>{sorted[sorted.length - 1]?.date || "—"}</b></div></div>
+            <button type="button" onClick={() => navigate?.("accounting_bank_reconciliation")} className="app-btn-primary"><span>Open reconciliation workspace</span><ArrowRight className="h-4 w-4" /></button>
           </div>
         </div>
       )}

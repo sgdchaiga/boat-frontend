@@ -145,6 +145,7 @@ export function OnboardingChecklist({ onNavigate }: { onNavigate: (page: string)
   const [row, setRow] = useState<OnboardingStateRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingStep, setSavingStep] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
 
   const steps = useMemo(() => stepsForBusinessType(businessType), [businessType]);
   const completed = useMemo(() => new Set(row?.completed_steps ?? []), [row?.completed_steps]);
@@ -152,6 +153,7 @@ export function OnboardingChecklist({ onNavigate }: { onNavigate: (page: string)
   const isComplete = completeCount >= steps.length;
 
   useEffect(() => {
+    if (!expanded) return;
     if (!orgId || user?.isSuperAdmin || user?.isSaccoMember) {
       setRow(null);
       return;
@@ -173,7 +175,7 @@ export function OnboardingChecklist({ onNavigate }: { onNavigate: (page: string)
     return () => {
       cancelled = true;
     };
-  }, [orgId, user?.isSaccoMember, user?.isSuperAdmin]);
+  }, [expanded, orgId, user?.isSaccoMember, user?.isSuperAdmin]);
 
   const updateSteps = async (nextSteps: string[], dismiss?: boolean, savingId = "saving") => {
     if (!orgId) return;
@@ -195,7 +197,16 @@ export function OnboardingChecklist({ onNavigate }: { onNavigate: (page: string)
   };
 
   if (!orgId || user?.isSuperAdmin || user?.isSaccoMember) return null;
-  if (row?.dismissed_at || isComplete) return null;
+  if (!expanded) {
+    return (
+      <div className="mb-4 flex justify-end">
+        <button type="button" onClick={() => setExpanded(true)} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-emerald-200 bg-white px-4 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50">
+          <ClipboardCheck className="h-4 w-4" />
+          {isComplete ? "Workspace setup complete" : "Finish workspace setup"}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <section className="mb-4 rounded-lg border border-emerald-200 bg-white shadow-sm">
@@ -213,10 +224,10 @@ export function OnboardingChecklist({ onNavigate }: { onNavigate: (page: string)
         </div>
         <button
           type="button"
-          onClick={() => void updateSteps(Array.from(completed), true, "dismiss")}
+          onClick={() => setExpanded(false)}
           className="inline-flex min-h-9 items-center justify-center gap-2 rounded-md border border-emerald-200 bg-white px-3 text-sm font-semibold text-emerald-800 hover:bg-emerald-50"
         >
-          {savingStep === "dismiss" ? <Loader2 className="h-4 w-4 animate-spin" /> : <EyeOff className="h-4 w-4" />}
+          <EyeOff className="h-4 w-4" />
           Hide
         </button>
       </div>

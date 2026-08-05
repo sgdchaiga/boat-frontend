@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownRight, ArrowLeftRight, ArrowUpRight, BookOpen, PackagePlus, Palette, Plus, RefreshCw, Search, ShoppingCart, X } from "lucide-react";
+import { ArrowDownRight, ArrowLeftRight, ArrowUpRight, Ban, BookOpen, CheckCircle2, Download, FileSpreadsheet, FileText, PackagePlus, Palette, Pencil, Plus, Printer, RefreshCw, Search, ShoppingCart, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { paymentReceivedCustomerLabel, type PaymentWithCustomer } from "@/lib/billingShared";
 import { useGeneralBusinessMode } from "@/lib/generalBusinessMode";
 import { supabase } from "@/lib/supabase";
 import { isGlAccountRelevantForBusinessType } from "@/lib/glAccountBusinessScope";
 import { GlAccountPicker } from "@/components/common/GlAccountPicker";
+import { downloadCsv, downloadXlsx, exportAccountingPdf } from "@/lib/accountingReportExport";
+import { createJournalForBill, createJournalForVendorPayment, deleteJournalEntryByReference, getDefaultGlAccounts } from "@/lib/journal";
+import { postStockInFromPurchaseOrderForBill } from "@/lib/poGrnStock";
+import { syncBillStatusInDb } from "@/lib/billStatus";
+import { randomUuid } from "@/lib/randomUuid";
+import { processSaleOnline } from "@/components/retail-pos/services/processSaleOnline";
 
 type CashbookDirection = "in" | "out";
 
 type CashbookRow = {
   id: string;
-  source: "cashbook_entry" | "receipt" | "supplier_payment" | "expense";
+  source: "cashbook_entry" | "receipt" | "supplier_payment" | "expense" | "mf_repayment" | "mf_disbursement" | "mf_recovery";
   date: string;
   description: string;
   party: string;
@@ -25,15 +31,20 @@ type CashbookRow = {
   postedAt?: string;
   submittedBy?: string;
   comments?: string;
+  rawId?: string;
+  createdBy?: string | null;
+  approvalStatus?: string;
 };
 
 type VendorRef = { name: string | null } | { name: string | null }[] | null;
 type EntryType = "money_in" | "money_out" | "sale" | "purchase" | "transfer";
-type DraftEntry = { type: EntryType; date: string; party: string; project: string; description: string; method: string; amount: string; reference: string };
+type DraftEntry = { type: EntryType; date: string; party: string; project: string; description: string; method: string; amount: string; reference: string; productId: string; productName: string; quantity: string; unitCost: string };
 type GlPosition = { opening: number; movement: number; closing: number };
+type ChannelPosition = { channel: string; opening: number; movement: number; closing: number };
 type QueuedDraft = DraftEntry & { id: string; queuedAt: string };
 type GlOption = { id: string; account_code: string; account_name: string; account_type: string; category: string | null };
 type MasterOption = { id: string; name: string; code?: string };
+type InventoryProductOption = { id: string; name: string; cost_price: number | null; sales_price: number | null; unit_of_measure: string | null; department_id: string | null; track_inventory: boolean | null };
 type SheetEntry = { transactionDate: string; headquarters: string; paymentMethod: string; description: string; comments: string; supplier: string; customer: string; counterpartGlId: string; cashGlId: string; cashIn: string; cashOut: string; reference: string };
 type CashbookSettings = { show_helper_text: boolean; helper_text: string; show_page_description: boolean; page_description: string; primary_color: string; accent_color: string; button_radius: number };
 
@@ -113,19 +124,23 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const [dateTo, setDateTo] = useState(todayISO);
   const [direction, setDirection] = useState<"all" | CashbookDirection>("all");
   const [search, setSearch] = useState("");
+  const [rowLimit, setRowLimit] = useState(2000);
   const [summaryDate, setSummaryDate] = useState(todayISO);
   const [entryOpen, setEntryOpen] = useState(false);
-  const [draft, setDraft] = useState<DraftEntry>(() => ({ type: "money_in", date: todayISO(), party: "", project: "", description: "", method: "cash", amount: "", reference: "" }));
+  const [draft, setDraft] = useState<DraftEntry>(() => ({ type: "money_in", date: todayISO(), party: "", project: "", description: "", method: "cash", amount: "", reference: "", productId: "", productName: "", quantity: "", unitCost: "" }));
   const [draftError, setDraftError] = useState<string | null>(null);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" ? true : navigator.onLine);
   const [glPosition, setGlPosition] = useState<GlPosition | null>(null);
+  const [channelPositions, setChannelPositions] = useState<ChannelPosition[]>([]);
   const [glOptions, setGlOptions] = useState<GlOption[]>([]);
   const [sheetEntry, setSheetEntry] = useState<SheetEntry>(() => ({ transactionDate: todayISO(), headquarters: "", paymentMethod: "cash", description: "", comments: "", supplier: "", customer: "", counterpartGlId: "", cashGlId: "", cashIn: "", cashOut: "", reference: "" }));
   const [postingEntry, setPostingEntry] = useState(false);
+  const [postingQuickTransaction, setPostingQuickTransaction] = useState(false);
   const [entryMessage, setEntryMessage] = useState<string | null>(null);
   const [projects, setProjects] = useState<MasterOption[]>([]);
   const [suppliers, setSuppliers] = useState<MasterOption[]>([]);
   const [customers, setCustomers] = useState<MasterOption[]>([]);
+  const [inventoryProducts, setInventoryProducts] = useState<InventoryProductOption[]>([]);
   const commentsPreferenceKey = `boat.cashbook.comments.${orgId || "no-org"}.${user?.id || "anonymous"}`;
   const [showComments, setShowComments] = useState(true);
   const [cashbookSettings, setCashbookSettings] = useState<CashbookSettings>(DEFAULT_CASHBOOK_SETTINGS);
@@ -138,6 +153,10 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const roleKey = String(user?.role || "").trim().toLowerCase();
   const canCustomizeAppearance = Boolean(user?.isSuperAdmin || ["admin", "super_admin"].includes(roleKey));
   const canEditHelperText = Boolean(user?.isSuperAdmin || roleKey === "super_admin");
+  const [canControlEntries,setCanControlEntries] = useState(Boolean(user?.isSuperAdmin || ["admin", "super_admin", "manager", "accountant"].includes(roleKey)));
+  const isMicrofinance = workspaceLabel.toLowerCase() === "microfinance";
+
+  useEffect(()=>{if(!orgId)return;void (supabase as any).rpc("gb_cashbook_can_control",{target_org:orgId}).then(({data,error}:any)=>{if(!error)setCanControlEntries(Boolean(data));});},[orgId,user?.isSuperAdmin,roleKey]);
 
   useEffect(() => {
     if (mode !== "cashbook") setMode("cashbook");
@@ -150,11 +169,13 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       supabase.from("business_projects").select("id,name,code").eq("organization_id", orgId).in("status", ["planned", "active"]).order("name"),
       supabase.from("vendors").select("id,name").eq("organization_id", orgId).order("name"),
       supabase.from("retail_customers").select("id,name").eq("organization_id", orgId).order("name"),
-    ]).then(([projectRes, supplierRes, customerRes]) => {
+      supabase.from("products").select("id,name,cost_price,sales_price,unit_of_measure,department_id,track_inventory").eq("organization_id", orgId).eq("track_inventory", true).eq("active", true).order("name"),
+    ]).then(([projectRes, supplierRes, customerRes, productRes]) => {
       if (cancelled) return;
       setProjects((projectRes.data || []) as MasterOption[]);
       setSuppliers((supplierRes.data || []) as MasterOption[]);
       setCustomers((customerRes.data || []) as MasterOption[]);
+      setInventoryProducts((productRes.data || []) as InventoryProductOption[]);
     });
     return () => { cancelled = true; };
   }, [orgId]);
@@ -221,7 +242,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         .gte("paid_at", `${queryFrom}T00:00:00`)
         .lte("paid_at", `${queryTo}T23:59:59`)
         .order("paid_at", { ascending: false })
-        .limit(2000),
+        .limit(rowLimit),
       supabase
         .from("vendor_payments")
         .select("id,amount,payment_date,payment_method,reference,status,vendors(name)")
@@ -229,7 +250,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         .gte("payment_date", queryFrom)
         .lte("payment_date", queryTo)
         .order("payment_date", { ascending: false })
-        .limit(2000),
+        .limit(rowLimit),
       supabase
         .from("expenses")
         .select("id,amount,description,expense_date,status,vendors(name)")
@@ -237,11 +258,11 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         .gte("expense_date", queryFrom)
         .lte("expense_date", queryTo)
         .order("expense_date", { ascending: false })
-        .limit(2000),
+        .limit(rowLimit),
       (supabase as any).from("general_business_cashbook_entries")
-        .select("id,posted_at,transaction_date,headquarters,payment_method,description,comments,supplier_name,customer_name,cash_in,cash_out,reference,counterpart:gl_accounts!counterpart_gl_account_id(account_code,account_name),creator:staff!created_by(full_name)")
+        .select("id,posted_at,transaction_date,headquarters,payment_method,description,comments,supplier_name,customer_name,cash_in,cash_out,reference,workspace_type,approval_status,created_by,counterpart:gl_accounts!counterpart_gl_account_id(account_code,account_name),creator:staff!created_by(full_name)")
         .eq("organization_id", orgId).gte("transaction_date", queryFrom).lte("transaction_date", queryTo)
-        .order("transaction_date", { ascending: false }).limit(2000),
+        .order("transaction_date", { ascending: false }).limit(rowLimit),
       supabase.from("gl_accounts").select("id,account_code,account_name,account_type,category").eq("organization_id", orgId).eq("is_active", true).order("account_code"),
     ]);
     if (!glAccountsRes.error) setGlOptions(((glAccountsRes.data || []) as GlOption[]).filter((account) => isGlAccountRelevantForBusinessType(account, user?.business_type)));
@@ -255,13 +276,13 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         .gte("payment_date", queryFrom)
         .lte("payment_date", queryTo)
         .order("payment_date", { ascending: false })
-        .limit(2000) as typeof vendorPaymentsInitial;
+        .limit(rowLimit) as typeof vendorPaymentsInitial;
     }
 
     const errors = [paymentsRes.error, vendorPaymentsRes.error, expensesRes.error].filter(Boolean);
     if (errors.length) setWarning(`Some cashbook sources could not be loaded: ${errors.map(errorMessage).join(" · ")}`);
     else if (directEntriesRes.error) setWarning("Direct Cash Book entry requires the latest Supabase migration. Existing BOAT transactions are still shown.");
-    else if ([paymentsRes.data?.length, vendorPaymentsRes.data?.length, expensesRes.data?.length].some((count) => count === 2000)) setWarning("This period reached the 2,000-row safety limit for at least one source. Narrow the date range for authoritative totals.");
+    else if ([paymentsRes.data?.length, vendorPaymentsRes.data?.length, expensesRes.data?.length,directEntriesRes.data?.length].some((count) => Number(count||0) >= rowLimit)) setWarning(`This period reached the ${rowLimit.toLocaleString()}-row page limit for at least one source. Load the next page or narrow the date range.`);
 
     const paymentRows = (paymentsRes.data || []) as unknown as PaymentWithCustomer[];
     const hotelCustomerIds = [...new Set(paymentRows.map((row) => row.property_customer_id).filter(Boolean))] as string[];
@@ -348,6 +369,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         cashOut: Number(expense.amount || 0),
         status: readable(expense.status || "active"),
       }));
+    const dedupedExpenses = expenses.filter(expense => !supplierPayments.some(payment => payment.date === expense.date && payment.cashOut === expense.cashOut && payment.party === expense.party));
 
     const directEntries: CashbookRow[] = ((directEntriesRes.data || []) as Array<any>).map((entry) => ({
       id: `cashbook:${entry.id}`,
@@ -365,11 +387,30 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       postedAt: entry.posted_at,
       submittedBy: entry.creator?.full_name || "—",
       comments: entry.comments || "",
+      rawId: entry.id,
+      createdBy: entry.created_by,
+      approvalStatus: entry.approval_status || "pending",
     }));
-
-    setRows([...directEntries, ...receipts, ...supplierPayments, ...expenses].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)));
+    let mfiRows: CashbookRow[] = [];
+    if (isMicrofinance) {
+      const [repayments, disbursements, recoveries] = await Promise.all([
+        (supabase as any).from("mf_repayments").select("id,payment_date,payment_method,amount,receipt_number,external_reference,status,reversal_of,posted_at,mf_loans(loan_number,mf_borrowers(full_name))").eq("organization_id",orgId).gte("payment_date",queryFrom).lte("payment_date",queryTo).in("status",["posted","reversed"]).limit(rowLimit),
+        (supabase as any).from("mf_disbursements").select("id,disbursed_at,method,net_amount,disbursement_reference,transaction_reference,mf_loans(loan_number,mf_borrowers(full_name))").eq("organization_id",orgId).gte("disbursed_at",`${queryFrom}T00:00:00`).lte("disbursed_at",`${queryTo}T23:59:59`).not("journal_entry_id","is",null).limit(rowLimit),
+        (supabase as any).from("mf_recoveries").select("id,recovery_date,payment_method,amount,external_reference,mf_loans(loan_number,mf_borrowers(full_name))").eq("organization_id",orgId).gte("recovery_date",queryFrom).lte("recovery_date",queryTo).not("journal_entry_id","is",null).limit(rowLimit),
+      ]);
+      const loanParty = (row:any) => row.mf_loans?.mf_borrowers?.full_name || row.mf_loans?.loan_number || "Microfinance client";
+      mfiRows = [
+        ...(repayments.data || []).map((r:any) => ({ id:`mf-repayment:${r.id}`,rawId:r.id,source:"mf_repayment" as const,date:r.payment_date,description:r.reversal_of?"Repayment reversal":"Loan repayment",party:loanParty(r),method:readable(r.payment_method),reference:r.receipt_number||r.external_reference,cashIn:r.reversal_of?0:Number(r.amount||0),cashOut:r.reversal_of?Number(r.amount||0):0,status:readable(r.status),postedAt:r.posted_at })),
+        ...(disbursements.data || []).map((r:any) => ({ id:`mf-disbursement:${r.id}`,rawId:r.id,source:"mf_disbursement" as const,date:localDatePart(r.disbursed_at),description:"Loan disbursement",party:loanParty(r),method:readable(r.method),reference:r.transaction_reference||r.disbursement_reference,cashIn:0,cashOut:Number(r.net_amount||0),status:"Posted" })),
+        ...(recoveries.data || []).map((r:any) => ({ id:`mf-recovery:${r.id}`,rawId:r.id,source:"mf_recovery" as const,date:r.recovery_date,description:"Written-off loan recovery",party:loanParty(r),method:readable(r.payment_method),reference:r.external_reference,cashIn:Number(r.amount||0),cashOut:0,status:"Posted" })),
+      ];
+      const mfiErrors = [repayments.error,disbursements.error,recoveries.error].filter(Boolean);
+      if (mfiErrors.length) setWarning(`Some Microfinance cash flows could not be loaded: ${mfiErrors.map(errorMessage).join(" · ")}`);
+    }
+    const baseRows = isMicrofinance ? directEntries : [...directEntries, ...receipts, ...supplierPayments, ...dedupedExpenses];
+    setRows([...baseRows,...mfiRows].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)));
     setLoading(false);
-  }, [dateFrom, dateTo, orgId, summaryDate]);
+  }, [dateFrom, dateTo, orgId, summaryDate, isMicrofinance, user?.business_type, rowLimit]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -385,6 +426,14 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       });
     return () => { cancelled = true; };
   }, [orgId, summaryDate, rows]);
+
+  useEffect(() => {
+    if (!orgId) { setChannelPositions([]); return; }
+    void (supabase as any).rpc("cashbook_daily_channel_positions", { p_organization_id: orgId, p_date: summaryDate }).then(({ data, error }: any) => {
+      if (error) { setChannelPositions([]); return; }
+      setChannelPositions((data || []).map((row:any) => ({ channel:row.channel,opening:Number(row.opening_balance||0),movement:Number(row.day_movement||0),closing:Number(row.closing_balance||0) })));
+    });
+  }, [orgId,summaryDate,rows]);
 
   const filteredRows = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -427,22 +476,25 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
 
   const dailyLines = useMemo(() => {
     const dayRows = rows.filter((row) => row.date === summaryDate);
-    let runningCash = glPosition?.opening ?? 0;
+    const openingByChannel = new Map(channelPositions.map(position => [position.channel,position.opening]));
+    const running: Record<string,number> = { cash:openingByChannel.get("cash")||0,mobile_money:openingByChannel.get("mobile_money")||0,bank:openingByChannel.get("bank")||0,wallet:openingByChannel.get("wallet")||0 };
     return dayRows.slice().sort((a, b) => a.id.localeCompare(b.id)).map((row) => {
       const method = row.method.toLowerCase();
       const signed = row.cashIn - row.cashOut;
       const isCash = method.includes("cash");
-      if (isCash) runningCash += signed;
+      const channel = isCash ? "cash" : method.includes("mobile") || method.includes("momo") ? "mobile_money" : method.includes("card") || method.includes("wallet") ? "wallet" : "bank";
+      running[channel] = (running[channel] || 0) + signed;
       return {
         ...row,
         momo: method.includes("mobile") || method.includes("momo") ? signed : 0,
         bank: method.includes("bank") || method.includes("card") || method.includes("wallet") ? signed : 0,
         physicalIn: isCash ? row.cashIn : 0,
         physicalOut: isCash ? row.cashOut : 0,
-        cashBalance: runningCash,
+        channel,
+        channelBalance: running[channel],
       };
     });
-  }, [glPosition?.opening, rows, summaryDate]);
+  }, [channelPositions, rows, summaryDate]);
 
   const postSheetEntry = async () => {
     if (!orgId) return;
@@ -466,8 +518,8 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
     });
     setPostingEntry(false);
     if (error) { setEntryMessage(errorMessage(error)); return; }
-    if (showComments && sheetEntry.comments.trim() && postedId) {
-      const { error: commentError } = await (supabase as any).from("general_business_cashbook_entries").update({ comments: sheetEntry.comments.trim() }).eq("id", postedId).eq("organization_id", orgId);
+    if (postedId && (isMicrofinance || (showComments && sheetEntry.comments.trim()))) {
+      const { error: commentError } = await (supabase as any).from("general_business_cashbook_entries").update({ ...(showComments && sheetEntry.comments.trim() ? { comments: sheetEntry.comments.trim() } : {}), workspace_type: isMicrofinance ? "microfinance" : "general_business" }).eq("id", postedId).eq("organization_id", orgId);
       if (commentError) { setEntryMessage(`Entry posted, but comments were not saved: ${errorMessage(commentError)}`); await load(); return; }
     }
     setSheetEntry((current) => ({ ...current, description: "", comments: "", supplier: "", customer: "", cashIn: "", cashOut: "", reference: "" }));
@@ -478,14 +530,14 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const openEntry = () => {
     let saved: DraftEntry | null = null;
     try { saved = JSON.parse(window.localStorage.getItem(draftStorageKey) || "null") as DraftEntry | null; } catch { saved = null; }
-    setDraft(saved ? { ...saved, project: saved.project || "" } : { type: "money_in", date: todayISO(), party: "", project: "", description: "", method: "cash", amount: "", reference: "" });
+    setDraft(saved ? { ...saved, project: saved.project || "", productId: saved.productId || "", productName: saved.productName || "", quantity: saved.quantity || "", unitCost: saved.unitCost || "" } : { type: "money_in", date: todayISO(), party: "", project: "", description: "", method: "cash", amount: "", reference: "", productId: "", productName: "", quantity: "", unitCost: "" });
     setDraftError(null);
     setEntryOpen(true);
   };
 
   const openEntryFor = (type: EntryType) => {
     openEntry();
-    setDraft((current) => ({ ...current, type, party: "" }));
+    setDraft((current) => ({ ...current, type, party: "", productId: "", productName: "", quantity: "", unitCost: "", amount: "" }));
   };
 
   const saveAppearance = async () => {
@@ -502,9 +554,128 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
     setAppearanceMessage(error ? errorMessage(error) : "Cashbook appearance saved for this organization.");
   };
 
-  const continueEntry = () => {
+  const fundsGlForMethod = async (method: string): Promise<string | null> => {
+    const accounts = await getDefaultGlAccounts();
+    if (method === "bank_transfer" || method === "card") return accounts.posBank || accounts.cash;
+    if (method === "airtel_money") return accounts.posAirtelMoney || accounts.posMtnMobileMoney || accounts.cash;
+    if (method === "mobile_money" || method === "mtn_mobile_money") return accounts.posMtnMobileMoney || accounts.posAirtelMoney || accounts.cash;
+    return accounts.cash;
+  };
+
+  const finishQuickPosting = async (message: string) => {
+    window.localStorage.removeItem(draftStorageKey);
+    setEntryOpen(false);
+    setDraftError(null);
+    setEntryMessage(message);
+    await load();
+  };
+
+  const postQuickPurchase = async () => {
+    if (!orgId || !user?.id) throw new Error("Your organization or user session is missing.");
+    const vendor = suppliers.find((item) => item.name === draft.party);
+    if (!vendor) throw new Error("Select the supplier being paid.");
+    const product = inventoryProducts.find((item) => item.id === draft.productId);
+    if (!product) throw new Error("Select a valid inventory product.");
+    const quantity = Number(draft.quantity);
+    const unitCost = Number(draft.unitCost);
+    const amount = Number(draft.amount);
+    if (Math.abs(quantity * unitCost - amount) > 0.02) throw new Error("Purchase amount must equal quantity × unit cost.");
+
+    const purchaseOrderId = randomUuid();
+    const billId = randomUuid();
+    const paymentId = randomUuid();
+    let billJournalPosted = false;
+    let paymentJournalPosted = false;
+    try {
+      const approvedAt = new Date().toISOString();
+      const { error: poError } = await supabase.from("purchase_orders").insert({ id: purchaseOrderId, organization_id: orgId, vendor_id: vendor.id, order_date: draft.date, status: "approved", total_amount: amount, approved_at: approvedAt });
+      if (poError) throw poError;
+      const { error: itemError } = await supabase.from("purchase_order_items").insert({ purchase_order_id: purchaseOrderId, organization_id: orgId, product_id: product.id, description: product.name, quantity, cost_price: unitCost });
+      if (itemError) throw itemError;
+      const { error: billError } = await supabase.from("bills").insert({ id: billId, organization_id: orgId, vendor_id: vendor.id, purchase_order_id: purchaseOrderId, bill_date: draft.date, due_date: draft.date, amount, description: draft.description.trim(), status: "pending_approval", approved_at: approvedAt, approved_by: user.id });
+      if (billError) throw billError;
+      const billJournal = await createJournalForBill(billId, amount, draft.description.trim(), draft.date, user.id, purchaseOrderId);
+      if (!billJournal.ok) throw new Error(billJournal.error || "The purchase journal could not be posted.");
+      billJournalPosted = true;
+      const stockResult = await postStockInFromPurchaseOrderForBill(billId, purchaseOrderId);
+      if (stockResult.unmatchedDescriptions.length) throw new Error(`Stock item was not matched: ${stockResult.unmatchedDescriptions.join(", ")}`);
+      const { error: paymentError } = await supabase.from("vendor_payments").insert({ id: paymentId, organization_id: orgId, vendor_id: vendor.id, bill_id: billId, amount, payment_date: draft.date, payment_method: draft.method, reference: draft.reference.trim() || `Cashbook purchase ${billId.slice(0, 8)}`, bill_allocations: [] });
+      if (paymentError) throw paymentError;
+      const sourceFundsGlAccountId = await fundsGlForMethod(draft.method);
+      const paymentJournal = await createJournalForVendorPayment(paymentId, amount, draft.date, user.id, { payableAmount: amount, unearnedExcessAmount: 0, sourceFundsGlAccountId });
+      if (!paymentJournal.ok) throw new Error(paymentJournal.error || "The supplier payment journal could not be posted.");
+      paymentJournalPosted = true;
+      await syncBillStatusInDb(billId);
+      await finishQuickPosting(`Purchase completed: ${quantity.toLocaleString()} ${product.unit_of_measure || "units"} of ${product.name} received and ${money.format(amount)} paid to ${vendor.name}.`);
+    } catch (error) {
+      if (paymentJournalPosted) await deleteJournalEntryByReference("vendor_payment", paymentId, orgId);
+      if (billJournalPosted) await deleteJournalEntryByReference("bill", billId, orgId);
+      await supabase.from("product_stock_movements").delete().eq("source_type", "bill").eq("source_id", billId);
+      await supabase.from("vendor_payments").delete().eq("id", paymentId);
+      await supabase.from("bills").delete().eq("id", billId);
+      await supabase.from("purchase_order_items").delete().eq("purchase_order_id", purchaseOrderId);
+      await supabase.from("purchase_orders").delete().eq("id", purchaseOrderId);
+      throw error;
+    }
+  };
+
+  const postQuickSale = async () => {
+    if (!orgId || !user?.id) throw new Error("Your organization or user session is missing.");
+    const product = inventoryProducts.find((item) => item.id === draft.productId);
+    if (!product) throw new Error("Select a valid inventory product.");
+    const customer = customers.find((item) => item.name === draft.party);
+    const quantity = Number(draft.quantity);
+    const unitPrice = Number(draft.unitCost);
+    const total = Number(draft.amount);
+    if (Math.abs(quantity * unitPrice - total) > 0.02) throw new Error("Sale amount must equal quantity × unit price.");
+    const tenderMethod = draft.method === "mobile_money" ? "mtn_mobile_money" : draft.method as "cash" | "card" | "bank_transfer" | "mtn_mobile_money" | "airtel_money" | "wallet";
+    await processSaleOnline({
+      saleId: randomUuid(),
+      lines: [{ productId: product.id, quantity, unitPrice, lineTotal: total, costPrice: product.cost_price, trackInventory: product.track_inventory !== false, departmentId: product.department_id, name: product.name }],
+      tenders: [{ method: tenderMethod, amount: total, status: "completed", reference: draft.reference.trim() || null }],
+      saleCustomer: { id: customer?.id || null, name: customer?.name || draft.party || "Walk-in customer", phone: null },
+      useDesktopLocalMode: false,
+      activeSessionId: null,
+      total,
+      amountPaid: total,
+      amountDue: 0,
+      changeDue: 0,
+      paymentStatus: "completed",
+      saleType: "cash",
+      creditDueDate: "",
+      posVatEnabled: false,
+      posVatRate: null,
+      userId: user.id,
+      organizationId: orgId,
+      customers: [],
+      departments: [],
+      onAtomicRpcStatus: () => undefined,
+      onAtomicFallbackCount: () => undefined,
+      saleAt: `${draft.date}T12:00:00+03:00`,
+    });
+    await finishQuickPosting(`Sale completed: ${quantity.toLocaleString()} ${product.unit_of_measure || "units"} of ${product.name} sold and ${money.format(total)} received${customer ? ` from ${customer.name}` : ""}.`);
+  };
+
+  const continueEntry = async () => {
     if (!draft.date || !draft.description.trim() || Number(draft.amount) <= 0) {
       setDraftError("Enter a date, description and an amount greater than zero.");
+      return;
+    }
+    if ((draft.type === "purchase" || draft.type === "sale") && (!draft.productId || Number(draft.quantity) <= 0 || Number(draft.unitCost) < 0)) {
+      setDraftError("Select the inventory product and enter a quantity greater than zero.");
+      return;
+    }
+    if (draft.type === "purchase" || draft.type === "sale") {
+      setPostingQuickTransaction(true);
+      setDraftError(null);
+      try {
+        if (draft.type === "purchase") await postQuickPurchase();
+        else await postQuickSale();
+      } catch (error) {
+        setDraftError(errorMessage(error));
+      } finally {
+        setPostingQuickTransaction(false);
+      }
       return;
     }
     if (!online) {
@@ -518,11 +689,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       ? "cash_receipts"
       : draft.type === "money_out"
         ? "purchases_expenses"
-        : draft.type === "sale"
-          ? user?.sales_workflow === "quick_sale" ? "retail_pos" : "retail_credit_invoices"
-          : draft.type === "purchase"
-            ? "purchases_bills"
-            : "treasury";
+        : "treasury";
     setEntryOpen(false);
     onNavigate(target, { cashbookDraft: draft, treasuryTab: draft.type === "transfer" ? "movements" : undefined });
   };
@@ -537,10 +704,28 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
 
   const reviewRow = (row: CashbookRow) => {
     const sourceId = row.id.slice(row.id.indexOf(":") + 1);
-    if (row.source === "cashbook_entry") onNavigate("accounting_journal", { cashbookEntryId: sourceId });
+    if (row.source === "mf_repayment" || row.source === "mf_recovery") onNavigate("mfi_collections", { highlightTransactionId: sourceId });
+    else if (row.source === "mf_disbursement") onNavigate("mfi_approvals_disbursements", { highlightTransactionId: sourceId });
+    else if (row.source === "cashbook_entry") onNavigate("accounting_journal", { cashbookEntryId: sourceId });
     else if (row.source === "receipt") onNavigate("payments", { highlightPaymentId: sourceId });
     else if (row.source === "supplier_payment") onNavigate("purchases_payments", { highlightVendorPaymentId: sourceId });
     else onNavigate("purchases_expenses", { highlightExpenseId: sourceId });
+  };
+
+  const exportCsv = () => {
+    downloadCsv(`${isMicrofinance?"microfinance":"general-business"}-cashbook-${dateFrom}-${dateTo}.csv`, exportRows());
+  };
+  const exportRows = (): (string|number)[][] => [["Date","Description","Party","Method","Reference","Cash In","Cash Out","Status","Source"],...filteredRows.map(row=>[row.date,row.description,row.party,row.method,row.reference,row.cashIn,row.cashOut,row.approvalStatus||row.status,row.source])];
+  const exportExcel = () => downloadXlsx(`${isMicrofinance?"microfinance":"general-business"}-cashbook-${dateFrom}-${dateTo}.xlsx`,exportRows(),{companyName:workspaceLabel,sheetName:"Cashbook"});
+  const exportPdf = () => exportAccountingPdf({title:`${workspaceLabel} Cashbook`,subtitle:`${dateFrom} to ${dateTo}`,filename:`${isMicrofinance?"microfinance":"general-business"}-cashbook-${dateFrom}-${dateTo}.pdf`,sections:[{title:"Cashbook register",head:exportRows()[0].map(String),body:exportRows().slice(1)}]});
+
+  const controlDirectEntry = async (row:CashbookRow,action:"approve"|"correct"|"void") => {
+    if(!orgId||!row.rawId)return;
+    let error:any=null;
+    if(action==="approve") ({error}=await (supabase as any).rpc("approve_general_cashbook_entry",{p_organization_id:orgId,p_entry_id:row.rawId}));
+    if(action==="void"){const reason=window.prompt("Reason for voiding this entry:");if(!reason)return;({error}=await (supabase as any).rpc("void_general_cashbook_entry",{p_organization_id:orgId,p_entry_id:row.rawId,p_reason:reason}));}
+    if(action==="correct"){const reason=window.prompt("Reason for correction:");if(!reason)return;const description=window.prompt("Corrected description:",row.description);if(description===null)return;const reference=window.prompt("Corrected reference:",row.reference);if(reference===null)return;({error}=await (supabase as any).rpc("correct_general_cashbook_entry",{p_organization_id:orgId,p_entry_id:row.rawId,p_reason:reason,p_description:description,p_reference:reference}));}
+    setWarning(error?errorMessage(error):`Entry ${action === "approve" ? "approved" : action === "void" ? "voided with a reversing journal" : "corrected with an audited replacement"}.`);if(!error)await load();
   };
 
   const pageTitle = view === "entry" ? "Cashbook Entry" : view === "daily" ? "Daily Summary" : "Cashbook Register";
@@ -551,7 +736,8 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       : "All completed cash, mobile-money and bank movements in one Google-Sheet-style register.";
 
   return (
-    <div className={`mx-auto space-y-5 p-4 sm:p-6 lg:p-8 ${view === "entry" ? "max-w-4xl" : "max-w-[1500px]"}`}>
+    <div className={`cashbook-print mx-auto space-y-5 p-4 sm:p-6 lg:p-8 ${view === "entry" ? "max-w-4xl" : "max-w-[1500px]"}`}>
+      <style>{`@media print{.cashbook-print{max-width:none!important;padding:0!important}.cashbook-print .print\\:hidden,.cashbook-print button,.cashbook-print input,.cashbook-print select{display:none!important}.cashbook-print table{min-width:0!important;font-size:9px!important}.cashbook-print th,.cashbook-print td{padding:4px!important}.cashbook-print section{box-shadow:none!important;break-inside:avoid}}`}</style>
       <header>
         <p className="text-xs font-bold uppercase tracking-wider text-brand-700">{workspaceLabel} · Consolidated register</p>
         <div className="mt-1 flex flex-wrap items-center justify-between gap-4">
@@ -593,7 +779,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         <button type="button" onClick={() => onNavigate(routes.daily)} className={view === "daily" ? "app-btn-primary" : "app-btn-secondary"}>Daily Summary</button>
       </nav>
 
-      {warning && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{warning}</div>}
+      {warning && <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 print:hidden"><span>{warning}</span>{warning.includes("page limit") && <button type="button" className="app-btn-secondary" onClick={()=>setRowLimit(limit=>limit+2000)}>Load 2,000 more per source</button>}</div>}
       {queuedDrafts.length > 0 && <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900"><span><strong>{queuedDrafts.length}</strong> offline transaction{queuedDrafts.length === 1 ? "" : "s"} waiting for controlled posting.</span><button type="button" disabled={!online} onClick={() => resumeQueuedDraft(queuedDrafts[0])} className="app-btn-secondary disabled:opacity-50">Resume next</button></div>}
 
       {view === "entry" && <section id="cashbook-entry" className="rounded-2xl border-2 bg-white p-4 shadow-sm sm:p-6" style={{ borderColor: cashbookSettings.accent_color }}>
@@ -630,8 +816,9 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       {view === "daily" && <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">Daily summary</p><h2 className="mt-1 text-xl font-bold text-slate-900">Day position</h2></div>
-          <label className="text-xs font-semibold text-slate-600">Summary date<input type="date" value={summaryDate} onChange={(event) => setSummaryDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
+          <div className="flex items-end gap-2"><label className="text-xs font-semibold text-slate-600">Summary date<input type="date" value={summaryDate} onChange={(event) => setSummaryDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label><button type="button" onClick={() => window.print()} className="app-btn-secondary"><Printer className="h-4 w-4" />Print</button></div>
         </div>
+        {channelPositions.length > 0 && <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{channelPositions.map(position=><SummaryMetric key={position.channel} label={`${readable(position.channel)} closing`} value={money.format(position.closing)} tone={position.closing<0?"negative":"positive"}/>)}</div>}
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
           <SummaryMetric label="Opening GL balance" value={glPosition ? money.format(glPosition.opening) : "Not available"} />
           <SummaryMetric label="Cash in" value={money.format(daily.cashIn)} tone="positive" />
@@ -647,10 +834,10 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         {glPosition && Math.abs(glPosition.movement - daily.net) > 0.01 && <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">The posted GL moved by {money.format(glPosition.movement)} while this operational register moved by {money.format(daily.net)}. Review unposted, omitted, or journal-only transactions.</p>}
         <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200">
           <table className="w-full min-w-[900px] text-sm">
-            <thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-3 py-3 text-left">Details</th><th className="px-3 py-3 text-left">Trx Date</th><th className="px-3 py-3 text-right">MOMO</th><th className="px-3 py-3 text-right">Bank</th><th className="px-3 py-3 text-right">Cash In</th><th className="px-3 py-3 text-right">Cash Out</th><th className="px-3 py-3 text-right">Cash Bal</th></tr></thead>
+            <thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-3 py-3 text-left">Details</th><th className="px-3 py-3 text-left">Trx Date</th><th className="px-3 py-3 text-right">MOMO</th><th className="px-3 py-3 text-right">Bank / wallet</th><th className="px-3 py-3 text-right">Cash In</th><th className="px-3 py-3 text-right">Cash Out</th><th className="px-3 py-3 text-right">Channel balance</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
               <tr className="bg-slate-50 font-semibold"><td className="px-3 py-2">Balance b/f</td><td className="px-3 py-2">{summaryDate}</td><td /><td /><td /><td /><td className="px-3 py-2 text-right">{glPosition ? money.format(glPosition.opening) : "—"}</td></tr>
-              {dailyLines.map((row) => <tr key={`daily:${row.id}`}><td className="px-3 py-2"><span className="font-medium text-slate-900">{row.description}</span><span className="block text-xs text-slate-500">{row.party}</span></td><td className="px-3 py-2">{row.date}</td><SignedCell value={row.momo} /><SignedCell value={row.bank} /><AmountCell value={row.physicalIn} tone="in" /><AmountCell value={row.physicalOut} tone="out" /><td className="px-3 py-2 text-right font-semibold">{money.format(row.cashBalance)}</td></tr>)}
+              {dailyLines.map((row) => <tr key={`daily:${row.id}`}><td className="px-3 py-2"><span className="font-medium text-slate-900">{row.description}</span><span className="block text-xs text-slate-500">{row.party} · {readable(row.channel)}</span></td><td className="px-3 py-2">{row.date}</td><SignedCell value={row.momo} /><SignedCell value={row.bank} /><AmountCell value={row.physicalIn} tone="in" /><AmountCell value={row.physicalOut} tone="out" /><td className="px-3 py-2 text-right font-semibold">{money.format(row.channelBalance)}</td></tr>)}
               {dailyLines.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No entries for this date.</td></tr>}
             </tbody>
             <tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-3 py-3">Daily totals</td><td className="px-3 py-3">{dailyLines.length} entries</td><SignedCell value={dailyLines.reduce((s,r) => s+r.momo,0)} /><SignedCell value={dailyLines.reduce((s,r) => s+r.bank,0)} /><AmountCell value={dailyLines.reduce((s,r) => s+r.physicalIn,0)} tone="in" /><AmountCell value={dailyLines.reduce((s,r) => s+r.physicalOut,0)} tone="out" /><td className="px-3 py-3 text-right">{glPosition ? money.format(glPosition.closing) : "—"}</td></tr></tfoot>
@@ -659,6 +846,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       </section>}
 
       {view === "register" && <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+        <div className="flex flex-wrap justify-end gap-2 border-b border-slate-200 p-3 print:hidden"><button type="button" onClick={exportCsv} className="app-btn-secondary"><Download className="h-4 w-4" />CSV</button><button type="button" onClick={exportExcel} className="app-btn-secondary"><FileSpreadsheet className="h-4 w-4" />Excel</button><button type="button" onClick={exportPdf} className="app-btn-secondary"><FileText className="h-4 w-4" />PDF</button><button type="button" onClick={() => window.print()} className="app-btn-secondary"><Printer className="h-4 w-4" />Print</button></div>
         <div className="grid gap-3 border-b border-slate-200 p-4 md:grid-cols-[160px_160px_170px_minmax(220px,1fr)]">
           <label className="text-xs font-semibold text-slate-600">From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
           <label className="text-xs font-semibold text-slate-600">To<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
@@ -681,7 +869,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
                   <td className="max-w-[220px] truncate px-4 py-3 font-mono text-xs text-slate-600" title={row.reference}>{row.reference}<span className="mt-1 block font-sans text-[10px] text-slate-400">{row.headquarters || "—"}</span></td>
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-emerald-700">{row.cashIn ? money.format(row.cashIn) : "—"}</td>
                   <td className="whitespace-nowrap px-4 py-3 text-right font-semibold text-rose-700">{row.cashOut ? money.format(row.cashOut) : "—"}</td>
-                  <td className="px-4 py-3"><span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs capitalize text-slate-700">{row.status}</span><button type="button" onClick={() => reviewRow(row)} className="mt-2 block text-xs font-semibold text-brand-700 hover:underline">Review / edit / void</button><span className="mt-1 block text-[10px] text-slate-500">{row.submittedBy || "BOAT workflow"}{row.postedAt ? ` · ${new Date(row.postedAt).toLocaleString()}` : ""}</span><span className="mt-1 block font-mono text-[9px] text-slate-400" title="Source audit identifier">{row.id}</span></td>
+                  <td className="px-4 py-3"><span className="inline-flex rounded-full bg-slate-100 px-2.5 py-1 text-xs capitalize text-slate-700">{row.approvalStatus || row.status}</span><div className="mt-2 flex flex-wrap gap-1">{row.source === "cashbook_entry" && canControlEntries ? <><button title="Correct" onClick={()=>void controlDirectEntry(row,"correct")} className="rounded p-1 text-brand-700 hover:bg-brand-50"><Pencil className="h-4 w-4" /></button><button title="Void" onClick={()=>void controlDirectEntry(row,"void")} className="rounded p-1 text-rose-700 hover:bg-rose-50"><Ban className="h-4 w-4" /></button>{(row.approvalStatus||"pending") === "pending" && row.createdBy !== user?.id && <button title="Approve" onClick={()=>void controlDirectEntry(row,"approve")} className="rounded p-1 text-emerald-700 hover:bg-emerald-50"><CheckCircle2 className="h-4 w-4" /></button>}</> : <button type="button" onClick={() => reviewRow(row)} className="text-xs font-semibold text-brand-700 hover:underline">Review source</button>}</div><span className="mt-1 block text-[10px] text-slate-500">{row.submittedBy || "BOAT workflow"}{row.postedAt ? ` · ${new Date(row.postedAt).toLocaleString()}` : ""}</span><span className="mt-1 block font-mono text-[9px] text-slate-400" title="Source audit identifier">{row.id}</span></td>
                 </tr>
               ))}
             </tbody>
@@ -695,21 +883,26 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
           <div className="sticky top-0 z-10 flex items-center justify-between border-b border-slate-200 bg-white px-5 py-4"><div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">Cashbook quick entry</p><h2 className="text-xl font-bold text-slate-900">Add transaction</h2></div><button type="button" onClick={() => setEntryOpen(false)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Close"><X className="h-5 w-5" /></button></div>
           <div className="space-y-5 p-5">
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-              {(["money_in", "money_out", "sale", "purchase", "transfer"] as EntryType[]).map((type) => <button key={type} type="button" onClick={() => setDraft((current) => ({ ...current, type, party: "" }))} className={`rounded-lg border px-3 py-2 text-sm font-semibold capitalize ${draft.type === type ? "border-brand-700 bg-brand-50 text-brand-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{type.replaceAll("_", " ")}</button>)}
+              {(["money_in", "money_out", "sale", "purchase", "transfer"] as EntryType[]).map((type) => <button key={type} type="button" onClick={() => setDraft((current) => ({ ...current, type, party: "", productId: "", productName: "", quantity: "", unitCost: "", amount: "" }))} className={`rounded-lg border px-3 py-2 text-sm font-semibold capitalize ${draft.type === type ? "border-brand-700 bg-brand-50 text-brand-800" : "border-slate-200 text-slate-600 hover:bg-slate-50"}`}>{type.replaceAll("_", " ")}</button>)}
             </div>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Transaction date"><input type="date" value={draft.date} onChange={(event) => setDraft((current) => ({ ...current, date: event.target.value }))} className="cashbook-input" /></Field>
-              <Field label="Payment method"><select value={draft.method} onChange={(event) => setDraft((current) => ({ ...current, method: event.target.value }))} className="cashbook-input"><option value="cash">Cash</option><option value="mobile_money">Mobile money</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="wallet">Wallet</option></select></Field>
+              <Field label="Payment method"><select value={draft.method} onChange={(event) => setDraft((current) => ({ ...current, method: event.target.value }))} className="cashbook-input"><option value="cash">Cash</option><option value="mtn_mobile_money">MTN Mobile Money</option><option value="airtel_money">Airtel Money</option><option value="bank_transfer">Bank transfer</option><option value="card">Card</option><option value="wallet">Wallet</option></select></Field>
             </div>
             {draft.type === "money_in" || draft.type === "sale" ? <Field label="Customer"><select value={draft.party} onChange={(event) => setDraft((current) => ({ ...current, party: event.target.value }))} className="cashbook-input"><option value="">Select customer</option>{customers.map((customer) => <option key={customer.id} value={customer.name}>{customer.name}</option>)}</select></Field> : draft.type === "money_out" || draft.type === "purchase" ? <Field label="Supplier / payee"><select value={draft.party} onChange={(event) => setDraft((current) => ({ ...current, party: event.target.value }))} className="cashbook-input"><option value="">Select supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.name}>{supplier.name}</option>)}</select></Field> : <Field label="From / to account"><input value={draft.party} onChange={(event) => setDraft((current) => ({ ...current, party: event.target.value }))} placeholder="Account transfer description" className="cashbook-input" /></Field>}
+            {(draft.type === "purchase" || draft.type === "sale") && <div className="grid gap-4 sm:grid-cols-3 sm:col-span-2">
+              <Field label="Inventory product *"><select value={draft.productId} onChange={(event) => { const product = inventoryProducts.find((item) => item.id === event.target.value); const price = product ? String(Number(draft.type === "sale" ? product.sales_price || 0 : product.cost_price || 0)) : ""; setDraft((current) => ({ ...current, productId: product?.id || "", productName: product?.name || "", unitCost: price, description: current.description || product?.name || "", amount: current.quantity && price ? String(Number(current.quantity) * Number(price)) : current.amount })); }} className="cashbook-input"><option value="">Select stock item</option>{inventoryProducts.map((product) => <option key={product.id} value={product.id}>{product.name} ({product.unit_of_measure || "unit"})</option>)}</select></Field>
+              <Field label={draft.type === "sale" ? "Quantity sold *" : "Quantity received *"}><input type="number" min="0" step="0.001" value={draft.quantity} onChange={(event) => setDraft((current) => ({ ...current, quantity: event.target.value, amount: current.unitCost ? String(Number(event.target.value) * Number(current.unitCost)) : current.amount }))} className="cashbook-input" /></Field>
+              <Field label={draft.type === "sale" ? "Unit selling price (UGX)" : "Unit cost (UGX)"}><input type="number" min="0" step="0.01" value={draft.unitCost} onChange={(event) => setDraft((current) => ({ ...current, unitCost: event.target.value, amount: current.quantity ? String(Number(current.quantity) * Number(event.target.value)) : current.amount }))} className="cashbook-input" /></Field>
+            </div>}
             <Field label="Project"><select value={draft.project || ""} onChange={(event) => setDraft((current) => ({ ...current, project: event.target.value }))} className="cashbook-input"><option value="">No project</option>{projects.map((project) => <option key={project.id} value={project.name}>{project.code ? `${project.code} - ` : ""}{project.name}</option>)}</select></Field>
             <Field label="Description"><textarea value={draft.description} onChange={(event) => setDraft((current) => ({ ...current, description: event.target.value }))} rows={3} placeholder="What was this transaction for?" className="cashbook-input" /></Field>
-            <div className="grid gap-4 sm:grid-cols-2"><Field label="Amount (UGX)"><input type="number" min="0" step="1" value={draft.amount} onChange={(event) => setDraft((current) => ({ ...current, amount: event.target.value }))} className="cashbook-input" /></Field><Field label="Reference"><input value={draft.reference} onChange={(event) => setDraft((current) => ({ ...current, reference: event.target.value }))} placeholder="Receipt, invoice or transfer ref" className="cashbook-input" /></Field></div>
-            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">This quick form prepares the transaction. BOAT will open the existing controlled workflow to validate accounts, approvals and posting.</div>
+            <div className="grid gap-4 sm:grid-cols-2"><Field label="Amount (UGX)"><input type="number" min="0" step="1" value={draft.amount} readOnly={draft.type === "purchase" || draft.type === "sale"} onChange={(event) => setDraft((current) => ({ ...current, amount: event.target.value }))} className={`cashbook-input ${(draft.type === "purchase" || draft.type === "sale") ? "bg-slate-50" : ""}`} /></Field><Field label="Reference"><input value={draft.reference} onChange={(event) => setDraft((current) => ({ ...current, reference: event.target.value }))} placeholder="Receipt, invoice or transfer ref" className="cashbook-input" /></Field></div>
+            <div className="rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{draft.type === "purchase" ? "One posting will receive stock, create the supplier bill and record payment." : draft.type === "sale" ? "One posting will record the sale, reduce stock and receive customer payment." : "BOAT will open the relevant controlled workflow to complete this transaction."}</div>
             {!online && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">Offline: save this transaction to the device queue. It will still pass through BOAT's controlled posting workflow when resumed online.</div>}
             {draftError && <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">{draftError}</p>}
           </div>
-          <div className="sticky bottom-0 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4"><button type="button" onClick={() => setEntryOpen(false)} className="app-btn-secondary">Cancel</button><button type="button" onClick={continueEntry} className="app-btn-primary">{online ? "Continue to posting" : "Save to offline queue"}</button></div>
+          <div className="sticky bottom-0 flex justify-end gap-2 border-t border-slate-200 bg-white px-5 py-4"><button type="button" onClick={() => setEntryOpen(false)} disabled={postingQuickTransaction} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void continueEntry()} disabled={postingQuickTransaction} className="app-btn-primary disabled:opacity-60">{postingQuickTransaction ? "Posting…" : !online ? "Save to offline queue" : draft.type === "purchase" ? "Receive stock & pay" : draft.type === "sale" ? "Complete sale & receive" : "Continue to posting"}</button></div>
         </aside>
       </div>}
     </div>

@@ -1511,7 +1511,7 @@ export function PlatformOrganizationsPage() {
                   checked={editEnableManufacturing}
                   onChange={(e) => setEditEnableManufacturing(e.target.checked)}
                 />
-                Enable Manufacturing module (BOM, work orders, production, costing — hotel / restaurant / mixed / dedicated manufacturing orgs)
+                Enable Manufacturing module (including Process Stock in General Business and Cashbook mode)
               </label>
             </div>
             <div className="border border-slate-200 rounded-lg p-3 mb-4 space-y-2 bg-slate-50/80">

@@ -180,9 +180,25 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
         icon: Package,
         children: [
           { name: "Products & services", page: "Products" },
+          ...(allowManufacturing
+            ? [{ name: "Process Stock", page: "manufacturing_production_entries", state: { manufacturingMode: "simple" } } as NavChild]
+            : []),
           { name: "Stock movements", page: "inventory_stock_adjustments" },
           { name: "Stock balances & counts", page: "inventory_stock_balances" },
           { name: "Inventory reports", page: "reports_stock_summary" },
+        ],
+      } as NavItem] : []),
+      ...(allowManufacturing ? [{
+        name: "Manufacturing",
+        icon: Package,
+        children: [
+          { name: "Overview", page: "manufacturing" },
+          { name: "Recipes / BOM", page: "manufacturing_bom" },
+          { name: "Production orders", page: "manufacturing_work_orders" },
+          { name: "Production entries", page: "manufacturing_production_entries" },
+          { name: "Costing", page: "manufacturing_costing" },
+          { name: "WIP report", page: "manufacturing_wip_report" },
+          { name: "Manufacturing account", page: "manufacturing_account" },
         ],
       } as NavItem] : []),
       { name: "Accounting", icon: Calculator, children: accounting },

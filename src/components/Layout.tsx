@@ -38,6 +38,10 @@ import {
   Calculator,
   Search,
   Bell,
+  CheckSquare,
+  RefreshCw,
+  Clock,
+  ExternalLink,
 } from 'lucide-react';
 import { SaccoNewTransactionFab } from './sacco/SaccoNewTransactionFab';
 import { APP_SHORT_NAME } from '../constants/branding';
@@ -381,6 +385,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Record supplier bill', page: 'purchases_bills' },
           { name: 'Transfer money', page: 'treasury', state: { treasuryTab: 'movements' } },
           ...(user?.enable_inventory !== false ? [{ name: 'Add stock', page: 'purchases_orders' }] : []),
+          ...(allowManufacturing ? [{ name: 'Process Stock', page: 'manufacturing_production_entries', state: { manufacturingMode: 'simple' } }] : []),
         ] },
         { name: 'Daily summary', icon: BarChart3, page: 'general_business_daily_summary' },
         { name: 'Master data', icon: UsersRound, children: [
@@ -388,6 +393,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Suppliers', page: 'purchases_vendors' },
           ...(user?.enable_inventory !== false ? [{ name: 'Items & stock', page: 'Products' }] : []),
         ] },
+        ...(allowManufacturing ? [{ name: 'Manufacturing', icon: Factory, children: [
+          { name: 'Overview', page: 'manufacturing' },
+          { name: 'Production entries', page: 'manufacturing_production_entries' },
+          { name: 'Production orders', page: 'manufacturing_work_orders' },
+          { name: 'Recipes / BOM', page: 'manufacturing_bom' },
+          { name: 'Costing', page: 'manufacturing_costing' },
+        ] }] : []),
         { name: 'Cashbook reports', icon: TrendingUp, children: [
           { name: 'Income statement', page: 'accounting_income' },
           { name: 'Cash flow', page: 'accounting_cashflow' },
@@ -1004,9 +1016,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const isHousekeepingWorkspace = normalizeNavRoleKey(user?.role) === 'housekeeping' &&
     (businessType === 'hotel' || businessType === 'mixed');
   const practiceNavigation: NavItem[] = [
+    { name: 'Operations Dashboard', icon: LayoutDashboard, page: 'practice_dashboard' },
     { name: 'Clients', icon: UsersRound, page: 'practice_clients' },
     { name: 'Engagements', icon: Briefcase, page: 'practice_engagements' },
+    { name: 'My Work', icon: CheckSquare, page: 'practice_my_work' },
       { name: 'Document Vault', icon: FileText, page: 'practice_documents' },
+      { name: 'Document Requests', icon: FileText, page: 'practice_document_requests' },
+      { name: 'Support Desk', icon: MessageSquare, page: 'practice_support' },
       { name: 'Image to Excel / Word', icon: FileText, page: 'image_document_converter' },
       { name: 'Reconciliation Center', icon: Landmark, page: 'practice_reconciliation' },
     { name: 'Stock Take', icon: PackageCheck, page: 'practice_stock_take' },
@@ -1015,6 +1031,18 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Tasks & Deadlines', icon: BookOpen, page: 'practice_tasks' },
     { name: 'Annual accounts', icon: FileText, page: 'practice_annual_accounts' },
     { name: 'Billing', icon: Receipt, page: 'practice_billing' },
+    { name: 'Subscription Renewals', icon: RefreshCw, page: 'practice_renewals' },
+    { name: 'Profitability', icon: TrendingUp, page: 'practice_profitability' },
+    { name: 'Activity History', icon: Bell, page: 'practice_activity' },
+    { name: 'Time & Expenses', icon: Clock, page: 'practice_time_expenses' },
+    { name: 'Sales & Proposals', icon: TrendingUp, page: 'practice_sales' },
+    { name: 'Quality & Client Experience', icon: CheckSquare, page: 'practice_quality' },
+    { name: 'Staff Capacity', icon: UsersRound, page: 'practice_capacity' },
+    { name: 'Client Portal', icon: ExternalLink, page: 'practice_client_portal' },
+    { name: 'Advanced Practice', icon: Shield, page: 'practice_advanced' },
+    { name: 'Integrations', icon: Link2, page: 'practice_integrations' },
+    { name: 'Practice Mobile', icon: Smartphone, page: 'practice_mobile' },
+    { name: 'Help & Learning', icon: BookOpen, page: 'learning_centre' },
     { name: 'Staff', icon: UsersRound, page: 'staff' },
     { name: 'Permissions & settings', icon: Settings, page: 'admin' },
   ];

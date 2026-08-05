@@ -75,7 +75,7 @@ async function productionCostAllocation(entryId: string): Promise<{ consumablesC
   };
 }
 
-export function ManufacturingProductionEntriesPage({ readOnly = false }: { readOnly?: boolean }) {
+export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMode = false }: { readOnly?: boolean; simpleMode?: boolean }) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
@@ -86,14 +86,19 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
   const [workOrders, setWorkOrders] = useState<WorkOrderRow[]>([]);
   const [staffList, setStaffList] = useState<StaffRow[]>([]);
   const [products, setProducts] = useState<ProductRow[]>([]);
+  const [allProducts, setAllProducts] = useState<ProductRow[]>([]);
   const [boms, setBoms] = useState<BomRow[]>([]);
   const [workOrderId, setWorkOrderId] = useState("");
   const [productId, setProductId] = useState("");
+  const [inputProductId, setInputProductId] = useState("");
+  const [quantityIn, setQuantityIn] = useState("");
+  const [directProcessingCost, setDirectProcessingCost] = useState("");
+  const [notes, setNotes] = useState("");
   const [postedByStaffId, setPostedByStaffId] = useState("");
   const [manualSerial, setManualSerial] = useState("");
   const [productionDate, setProductionDate] = useState(() => new Date().toISOString().slice(0, 10));
-  const [producedQty, setProducedQty] = useState("0");
-  const [scrapQty, setScrapQty] = useState("0");
+  const [producedQty, setProducedQty] = useState("");
+  const [scrapQty, setScrapQty] = useState("");
   const [pendingItems, setPendingItems] = useState<PendingProductionItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -124,6 +129,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
     setWorkOrders((woRes.data || []) as WorkOrderRow[]);
     setStaffList((staffRes.data || []) as StaffRow[]);
     const allProducts = (productRes.data || []) as ProductRow[];
+    setAllProducts(allProducts);
     const finished = allProducts.filter((product) => product.manufacturing_item_type === "finished_product");
     setProducts(finished.length ? finished : allProducts);
     setBoms((bomRes.data || []) as BomRow[]);
@@ -137,10 +143,14 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
     setPendingItems([]);
     setWorkOrderId("");
     setProductId("");
+    setInputProductId("");
+    setQuantityIn("");
+    setDirectProcessingCost("");
+    setNotes("");
     setManualSerial(nextSerial ?? nextProductionSerial(rowsData[0]?.manual_serial_number));
     setProductionDate(new Date().toISOString().slice(0, 10));
-    setProducedQty("0");
-    setScrapQty("0");
+    setProducedQty("");
+    setScrapQty("");
     setPostedByStaffId(user?.id ?? "");
   };
 
@@ -149,6 +159,10 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
     setPendingItems([]);
     setWorkOrderId(String(row.work_order_id || ""));
     setProductId(String(row.product_id || ""));
+    setInputProductId(String(row.input_product_id || ""));
+    setQuantityIn(String(row.quantity_in || 0));
+    setDirectProcessingCost(String(row.direct_processing_cost || 0));
+    setNotes(String(row.processing_notes || ""));
     setManualSerial(String(row.manual_serial_number || ""));
     setProductionDate(String(row.production_date || String(row.posted_at || "").slice(0, 10)));
     setProducedQty(String(row.produced_qty || 0));
@@ -160,6 +174,14 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
   const validateProductionItem = (item: PendingProductionItem): string | null => {
     if (!item.manualSerial.trim()) return "Enter a manual serial number.";
     if (!item.productId) return "Select a finished product.";
+    if (simpleMode) {
+      if (!inputProductId) return "Select an input product.";
+      if (inputProductId === item.productId) return "Input and output products must be different.";
+      if (Number(quantityIn) <= 0) return "Quantity in must be greater than zero.";
+      if (Number(directProcessingCost || 0) < 0) return "Direct processing cost cannot be negative.";
+      if (Number(item.producedQty) <= 0) return "Quantity out must be greater than zero.";
+      return null;
+    }
     const itemBom = boms.find((bom) => bom.product_id === item.productId && bom.status === "Active")
       || boms.find((bom) => bom.product_id === item.productId);
     if (!itemBom) return "Create an Active or Draft BOM for each finished product before recording production.";
@@ -189,8 +211,8 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
     setManualSerial(nextProductionSerial(item.manualSerial));
     setWorkOrderId("");
     setProductId("");
-    setProducedQty("0");
-    setScrapQty("0");
+    setProducedQty("");
+    setScrapQty("");
   };
 
   const handleSave = async () => {
@@ -215,6 +237,13 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
         production_date: productionDate,
         produced_qty: Number(item.producedQty),
         scrap_qty: Number(item.scrapQty || 0),
+        ...(simpleMode ? {
+          processing_mode: "simple",
+          input_product_id: inputProductId,
+          quantity_in: Number(quantityIn),
+          direct_processing_cost: Number(directProcessingCost || 0),
+          processing_notes: notes.trim() || null,
+        } : {}),
         posted_at: `${productionDate}T12:00:00`,
         posted_by_staff_id: postedByStaffId || user?.id || null,
       };
@@ -280,23 +309,28 @@ export function ManufacturingProductionEntriesPage({ readOnly = false }: { readO
     <div className="p-6 md:p-8">
       {readOnly && <ReadOnlyNotice />}
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-2"><h1 className="text-3xl font-bold text-slate-900">Production Entries</h1><PageNotes ariaLabel="Manufacturing production entries help"><p>Record finished output. Saving an entry adds the produced quantity to finished-goods stock.</p></PageNotes></div>
+        <div className="flex items-center gap-2"><h1 className="text-3xl font-bold text-slate-900">{simpleMode ? "Process Stock" : "Production Entries"}</h1><PageNotes ariaLabel="Manufacturing production entries help"><p>{simpleMode ? "Convert one stock item into another. BOAT records the input consumption, output receipt, yield and cost in the existing manufacturing records." : "Record finished output. Saving an entry adds the produced quantity to finished-goods stock."}</p></PageNotes></div>
         <div className="flex items-center gap-2">
           {editingId ? <button type="button" onClick={() => resetForm()} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"><X className="h-4 w-4" />Cancel edit</button> : null}
-          <button type="button" onClick={() => void handleSave()} disabled={readOnly || saving} className="app-btn-primary disabled:cursor-not-allowed">{saving ? "Saving..." : editingId ? "Save Changes" : pendingItems.length > 0 ? `Save ${pendingItems.length + (productId ? 1 : 0)} Entries` : "Save Entry"}</button>
+          <button type="button" onClick={() => void handleSave()} disabled={readOnly || saving} className="app-btn-primary disabled:cursor-not-allowed">{saving ? "Saving..." : editingId ? "Save Changes" : simpleMode ? "Process Stock" : pendingItems.length > 0 ? `Save ${pendingItems.length + (productId ? 1 : 0)} Entries` : "Save Entry"}</button>
         </div>
       </div>
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          <label className="text-xs text-slate-600">Serial number<input value={manualSerial} onChange={(e) => setManualSerial(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Suggested from the previous entry; you can change it.</span></label>
-          <label className="text-xs text-slate-600">Production date<input type="date" value={productionDate} onChange={(e) => setProductionDate(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
-          <label className="text-xs text-slate-600">Finished product<select value={productId} onChange={(e) => setProductId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">Select finished product...</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select><span className="mt-1 block text-[11px] text-slate-400">{productId ? selectedBom ? `Uses ${selectedBom.status} BOM ${selectedBom.version}: ${selectedBom.materials.length} material(s) per ${selectedBom.output_qty} output.` : "No BOM found. Create a BOM before recording production." : "Select a product to see its BOM connection."}</span></label>
-          <label className="text-xs text-slate-600">Production order (optional)<select value={workOrderId} onChange={(e) => setWorkOrderId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">No production order</option>{workOrders.map((order) => <option key={order.id} value={order.id}>{order.product_name}</option>)}</select></label>
-          <label className="text-xs text-slate-600">Employee in charge<select value={postedByStaffId} onChange={(e) => setPostedByStaffId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{staffList.map((staff) => <option key={staff.id} value={staff.id}>{staff.full_name}</option>)}</select></label>
-          <label className="text-xs text-slate-600">Produced quantity<input type="number" min="0.001" step="0.001" value={producedQty} onChange={(e) => setProducedQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
-          <label className="text-xs text-slate-600">Scrap metal quantity<input type="number" min="0" step="0.001" value={scrapQty} onChange={(e) => setScrapQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Automatically increases the Scrap Metal inventory item. Its cost price determines the inventory value transferred from production.</span></label>
-          <label className="text-xs text-slate-600">Search<input value={search} onChange={(e) => setSearch(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
-          {!editingId ? <div className="flex items-end"><button type="button" onClick={addProductionItem} disabled={readOnly} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100 disabled:opacity-50"><Plus className="h-4 w-4" />Add item</button></div> : null}
+          <label className="text-xs text-slate-600">{simpleMode ? "Batch / lot number" : "Serial number"}<input value={manualSerial} onChange={(e) => setManualSerial(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Suggested from the previous entry; you can change it.</span></label>
+          <label className="text-xs text-slate-600">{simpleMode ? "Processing date" : "Production date"}<input type="date" value={productionDate} onChange={(e) => setProductionDate(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+          {simpleMode && <label className="text-xs text-slate-600">Input product<select value={inputProductId} onChange={(e) => setInputProductId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">Select input stock...</option>{allProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>}
+          {simpleMode && <label className="text-xs text-slate-600">Quantity in<input type="number" min="0.001" step="0.001" value={quantityIn} onChange={(e) => setQuantityIn(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
+          <label className="text-xs text-slate-600">{simpleMode ? "Output product" : "Finished product"}<select value={productId} onChange={(e) => setProductId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">Select output product...</option>{(simpleMode ? allProducts : products).map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>{!simpleMode && <span className="mt-1 block text-[11px] text-slate-400">{productId ? selectedBom ? `Uses ${selectedBom.status} BOM ${selectedBom.version}: ${selectedBom.materials.length} material(s) per ${selectedBom.output_qty} output.` : "No BOM found. Create a BOM before recording production." : "Select a product to see its BOM connection."}</span>}</label>
+          <label className="text-xs text-slate-600">{simpleMode ? "Quantity out" : "Produced quantity"}<input type="number" min="0.001" step="0.001" value={producedQty} onChange={(e) => setProducedQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+          {simpleMode && <label className="text-xs text-slate-600">Direct processing cost<input type="number" min="0" step="0.01" value={directProcessingCost} onChange={(e) => setDirectProcessingCost(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
+          {simpleMode && Number(quantityIn) > 0 && Number(producedQty) >= 0 && <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><span className="block text-xs text-slate-500">Yield / processing loss</span><strong>{((Number(producedQty) / Number(quantityIn)) * 100).toFixed(1)}% yield</strong><span className="ml-2 text-slate-500">({Math.max(0, Number(quantityIn) - Number(producedQty)).toFixed(3)} loss)</span></div>}
+          {!simpleMode && <label className="text-xs text-slate-600">Production order (optional)<select value={workOrderId} onChange={(e) => setWorkOrderId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">No production order</option>{workOrders.map((order) => <option key={order.id} value={order.id}>{order.product_name}</option>)}</select></label>}
+          {!simpleMode && <label className="text-xs text-slate-600">Employee in charge<select value={postedByStaffId} onChange={(e) => setPostedByStaffId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{staffList.map((staff) => <option key={staff.id} value={staff.id}>{staff.full_name}</option>)}</select></label>}
+          {!simpleMode && <label className="text-xs text-slate-600">Scrap / by-product quantity<input type="number" min="0" step="0.001" value={scrapQty} onChange={(e) => setScrapQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Records recoverable scrap or by-product inventory from any processing industry.</span></label>}
+          {simpleMode && <label className="text-xs text-slate-600 md:col-span-2">Notes<textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
+          {!simpleMode && <label className="text-xs text-slate-600">Search<input value={search} onChange={(e) => setSearch(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
+          {!simpleMode && !editingId ? <div className="flex items-end"><button type="button" onClick={addProductionItem} disabled={readOnly} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100 disabled:opacity-50"><Plus className="h-4 w-4" />Add item</button></div> : null}
         </div>
         {pendingItems.length > 0 ? <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
           <div className="mb-2 flex items-center justify-between gap-3"><p className="text-sm font-semibold text-slate-800">Items ready to save</p><span className="rounded-full bg-brand-100 px-2.5 py-1 text-xs font-bold text-brand-800">{pendingItems.length}</span></div>

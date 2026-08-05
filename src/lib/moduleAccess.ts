@@ -176,7 +176,8 @@ export function isBusinessEligible(audience: ModuleAudience, businessType?: Busi
       businessType === "hotel" ||
       businessType === "mixed" ||
       businessType === "restaurant" ||
-      businessType === "manufacturing"
+      businessType === "manufacturing" ||
+      businessType === "general_business"
     );
   }
   if (audience === "manufacturing") return businessType === "manufacturing";
@@ -525,14 +526,29 @@ const CLINIC_PAGE_IDS = new Set([
 ]);
 const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
   "practice_dashboard",
+  "practice_my_work",
   "practice_clients",
   "practice_engagements",
   "practice_housekeeping_audit",
   "practice_documents",
+  "practice_document_requests",
+  "practice_support",
   "practice_reconciliation",
   "practice_stock_take",
   "practice_tasks",
   "practice_billing",
+  "practice_renewals",
+  "practice_profitability",
+  "practice_activity",
+  "practice_time_expenses",
+  "practice_sales",
+  "practice_quality",
+  "practice_capacity",
+  "practice_client_portal",
+  "practice_advanced",
+  "practice_integrations",
+  "practice_mobile",
+  "learning_centre",
 ]);
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */

@@ -244,6 +244,11 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
     setDueDate(date);
     setAmount(String(cashbookDraft.amount || ""));
     setDescription([cashbookDraft.description, cashbookDraft.reference].filter(Boolean).join(" · "));
+    const productId = String(cashbookDraft.productId || "");
+    const productName = String(cashbookDraft.productName || cashbookDraft.description || "").trim();
+    const quantity = String(cashbookDraft.quantity || "");
+    const unitCost = String(cashbookDraft.unitCost || "");
+    setCloneItemDrafts(productId && productName && Number(quantity) > 0 ? [{ id: randomUuid(), product_id: productId, description: productName, quantity, cost_price: unitCost }] : []);
     const party = String(cashbookDraft.party || "").trim().toLowerCase();
     setVendorId(vendors.find((vendor) => vendor.name.trim().toLowerCase() === party)?.id || "");
     setShowModal(true);
@@ -1692,6 +1697,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                 <label className="block text-sm font-medium mb-1">Description</label>
                 <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="e.g. Invoice #1234" />
               </div>
+              {!editingBill && cloneItemDrafts.length > 0 && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><strong>Stock to receive:</strong> {cloneItemDrafts[0].quantity} × {cloneItemDrafts[0].description}. Stock will be added when this GRN/Bill is approved.</div>}
             </div>
             <div className="flex gap-2 mt-6">
               <button type="button" onClick={handleSave} disabled={saving} className="app-btn-primary flex-1 py-2">{saving ? "Saving…" : "Save"}</button>

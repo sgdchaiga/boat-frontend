@@ -142,6 +142,21 @@ const GeneralLedgerPage = lazyNamed(() => import('./components/accounting/Genera
 const BankReconciliationPage = lazyNamed(() => import('./components/accounting/BankReconciliationPage'), 'BankReconciliationPage');
 const FinanceOverviewPage = lazyNamed(() => import('./components/accounting/FinanceOverviewPage'), 'FinanceOverviewPage');
 const PracticeWorkspacePage = lazyNamed(() => import('./components/accounting-practice/PracticeWorkspacePage'), 'PracticeWorkspacePage');
+const PracticeOperationsPage = lazyNamed(() => import('./components/accounting-practice/PracticeOperationsPage'), 'PracticeOperationsPage');
+const PracticeEngagementsPage = lazyNamed(() => import('./components/accounting-practice/PracticeEngagementsPage'), 'PracticeEngagementsPage');
+const PracticeDeliveryControlsPage = lazyNamed(() => import('./components/accounting-practice/PracticeDeliveryControlsPage'), 'PracticeDeliveryControlsPage');
+const PracticeFinancePage = lazyNamed(() => import('./components/accounting-practice/PracticeFinancePage'), 'PracticeFinancePage');
+const PracticeClientsPage = lazyNamed(() => import('./components/accounting-practice/PracticeClientsPage'), 'PracticeClientsPage');
+const PracticeActivityPage = lazyNamed(() => import('./components/accounting-practice/PracticeActivityPage'), 'PracticeActivityPage');
+const PracticeTimeExpensesPage = lazyNamed(() => import('./components/accounting-practice/PracticeTimeExpensesPage'), 'PracticeTimeExpensesPage');
+const PracticeSalesPage = lazyNamed(() => import('./components/accounting-practice/PracticeSalesPage'), 'PracticeSalesPage');
+const PracticeQualityPage = lazyNamed(() => import('./components/accounting-practice/PracticeQualityPage'), 'PracticeQualityPage');
+const PracticeCapacityPage = lazyNamed(() => import('./components/accounting-practice/PracticeCapacityPage'), 'PracticeCapacityPage');
+const PracticeClientPortalPage = lazyNamed(() => import('./components/accounting-practice/PracticeClientPortalPage'), 'PracticeClientPortalPage');
+const PracticeAdvancedPage = lazyNamed(() => import('./components/accounting-practice/PracticeAdvancedPage'), 'PracticeAdvancedPage');
+const PracticeIntegrationsPage = lazyNamed(() => import('./components/accounting-practice/PracticeIntegrationsPage'), 'PracticeIntegrationsPage');
+const PracticeMobilePage = lazyNamed(() => import('./components/accounting-practice/PracticeMobilePage'), 'PracticeMobilePage');
+const LearningCentrePage = lazyNamed(() => import('./components/learning/LearningCentrePage'), 'LearningCentrePage');
 const PracticeStockTakePage = lazyNamed(() => import('./components/accounting-practice/PracticeStockTakePage'), 'PracticeStockTakePage');
 const PracticeHousekeepingAuditPage = lazyNamed(() => import('./components/accounting-practice/PracticeHousekeepingAuditPage'), 'PracticeHousekeepingAuditPage');
 const AssetVerificationPage = lazyNamed(() => import('./components/accounting-practice/AssetVerificationPage'), 'AssetVerificationPage');
@@ -1025,18 +1040,49 @@ function AppContent() {
       case 'financial_modelling_studio':
         return <FinancialModellingStudio />;
       case 'practice_dashboard':
+        return <PracticeOperationsPage mode="dashboard" readOnly={access.readOnly} onNavigate={navigate} />;
+      case 'practice_my_work':
+        return <PracticeOperationsPage mode="my_work" readOnly={access.readOnly} />;
       case 'practice_clients':
-        return <PracticeWorkspacePage section="clients" readOnly={access.readOnly} />;
+        return <PracticeClientsPage readOnly={access.readOnly} />;
       case 'practice_engagements':
-        return <PracticeWorkspacePage section="engagements" readOnly={access.readOnly} />;
+        return <PracticeEngagementsPage readOnly={access.readOnly} />;
       case 'practice_documents':
         return <PracticeWorkspacePage section="documents" readOnly={access.readOnly} />;
+      case 'practice_document_requests':
+        return <PracticeDeliveryControlsPage mode="requests" readOnly={access.readOnly} />;
+      case 'practice_support':
+        return <PracticeDeliveryControlsPage mode="support" readOnly={access.readOnly} />;
       case 'practice_reconciliation':
         return <PracticeWorkspacePage section="reconciliation" readOnly={access.readOnly} />;
       case 'practice_tasks':
         return <PracticeWorkspacePage section="tasks" readOnly={access.readOnly} />;
       case 'practice_billing':
-        return <PracticeWorkspacePage section="billing" readOnly={access.readOnly} />;
+        return <PracticeFinancePage mode="billing" readOnly={access.readOnly} />;
+      case 'practice_renewals':
+        return <PracticeFinancePage mode="renewals" readOnly={access.readOnly} />;
+      case 'practice_profitability':
+        return <PracticeFinancePage mode="profitability" readOnly={access.readOnly} />;
+      case 'practice_activity':
+        return <PracticeActivityPage />;
+      case 'practice_time_expenses':
+        return <PracticeTimeExpensesPage readOnly={access.readOnly} />;
+      case 'practice_sales':
+        return <PracticeSalesPage readOnly={access.readOnly} />;
+      case 'practice_quality':
+        return <PracticeQualityPage readOnly={access.readOnly} />;
+      case 'practice_capacity':
+        return <PracticeCapacityPage readOnly={access.readOnly} />;
+      case 'practice_client_portal':
+        return <PracticeClientPortalPage />;
+      case 'practice_advanced':
+        return <PracticeAdvancedPage readOnly={access.readOnly} />;
+      case 'practice_integrations':
+        return <PracticeIntegrationsPage readOnly={access.readOnly} />;
+      case 'practice_mobile':
+        return <PracticeMobilePage onNavigate={navigate} />;
+      case 'learning_centre':
+        return <LearningCentrePage onNavigate={navigate} />;
       case 'practice_annual_accounts':
         return user?.business_type === 'accounting_practice'
           ? <SaccoAnnualAccountsPage />
@@ -1542,7 +1588,7 @@ function AppContent() {
       case 'manufacturing_work_orders':
         return <ManufacturingWorkOrdersPage readOnly={access.readOnly} />;
       case 'manufacturing_production_entries':
-        return <ManufacturingProductionEntriesPage readOnly={access.readOnly} />;
+        return <ManufacturingProductionEntriesPage readOnly={access.readOnly} simpleMode={pageState?.manufacturingMode === 'simple'} />;
       case 'manufacturing_costing':
         return <ManufacturingCostingPage readOnly={access.readOnly} />;
       case 'manufacturing_wip_report':
@@ -1690,7 +1736,7 @@ function AppContent() {
         onBack={navigateBack}
         canGoBack={pageHistory.length > 0}
       >
-        <OnboardingChecklist onNavigate={(page) => navigate(page)} />
+        {(currentPage === "dashboard" || currentPage.toLowerCase().includes("dashboard")) && <OnboardingChecklist onNavigate={(page) => navigate(page)} />}
         {pageSuspense(renderPage())}
       </Layout>)}
     </AppProvider>

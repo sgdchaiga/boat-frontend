@@ -21,6 +21,7 @@ import {
   guidedTourSteps,
   type AssistantResult,
 } from "@/lib/userGuidance";
+import type { LearningArticle } from "@/components/learning/InAppLearning";
 
 type OnboardingStateRow = {
   organization_id: string;
@@ -45,9 +46,22 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
   const [completedSteps, setCompletedSteps] = useState<string[]>([]);
   const [completedTours, setCompletedTours] = useState<string[]>([]);
   const [savingStep, setSavingStep] = useState<string | null>(null);
+  const [databaseArticle, setDatabaseArticle] = useState<LearningArticle | null>(null);
 
   const tourSteps = useMemo(() => guidedTourSteps(businessType), [businessType]);
-  const pageGuide = useMemo(() => guidanceForPage(currentPage, businessType), [currentPage, businessType]);
+  const pageGuide = useMemo(() => {
+    if (!databaseArticle) return guidanceForPage(currentPage, businessType);
+    return {
+      title: databaseArticle.title,
+      duration: databaseArticle.media_url ? "5 min + demonstration" : "4 min",
+      summary: databaseArticle.short_description,
+      steps: databaseArticle.instructions ?? [],
+      faqs: [
+        ...(databaseArticle.common_mistakes ?? []).map((item) => ({ question: "Common mistake", answer: item })),
+        ...(databaseArticle.troubleshooting ?? []).map((item) => ({ question: "Troubleshooting", answer: item })),
+      ],
+    };
+  }, [currentPage, businessType, databaseArticle]);
   const tourDoneCount = tourSteps.filter((step) => completedSteps.includes(step.id) || completedTours.includes(step.id)).length;
 
   useEffect(() => {
@@ -67,6 +81,25 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
       cancelled = true;
     };
   }, [orgId, user?.isSaccoMember, user?.isSuperAdmin]);
+
+  useEffect(() => {
+    if (!orgId || user?.isSuperAdmin || user?.isSaccoMember) return;
+    let cancelled = false;
+    const loadArticle = async () => {
+      const { data } = await (supabase as any)
+        .from("help_articles")
+        .select("*")
+        .eq("page_key", currentPage)
+        .eq("is_active", true)
+        .order("organization_id", { ascending: false, nullsFirst: false })
+        .order("version", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (!cancelled) setDatabaseArticle((data as LearningArticle | null) ?? null);
+    };
+    void loadArticle();
+    return () => { cancelled = true; };
+  }, [currentPage, orgId, user?.isSaccoMember, user?.isSuperAdmin]);
 
   if (!orgId || user?.isSuperAdmin || user?.isSaccoMember) return null;
 
@@ -300,4 +333,3 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
     </>
   );
 }
-

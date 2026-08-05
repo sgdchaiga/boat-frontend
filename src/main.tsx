@@ -5,8 +5,10 @@ import { ErrorBoundary } from "./components/common/ErrorBoundary";
 import './index.css';
 import { isConstrainedConnection } from "./lib/mobileLite";
 import { startMobilePerformanceTracking } from "./lib/mobilePerformance";
+import { installNumericInputConvenience } from "./lib/numericInput";
 
 startMobilePerformanceTracking();
+installNumericInputConvenience();
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

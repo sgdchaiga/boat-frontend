@@ -379,7 +379,7 @@ export function ReservationsPage() {
         reservation_id: reservation.id,
         property_customer_id: reservation.property_customer_id,
         room_id: reservation.room_id,
-        check_in_time: new Date().toISOString(),
+        actual_check_in: new Date().toISOString(),
         room_discount_amount: Math.max(0, Number(reservation.room_discount_amount || 0) || 0),
         room_discount_reason: reservation.room_discount_reason ?? null,
         rate_plan_id: (reservation as any).rate_plan_id ?? null,
