@@ -9,6 +9,7 @@ test("numeric input normalization handles leading zeroes globally", async () => 
   assert.match(helper, /input\.type !== "number"/);
   assert.match(helper, /normalizeNumericInputValue/);
   assert.match(helper, /input\.select\(\)/);
+  assert.doesNotMatch(helper, /addEventListener\("input"/);
   const main = await source("src/main.tsx");
   assert.match(main, /installNumericInputConvenience\(\)/);
 });

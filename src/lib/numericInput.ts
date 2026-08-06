@@ -7,23 +7,20 @@ export function normalizeNumericInputValue(value: string): string {
   return `${sign}${integerDigits}${suffix}`;
 }
 
-/** Improves native number inputs across both new and existing forms. */
+/**
+ * Selects a default zero when a number input receives focus, allowing the
+ * user's first keystroke to replace it. This deliberately avoids mutating
+ * controlled inputs during the input event, which can fight React state and
+ * cause visible layout jitter on dense entry screens such as Cashbook.
+ */
 export function installNumericInputConvenience(root: Document = document): () => void {
   const onFocus = (event: FocusEvent) => {
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || input.type !== "number") return;
     if (/^-?0+(?:\.0+)?$/.test(input.value)) input.select();
   };
-  const onInput = (event: Event) => {
-    const input = event.target;
-    if (!(input instanceof HTMLInputElement) || input.type !== "number") return;
-    const normalized = normalizeNumericInputValue(input.value);
-    if (normalized !== input.value) input.value = normalized;
-  };
   root.addEventListener("focusin", onFocus);
-  root.addEventListener("input", onInput, true);
   return () => {
     root.removeEventListener("focusin", onFocus);
-    root.removeEventListener("input", onInput, true);
   };
 }

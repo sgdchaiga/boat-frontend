@@ -1385,7 +1385,9 @@ function AppContent() {
             : "tables";
         return (
           <POSPage
-            readOnly={access.readOnly || !caps.canEditPrices}
+            // Fixed-price operational roles (for example waiters) can transact
+            // without being allowed to edit the configured product prices.
+            readOnly={access.readOnly}
             compactMode="waiter"
             posPanel={panel}
             hidePricing={caps.hidePricing}
