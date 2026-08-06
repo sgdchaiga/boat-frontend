@@ -6,6 +6,8 @@ import {
 
   defaultLandingStateForRole,
 
+  getRolePageAllowList,
+
 } from "@/lib/roleNavigation";
 import { pageAccessDecision } from "@/lib/permissions";
 
@@ -18,6 +20,8 @@ export type NavRoleExperience =
   | "waitress"
 
   | "bartender"
+
+  | "hotel_operations_assistant"
 
   | "kitchen"
 
@@ -42,6 +46,12 @@ export function normalizeNavRoleKey(roleKey: string | undefined | null): string 
 
   if (r === "barman" || r === "bartender" || r === "bar_staff") return "bartender";
 
+  if (r === "hotel_operations_assistant" || r === "hotel_ops_assistant" || r === "operations_assistant") {
+
+    return "hotel_operations_assistant";
+
+  }
+
   if (r === "kitchen_staff" || r === "chef" || r === "cook" || r === "kitchen") return "kitchen";
 
   if (r === "supervisor") return "manager";
@@ -61,6 +71,8 @@ export function getNavRoleExperience(roleKey: string | undefined | null): NavRol
   if (r === "waitress") return "waitress";
 
   if (r === "bartender") return "bartender";
+
+  if (r === "hotel_operations_assistant") return "hotel_operations_assistant";
 
   if (r === "kitchen") return "kitchen";
 
@@ -123,6 +135,16 @@ export function isPageAllowedForNavRole(
 ): boolean {
 
   const xp = getNavRoleExperience(_roleKey);
+
+  if (xp === "hotel_operations_assistant" && shouldApplyNavRoleScope(_businessType)) {
+
+    const configuredDecision = pageAccessDecision(page);
+
+    if (configuredDecision !== null) return configuredDecision;
+
+    return getRolePageAllowList(xp)?.has(page) === true;
+
+  }
 
   if (xp === "housekeeping" && shouldApplyNavRoleScope(_businessType)) {
 

@@ -43,6 +43,7 @@ export type UserRole =
   | "accountant"
   | "housekeeping"
   | "barman"
+  | "hotel_operations_assistant"
   | "cashier"
   | "storekeeper";
 
@@ -72,6 +73,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   accountant: "Accountant",
   housekeeping: "Housekeeping",
   barman: "Barman",
+  hotel_operations_assistant: "Hotel Operations Assistant",
   cashier: "Cashier",
   storekeeper: "Storekeeper",
 };

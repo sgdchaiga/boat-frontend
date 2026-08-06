@@ -36,6 +36,14 @@ export function getRoleCapabilities(roleKey: string | undefined | null): RoleCap
         hidePricing: false,
         canApplyDiscounts: false,
       };
+    case "hotel_operations_assistant":
+      return {
+        canEditPrices: false,
+        canCancelInvoices: false,
+        canAccessFinance: false,
+        hidePricing: false,
+        canApplyDiscounts: false,
+      };
     case "kitchen":
       return {
         canEditPrices: false,

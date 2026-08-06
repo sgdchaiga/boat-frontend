@@ -146,6 +146,24 @@ export const ROLE_PAGE_ALLOW: Record<Exclude<NavRoleExperience, "full">, Set<str
     "retail_credit_invoices",
     "accounting_cashflow",
   ]),
+  hotel_operations_assistant: new Set([
+    "dashboard",
+    W,
+    "POS",
+    "Bar Orders",
+    HOTEL_PAGE.posKitchenBar,
+    "hotel_customers",
+    "billing",
+    "rooms",
+    "reservations",
+    "checkin",
+    "stays",
+    "purchases_vendors",
+    "purchases_orders",
+    "purchases_expenses",
+    "reports_stock_movement",
+    "inventory_stock_balances",
+  ]),
   housekeeping: new Set(["housekeeping"]),
 };
 
@@ -162,6 +180,7 @@ export function getRoleBasedNavMenuTitle(roleKey: string | undefined | null): st
     waiter: "Waiter Menu",
     bartender: "Bartender Menu",
     barman: "Bartender Menu",
+    hotel_operations_assistant: "Hotel Operations Menu",
     kitchen: "Kitchen Menu",
     kitchen_staff: "Kitchen Menu",
     cashier: "Cashier Menu",
@@ -231,6 +250,24 @@ function accountantNav(): RoleNavLeaf[] {
   ];
 }
 
+function hotelOperationsAssistantNav(): RoleNavLeaf[] {
+  return [
+    { name: "New Order", icon: ClipboardList, page: W, state: { posPanel: "new" } },
+    { name: "Tables", icon: Grid3x3, page: W, state: { posPanel: "tables" } },
+    { name: "Bar Orders", icon: Wine, page: "Bar Orders", state: { barView: "queue" } },
+    { name: "Customers", icon: Users, page: "hotel_customers" },
+    { name: "Pending Bills", icon: Receipt, page: "billing" },
+    { name: "Rooms", icon: Grid3x3, page: "rooms" },
+    { name: "Reservations", icon: BookOpen, page: "reservations" },
+    { name: "Check In", icon: Users, page: "checkin" },
+    { name: "Active Stays", icon: Users, page: "stays" },
+    { name: "Vendors", icon: Package, page: "purchases_vendors" },
+    { name: "Purchase Orders", icon: ClipboardList, page: "purchases_orders" },
+    { name: "Expenses", icon: Banknote, page: "purchases_expenses" },
+    { name: "Stock Movement", icon: TrendingUp, page: "reports_stock_movement" },
+  ];
+}
+
 function managerNav(): RoleNavLeaf[] {
   return [
     { name: "Overview", icon: LayoutDashboard, page: "dashboard" },
@@ -255,6 +292,8 @@ export function buildRoleNavigation(
       return waitressNav();
     case "bartender":
       return bartenderNav();
+    case "hotel_operations_assistant":
+      return hotelOperationsAssistantNav();
     case "kitchen":
       return kitchenNav();
     case "cashier":
@@ -316,6 +355,7 @@ export function defaultLandingPageForRole(
   if (xp === "full") return null;
   if (xp === "waitress") return W;
   if (xp === "bartender") return "Bar Orders";
+  if (xp === "hotel_operations_assistant") return W;
   if (xp === "kitchen") return "Kitchen Orders";
   if (xp === "cashier") {
     if (businessType === "clinic") return "clinic_pos";
@@ -335,5 +375,6 @@ export function defaultLandingStateForRole(
   const r = normalizeNavRoleKey(roleKey);
   if (r === "waitress") return { posPanel: "new" };
   if (r === "bartender") return { barView: "queue" };
+  if (r === "hotel_operations_assistant") return { posPanel: "new" };
   return undefined;
 }
