@@ -59,6 +59,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const [invoices, setInvoices] = useState<InvOpt[]>([]);
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [orgName, setOrgName] = useState<string | null>(null);
   const [orgAddress, setOrgAddress] = useState<string | null>(null);
@@ -108,7 +109,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       return;
     }
     const [pRes, sRes] = await Promise.all([
-      supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }),
+      supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(100),
       supabase.from("students").select("id,first_name,last_name,admission_number").eq("organization_id", orgId).order("last_name"),
     ]);
     setErr(pRes.error?.message || sRes.error?.message || null);
@@ -176,6 +177,16 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   }, [form.student_id, user?.organization_id]);
 
   const recordPayment = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      await recordPaymentImpl();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const recordPaymentImpl = async () => {
     if (readOnly) return;
     if (!form.student_id || !form.amount) {
       setErr("Student and amount are required.");
@@ -382,7 +393,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         reference: autoRef,
         invoice_allocations: allocations,
       })
-      .select("id")
+      .select("id,amount,method,reference,paid_at,student_id")
       .single();
     if (error) {
       if (walletIdForReverse && user?.id) {
@@ -405,49 +416,53 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       );
       return;
     }
+    const receiptNo = `R-${Date.now().toString(36).toUpperCase()}`;
     if (pay?.id) {
       const paidAtIso = new Date().toISOString();
-      const { journalMessage } = await postSchoolFeePaymentAccounting({
-        organizationId: orgId,
-        staffUserId: user?.id ?? null,
-        paymentId: pay.id as string,
-        amount: amt,
-        method: form.method,
-        paidAt: paidAtIso,
-        studentId: form.student_id,
-      });
-      if (journalMessage) console.warn("[school payment journal]", journalMessage);
-
       const paidByInvoice = new Map<string, number>();
       for (const a of allocations) {
         paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
       }
-      for (const inv of targetInvoices) {
+      const invoiceUpdates = targetInvoices.flatMap((inv) => {
         const paidDelta = paidByInvoice.get(inv.id) ?? 0;
-        if (paidDelta <= 0) continue;
+        if (paidDelta <= 0) return [];
         const newPaid = round2(Number(inv.amount_paid) + paidDelta);
-        const totalDue = Number(inv.total_due);
-        await supabase
+        return [supabase
           .from("student_invoices")
-          .update({
-            amount_paid: newPaid,
-            status: newPaid >= totalDue ? "paid" : "partial",
-          })
-          .eq("id", inv.id);
+          .update({ amount_paid: newPaid, status: newPaid >= Number(inv.total_due) ? "paid" : "partial" })
+          .eq("id", inv.id)];
+      });
+      const [accountingResult, invoiceResults, receiptResult] = await Promise.all([
+        postSchoolFeePaymentAccounting({
+          organizationId: orgId,
+          staffUserId: user?.id ?? null,
+          paymentId: pay.id as string,
+          amount: amt,
+          method: form.method,
+          paidAt: paidAtIso,
+          studentId: form.student_id,
+        }),
+        Promise.all(invoiceUpdates),
+        supabase.from("school_receipts").insert({
+          school_payment_id: pay.id,
+          receipt_number: receiptNo,
+          delivery_channels: ["print"],
+        }),
+      ]);
+      if (accountingResult.journalMessage) console.warn("[school payment journal]", accountingResult.journalMessage);
+      const invoiceError = invoiceResults.find((result) => result.error)?.error;
+      if (invoiceError) {
+        setErr(invoiceError.message);
+        return;
+      }
+      if (receiptResult.error) {
+        setErr(receiptResult.error.message);
+        return;
       }
     }
-    const receiptNo = `R-${Date.now().toString(36).toUpperCase()}`;
-    const rIns = await supabase.from("school_receipts").insert({
-      school_payment_id: pay.id,
-      receipt_number: receiptNo,
-      delivery_channels: ["print"],
-    });
-    if (rIns.error) {
-      setErr(rIns.error.message);
-      return;
-    }
+    setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 100));
+    sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
     setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash" });
-    load();
   };
 
   const openPrintReceipt = async (payment: PayRow) => {
@@ -562,8 +577,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             ))}
           </select>
           <p className="md:col-span-2 text-xs text-slate-600">{refNote}</p>
-          <button type="button" onClick={recordPayment} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 w-fit">
-            Record school-fee payment
+          <button type="button" onClick={recordPayment} disabled={saving} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60 w-fit">
+            {saving ? "Saving payment..." : "Record school-fee payment"}
           </button>
         </div>
       )}

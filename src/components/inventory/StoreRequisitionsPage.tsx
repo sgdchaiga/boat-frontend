@@ -49,6 +49,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     { id: randomUuid(), product_id: "", quantity: "" },
   ]);
   const [saving, setSaving] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const saveRequisitionInFlightRef = useRef(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -85,9 +86,11 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     );
     if (error) {
       console.error("Error loading store_requisitions:", error);
+      setErrorMessage(error.message);
       setLoading(false);
       return;
     }
+    setErrorMessage(null);
     setRequisitions((data || []) as Requisition[]);
     setLoading(false);
   };
@@ -152,6 +155,10 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
   };
 
   const handleSave = async () => {
+    if (!orgId) {
+      setErrorMessage("Your user account is not linked to an organization. Requisition was not saved.");
+      return;
+    }
     const validItems = itemRows.filter(
       (r) => r.product_id && Number(r.quantity) > 0
     );
@@ -162,6 +169,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     if (saveRequisitionInFlightRef.current) return;
     saveRequisitionInFlightRef.current = true;
     setSaving(true);
+    setErrorMessage(null);
     try {
       let requisitionId = editingId;
       if (editingId) {
@@ -173,16 +181,19 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
             to_location: toLocation,
             note: note.trim() || null,
           })
-          .eq("id", editingId);
+          .eq("id", editingId)
+          .eq("organization_id", orgId);
         if (error) throw error;
         await supabase
           .from("store_requisition_items")
           .delete()
-          .eq("requisition_id", editingId);
+          .eq("requisition_id", editingId)
+          .eq("organization_id", orgId);
       } else {
         const { data, error } = await supabase
           .from("store_requisitions")
           .insert({
+            organization_id: orgId,
             request_date: requestDate,
             from_location: fromLocation,
             to_location: toLocation,
@@ -197,6 +208,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
       }
 
       const itemPayload = validItems.map((r) => ({
+        organization_id: orgId,
         requisition_id: requisitionId,
         product_id: r.product_id,
         quantity: Number(r.quantity),
@@ -210,7 +222,9 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
       await fetchRequisitions();
     } catch (e) {
       console.error(e);
-      alert("Failed to save requisition.");
+      const message = e instanceof Error ? e.message : "Failed to save requisition.";
+      setErrorMessage(message);
+      alert(`Failed to save requisition: ${message}`);
     } finally {
       saveRequisitionInFlightRef.current = false;
       setSaving(false);
@@ -218,6 +232,11 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
   };
 
   const handleApprove = async (id: string) => {
+    if (!orgId) {
+      setErrorMessage("Your user account is not linked to an organization. Requisition was not approved.");
+      return;
+    }
+    setErrorMessage(null);
     try {
       const { data: header, error: hErr } = await filterByOrganizationId(
         supabase
@@ -253,6 +272,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
         if (qty <= 0) return;
         movements.push(
           {
+            organization_id: orgId,
             product_id: it.product_id,
             movement_date: nowIso,
             source_type: "transfer",
@@ -264,6 +284,7 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
             note: `Requisition ${fromLoc} → ${toLoc}`,
           },
           {
+            organization_id: orgId,
             product_id: it.product_id,
             movement_date: nowIso,
             source_type: "transfer",
@@ -291,13 +312,16 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
           approved_by: user?.id ?? null,
           approved_at: nowIso,
         })
-        .eq("id", id);
+        .eq("id", id)
+        .eq("organization_id", orgId);
       if (uErr) throw uErr;
 
       await fetchRequisitions();
     } catch (e) {
       console.error(e);
-      alert("Failed to approve requisition.");
+      const message = e instanceof Error ? e.message : "Failed to approve requisition.";
+      setErrorMessage(message);
+      alert(`Failed to approve requisition: ${message}`);
     }
   };
 
@@ -321,6 +345,12 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
           New Requisition
         </button>
       </div>
+
+      {errorMessage && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+          {errorMessage}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-slate-500">Loading…</div>
@@ -559,4 +589,3 @@ export function StoreRequisitionsPage({ highlightRequisitionId }: { highlightReq
     </div>
   );
 }
-

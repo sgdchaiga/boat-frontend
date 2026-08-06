@@ -43,10 +43,11 @@ export function GLAccountsPage() {
   const superAdmin = !!user?.isSuperAdmin;
   const localAuthEnabled = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
   const roleKey = String(user?.role || "").toLowerCase();
+  const isSchool = String(user?.business_type || "").toLowerCase() === "school";
   const localDesktopRoleCanManage = localAuthEnabled && ["admin", "manager", "accountant"].includes(roleKey);
-  const canManageChartOfAccounts = Boolean(
-    user?.isSuperAdmin || ["admin", "super_admin"].includes(roleKey) || localAuthEnabled || localDesktopRoleCanManage || canApprove("chart_of_accounts", user?.role)
-  );
+  const canManageChartOfAccounts = isSchool
+    ? Boolean(user?.isSuperAdmin || ["admin", "super_admin", "owner"].includes(roleKey))
+    : Boolean(user?.isSuperAdmin || ["admin", "super_admin"].includes(roleKey) || localAuthEnabled || localDesktopRoleCanManage || canApprove("chart_of_accounts", user?.role));
   const [accounts, setAccounts] = useState<GLAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
@@ -65,8 +66,8 @@ export function GLAccountsPage() {
   });
 
   useEffect(() => {
-    fetchAccounts();
-  }, []);
+    void fetchAccounts();
+  }, [orgId, user?.business_type]);
 
   const fetchAccounts = async () => {
     setLoading(true);
@@ -161,7 +162,8 @@ export function GLAccountsPage() {
       const { error } = await supabase
         .from("gl_accounts")
         .update(payload)
-        .eq("id", editing.id);
+        .eq("id", editing.id)
+        .eq("organization_id", orgId);
       if (error) {
         console.error(error);
         alert(error.message);
@@ -189,7 +191,8 @@ export function GLAccountsPage() {
     const { error } = await supabase
       .from("gl_accounts")
       .update({ is_active: !acc.is_active })
-      .eq("id", acc.id);
+      .eq("id", acc.id)
+      .eq("organization_id", orgId);
     if (error) {
       console.error(error);
       alert(error.message);
@@ -230,6 +233,7 @@ export function GLAccountsPage() {
               <p>Manage GL accounts used for sales, purchases, and stock.</p>
             </PageNotes>
           </div>
+          {isSchool && <p className="mt-1 text-sm text-slate-500">Standard school accounts for fees, operations, assets, liabilities and reporting. Administrators can add or deactivate accounts.</p>}
         </div>
         {canManageChartOfAccounts && (
           <button

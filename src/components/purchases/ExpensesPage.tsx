@@ -16,6 +16,7 @@ import { randomUuid } from "../../lib/randomUuid";
 import { loadHotelConfig } from "../../lib/hotelConfig";
 import { approveExpenseAndPost, isSpendMoneyApprovalEnabled, queueExpenseForTreasury, setSpendMoneyApprovalEnabled } from "../../lib/treasuryWorkflow";
 import { clearCashbookDraft } from "../../lib/cashbookDraft";
+import { isGlAccountRelevantForBusinessType } from "../../lib/glAccountBusinessScope";
 
 const SIMPLE_EXPENSE_MODE_KEY = "boat.expenses.simple_mode";
 
@@ -592,6 +593,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const [schoolBudgetByGl, setSchoolBudgetByGl] = useState<Map<string, number>>(new Map());
   const [schoolSpentByGl, setSchoolSpentByGl] = useState<Map<string, number>>(new Map());
   const [schoolBudgetGlId, setSchoolBudgetGlId] = useState("");
+  const [schoolBudgetError, setSchoolBudgetError] = useState<string | null>(null);
   const [approvalEnabled, setApprovalEnabled] = useState(true);
   const [approvalWorkingId, setApprovalWorkingId] = useState<string | null>(null);
 
@@ -606,19 +608,36 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   useEffect(() => {
     if (!orgId || String(user?.business_type || "").toLowerCase() !== "school") {
       setSchoolBudgetByGl(new Map());
+      setSchoolBudgetError(null);
       return;
     }
     void (async () => {
-      const today = localDateISO();
-      const { data: budgetRows } = await supabase.from("budgets").select("id,start_date,end_date").eq("organization_id", orgId).eq("is_active", true).lte("start_date", today).gte("end_date", today);
+      const selectedDate = expenseDate || localDateISO();
+      const { data: budgetRows, error: budgetError } = await supabase.from("budgets").select("id,start_date,end_date").eq("organization_id", orgId).eq("is_active", true).lte("start_date", selectedDate).gte("end_date", selectedDate);
+      if (budgetError) {
+        setSchoolBudgetError(budgetError.message);
+        setSchoolBudgetByGl(new Map());
+        setSchoolSpentByGl(new Map());
+        return;
+      }
       const typedBudgets = (budgetRows || []) as Array<{ id: string; start_date: string; end_date: string }>;
       const ids = typedBudgets.map((b) => b.id);
-      if (!ids.length) { setSchoolBudgetByGl(new Map()); setSchoolSpentByGl(new Map()); return; }
-      const { data } = await supabase.from("budget_lines").select("gl_account_id,amount").in("budget_id", ids);
+      if (!ids.length) {
+        setSchoolBudgetError(`No active budget covers the expense date ${selectedDate}. Open Budget formulation and activate the Term 2 budget after checking its start and end dates.`);
+        setSchoolBudgetByGl(new Map()); setSchoolSpentByGl(new Map()); return;
+      }
+      const { data, error: lineError } = await supabase.from("budget_lines").select("gl_account_id,amount").in("budget_id", ids);
+      if (lineError) {
+        setSchoolBudgetError(lineError.message);
+        setSchoolBudgetByGl(new Map());
+        setSchoolSpentByGl(new Map());
+        return;
+      }
       const totals = new Map<string, number>();
       for (const row of (data || []) as Array<{ gl_account_id: string | null; amount: number }>) {
         if (row.gl_account_id) totals.set(row.gl_account_id, (totals.get(row.gl_account_id) || 0) + Number(row.amount || 0));
       }
+      setSchoolBudgetError(totals.size ? null : "The active Term 2 budget has no lines linked to expense accounts. Edit its lines and select a GL account for each expense vote.");
       setSchoolBudgetByGl(totals);
       const from = typedBudgets.map((b) => b.start_date).sort()[0];
       const sortedEndDates = typedBudgets.map((b) => b.end_date).sort();
@@ -632,7 +651,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
       }
       setSchoolSpentByGl(spent);
     })();
-  }, [orgId, user?.business_type, showModal]);
+  }, [orgId, user?.business_type, showModal, expenseDate]);
 
   const loadGlAccounts = useCallback(async () => {
     const { data, error } = await supabase
@@ -646,13 +665,14 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     const normalized = ((data || []) as Array<Record<string, unknown>>)
       .map(normalizeGlAccount)
       .filter((row) => row.id)
+      .filter((row) => isGlAccountRelevantForBusinessType(row, user?.business_type))
       .sort((a, b) =>
         `${a.account_code || ""} ${a.account_name || ""}`.localeCompare(
           `${b.account_code || ""} ${b.account_name || ""}`
         )
       );
     setGlAccounts(normalized);
-  }, []);
+  }, [user?.business_type]);
 
   const loadVendors = useCallback(async () => {
     const loadLocalVendors = async () => {
@@ -930,9 +950,15 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     return glAccounts.filter((a) => a.account_type === "asset");
   }, [glAccounts]);
 
-  const expenseGlOptions = useMemo(
-    () => glAccounts.filter((a) => a.account_type === "expense"),
-    [glAccounts]
+  const expenseGlOptions = useMemo(() => {
+    const expenseAccounts = glAccounts.filter((a) => a.account_type === "expense");
+    if (String(user?.business_type || "").toLowerCase() !== "school") return expenseAccounts;
+    return expenseAccounts.filter((account) => schoolBudgetByGl.has(account.id));
+  }, [glAccounts, schoolBudgetByGl, user?.business_type]);
+
+  const schoolExpenseBudgetEntries = useMemo(
+    () => [...schoolBudgetByGl.entries()].filter(([glId]) => glAccounts.some((account) => account.id === glId && account.account_type === "expense")),
+    [glAccounts, schoolBudgetByGl]
   );
 
   /** Input VAT can sit on asset, liability, or expense per chart — allow full chart search */
@@ -1016,6 +1042,10 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   };
 
   const handleSave = async () => {
+    if (!orgId) {
+      alert("Your user account is not linked to a school organization. Expense was not saved.");
+      return;
+    }
     const rate = parseNum(vatRatePercent);
     const journalRows: ExpenseJournalLineInput[] = [];
     const vendorIdsPerJournalRow: (string | null)[] = [];
@@ -1093,7 +1123,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     }
 
     if (String(user?.business_type || "").toLowerCase() === "school") {
-      if (!schoolBudgetByGl.size) { alert("Expense blocked: no active approved budget is available for this date."); return; }
+      if (!schoolExpenseBudgetEntries.length) { alert(schoolBudgetError || "Expense blocked: the active budget has no lines linked to school expense accounts for this date."); return; }
       if (simpleExpenseMode && !schoolBudgetGlId) { alert("Select the approved budget line before saving this expense."); return; }
       const requested = new Map<string, number>();
       for (const row of journalRows) requested.set(row.expense_gl_account_id, (requested.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
@@ -1163,7 +1193,8 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
             expense_date: expDate,
             ...(simpleExpenseMode ? { vendor_id: simpleVendorId } : {}),
           })
-          .eq("id", expenseId);
+          .eq("id", expenseId)
+          .eq("organization_id", orgId);
         if (updErr) throw updErr;
 
         const { error: lineErr } = await supabase.from("expense_lines").insert(lineInsertsFor(expenseId));
@@ -1172,6 +1203,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         const { data: insertedRows, error: expErr } = await supabase
           .from("expenses")
           .insert({
+            organization_id: orgId,
             vendor_id: simpleExpenseMode ? simpleVendorId : null,
             amount: totalRounded,
             description: summary,
@@ -1903,12 +1935,12 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                         <label className="block text-sm font-semibold text-slate-800 mb-1">Approved budget line *</label>
                         <select value={schoolBudgetGlId} onChange={(e) => setSchoolBudgetGlId(e.target.value)} className="w-full rounded-lg border border-indigo-300 bg-white px-3 py-2 text-sm">
                           <option value="">Select the budget this expense will use</option>
-                          {[...schoolBudgetByGl.entries()].map(([glId, budget]) => {
+                          {schoolExpenseBudgetEntries.map(([glId, budget]) => {
                             const account=glAccounts.find((row)=>row.id===glId); const spent=schoolSpentByGl.get(glId)||0; const remaining=Math.max(0,budget-spent);
                             return <option key={glId} value={glId}>{account ? `${account.account_code} - ${account.account_name}` : "Budget line"} · Remaining ${remaining.toLocaleString()}</option>;
                           })}
                         </select>
-                        {!schoolBudgetByGl.size && <p className="mt-2 text-xs font-medium text-red-700">No active approved budget is available. This expense cannot be saved.</p>}
+                        {!schoolExpenseBudgetEntries.length && <p className="mt-2 text-xs font-medium text-red-700">{schoolBudgetError || "The active budget has no lines linked to school expense accounts for the selected date."}</p>}
                         {schoolBudgetGlId && <p className="mt-2 text-xs text-indigo-800">Approved: {(schoolBudgetByGl.get(schoolBudgetGlId)||0).toLocaleString()} · Spent: {(schoolSpentByGl.get(schoolBudgetGlId)||0).toLocaleString()} · Remaining: {Math.max(0,(schoolBudgetByGl.get(schoolBudgetGlId)||0)-(schoolSpentByGl.get(schoolBudgetGlId)||0)).toLocaleString()}</p>}
                       </div>
                     )}

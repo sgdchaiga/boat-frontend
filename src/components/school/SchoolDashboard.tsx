@@ -3,6 +3,8 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { SCHOOL_PAGE } from "@/lib/schoolPages";
 import { PageNotes } from "@/components/common/PageNotes";
+import { isCashEquivalentAccount } from "@/lib/cashFlowStatement";
+import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { SchoolDashboardV1 } from "./SchoolDashboardV1";
 import {
   AlertTriangle,
@@ -50,6 +52,7 @@ type DashboardData = {
   collectedToday: number;
   receiptsToday: number;
   pendingApprovals: number;
+  availableFunds: number;
   recentPayments: PaymentRow[];
   recentExpenses: ExpenseRow[];
 };
@@ -64,6 +67,7 @@ const initialData: DashboardData = {
   collectedToday: 0,
   receiptsToday: 0,
   pendingApprovals: 0,
+  availableFunds: 0,
   recentPayments: [],
   recentExpenses: [],
 };
@@ -109,6 +113,15 @@ function SchoolDashboardV11({ onNavigate }: Props) {
       if (firstError) setError(firstError.message);
       const invoiceRows = (invoices.data || []) as Array<{ total_due?: number; amount_paid?: number }>;
       const paymentRows = (payments.data || []) as PaymentRow[];
+      const fundsCacheKey = `boat.school.available-funds.${orgId}`;
+      const cachedFunds = (() => {
+        try {
+          const value = JSON.parse(sessionStorage.getItem(fundsCacheKey) || "null") as { amount?: number; savedAt?: number } | null;
+          return value && Number.isFinite(value.amount) && Date.now() - Number(value.savedAt || 0) < 300_000 ? value : null;
+        } catch {
+          return null;
+        }
+      })();
       const billed = invoiceRows.reduce((sum, row) => sum + Number(row.total_due || 0), 0);
       const collected = invoiceRows.reduce((sum, row) => sum + Number(row.amount_paid || 0), 0);
       const todaysPayments = paymentRows.filter((row) => {
@@ -125,10 +138,37 @@ function SchoolDashboardV11({ onNavigate }: Props) {
         collectedToday: todaysPayments.reduce((sum, row) => sum + Number(row.amount || 0), 0),
         receiptsToday: todaysPayments.length,
         pendingApprovals: pendingPos.count || 0,
+        availableFunds: Number(cachedFunds?.amount || 0),
         recentPayments: paymentRows,
         recentExpenses: expenses.error ? [] : ((expenses.data || []) as ExpenseRow[]),
       });
       setLoading(false);
+      if (!cachedFunds) {
+        void (async () => {
+          const accountResult = await supabase
+            .from("gl_accounts")
+            .select("id,account_code,account_name,account_type,category,is_active")
+            .eq("organization_id", orgId);
+          const moneyAccountIds = normalizeGlAccountRows((accountResult.data || []) as unknown[])
+            .filter(isCashEquivalentAccount)
+            .map((account) => account.id);
+          if (!moneyAccountIds.length || cancelled) return;
+          const linesResult = await supabase
+            .from("journal_entry_lines")
+            .select("debit,credit,journal_entries!inner(organization_id,is_posted,is_deleted)")
+            .in("gl_account_id", moneyAccountIds)
+            .eq("journal_entries.organization_id", orgId)
+            .eq("journal_entries.is_posted", true)
+            .eq("journal_entries.is_deleted", false);
+          if (linesResult.error || cancelled) return;
+          const amount = (linesResult.data || []).reduce(
+            (sum, row) => sum + Number(row.debit || 0) - Number(row.credit || 0),
+            0,
+          );
+          sessionStorage.setItem(fundsCacheKey, JSON.stringify({ amount, savedAt: Date.now() }));
+          setData((current) => ({ ...current, availableFunds: amount }));
+        })();
+      }
     })();
     return () => { cancelled = true; };
   }, [user?.organization_id]);
@@ -138,7 +178,7 @@ function SchoolDashboardV11({ onNavigate }: Props) {
   const roleLabel = role === "accountant" ? "Bursar / accountant" : role === "cashier" ? "Cashier" : role === "storekeeper" ? "Storekeeper" : role === "receptionist" ? "Admissions officer" : "School administrator";
   const quickActions = useMemo(() => {
     if (role === "cashier") return [
-      { label: "Receive school fees", page: SCHOOL_PAGE.payments, icon: Receipt },
+      { label: "Receive payment", page: SCHOOL_PAGE.payments, icon: Receipt },
       { label: "View receipts", page: SCHOOL_PAGE.receipts, icon: FilePlus2 },
       { label: "Collections summary", page: SCHOOL_PAGE.collections, icon: TrendingUp },
     ];
@@ -154,8 +194,8 @@ function SchoolDashboardV11({ onNavigate }: Props) {
       { label: "Health alerts", page: SCHOOL_PAGE.healthIssues, icon: AlertTriangle },
     ];
     return [
-      { label: "Receive school fees", page: SCHOOL_PAGE.payments, icon: Receipt },
-      { label: "Create invoices", page: SCHOOL_PAGE.invoices, icon: FilePlus2 },
+      { label: "Receive payment", page: SCHOOL_PAGE.payments, icon: Receipt },
+      { label: "Create term charges", page: SCHOOL_PAGE.invoices, icon: FilePlus2 },
       { label: "Add student", page: SCHOOL_PAGE.students, icon: UserPlus },
       { label: "Review approvals", page: "purchases_orders", icon: CheckCircle2 },
     ];
@@ -165,32 +205,32 @@ function SchoolDashboardV11({ onNavigate }: Props) {
     { label: "Active students", value: data.students.toLocaleString(), page: SCHOOL_PAGE.studentsList, icon: GraduationCap },
     { label: "Fees billed", value: money(data.billed), page: SCHOOL_PAGE.invoices, icon: FilePlus2 },
     { label: "Fees collected", value: money(data.collected), page: SCHOOL_PAGE.collections, icon: Receipt },
-    { label: "Outstanding fees", value: money(data.outstanding), page: SCHOOL_PAGE.invoices, icon: Wallet, alert: data.outstanding > 0 },
-    { label: "Collections today", value: money(data.collectedToday), page: SCHOOL_PAGE.payments, icon: Banknote },
-    { label: "Pending approvals", value: data.pendingApprovals.toLocaleString(), page: "purchases_orders", icon: ClipboardList, alert: data.pendingApprovals > 0 },
+    { label: "Unpaid fees", value: money(data.outstanding), page: "reports_school_outstanding", icon: Wallet, alert: data.outstanding > 0 },
+    { label: "Collection rate", value: `${collectionRate.toFixed(1)}%`, page: SCHOOL_PAGE.collections, icon: TrendingUp },
+    { label: "Cash & bank", value: money(data.availableFunds), page: "treasury", icon: Banknote },
   ];
 
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div><div className="flex items-center gap-2"><h1 className="text-3xl font-bold text-slate-900">{user?.organization_name || "School dashboard"}</h1><PageNotes ariaLabel="School dashboard help"><p>This shared dashboard prioritizes students, billing, collections, balances, approvals and exceptions. Detailed accounting and inventory remain in their dedicated workspaces.</p></PageNotes></div><p className="mt-1 text-sm text-slate-500">{roleLabel} view · live operational overview</p></div>
-        <button type="button" onClick={() => onNavigate(SCHOOL_PAGE.payments)} className="app-btn-primary"><Receipt className="h-4 w-4"/> Record payment</button>
+        <div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">School operations</p><div className="mt-1 flex items-center gap-2"><h1 className="text-3xl font-bold text-slate-900">{user?.organization_name || "School dashboard"}</h1><PageNotes ariaLabel="School dashboard help"><p>This dashboard prioritizes students, fees, collections, available funds, approvals and exceptions. Detailed accounting remains available only to authorized roles.</p></PageNotes></div><p className="mt-1 text-sm text-slate-600">{roleLabel} view - live operational overview</p></div>
+        <button type="button" onClick={() => onNavigate(SCHOOL_PAGE.payments)} className="app-btn-primary"><Receipt className="h-4 w-4"/> Receive payment</button>
       </header>
 
       {error && <div className="rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">Some dashboard information could not be loaded: {error}</div>}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-6">
-        {cards.map(({ label, value, page, icon: Icon, alert }) => <button key={label} type="button" onClick={() => onNavigate(page)} className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${alert ? "border-amber-300" : "border-slate-200"}`}><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span><Icon className={`h-5 w-5 ${alert ? "text-amber-600" : "text-brand-700"}`}/></div><p className="text-2xl font-bold text-slate-900">{loading ? "—" : value}</p></button>)}
+        {cards.map(({ label, value, page, icon: Icon, alert }) => <button key={label} type="button" onClick={() => onNavigate(page)} className={`rounded-xl border bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${alert ? "border-amber-300" : "border-slate-200 hover:border-brand-300"}`}><div className="mb-3 flex items-center justify-between"><span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</span><Icon className={`h-5 w-5 ${alert ? "text-amber-600" : "text-brand-700"}`}/></div><p className="text-2xl font-bold text-slate-900">{loading ? "-" : value}</p></button>)}
       </section>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-4"><h2 className="font-semibold text-slate-900">Quick actions</h2><div className="mt-3 flex flex-wrap gap-2">{quickActions.map(({ label, page, icon: Icon }) => <button key={label} type="button" onClick={() => onNavigate(page)} className="app-btn-secondary"><Icon className="h-4 w-4"/>{label}</button>)}</div></section>
+      <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-bold text-slate-900">Common tasks</h2><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">{quickActions.map(({ label, page, icon: Icon }) => <button key={label} type="button" onClick={() => onNavigate(page)} className="flex items-center gap-3 rounded-lg border border-slate-200 p-4 text-left font-semibold text-slate-800 transition hover:bg-slate-50"><Icon className="h-5 w-5 text-brand-700"/>{label}</button>)}</div></section>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="rounded-xl border border-slate-200 bg-white p-5"><div className="flex items-start justify-between"><div><h2 className="font-semibold text-slate-900">Fee collection progress</h2><p className="text-xs text-slate-500">{money(data.collected)} collected from {money(data.billed)} billed</p></div><strong className="text-xl text-brand-700">{collectionRate.toFixed(1)}%</strong></div><div className="mt-5 h-3 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-brand-600 transition-all" style={{ width: `${collectionRate}%` }}/></div><div className="mt-4 grid grid-cols-3 gap-3 text-sm"><Summary label="Invoices" value={data.invoices.toLocaleString()}/><Summary label="Receipts today" value={data.receiptsToday.toLocaleString()}/><Summary label="Balance" value={money(data.outstanding)}/></div></section>
         <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold text-slate-900">Student summary</h2><div className="mt-4 grid grid-cols-2 gap-4"><Summary label="Active students" value={data.students.toLocaleString()}/><Summary label="Parents / guardians" value={data.parents.toLocaleString()}/></div><button type="button" onClick={() => onNavigate(SCHOOL_PAGE.studentsList)} className="mt-5 inline-flex items-center gap-1 text-sm font-semibold text-brand-700">Open student register <ArrowRight className="h-4 w-4"/></button></section>
       </div>
 
-      <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold text-slate-900">Tasks requiring attention</h2><div className="mt-3 divide-y divide-slate-100">{data.pendingApprovals > 0 && <Attention label={`${data.pendingApprovals} purchase order${data.pendingApprovals === 1 ? "" : "s"} awaiting approval`} action="Review approvals" onClick={() => onNavigate("purchases_orders")}/>} {data.outstanding > 0 && <Attention label={`${money(data.outstanding)} in outstanding school fees`} action="Review balances" onClick={() => onNavigate(SCHOOL_PAGE.invoices)}/>} {data.receiptsToday === 0 && <Attention label="No school-fee receipts recorded today" action="Receive payment" onClick={() => onNavigate(SCHOOL_PAGE.payments)}/>} {data.pendingApprovals === 0 && data.outstanding === 0 && data.receiptsToday > 0 && <p className="py-4 text-sm text-emerald-700">No urgent exceptions require attention.</p>}</div></section>
+      <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold text-slate-900">Tasks & alerts</h2><div className="mt-3 divide-y divide-slate-100">{data.pendingApprovals > 0 && <Attention label={`${data.pendingApprovals} purchase order${data.pendingApprovals === 1 ? "" : "s"} awaiting approval`} action="Review approvals" onClick={() => onNavigate("purchases_orders")}/>} {data.outstanding > 0 && <Attention label={`${money(data.outstanding)} in unpaid school fees`} action="View affected students" onClick={() => onNavigate("reports_school_outstanding")}/>} {data.receiptsToday === 0 && <Attention label="No school-fee payments received today" action="Receive payment" onClick={() => onNavigate(SCHOOL_PAGE.payments)}/>} {data.pendingApprovals === 0 && data.outstanding === 0 && data.receiptsToday > 0 && <p className="py-4 text-sm text-emerald-700">No urgent exceptions require attention.</p>}</div></section>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <ActivityPanel title="Recent money received" empty="No recent school-fee payments." rows={data.recentPayments.map((row) => ({ id: row.id, primary: row.reference || "School-fee payment", secondary: `${dateLabel(row.paid_at)} · ${row.method}`, amount: money(row.amount) }))} onOpen={() => onNavigate(SCHOOL_PAGE.payments)}/>
