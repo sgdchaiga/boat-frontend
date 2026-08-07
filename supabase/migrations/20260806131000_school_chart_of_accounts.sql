@@ -119,22 +119,33 @@ BEGIN
     WHERE organization_id = p_organization_id AND account_code = r.account_code
     LIMIT 1;
 
-    IF v_id IS NULL THEN
-      v_parent_id := NULL;
-      IF r.parent_code IS NOT NULL THEN
-        v_parent_id := (account_ids->>r.parent_code)::uuid;
-        IF v_parent_id IS NULL THEN
-          SELECT id INTO v_parent_id FROM public.gl_accounts
-          WHERE organization_id = p_organization_id AND account_code = r.parent_code
-          LIMIT 1;
-        END IF;
+    v_parent_id := NULL;
+    IF r.parent_code IS NOT NULL THEN
+      v_parent_id := (account_ids->>r.parent_code)::uuid;
+      IF v_parent_id IS NULL THEN
+        SELECT id INTO v_parent_id FROM public.gl_accounts
+        WHERE organization_id = p_organization_id AND account_code = r.parent_code
+        LIMIT 1;
       END IF;
+    END IF;
+
+    IF v_id IS NULL THEN
       INSERT INTO public.gl_accounts(
         id, organization_id, account_code, account_name, account_type, category, parent_id, is_active, business_type
       ) VALUES (
         gen_random_uuid(), p_organization_id, r.account_code, r.account_name,
         r.account_type, r.category, v_parent_id, true, 'school'
       ) RETURNING id INTO v_id;
+    ELSE
+      -- Convert legacy mixed-industry defaults to the school standard while
+      -- preserving the administrator-controlled active/inactive state.
+      UPDATE public.gl_accounts SET
+        account_name = r.account_name,
+        account_type = r.account_type,
+        category = r.category,
+        parent_id = v_parent_id,
+        business_type = 'school'
+      WHERE id = v_id;
     END IF;
     account_ids := account_ids || jsonb_build_object(r.account_code, v_id::text);
   END LOOP;

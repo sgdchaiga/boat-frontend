@@ -18,3 +18,8 @@ export function isGlAccountRelevantForBusinessType(account: AccountLike, busines
   if (selectedType === "general_business" || selectedType === "retail" || selectedType === "restaurant") return false;
   return taggedIndustries.includes(selectedType);
 }
+
+/** Keep a chart or picker aligned to the active business while retaining neutral custom accounts. */
+export function filterGlAccountsForBusinessType<T extends AccountLike>(accounts: T[], businessType?: string | null): T[] {
+  return accounts.filter((account) => isGlAccountRelevantForBusinessType(account, businessType));
+}

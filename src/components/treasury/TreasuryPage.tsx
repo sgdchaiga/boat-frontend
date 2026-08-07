@@ -8,6 +8,7 @@ import { syncBillStatusInDb } from "@/lib/billStatus";
 import { randomUuid } from "@/lib/randomUuid";
 import { isCashEquivalentAccount } from "@/lib/cashFlowStatement";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
 import { businessTodayISO } from "@/lib/timezone";
 import { canApprove } from "@/lib/approvalRights";
 import { approveExpenseAndPost } from "@/lib/treasuryWorkflow";
@@ -193,7 +194,10 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       (row) => row.payment_source !== "pos_retail" || (!!row.transaction_id && activeRetailSaleIds.has(row.transaction_id))
     ));
     setSpendMoneyApprovalEnabled(workflowRes.data?.allowed !== false);
-    const allMoneyAccounts = normalizeGlAccountRows((accountRes.data || []) as unknown[])
+    const allMoneyAccounts = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accountRes.data || []) as unknown[]),
+      user?.business_type
+    )
       .filter(isCashEquivalentAccount)
       .map((account) => ({
         id: account.id,

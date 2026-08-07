@@ -6,6 +6,7 @@ import { formatDrCrCell } from "../../lib/accountingReportExport";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 
 type GLAccount = { id: string; account_code: string; account_name: string; account_type: string };
 type LedgerLine = {
@@ -90,7 +91,10 @@ export function GeneralLedgerPage() {
       return;
     }
 
-    const normalizedAccounts = normalizeGlAccountRows((accData || []) as unknown[]).map((row) => ({
+    const normalizedAccounts = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accData || []) as unknown[]),
+      user?.business_type
+    ).map((row) => ({
       id: row.id,
       account_code: row.account_code,
       account_name: row.account_name,

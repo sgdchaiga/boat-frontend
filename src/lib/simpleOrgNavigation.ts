@@ -139,6 +139,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
       ...(canManageAccounting ? [
         { name: "Journal entries", page: "accounting_journal" } as NavChild,
       ] : []),
+      { name: "Manual journals", page: "accounting_manual" },
       { name: "General ledger", page: "accounting_gl" },
       ...(allowFixedAssets ? [{ name: "Fixed assets", page: "fixed_assets" } as NavChild] : []),
       { name: "Trial balance", page: "accounting_trial" },

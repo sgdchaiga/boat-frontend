@@ -1369,6 +1369,21 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     setShowModal(true);
   }, [pageState?.cashbookDraft, vendors]);
 
+  useEffect(() => {
+    const draft = pageState?.assistantDraft as Record<string, unknown> | undefined;
+    if (!draft || !["purchase", "expense", "equipment"].includes(String(draft.transactionType))) return;
+    setEditingExpenseId(null);
+    setSimpleExpenseMode(true);
+    setExpenseDate(String(draft.date || localDateISO()));
+    setSimpleNotes(`Prepared by BOAT Assistant for review: ${String(draft.description || "")}`);
+    const counterparty = String(draft.counterparty || "").trim().toLowerCase();
+    setSimpleVendorId(vendors.find((vendor) => vendor.name.trim().toLowerCase() === counterparty)?.id || null);
+    const rawMethod = String(draft.paymentMethod || "cash");
+    const method: PaymentMethodSimple = rawMethod === "mobile" ? "mobile" : rawMethod === "bank" ? "bank" : rawMethod === "wallet" ? "wallet" : "cash";
+    setSimpleLines([{ ...emptySimpleLine(), item: String(draft.description || ""), amount: String(draft.amount || ""), payment_method: method }]);
+    setShowModal(true);
+  }, [pageState?.assistantDraft, vendors]);
+
   const openEditModal = async (expenseId: string) => {
     setShowModal(true);
     setEditModalLoading(true);

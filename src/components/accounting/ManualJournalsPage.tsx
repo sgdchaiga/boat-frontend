@@ -10,6 +10,7 @@ import { PageNotes } from "../common/PageNotes";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { randomUuid } from "../../lib/randomUuid";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 
 type GLAccount = {
   id: string;
@@ -94,7 +95,10 @@ export function ManualJournalsPage() {
       ),
       fetchExpenseGlAccountPreferenceOrder(orgId, superAdmin),
     ]);
-    const normalized = normalizeGlAccountRows((accRes.data || []) as unknown[]).filter((row) => row.is_active);
+    const normalized = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accRes.data || []) as unknown[]),
+      user?.business_type
+    ).filter((row) => row.is_active);
     setAccounts(normalized as GLAccount[]);
     setExpenseGlPreferenceOrder(prefOrder);
     setLoading(false);

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
@@ -126,9 +127,9 @@ export function BudgetingPage({ readOnly }: Props) {
       .from("gl_accounts")
       .select("*")
       .order("account_code");
-    const normalized = normalizeGlAccountRows((data || []) as unknown[]).filter((row) => row.is_active);
+    const normalized = filterGlAccountsForBusinessType(normalizeGlAccountRows((data || []) as unknown[]), user?.business_type).filter((row) => row.is_active);
     setAccounts(normalized as GLPick[]);
-  }, []);
+  }, [user?.business_type]);
 
   const accountTypeById = useMemo(() => new Map(accounts.map((a) => [a.id, a.account_type])), [accounts]);
 

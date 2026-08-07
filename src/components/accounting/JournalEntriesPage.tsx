@@ -21,6 +21,7 @@ import { orderGlAccountsWithExpensePreferences, fetchExpenseGlAccountPreferenceO
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { randomUuid } from "../../lib/randomUuid";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 
 type GLAccount = {
   id: string;
@@ -288,7 +289,10 @@ export function JournalEntriesPage() {
     const total = typeof entRes.count === "number" ? entRes.count : null;
     setTotalEntries(total);
     setHasMorePages(total !== null ? (page + 1) * 50 < total : fetchedEntries.length === 50);
-    const normalizedAccounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+    const normalizedAccounts = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accRes.data || []) as unknown[]),
+      user?.business_type
+    )
       .filter((row) => row.is_active)
       .map((row) => ({
         id: row.id,

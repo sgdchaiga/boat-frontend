@@ -8,7 +8,14 @@ type ImportEntity =
   | "retail-customers"
   | "hotel-customers"
   | "vendors"
-  | "chart-of-accounts";
+  | "chart-of-accounts"
+  | "school-students"
+  | "school-parents"
+  | "school-classes"
+  | "school-streams"
+  | "school-subjects"
+  | "school-teachers"
+  | "school-fee-structures";
 
 type ParsedRow = Record<string, unknown>;
 
@@ -18,6 +25,13 @@ const ENTITY_OPTIONS: Array<{ id: ImportEntity; label: string; required: string[
   { id: "hotel-customers", label: "Hotel Customers", required: ["first_name", "last_name"] },
   { id: "vendors", label: "Vendors", required: ["name"] },
   { id: "chart-of-accounts", label: "Chart of Accounts", required: ["name"] },
+  { id: "school-students", label: "School - Students", required: ["admission_number", "first_name", "last_name", "class_name"] },
+  { id: "school-parents", label: "School - Parents & Guardians", required: ["full_name"] },
+  { id: "school-classes", label: "School - Classes", required: ["name"] },
+  { id: "school-streams", label: "School - Streams", required: ["name"] },
+  { id: "school-subjects", label: "School - Subjects", required: ["name"] },
+  { id: "school-teachers", label: "School - Teachers", required: ["full_name"] },
+  { id: "school-fee-structures", label: "School - Fee Structures", required: ["class_name", "academic_year", "term_name", "tuition"] },
 ];
 
 const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
@@ -62,6 +76,13 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "chart-of-accounts": [
     { id: "", code: "1000", name: "Cash on Hand", type: "Asset", parent_code: "", is_active: "1" },
   ],
+  "school-students": [{ id: "", admission_number: "S0001", first_name: "Amina", last_name: "Nabirye", class_name: "Senior 1", stream: "East", status: "active", date_of_birth: "2012-03-15", notes: "" }],
+  "school-parents": [{ id: "", full_name: "Sarah Nabirye", phone: "+256700000001", phone_alt: "", email: "", address: "Kampala", notes: "Primary guardian" }],
+  "school-classes": [{ id: "", name: "Senior 1", code: "S1", sort_order: "1", is_active: "1" }],
+  "school-streams": [{ id: "", name: "East", code: "E", sort_order: "1", is_active: "1" }],
+  "school-subjects": [{ id: "", name: "Mathematics", code: "MATH", sort_order: "1", is_active: "1" }],
+  "school-teachers": [{ id: "", full_name: "Grace Namusoke", employee_number: "T001", phone: "+256700000002", email: "", notes: "Mathematics", is_active: "1" }],
+  "school-fee-structures": [{ id: "", class_name: "Senior 1", stream: "", academic_year: "2026", term_name: "Term 2", currency: "UGX", tuition: "450000", boarding: "300000", meals: "150000", transport: "0", other: "0", is_active: "1" }],
 };
 
 function normalizeRow(row: Record<string, unknown>): ParsedRow {
@@ -110,6 +131,12 @@ export function AdminLocalImportPage() {
     () => ENTITY_OPTIONS.find((opt) => opt.id === entity) ?? ENTITY_OPTIONS[0],
     [entity]
   );
+
+  const availableEntityOptions = useMemo(() => {
+    const isSchool = String(user?.business_type || "").toLowerCase() === "school";
+    if (!isSchool) return ENTITY_OPTIONS.filter((option) => !option.id.startsWith("school-"));
+    return ENTITY_OPTIONS.filter((option) => !["retail-customers", "hotel-customers"].includes(option.id));
+  }, [user?.business_type]);
 
   const parseSelectedFile = async (): Promise<ParsedRow[]> => {
     if (!file) return [];
@@ -222,7 +249,7 @@ export function AdminLocalImportPage() {
   };
 
   const importChartOfAccounts = async (rows: ParsedRow[]) => {
-    const localOrgId = (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || "00000000-0000-0000-0000-000000000001";
+    const localOrgId = user?.organization_id || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || "00000000-0000-0000-0000-000000000001";
     const mapped = rows
       .filter((row) => asText(row.name) || asText(row.account_name))
       .map((row) => ({
@@ -235,9 +262,54 @@ export function AdminLocalImportPage() {
         parent_id: asText(row.parent_id) || null,
         parent_code: asText(row.parent_code),
         is_active: asBool(row.is_active, true),
+        business_type: user?.business_type || null,
       }));
     if (mapped.length === 0) return 0;
     await desktopApi.localUpsert({ table: "gl_accounts", rows: mapped });
+    return mapped.length;
+  };
+
+  const importSchoolRows = async (rows: ParsedRow[], type: ImportEntity) => {
+    const organizationId = user?.organization_id || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim();
+    if (!organizationId) throw new Error("Your school user is not linked to an organization.");
+    const tableByType: Partial<Record<ImportEntity, string>> = {
+      "school-students": "students", "school-parents": "parents", "school-classes": "classes",
+      "school-streams": "streams", "school-subjects": "subjects", "school-teachers": "teachers",
+      "school-fee-structures": "fee_structures",
+    };
+    const table = tableByType[type];
+    if (!table) return 0;
+    const mapped = rows.flatMap<Record<string, unknown>>((row, index) => {
+      const base = { id: asText(row.id) || generateId(type.replace("school-", "sch")), organization_id: organizationId };
+      if (type === "school-students") {
+        if (!asText(row.admission_number) || !asText(row.first_name) || !asText(row.last_name) || !asText(row.class_name)) return [];
+        return [{ ...base, admission_number: asText(row.admission_number), first_name: asText(row.first_name), last_name: asText(row.last_name), class_name: asText(row.class_name), stream: asText(row.stream) || null, status: asText(row.status) || "active", date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
+      }
+      if (type === "school-parents") {
+        if (!asText(row.full_name)) return [];
+        return [{ ...base, full_name: asText(row.full_name), phone: asText(row.phone) || null, phone_alt: asText(row.phone_alt) || null, email: asText(row.email) || null, address: asText(row.address) || null, notes: asText(row.notes) || null }];
+      }
+      if (["school-classes", "school-streams", "school-subjects"].includes(type)) {
+        if (!asText(row.name)) return [];
+        return [{ ...base, name: asText(row.name), code: asText(row.code) || null, sort_order: asNumber(row.sort_order, index + 1), is_active: asBool(row.is_active, true) }];
+      }
+      if (type === "school-teachers") {
+        if (!asText(row.full_name)) return [];
+        return [{ ...base, full_name: asText(row.full_name), employee_number: asText(row.employee_number) || null, phone: asText(row.phone) || null, email: asText(row.email) || null, notes: asText(row.notes) || null, is_active: asBool(row.is_active, true) }];
+      }
+      if (!asText(row.class_name) || !asText(row.academic_year) || !asText(row.term_name)) return [];
+      const feeLines = ([
+        ["TUITION", "Tuition", row.tuition], ["BOARDING", "Boarding", row.boarding],
+        ["MEALS", "Meals", row.meals], ["TRANSPORT", "Transport", row.transport],
+        ["OTHER", "Other", row.other],
+      ] as Array<[string, string, unknown]>)
+        .map(([code, label, value], priority) => ({ code, label, amount: asNumber(value, 0), priority: priority + 1 }))
+        .filter((line) => line.amount > 0);
+      if (!feeLines.length) return [];
+      return [{ ...base, class_name: asText(row.class_name), stream: asText(row.stream) || null, academic_year: asText(row.academic_year), term_name: asText(row.term_name), currency: asText(row.currency) || "UGX", line_items: feeLines, is_active: asBool(row.is_active, true) }];
+    });
+    if (!mapped.length) return 0;
+    await desktopApi.localUpsert({ table, rows: mapped });
     return mapped.length;
   };
 
@@ -264,6 +336,7 @@ export function AdminLocalImportPage() {
       else if (entity === "hotel-customers") imported = await importHotelCustomers(rows);
       else if (entity === "vendors") imported = await importVendors(rows);
       else if (entity === "chart-of-accounts") imported = await importChartOfAccounts(rows);
+      else if (entity.startsWith("school-")) imported = await importSchoolRows(rows, entity);
 
       const skipped = rows.length - imported;
       setMessage(`Imported ${imported} row(s).${skipped > 0 ? ` Skipped ${skipped} row(s).` : ""}`);
@@ -314,7 +387,7 @@ export function AdminLocalImportPage() {
             onChange={(e) => setEntity(e.target.value as ImportEntity)}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
           >
-            {ENTITY_OPTIONS.map((opt) => (
+            {availableEntityOptions.map((opt) => (
               <option key={opt.id} value={opt.id}>
                 {opt.label}
               </option>

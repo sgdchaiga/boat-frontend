@@ -22,6 +22,29 @@ export type AssistantResult = {
   checklistStep?: string;
 };
 
+export type AssistantSuggestion = AssistantResult & {
+  originalInstruction: string;
+  understood: string;
+  recommendedTreatment: string;
+  amount: number | null;
+  currency: string | null;
+  transactionDate: string;
+  confidence: "high" | "medium" | "low";
+  risk: "low" | "medium" | "high";
+  needsConfirmation: boolean;
+  explanation: string;
+  draft: {
+    transactionType: "sale" | "receipt" | "purchase" | "expense" | "equipment" | "report" | "other";
+    counterparty: string | null;
+    description: string;
+    quantity: number | null;
+    paymentMethod: "cash" | "mobile" | "bank" | "wallet" | null;
+    amount: number | null;
+    currency: string | null;
+    date: string;
+  };
+};
+
 function firstSetupPage(businessType: BusinessType | null | undefined): string {
   if (businessType === "manufacturing") return "manufacturing";
   if (businessType === "sacco") return "sacco_overview";
@@ -299,3 +322,63 @@ export function answerAssistantPrompt(prompt: string, businessType: BusinessType
   };
 }
 
+/**
+ * Deterministic interpretation envelope for the current assistant UI. It does not
+ * post or alter accounting records; it prepares a reviewable suggestion only.
+ */
+export function prepareAssistantSuggestion(prompt: string, businessType: BusinessType | null | undefined): AssistantSuggestion {
+  const result = answerAssistantPrompt(prompt, businessType);
+  const normalized = prompt.replace(/,/g, "");
+  const currencyMoneyMatch = normalized.match(/\b(UGX|USD|KES|TZS|RWF|GBP|EUR)\s*(\d+(?:\.\d{1,2})?)\b/i);
+  const numericMatches = Array.from(normalized.matchAll(/\b(\d+(?:\.\d{1,2})?)\b/g));
+  const fallbackMoneyMatch = numericMatches.length ? numericMatches[numericMatches.length - 1] : undefined;
+  const moneyMatch = currencyMoneyMatch ?? fallbackMoneyMatch;
+  const highRisk = /\b(pay supplier|supplier payment|disburse|write[- ]?off|delete|opening balance|close period|submit tax|change price|permission)\b/i.test(prompt);
+  const mediumRisk = /\b(loan|journal|equipment|asset|stock|purchase|expense|withdraw)\b/i.test(prompt);
+  const lowConfidence = prompt.trim().split(/\s+/).length < 3;
+  const confidence = lowConfidence ? "low" : moneyMatch || result.page ? "high" : "medium";
+  const risk = highRisk ? "high" : mediumRisk ? "medium" : "low";
+  const currency = currencyMoneyMatch?.[1]?.toUpperCase() ?? null;
+  const amount = currencyMoneyMatch ? Number(currencyMoneyMatch[2]) : fallbackMoneyMatch ? Number(fallbackMoneyMatch[1]) : null;
+  const transactionType: AssistantSuggestion["draft"]["transactionType"] = /\b(equipment|machine|vehicle|computer|asset)\b/i.test(prompt)
+    ? "equipment"
+    : /\b(received|receive|collected|collection)\b/i.test(prompt)
+      ? "receipt"
+      : /\b(sold|sale|sell)\b/i.test(prompt)
+        ? "sale"
+        : /\b(stock|purchase|bought|buy)\b/i.test(prompt)
+          ? "purchase"
+          : /\b(expense|paid|rent|fuel|utility)\b/i.test(prompt)
+            ? "expense"
+            : /\b(profit|report|balance sheet|trial balance)\b/i.test(prompt) ? "report" : "other";
+  const counterpartyMatch = prompt.match(/\b(?:from|to|supplier|customer)\s+([a-z][a-z0-9 .&'-]{1,50}?)(?=\s+(?:for|using|by|on|and|worth|UGX|USD|KES|TZS|RWF)\b|[,.]|$)/i);
+  const quantityMatch = prompt.match(/\b(\d+(?:\.\d+)?)\s+(?:bags?|boxes?|units?|items?|pieces?|pcs?|litres?|liters?|kg|kilograms?)\b/i);
+  const paymentMethod: AssistantSuggestion["draft"]["paymentMethod"] = /mobile money|momo/i.test(prompt) ? "mobile" : /\bbank/i.test(prompt) ? "bank" : /\bwallet/i.test(prompt) ? "wallet" : /\bcash/i.test(prompt) ? "cash" : null;
+  const date = new Date().toISOString().slice(0, 10);
+
+  return {
+    ...result,
+    originalInstruction: prompt,
+    understood: result.title,
+    recommendedTreatment: result.message,
+    amount: Number.isFinite(amount) ? amount : null,
+    currency,
+    transactionDate: date,
+    confidence,
+    risk,
+    needsConfirmation: true,
+    explanation: highRisk
+      ? "This request matches a sensitive or potentially irreversible action, so BOAT will not process it automatically."
+      : "This suggestion uses the words in your instruction and BOAT's deterministic page-routing rules. Nothing has been posted.",
+    draft: {
+      transactionType,
+      counterparty: counterpartyMatch?.[1]?.trim() ?? null,
+      description: prompt,
+      quantity: quantityMatch ? Number(quantityMatch[1]) : null,
+      paymentMethod,
+      amount: Number.isFinite(amount) ? amount : null,
+      currency,
+      date,
+    },
+  };
+}

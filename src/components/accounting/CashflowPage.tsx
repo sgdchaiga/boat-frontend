@@ -5,6 +5,7 @@ import { getDefaultGlAccounts } from "../../lib/journal";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 import {
   type GlAccountRow,
   type JournalLineRow,
@@ -260,7 +261,10 @@ export function CashflowPage() {
       return;
     }
 
-    const rows = normalizeGlAccountRows((data || []) as unknown[])
+    const rows = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((data || []) as unknown[]),
+      user?.business_type
+    )
       .filter((row) => row.is_active && row.account_type === "asset")
       .map((row) => ({
         id: row.id,
@@ -309,7 +313,10 @@ export function CashflowPage() {
       return;
     }
 
-    const allAccounts = normalizeGlAccountRows((accData || []) as unknown[])
+    const allAccounts = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accData || []) as unknown[]),
+      user?.business_type
+    )
       .filter((row) => row.is_active)
       .map((row) => ({
         id: row.id,

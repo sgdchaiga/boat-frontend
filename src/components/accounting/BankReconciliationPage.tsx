@@ -14,6 +14,7 @@ import {
   type ReconciliationSourceType,
 } from "../../lib/bankReconciliation";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 import { PageNotes } from "../common/PageNotes";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 
@@ -92,13 +93,22 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
   const [message, setMessage] = useState<string | null>(null);
 
   const loadAccounts = useCallback(async () => {
+    if (!orgId) {
+      setAccounts([]);
+      setAccountId("");
+      return;
+    }
     const { data, error } = await reconciliationDb
       .from("gl_accounts")
       .select("id,account_code,account_name,account_type,category,is_active")
+      .eq("organization_id", orgId)
       .eq("is_active", true)
       .order("account_code");
     if (error) throw error;
-    const rows = normalizeGlAccountRows((data || []) as unknown[])
+    const rows = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((data || []) as unknown[]),
+      user?.business_type
+    )
       .filter((account) => {
         const text = `${account.account_name} ${account.category || ""}`.toLowerCase();
         return account.account_type === "asset" && (/bank|cash|mobile money|wallet/.test(text) || account.category === "cash");
@@ -111,7 +121,7 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
       }));
     setAccounts(rows);
     setAccountId((current) => current || rows[0]?.id || "");
-  }, []);
+  }, [orgId, user?.business_type]);
 
   const loadWorkspace = useCallback(async () => {
     if (!accountId || !orgId) {
