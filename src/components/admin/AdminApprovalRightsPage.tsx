@@ -13,6 +13,7 @@ import {
   type PermissionKey,
 } from "../../lib/permissions";
 import { saveApprovalRights, type ApprovalRightsConfig } from "../../lib/approvalRights";
+import { isPageAllowedForBusinessType } from "../../lib/moduleAccess";
 
 type RoleTypeRow = {
   role_key: string;
@@ -38,6 +39,17 @@ export function AdminApprovalRightsPage({
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const canManageSensitiveRights = user?.isSuperAdmin === true || user?.role === "super_admin";
+  const visiblePageAccessDefs = useMemo(
+    () =>
+      PAGE_ACCESS_DEFS.filter((page) => {
+        if (!isPageAllowedForBusinessType(page.page, user?.business_type)) return false;
+        if (page.page === "asset_verification") {
+          return user?.business_type === "accounting_practice" || user?.enable_asset_verification === true;
+        }
+        return true;
+      }),
+    [user?.business_type, user?.enable_asset_verification]
+  );
   const [roles, setRoles] = useState<RoleTypeRow[]>([]);
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [rolePerms, setRolePerms] = useState<Record<string, Record<string, boolean>>>({});
@@ -145,9 +157,9 @@ export function AdminApprovalRightsPage({
   const selectedStaff = staff.find((member) => member.id === focusStaffId) ?? staff[0] ?? null;
   const pageGroups = useMemo(() => {
     const grouped = new Map<string, typeof PAGE_ACCESS_DEFS>();
-    PAGE_ACCESS_DEFS.forEach((page) => grouped.set(page.group, [...(grouped.get(page.group) || []), page]));
+    visiblePageAccessDefs.forEach((page) => grouped.set(page.group, [...(grouped.get(page.group) || []), page]));
     return Array.from(grouped.entries());
-  }, []);
+  }, [visiblePageAccessDefs]);
 
   const toggleRolePermission = (roleKey: string, key: PermissionKey) => {
     if (readOnly || !canManageSensitiveRights) return;
@@ -185,7 +197,7 @@ export function AdminApprovalRightsPage({
     if (readOnly || !orgId) return;
     setSaving(true);
     try {
-      const editablePageKeys = PAGE_ACCESS_DEFS
+      const editablePageKeys = visiblePageAccessDefs
         .filter((page) => canManageSensitiveRights || !isSuperAdminControlledReportPage(page))
         .map((page) => pagePermissionKey(page.page));
       const editableSensitiveKeys = canManageSensitiveRights ? PERMISSIONS.map((permission) => permission.key) : [];

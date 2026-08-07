@@ -631,6 +631,15 @@ function AppContent() {
       setCurrentPage("general_business_dashboard");
       return;
     }
+    if (
+      user.business_type === "general_business" &&
+      user.enable_cashbook_mode !== true &&
+      (currentPage.startsWith("general_business_cashbook") || currentPage === "general_business_daily_summary")
+    ) {
+      setCurrentPage("general_business_dashboard");
+      setPageState({});
+      return;
+    }
     if (user.business_type === "accounting_practice" && (currentPage === "dashboard" || currentPage === "retail_dashboard")) {
       setCurrentPage("practice_clients");
       return;

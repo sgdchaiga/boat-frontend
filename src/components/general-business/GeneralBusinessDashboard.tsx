@@ -62,10 +62,10 @@ export function GeneralBusinessDashboard({ onNavigate }: Props) {
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">General Business</p><h1 className="mt-1 text-3xl font-bold text-slate-900">{user?.organization_name || "Business dashboard"}</h1><p className="mt-1 text-sm text-slate-600">Sales, spending, money owed and accounting in one shared workspace.</p></div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 text-sm" aria-label="General Business mode">
+          {user?.enable_cashbook_mode === true ? <div className="inline-flex rounded-lg border border-slate-300 bg-white p-1 text-sm" aria-label="General Business mode">
             <button type="button" onClick={() => setMode("modern")} className={`rounded-md px-3 py-1.5 font-semibold ${mode === "modern" ? "bg-brand-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}>Modern</button>
             <button type="button" onClick={() => { setMode("cashbook"); onNavigate("general_business_cashbook"); }} className={`inline-flex items-center gap-1 rounded-md px-3 py-1.5 font-semibold ${mode === "cashbook" ? "bg-brand-700 text-white" : "text-slate-600 hover:bg-slate-50"}`}><BookOpen className="h-4 w-4" />Cashbook</button>
-          </div>
+          </div> : null}
           <button type="button" className="app-btn-primary" onClick={() => onNavigate(primarySalesPage)}><FileText className="h-4 w-4" />{user?.sales_workflow === "quick_sale" ? "New quick sale" : "New sales invoice"}</button>
         </div>
       </header>

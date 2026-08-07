@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, ArrowUpDown, Download } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
-import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { PageNotes } from "../common/PageNotes";
 
@@ -20,6 +20,17 @@ type RoomBillingRow = {
   } | null;
 };
 type BillingSortKey = "charged_at" | "stay_night_date" | "room" | "guest" | "description" | "source" | "amount";
+
+type RoomChargeJournalLine = {
+  debit: number | null;
+  credit: number | null;
+  journal_entries?: {
+    id: string;
+    entry_date: string;
+    description: string | null;
+    reference_id: string | null;
+  } | null;
+};
 
 function formatMoney(amount: number) {
   return amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -66,7 +77,21 @@ export function RoomBillingReportPage() {
       const toInclusiveDate = toBusinessDateString(new Date(to.getTime() - 1));
       const select =
         "id, stay_id, description, amount, charged_at, stay_night_date, auto_charge_source, stays(rooms(room_number), hotel_customers(first_name, last_name))";
-      const [byChargeDate, byFolioNight] = await Promise.all([
+      const journalLinesQuery = supabase
+        .from("journal_entry_lines")
+        .select(
+          "debit, credit, gl_accounts!inner(account_type), journal_entries!inner(id,entry_date,description,reference_id)"
+        )
+        .eq("gl_accounts.account_type", "income")
+        .eq("journal_entries.reference_type", "room_charge")
+        .eq("journal_entries.is_posted", true)
+        .eq("journal_entries.is_deleted", false)
+        .gte("journal_entries.entry_date", fromDate)
+        .lte("journal_entries.entry_date", toInclusiveDate);
+      const scopedJournalLines = superAdmin
+        ? filterJournalLinesByOrganizationId(journalLinesQuery, orgId, true)
+        : journalLinesQuery;
+      const [byChargeDate, byFolioNight, journalLines] = await Promise.all([
         filterByOrganizationId(
           supabase
             .from("billing")
@@ -89,12 +114,42 @@ export function RoomBillingReportPage() {
           orgId,
           superAdmin
         ),
+        scopedJournalLines,
       ]);
       if (byChargeDate.error && byFolioNight.error) throw byChargeDate.error;
       const rowMap = new Map<string, RoomBillingRow>();
       ([...(byChargeDate.data || []), ...(byFolioNight.data || [])] as unknown as RoomBillingRow[]).forEach((row) => {
         rowMap.set(row.id, row);
       });
+      if (!journalLines.error) {
+        const journalFallbacks = new Map<
+          string,
+          { entry: NonNullable<RoomChargeJournalLine["journal_entries"]>; amount: number }
+        >();
+        ((journalLines.data || []) as unknown as RoomChargeJournalLine[]).forEach((line) => {
+          const entry = line.journal_entries;
+          if (!entry) return;
+          const current = journalFallbacks.get(entry.id);
+          journalFallbacks.set(entry.id, {
+            entry,
+            amount: (current?.amount || 0) + Number(line.credit || 0) - Number(line.debit || 0),
+          });
+        });
+        journalFallbacks.forEach(({ entry, amount }) => {
+          if (entry.reference_id && rowMap.has(entry.reference_id)) return;
+          if (Math.abs(amount) < 0.005) return;
+          rowMap.set(`journal:${entry.id}`, {
+            id: `journal:${entry.id}`,
+            stay_id: null,
+            description: entry.description || "Room charge",
+            amount,
+            charged_at: `${entry.entry_date}T12:00:00+03:00`,
+            stay_night_date: entry.entry_date,
+            auto_charge_source: "general ledger",
+            stays: null,
+          });
+        });
+      }
       setRows(Array.from(rowMap.values()));
     } catch (e) {
       console.error("[Room billing report]", e);
@@ -179,7 +234,7 @@ export function RoomBillingReportPage() {
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-3xl font-bold text-slate-900">Room billing report</h1>
           <PageNotes ariaLabel="Room billing report help">
-            <p>Room charges posted to guest billing, filtered by the charge date in the Kampala business timezone.</p>
+            <p>Room charges posted to guest billing, plus posted room-charge ledger entries whose source billing row is unavailable.</p>
           </PageNotes>
         </div>
         <button

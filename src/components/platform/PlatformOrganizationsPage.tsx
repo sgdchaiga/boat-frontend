@@ -26,6 +26,7 @@ type Org = {
   enable_reconciliation?: boolean | null;
   enable_agent?: boolean | null;
   enable_assistant?: boolean | null;
+  enable_cashbook_mode?: boolean | null;
   enable_boat_connect?: boolean | null;
   enable_hotel_assessment?: boolean | null;
   enable_manufacturing?: boolean | null;
@@ -208,6 +209,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableReconciliation, setEditEnableReconciliation] = useState(true);
   const [editEnableAgent, setEditEnableAgent] = useState(true);
   const [editEnableAssistant, setEditEnableAssistant] = useState(false);
+  const [editEnableCashbookMode, setEditEnableCashbookMode] = useState(false);
   const [editEnableBoatConnect, setEditEnableBoatConnect] = useState(true);
   const [editEnableReports, setEditEnableReports] = useState(true);
   const [editEnableAccounting, setEditEnableAccounting] = useState(true);
@@ -272,6 +274,7 @@ export function PlatformOrganizationsPage() {
       | "enable_reconciliation"
       | "enable_agent"
       | "enable_assistant"
+      | "enable_cashbook_mode"
       | "enable_boat_connect"
       | "enable_hotel_assessment"
       | "enable_manufacturing",
@@ -640,6 +643,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableReconciliation(org.enable_reconciliation !== false);
     setEditEnableAgent(org.enable_agent !== false);
     setEditEnableAssistant(org.enable_assistant === true);
+    setEditEnableCashbookMode(org.enable_cashbook_mode === true);
     setEditEnableBoatConnect(org.enable_boat_connect !== false);
     setEditEnableReports(org.enable_reports !== false);
     setEditEnableAccounting(org.enable_accounting !== false);
@@ -693,6 +697,7 @@ export function PlatformOrganizationsPage() {
         enable_reconciliation: editEnableReconciliation,
         enable_agent: editEnableAgent,
         enable_assistant: editEnableAssistant,
+        enable_cashbook_mode: editEnableCashbookMode,
         enable_boat_connect: editEnableBoatConnect,
         enable_hotel_assessment: editEnableHotelAssessment,
         enable_manufacturing: editEnableManufacturing,
@@ -861,6 +866,7 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">BOAT version</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Staff</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Cashbook mode</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Assistant</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Treasury</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Budget</th>
@@ -878,7 +884,7 @@ export function PlatformOrganizationsPage() {
             <tbody>
               {filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={17} className="p-8 text-center text-slate-600 text-sm">
+                  <td colSpan={18} className="p-8 text-center text-slate-600 text-sm">
                     {orgSearch.trim()
                       ? "No organizations match your search."
                       : "No organizations yet."}
@@ -910,6 +916,16 @@ export function PlatformOrganizationsPage() {
                           className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
                         >
                           {org.enable_payroll === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${org.enable_cashbook_mode === true ? "bg-emerald-100 text-emerald-800" : "bg-red-100 text-red-800"}`}>
+                          {org.enable_cashbook_mode === true ? "On" : "Off"}
+                        </span>
+                        <button type="button" onClick={() => toggleOrgModule(org.id, "enable_cashbook_mode", org.enable_cashbook_mode !== true)} className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50">
+                          {org.enable_cashbook_mode === true ? "Turn Off" : "Turn On"}
                         </button>
                       </div>
                     </td>
@@ -1447,6 +1463,10 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnableAssistant(e.target.checked)}
                 />
                 BOAT Assistant (optional; users remain in control)
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input type="checkbox" checked={editEnableCashbookMode} onChange={(e) => setEditEnableCashbookMode(e.target.checked)} />
+                General Business Cashbook mode
               </label>
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input

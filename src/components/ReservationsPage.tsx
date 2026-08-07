@@ -5,6 +5,7 @@ import { useAuth } from "../contexts/AuthContext";
 import type { Database } from "../lib/database.types";
 import { PageNotes } from "./common/PageNotes";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
+import { desktopApi } from "../lib/desktopApi";
 
 type Reservation = Database["public"]["Tables"]["reservations"]["Row"] & {
   hotel_customers: { id: string; first_name: string; last_name: string } | null;
@@ -31,6 +32,10 @@ export function ReservationsPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
+  const localAuthEnabled = ["true", "1", "yes"].includes(
+    (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase()
+  );
+  const useDesktopLocalCustomers = localAuthEnabled && desktopApi.isAvailable();
 
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [hotelCustomers, setHotelCustomers] = useState<PropertyCustomer[]>([]);
@@ -88,6 +93,13 @@ export function ReservationsPage() {
           return;
         }
         const today = new Date().toISOString().slice(0, 10);
+        const customerRequest = useDesktopLocalCustomers
+          ? desktopApi.listCustomers().then((data) => ({ data, error: null }))
+          : filterByOrganizationId(
+              supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name").limit(1000),
+              orgId,
+              superAdmin
+            );
         const [resRes, custRes, plansRes] = await Promise.all([
           filterByOrganizationId(
             supabase
@@ -116,11 +128,7 @@ export function ReservationsPage() {
             orgId,
             superAdmin
           ),
-          filterByOrganizationId(
-            supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name").limit(1000),
-            orgId,
-            superAdmin
-          ),
+          customerRequest,
           filterByOrganizationId(
             (supabase as any).from("hotel_rate_plans").select("id,code,name,includes_breakfast").eq("is_active", true).order("name"),
             orgId,
@@ -129,6 +137,7 @@ export function ReservationsPage() {
         ]);
         if (cancelled) return;
         if (resRes.error) throw resRes.error;
+        if (custRes.error) throw custRes.error;
         const resData = (resRes.data || []) as Reservation[];
         setReservations(resData);
         setHotelCustomers(custRes.data || []);
@@ -168,7 +177,7 @@ export function ReservationsPage() {
     return () => {
       cancelled = true;
     };
-  }, [orgId, superAdmin]);
+  }, [orgId, superAdmin, useDesktopLocalCustomers]);
 
   /* -------------------- */
   /* LOAD DATA */

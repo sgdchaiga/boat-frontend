@@ -242,7 +242,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     useAuth();
   const [orgSwitching, setOrgSwitching] = useState(false);
   const businessType = user?.business_type ?? null;
-  const { mode: generalBusinessMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
+  const { mode: generalBusinessMode, setMode: setGeneralBusinessMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
+  const generalBusinessCashbookEnabled = user?.enable_cashbook_mode === true;
+  const effectiveGeneralBusinessMode = generalBusinessCashbookEnabled ? generalBusinessMode : 'modern';
+  useEffect(() => {
+    if (businessType === 'general_business' && !generalBusinessCashbookEnabled && generalBusinessMode === 'cashbook') {
+      setGeneralBusinessMode('modern');
+    }
+  }, [businessType, generalBusinessCashbookEnabled, generalBusinessMode, setGeneralBusinessMode]);
   const organizationAppVersion = user?.app_version || "1.0";
   const usesVersionedLayout = organizationAppVersion
     .split(".")
@@ -374,7 +381,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           isSuperAdmin || ["admin", "manager", "accountant"].includes(String(user?.role || "").trim().toLowerCase())
         ),
       });
-      if (businessType !== 'general_business' || generalBusinessMode !== 'cashbook') return fullNavigation;
+      if (businessType !== 'general_business' || effectiveGeneralBusinessMode !== 'cashbook') return fullNavigation;
       return [
         { name: 'Cashbook register', icon: BookOpen, page: 'general_business_cashbook' },
         { name: 'Data entry', icon: Plus, children: [
@@ -423,7 +430,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enableFixedAssets,
       user?.sales_workflow,
       user?.enable_inventory,
-      generalBusinessMode,
+      effectiveGeneralBusinessMode,
       user?.role,
       isSuperAdmin,
     ]
@@ -1221,7 +1228,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const homePage = businessType === 'retail'
     ? 'retail_dashboard'
     : businessType === 'general_business'
-      ? generalBusinessMode === 'cashbook' ? 'general_business_cashbook' : 'general_business_dashboard'
+      ? effectiveGeneralBusinessMode === 'cashbook' ? 'general_business_cashbook' : 'general_business_dashboard'
     : businessType === 'clinic'
       ? 'clinic_dashboard'
       : businessType === 'sacco'

@@ -124,6 +124,8 @@ interface AuthUser {
   enable_agent?: boolean;
   /** Platform: optional BOAT Assistant panel toggle. */
   enable_assistant?: boolean;
+  /** Platform: General Business Cashbook workspace toggle. */
+  enable_cashbook_mode?: boolean;
   /** Platform: BOAT Connect data integration and reporting layer toggle. */
   enable_boat_connect?: boolean;
   /** Platform: Assessment & onboarding module (prospect hotels). */
@@ -304,6 +306,7 @@ type TenantProfile = {
   enable_reconciliation: boolean;
   enable_agent: boolean;
   enable_assistant: boolean;
+  enable_cashbook_mode: boolean;
   enable_boat_connect: boolean;
   enable_hotel_assessment: boolean;
   enable_manufacturing: boolean;
@@ -395,6 +398,7 @@ function localTenantDefaults(): TenantProfile {
     enable_reconciliation: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_RECONCILIATION, true),
     enable_agent: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_AGENT, true),
     enable_assistant: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_ASSISTANT, false),
+    enable_cashbook_mode: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_CASHBOOK_MODE, false),
     enable_boat_connect: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BOAT_CONNECT, true),
     enable_hotel_assessment: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_HOTEL_ASSESSMENT, true),
     enable_manufacturing: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_MANUFACTURING, true),
@@ -560,6 +564,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     enable_reconciliation: true,
     enable_agent: true,
     enable_assistant: false,
+    enable_cashbook_mode: false,
     enable_boat_connect: true,
     enable_hotel_assessment: true,
     enable_manufacturing: true,
@@ -602,7 +607,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_assistant, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_assistant, enable_cashbook_mode, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -640,6 +645,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_reconciliation?: boolean | null;
       enable_agent?: boolean | null;
       enable_assistant?: boolean | null;
+      enable_cashbook_mode?: boolean | null;
       enable_boat_connect?: boolean | null;
       enable_hotel_assessment?: boolean | null;
       enable_manufacturing?: boolean | null;
@@ -691,6 +697,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_reconciliation: org?.enable_reconciliation !== false,
       enable_agent: org?.enable_agent !== false,
       enable_assistant: org?.enable_assistant === true,
+      enable_cashbook_mode: org?.enable_cashbook_mode === true,
       enable_boat_connect: org?.enable_boat_connect !== false,
       enable_hotel_assessment: org?.enable_hotel_assessment !== false,
       enable_manufacturing: org?.enable_manufacturing !== false,
@@ -964,6 +971,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           enable_reconciliation: true,
           enable_agent: true,
           enable_assistant: false,
+          enable_cashbook_mode: false,
           enable_boat_connect: true,
           enable_hotel_assessment: true,
           enable_manufacturing: true,

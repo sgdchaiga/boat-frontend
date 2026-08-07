@@ -68,3 +68,18 @@ test("General Business exposes Manual journals in modern and cashbook modes", as
   assert.match(simpleNavigation, /const accounting:[\s\S]{0,500}Manual journals[\s\S]{0,100}accounting_manual/);
   assert.match(layout, /Cashbook entry[\s\S]{0,700}Manual journals[\s\S]{0,200}accounting_manual/);
 });
+
+test("General Business Cashbook mode is Super Admin controlled and defaults off", async () => {
+  const sql = await source("supabase/migrations/20260807133000_organizations_enable_cashbook_mode.sql");
+  const platform = await source("src/components/platform/PlatformOrganizationsPage.tsx");
+  const auth = await source("src/contexts/AuthContext.tsx");
+  const layout = await source("src/components/Layout.tsx");
+  const app = await source("src/App.tsx");
+  assert.match(sql, /enable_cashbook_mode boolean NOT NULL DEFAULT false/);
+  assert.match(platform, /toggleOrgModule\(org\.id, "enable_cashbook_mode"/);
+  assert.match(auth, /enable_cashbook_mode: org\?\.enable_cashbook_mode === true/);
+  assert.match(layout, /effectiveGeneralBusinessMode = generalBusinessCashbookEnabled \? generalBusinessMode : 'modern'/);
+  assert.match(app, /user\.enable_cashbook_mode !== true/);
+  assert.match(app, /currentPage\.startsWith\("general_business_cashbook"\)/);
+  assert.match(app, /currentPage === "general_business_daily_summary"/);
+});
