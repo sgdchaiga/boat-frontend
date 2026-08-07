@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Edit, LogIn, Plus } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -63,6 +63,19 @@ export function ReservationsPage() {
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [savingReservation, setSavingReservation] = useState(false);
 
+  const fetchHotelCustomers = useCallback(async (): Promise<PropertyCustomer[]> => {
+    if (useDesktopLocalCustomers) {
+      return ((await desktopApi.listCustomers()) || []) as PropertyCustomer[];
+    }
+    const { data, error } = await filterByOrganizationId(
+      supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name").limit(1000),
+      orgId,
+      superAdmin
+    );
+    if (error) throw error;
+    return (data || []) as PropertyCustomer[];
+  }, [orgId, superAdmin, useDesktopLocalCustomers]);
+
   const createBedBreakfastRatePlan = async () => {
     if (!orgId) return;
     const name = window.prompt("Bed & Breakfast rate plan name", "Bed & Breakfast");
@@ -93,14 +106,7 @@ export function ReservationsPage() {
           return;
         }
         const today = new Date().toISOString().slice(0, 10);
-        const customerRequest = useDesktopLocalCustomers
-          ? desktopApi.listCustomers().then((data) => ({ data, error: null }))
-          : filterByOrganizationId(
-              supabase.from("hotel_customers").select("id,first_name,last_name").order("first_name").limit(1000),
-              orgId,
-              superAdmin
-            );
-        const [resRes, custRes, plansRes] = await Promise.all([
+        const [resRes, customerRows, plansRes] = await Promise.all([
           filterByOrganizationId(
             supabase
               .from("reservations")
@@ -128,7 +134,7 @@ export function ReservationsPage() {
             orgId,
             superAdmin
           ),
-          customerRequest,
+          fetchHotelCustomers(),
           filterByOrganizationId(
             (supabase as any).from("hotel_rate_plans").select("id,code,name,includes_breakfast").eq("is_active", true).order("name"),
             orgId,
@@ -136,11 +142,10 @@ export function ReservationsPage() {
           ),
         ]);
         if (cancelled) return;
+        setHotelCustomers(customerRows);
         if (resRes.error) throw resRes.error;
-        if (custRes.error) throw custRes.error;
         const resData = (resRes.data || []) as Reservation[];
         setReservations(resData);
-        setHotelCustomers(custRes.data || []);
         setRatePlans((plansRes.data || []) as RatePlan[]);
 
         const reservedRoomIds = new Set<string>();
@@ -177,7 +182,7 @@ export function ReservationsPage() {
     return () => {
       cancelled = true;
     };
-  }, [orgId, superAdmin, useDesktopLocalCustomers]);
+  }, [orgId, superAdmin, fetchHotelCustomers]);
 
   /* -------------------- */
   /* LOAD DATA */
@@ -264,7 +269,8 @@ export function ReservationsPage() {
 
   const openNewReservation = async () => {
 
-     await fetchRooms();
+    const [, customerRows] = await Promise.all([fetchRooms(), fetchHotelCustomers()]);
+    setHotelCustomers(customerRows);
 
     setEditingReservation(null);
 
