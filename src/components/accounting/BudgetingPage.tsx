@@ -10,6 +10,7 @@ import { budgetPeriodRange, budgetVariance, frequencyPeriodMultiplier, netJourna
 import { randomUuid } from "@/lib/randomUuid";
 import { canApprove } from "@/lib/permissions";
 import { SchoolBudgetDriversPanel } from "@/components/accounting/SchoolBudgetDriversPanel";
+import { SchoolBudgetCompletionPanel } from "@/components/accounting/SchoolBudgetCompletionPanel";
 
 type BudgetRow = {
   id: string;
@@ -723,6 +724,7 @@ export function BudgetingPage({ readOnly }: Props) {
         </div>
       )}
       {selectedBudget && lines.length>0 && ["draft","submitted","reviewed"].includes(selectedBudget.status) && <SchoolBudgetDriversPanel budgetId={selectedBudget.id} lines={lines.map(l=>({id:l.id,line_label:l.line_label,budget_type:l.budget_type}))} disabled={readOnly||!canPrepareBudget||editingLines} onSaved={()=>void loadLines(selectedBudget.id)}/>}
+      <SchoolBudgetCompletionPanel organizationId={orgId} userId={user?.id} disabled={readOnly||!canPrepareBudget} onImported={()=>void loadBudgets()}/>
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-white overflow-hidden">
