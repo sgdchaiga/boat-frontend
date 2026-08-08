@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { PieChart } from "lucide-react";
+import { AlertTriangle, Download, PieChart, Printer } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
@@ -222,6 +222,32 @@ export function BudgetVarianceReportPage() {
   const totalCommitments=useMemo(()=>visibleLines.reduce((s,l)=>s+(commitmentByLine.get(l.id)||0),0),[visibleLines,commitmentByLine]);
   const totalAvailable=lineTotal-sumActualDisplay-totalCommitments;
   const sumVariance = useMemo(() => [...lineVariance.values()].reduce((a, b) => a + b, 0), [lineVariance]);
+  const managementAlerts = useMemo(() => visibleLines.map((line) => {
+    const budget = currentBudgetFor(line);
+    const actual = lineActualDisplay.get(line.id) ?? 0;
+    const committed = commitmentByLine.get(line.id) ?? 0;
+    const exposure = actual + committed;
+    const percent = budget > 0 ? (exposure / budget) * 100 : exposure > 0 ? 999 : 0;
+    const severity = percent > 100 ? "critical" : percent >= 80 ? "warning" : null;
+    return { line, budget, actual, committed, available: budget - exposure, percent, severity };
+  }).filter((row) => row.severity).sort((a, b) => b.percent - a.percent), [visibleLines, lineActualDisplay, commitmentByLine, transferNetByLine]);
+
+  const exportCsv = () => {
+    if (!selectedBudget) return;
+    const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+    const rows = visibleLines.map((line) => {
+      const budget = currentBudgetFor(line);
+      const actual = lineActualDisplay.get(line.id) ?? 0;
+      const committed = commitmentByLine.get(line.id) ?? 0;
+      return [line.line_label, line.departments?.name || "Central / shared", line.budget_type, budget, actual, committed, budget - actual - committed];
+    });
+    const csv = [["Budget line", "Department", "Type", "Current budget", "Actual", "Commitments", "Available"], ...rows].map((row) => row.map(quote).join(",")).join("\r\n");
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    link.download = `${selectedBudget.name.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase()}-variance.csv`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+  };
 
   const periodHint = useMemo(() => {
     if (!selectedBudget) return "";
@@ -285,6 +311,7 @@ export function BudgetVarianceReportPage() {
             GL period: <span className="font-medium"> {periodHint}</span>
           </p>
         )}
+        {selectedBudget && <div className="ml-auto flex gap-2"><button type="button" onClick={exportCsv} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Download className="h-4 w-4"/>Export CSV</button><button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"><Printer className="h-4 w-4"/>Print</button></div>}
       </div>
 
       {loading ? (
@@ -328,6 +355,12 @@ export function BudgetVarianceReportPage() {
                 </div>
               </div>
             </div>
+          </div>
+
+          <div className={`rounded-xl border p-4 ${managementAlerts.some((a) => a.severity === "critical") ? "border-red-200 bg-red-50" : managementAlerts.length ? "border-amber-200 bg-amber-50" : "border-emerald-200 bg-emerald-50"}`}>
+            <div className="flex items-start gap-3"><AlertTriangle className={`mt-0.5 h-5 w-5 ${managementAlerts.some((a) => a.severity === "critical") ? "text-red-700" : managementAlerts.length ? "text-amber-700" : "text-emerald-700"}`}/><div className="min-w-0 flex-1"><h2 className="font-semibold text-slate-900">Management alerts</h2><p className="text-xs text-slate-600">Risk includes posted actuals plus approved commitments against the current budget after transfers.</p>
+            {!managementAlerts.length ? <p className="mt-3 text-sm font-medium text-emerald-800">No budget lines have reached the 80% warning level.</p> : <div className="mt-3 grid gap-2 md:grid-cols-2">{managementAlerts.map(({line,percent,available,severity}) => <div key={line.id} className="rounded-lg border border-white/70 bg-white/70 p-3"><div className="flex items-center justify-between gap-3"><span className="font-medium text-slate-900">{line.line_label}</span><span className={`rounded-full px-2 py-0.5 text-xs font-bold ${severity === "critical" ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}>{percent.toFixed(1)}%</span></div><p className="mt-1 text-xs text-slate-600">{line.departments?.name || "Central / shared"} · {available < 0 ? `Overcommitted by ${Math.abs(available).toLocaleString()}` : `${available.toLocaleString()} available`}</p></div>)}</div>}
+            </div></div>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
