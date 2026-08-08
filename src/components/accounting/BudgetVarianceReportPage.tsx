@@ -35,6 +35,8 @@ type LineRow = {
 };
 
 type GLPick = { id: string; account_code: string; account_name: string; account_type: string };
+type TransferRow = { source_line_id:string; destination_line_id:string; amount:number; status:string };
+type CommitmentRow = { budget_line_id:string; amount:number; status:string };
 
 /** Bar showing how much of the budget line was "used" (actual vs budget). */
 function BudgetUseBar({ pct, overBudget }: { pct: number; overBudget: boolean }) {
@@ -65,6 +67,8 @@ export function BudgetVarianceReportPage() {
   const [actualByGlId, setActualByGlId] = useState<Map<string, number>>(new Map());
   const [actualsLoading, setActualsLoading] = useState(false);
   const [departmentFilter, setDepartmentFilter] = useState("all");
+  const [transfers,setTransfers] = useState<TransferRow[]>([]);
+  const [commitments,setCommitments] = useState<CommitmentRow[]>([]);
 
   const loadBudgets = useCallback(async () => {
     if (!orgId) {
@@ -103,14 +107,17 @@ export function BudgetVarianceReportPage() {
 
   const loadLines = useCallback(async (budgetId: string) => {
     setLinesLoading(true);
-    const { data, error } = await supabase
-      .from("budget_lines")
-      .select("id,gl_account_id,line_label,amount,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,departments(name),gl_accounts(account_code,account_name)")
-      .eq("budget_id", budgetId)
-      .order("sort_order", { ascending: true })
-      .order("id", { ascending: true });
-    setErr(error?.message ?? null);
-    setLines((data as LineRow[]) || []);
+    const [lineResult,transferResult] = await Promise.all([
+      supabase.from("budget_lines").select("id,gl_account_id,line_label,amount,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,departments(name),gl_accounts(account_code,account_name)").eq("budget_id",budgetId).order("sort_order",{ascending:true}).order("id",{ascending:true}),
+      supabase.from("budget_transfers").select("source_line_id,destination_line_id,amount,status").eq("budget_id",budgetId),
+    ]);
+    const rows=(lineResult.data as LineRow[])||[];
+    const ids=rows.map(row=>row.id);
+    const commitmentResult=ids.length?await supabase.from("school_expense_budget_requests").select("budget_line_id,amount,status").in("budget_line_id",ids):{data:[],error:null};
+    setErr(lineResult.error?.message ?? transferResult.error?.message ?? commitmentResult.error?.message ?? null);
+    setLines(rows);
+    setTransfers((transferResult.data as TransferRow[])||[]);
+    setCommitments((commitmentResult.data as CommitmentRow[])||[]);
     setLinesLoading(false);
   }, []);
 
@@ -130,18 +137,21 @@ export function BudgetVarianceReportPage() {
   const selectedBudget = useMemo(() => budgets.find((b) => b.id === selectedId), [budgets, selectedId]);
   const departmentOptions = useMemo(() => [...new Map(lines.filter((l) => l.department_id).map((l) => [l.department_id!, l.departments?.name || "Department"])).entries()], [lines]);
   const visibleLines = useMemo(() => departmentFilter === "all" ? lines : departmentFilter === "central" ? lines.filter((l) => !l.department_id) : lines.filter((l) => l.department_id === departmentFilter), [lines, departmentFilter]);
+  const transferNetByLine=useMemo(()=>{const m=new Map<string,number>();for(const t of transfers.filter(row=>row.status==="approved")){m.set(t.source_line_id,(m.get(t.source_line_id)||0)-Number(t.amount));m.set(t.destination_line_id,(m.get(t.destination_line_id)||0)+Number(t.amount));}return m},[transfers]);
+  const commitmentByLine=useMemo(()=>{const m=new Map<string,number>();for(const c of commitments.filter(row=>row.status==="approved"))m.set(c.budget_line_id,(m.get(c.budget_line_id)||0)+Number(c.amount));return m},[commitments]);
+  const currentBudgetFor=(line:LineRow)=>Number(line.amount||0)+(transferNetByLine.get(line.id)||0);
 
-  const lineTotal = useMemo(() => visibleLines.reduce((s, l) => s + Number(l.amount ?? 0), 0), [visibleLines]);
+  const lineTotal = useMemo(() => visibleLines.reduce((s, l) => s + currentBudgetFor(l), 0), [visibleLines,transferNetByLine]);
 
   const budgetSumByGl = useMemo(() => {
     const m = new Map<string, number>();
     for (const l of visibleLines) {
       if (!l.gl_account_id) continue;
       const g = l.gl_account_id;
-      m.set(g, (m.get(g) || 0) + Number(l.amount ?? 0));
+      m.set(g, (m.get(g) || 0) + currentBudgetFor(l));
     }
     return m;
-  }, [visibleLines]);
+  }, [visibleLines,transferNetByLine]);
 
   const lineActualDisplay = useMemo(() => {
     const m = new Map<string, number>();
@@ -152,7 +162,7 @@ export function BudgetVarianceReportPage() {
       }
       const total = actualByGlId.get(l.gl_account_id) ?? 0;
       const share = budgetSumByGl.get(l.gl_account_id) ?? 0;
-      const amt = Number(l.amount ?? 0);
+      const amt = currentBudgetFor(l);
       if (share <= 0) {
         m.set(l.id, 0);
         continue;
@@ -160,7 +170,7 @@ export function BudgetVarianceReportPage() {
       m.set(l.id, (amt / share) * total);
     }
     return m;
-  }, [visibleLines, actualByGlId, budgetSumByGl]);
+  }, [visibleLines, actualByGlId, budgetSumByGl,transferNetByLine]);
 
   const lineVariance = useMemo(() => {
     const m = new Map<string, number>();
@@ -170,12 +180,12 @@ export function BudgetVarianceReportPage() {
         continue;
       }
       const at = accountTypeById.get(l.gl_account_id) || "expense";
-      const bud = Number(l.amount ?? 0);
+      const bud = currentBudgetFor(l);
       const act = lineActualDisplay.get(l.id) ?? 0;
       m.set(l.id, budgetVariance(bud, act, at));
     }
     return m;
-  }, [visibleLines, lineActualDisplay, accountTypeById]);
+  }, [visibleLines, lineActualDisplay, accountTypeById,transferNetByLine]);
 
   const loadActuals = useCallback(async () => {
     if (!orgId || !selectedBudget || lines.length === 0) {
@@ -209,6 +219,8 @@ export function BudgetVarianceReportPage() {
     () => [...lineActualDisplay.values()].reduce((a, b) => a + b, 0),
     [lineActualDisplay]
   );
+  const totalCommitments=useMemo(()=>visibleLines.reduce((s,l)=>s+(commitmentByLine.get(l.id)||0),0),[visibleLines,commitmentByLine]);
+  const totalAvailable=lineTotal-sumActualDisplay-totalCommitments;
   const sumVariance = useMemo(() => [...lineVariance.values()].reduce((a, b) => a + b, 0), [lineVariance]);
 
   const periodHint = useMemo(() => {
@@ -283,9 +295,9 @@ export function BudgetVarianceReportPage() {
         <p className="text-slate-500">Loading lines…</p>
       ) : (
         <>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
             <div className="rounded-xl border border-slate-200 bg-white p-4">
-              <p className="text-xs text-slate-500 uppercase tracking-wide">Total budget</p>
+              <p className="text-xs text-slate-500 uppercase tracking-wide">Current budget</p>
               <p className="text-2xl font-bold text-slate-900 tabular-nums">{lineTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
             </div>
             <div className="rounded-xl border border-slate-200 bg-white p-4">
@@ -300,6 +312,8 @@ export function BudgetVarianceReportPage() {
                 {actualsLoading ? "…" : sumVariance.toLocaleString(undefined, { maximumFractionDigits: 2 })}
               </p>
             </div>
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><p className="text-xs uppercase tracking-wide text-amber-700">Commitments</p><p className="text-2xl font-bold tabular-nums text-amber-800">{totalCommitments.toLocaleString(undefined,{maximumFractionDigits:2})}</p></div>
+            <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4"><p className="text-xs uppercase tracking-wide text-indigo-700">Available</p><p className={`text-2xl font-bold tabular-nums ${totalAvailable<0?"text-red-700":"text-indigo-800"}`}>{totalAvailable.toLocaleString(undefined,{maximumFractionDigits:2})}</p></div>
             <div className="rounded-xl border border-slate-200 bg-white p-4 flex items-center gap-3">
               <div className="flex h-14 w-14 items-center justify-center rounded-full bg-indigo-50 text-indigo-700">
                 <PieChart className="w-7 h-7" />
@@ -323,8 +337,10 @@ export function BudgetVarianceReportPage() {
                 <thead>
                   <tr className="border-b border-slate-200 bg-slate-50/80">
                     <th className="text-left p-2 font-semibold text-slate-700">Line</th>
-                    <th className="text-right p-2 font-semibold text-slate-700">Budget</th>
+                    <th className="text-right p-2 font-semibold text-slate-700">Current budget</th>
                     <th className="text-right p-2 font-semibold text-slate-700">Actual</th>
+                    <th className="text-right p-2 font-semibold text-slate-700">Commitments</th>
+                    <th className="text-right p-2 font-semibold text-slate-700">Available</th>
                     <th className="text-right p-2 font-semibold text-slate-700">Variance</th>
                     <th className="text-left p-2 font-semibold text-slate-700 min-w-[140px]">Budget used</th>
                     <th className="text-left p-2 font-semibold text-slate-700 min-w-[220px]">Variance explanation</th>
@@ -333,8 +349,10 @@ export function BudgetVarianceReportPage() {
                 <tbody>
                   {visibleLines.map((l) => {
                     const hasGl = Boolean(l.gl_account_id);
-                    const bud = Number(l.amount ?? 0);
+                    const bud = currentBudgetFor(l);
                     const act = lineActualDisplay.get(l.id) ?? 0;
+                    const committed=commitmentByLine.get(l.id)||0;
+                    const available=bud-act-committed;
                     const vari = lineVariance.get(l.id) ?? 0;
                     const variClass =
                       !hasGl || vari === 0 ? "text-slate-400" : vari >= 0 ? "text-emerald-700" : "text-red-700";
@@ -361,6 +379,8 @@ export function BudgetVarianceReportPage() {
                         <td className="w-32 whitespace-nowrap p-2 text-right tabular-nums text-slate-800">
                           {!hasGl ? "—" : actualsLoading ? "…" : act.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </td>
+                        <td className="w-32 whitespace-nowrap p-2 text-right tabular-nums text-amber-700">{committed.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
+                        <td className={`w-32 whitespace-nowrap p-2 text-right tabular-nums font-semibold ${available<0?"text-red-700":"text-indigo-700"}`}>{available.toLocaleString(undefined,{maximumFractionDigits:2})}</td>
                         <td className={`w-32 whitespace-nowrap p-2 text-right tabular-nums font-medium ${variClass}`}>
                           {!hasGl ? "—" : actualsLoading ? "…" : vari.toLocaleString(undefined, { maximumFractionDigits: 2 })}
                         </td>
