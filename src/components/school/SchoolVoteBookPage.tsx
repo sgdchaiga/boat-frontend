@@ -5,8 +5,9 @@ import { supabase } from "@/lib/supabase";
 import { BudgetingPage } from "@/components/accounting/BudgetingPage";
 import { BudgetVarianceReportPage } from "@/components/accounting/BudgetVarianceReportPage";
 
-type RequestRow = { id:string; description:string; quantity:number; unit_rate:number; amount:number; reason:string; status:string; created_at:string; budget_lines?:{line_label?:string}|null };
+type RequestRow = { id:string; description:string; quantity:number; unit_rate:number; amount:number; reason:string; status:string; created_at:string; budget_line_id:string; budget_lines?:{line_label?:string}|null };
 type VoteLine = { id:string; line_label:string; amount:number };
+type TransferRow = {id:string;source_line_id:string;destination_line_id:string;amount:number;reason:string;status:string;created_at:string};
 type Props = { readOnly?: boolean };
 
 export function SchoolVoteBookPage({ readOnly }: Props) {
@@ -18,18 +19,22 @@ export function SchoolVoteBookPage({ readOnly }: Props) {
   const [message,setMessage]=useState<string|null>(null);
   const [voteLines,setVoteLines]=useState<VoteLine[]>([]);
   const [request,setRequest]=useState({budget_line_id:"",description:"",quantity:"1",unit_rate:"",reason:""});
+  const [transfers,setTransfers]=useState<TransferRow[]>([]);
+  const [transfer,setTransfer]=useState({source_line_id:"",destination_line_id:"",amount:"",reason:""});
 
   const load = useCallback(async()=>{
     if(!orgId)return;
-    const [r,o,b]=await Promise.all([
-      supabase.from("school_expense_budget_requests").select("id,description,quantity,unit_rate,amount,reason,status,created_at,budget_lines(line_label)").eq("organization_id",orgId).order("created_at",{ascending:false}),
+    const [r,o,b,t]=await Promise.all([
+      supabase.from("school_expense_budget_requests").select("id,budget_line_id,description,quantity,unit_rate,amount,reason,status,created_at,budget_lines(line_label)").eq("organization_id",orgId).order("created_at",{ascending:false}),
       supabase.from("organizations").select("school_budget_amber_percent,school_headteacher_approval_percent,school_board_approval_percent").eq("id",orgId).maybeSingle(),
-      supabase.from("budget_lines").select("id,line_label,amount,budgets!inner(organization_id,is_active)").eq("budgets.organization_id",orgId).eq("budgets.is_active",true)
+      supabase.from("budget_lines").select("id,line_label,amount,budgets!inner(organization_id,is_active)").eq("budgets.organization_id",orgId).eq("budgets.is_active",true),
+      supabase.from("budget_transfers").select("id,source_line_id,destination_line_id,amount,reason,status,created_at").eq("organization_id",orgId).order("created_at",{ascending:false})
     ]);
     setRequests((r.data as unknown as RequestRow[])||[]);
     const x=o.data as {school_budget_amber_percent?:number;school_headteacher_approval_percent?:number;school_board_approval_percent?:number}|null;
     if(x)setThresholds({amber:String(x.school_budget_amber_percent??80),headteacher:String(x.school_headteacher_approval_percent??100),board:String(x.school_board_approval_percent??120)});
     setVoteLines((b.data as unknown as VoteLine[])||[]);
+    setTransfers((t.data as TransferRow[])||[]);
   },[orgId]);
   useEffect(()=>{void load()},[load]);
 
@@ -50,9 +55,13 @@ export function SchoolVoteBookPage({ readOnly }: Props) {
     const {error}=await supabase.from("school_expense_budget_requests").insert({organization_id:orgId,budget_line_id:line.id,description:request.description.trim(),quantity,unit_rate:rate,amount,reason:request.reason.trim(),projected_percent:projected,status,requested_by:user?.id||null});
     setMessage(error?.message||"Exception submitted for headteacher approval."); if(!error){setRequest({budget_line_id:"",description:"",quantity:"1",unit_rate:"",reason:""});void load();}
   };
+  const currentBudget=(lineId:string)=>{const line=voteLines.find(v=>v.id===lineId);return Number(line?.amount||0)+transfers.filter(t=>t.status==='approved').reduce((s,t)=>s+(t.destination_line_id===lineId?Number(t.amount):t.source_line_id===lineId?-Number(t.amount):0),0)};
+  const commitment=(lineId:string)=>requests.filter(r=>r.budget_line_id===lineId&&r.status==='approved').reduce((s,r)=>s+Number(r.amount),0);
+  const submitTransfer=async()=>{const amount=Number(transfer.amount);if(!transfer.source_line_id||!transfer.destination_line_id||!(amount>0)||!transfer.reason.trim())return setMessage("Complete the source, destination, amount and reason.");const{error}=await supabase.rpc("create_budget_transfer",{p_source_line_id:transfer.source_line_id,p_destination_line_id:transfer.destination_line_id,p_amount:amount,p_reason:transfer.reason.trim()});setMessage(error?.message||"Budget transfer approved and recorded.");if(!error){setTransfer({source_line_id:"",destination_line_id:"",amount:"",reason:""});void load();}};
+  const releaseCommitment=async(id:string)=>{const{error}=await supabase.rpc("complete_school_budget_commitment",{p_request_id:id});setMessage(error?.message||"Commitment released to actual expenditure.");if(!error)void load();};
   return <div className="space-y-5">
     <div className="px-6 pt-6 lg:px-8"><div className="flex items-center gap-2"><BookOpen className="h-6 w-6 text-indigo-700"/><h1 className="text-2xl font-bold">Vote book & budget movement</h1></div>
-      <div className="mt-4 flex flex-wrap gap-2">{([['vote','Vote book report'],['formulation','Budget formulation'],['approvals','Headteacher approvals'],['controls','Spending controls']] as const).map(([id,label])=><button key={id} onClick={()=>setTab(id)} className={`rounded-lg px-4 py-2 text-sm font-medium ${tab===id?'bg-indigo-700 text-white':'border bg-white text-slate-700'}`}>{label}</button>)}</div>
+      <div className="mt-4 flex flex-wrap gap-2">{([['vote','Vote book report'],['formulation','Budget formulation'],['approvals','Commitments & approvals'],['controls','Spending controls']] as const).map(([id,label])=><button key={id} onClick={()=>setTab(id)} className={`rounded-lg px-4 py-2 text-sm font-medium ${tab===id?'bg-indigo-700 text-white':'border bg-white text-slate-700'}`}>{label}</button>)}</div>
       {message&&<p className="mt-3 rounded-lg bg-slate-100 p-3 text-sm">{message}</p>}</div>
     {tab==="vote"&&<BudgetVarianceReportPage/>}
     {tab==="formulation"&&<BudgetingPage readOnly={readOnly}/>} 
