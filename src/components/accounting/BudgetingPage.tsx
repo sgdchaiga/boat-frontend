@@ -9,6 +9,7 @@ import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { budgetPeriodRange, budgetVariance, frequencyPeriodMultiplier, netJournalActivity } from "@/lib/budgetActuals";
 import { randomUuid } from "@/lib/randomUuid";
 import { canApprove } from "@/lib/permissions";
+import { SchoolBudgetDriversPanel } from "@/components/accounting/SchoolBudgetDriversPanel";
 
 type BudgetRow = {
   id: string;
@@ -721,6 +722,7 @@ export function BudgetingPage({ readOnly }: Props) {
           {budgetSummary.terms.slice(0,3).map((value,index) => <div key={index} className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Term {index+1}</p><p className="mt-1 text-lg font-bold tabular-nums text-indigo-700">{value.toLocaleString()}</p></div>)}
         </div>
       )}
+      {selectedBudget && lines.length>0 && ["draft","submitted","reviewed"].includes(selectedBudget.status) && <SchoolBudgetDriversPanel budgetId={selectedBudget.id} lines={lines.map(l=>({id:l.id,line_label:l.line_label,budget_type:l.budget_type}))} disabled={readOnly||!canPrepareBudget||editingLines} onSaved={()=>void loadLines(selectedBudget.id)}/>}
 
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
         <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-white overflow-hidden">
