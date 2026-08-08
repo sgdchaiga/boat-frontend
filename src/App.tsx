@@ -640,6 +640,11 @@ function AppContent() {
       setPageState({});
       return;
     }
+    if (user.business_type === "school" && user.enable_cashbook_mode !== true && currentPage.startsWith("school_cashbook")) {
+      setCurrentPage(SCHOOL_PAGE.dashboard);
+      setPageState({});
+      return;
+    }
     if (user.business_type === "accounting_practice" && (currentPage === "dashboard" || currentPage === "retail_dashboard")) {
       setCurrentPage("practice_clients");
       return;
@@ -1112,6 +1117,12 @@ function AppContent() {
         return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" />;
       case 'general_business_daily_summary':
         return <GeneralBusinessCashbookPage onNavigate={navigate} view="daily" />;
+      case 'school_cashbook_register':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="register" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
+      case 'school_cashbook_entry':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
+      case 'school_cashbook_daily':
+        return <GeneralBusinessCashbookPage onNavigate={navigate} view="daily" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
       case 'sacco_cashbook_register':
         return <SaccoTerekaCashbookPage navigate={navigate} view="register" />;
       case 'sacco_cashbook_entry':

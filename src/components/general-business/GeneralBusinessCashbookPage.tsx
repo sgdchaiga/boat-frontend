@@ -12,12 +12,13 @@ import { postStockInFromPurchaseOrderForBill } from "@/lib/poGrnStock";
 import { syncBillStatusInDb } from "@/lib/billStatus";
 import { randomUuid } from "@/lib/randomUuid";
 import { processSaleOnline } from "@/components/retail-pos/services/processSaleOnline";
+import { SCHOOL_PAGE } from "@/lib/schoolPages";
 
 type CashbookDirection = "in" | "out";
 
 type CashbookRow = {
   id: string;
-  source: "cashbook_entry" | "receipt" | "supplier_payment" | "expense" | "mf_repayment" | "mf_disbursement" | "mf_recovery";
+  source: "cashbook_entry" | "receipt" | "supplier_payment" | "expense" | "school_fee" | "mf_repayment" | "mf_disbursement" | "mf_recovery";
   date: string;
   description: string;
   party: string;
@@ -155,6 +156,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const canEditHelperText = Boolean(user?.isSuperAdmin || roleKey === "super_admin");
   const [canControlEntries,setCanControlEntries] = useState(Boolean(user?.isSuperAdmin || ["admin", "super_admin", "manager", "accountant"].includes(roleKey)));
   const isMicrofinance = workspaceLabel.toLowerCase() === "microfinance";
+  const isSchool = workspaceLabel.toLowerCase() === "school";
 
   useEffect(()=>{if(!orgId)return;void (supabase as any).rpc("gb_cashbook_can_control",{target_org:orgId}).then(({data,error}:any)=>{if(!error)setCanControlEntries(Boolean(data));});},[orgId,user?.isSuperAdmin,roleKey]);
 
@@ -407,10 +409,16 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       const mfiErrors = [repayments.error,disbursements.error,recoveries.error].filter(Boolean);
       if (mfiErrors.length) setWarning(`Some Microfinance cash flows could not be loaded: ${mfiErrors.map(errorMessage).join(" · ")}`);
     }
-    const baseRows = isMicrofinance ? directEntries : [...directEntries, ...receipts, ...supplierPayments, ...dedupedExpenses];
+    let schoolRows: CashbookRow[] = [];
+    if (isSchool) {
+      const schoolPayments = await supabase.from("school_payments").select("id,amount,method,reference,paid_at,notes,students(first_name,last_name,admission_number)").eq("organization_id",orgId).gte("paid_at",`${queryFrom}T00:00:00`).lte("paid_at",`${queryTo}T23:59:59`).order("paid_at",{ascending:false}).limit(rowLimit);
+      if (schoolPayments.error) setWarning(`School fee collections could not be loaded: ${schoolPayments.error.message}`);
+      schoolRows=((schoolPayments.data||[]) as any[]).map(payment=>({id:`school-fee:${payment.id}`,source:"school_fee" as const,date:localDatePart(payment.paid_at),description:payment.notes?.trim()||"School fee collection",party:[payment.students?.first_name,payment.students?.last_name].filter(Boolean).join(" ")||payment.students?.admission_number||"Student",method:readable(payment.method),reference:payment.reference||payment.id,cashIn:Number(payment.amount||0),cashOut:0,status:"Completed"}));
+    }
+    const baseRows = isMicrofinance ? directEntries : isSchool ? [...directEntries,...schoolRows,...supplierPayments,...dedupedExpenses] : [...directEntries, ...receipts, ...supplierPayments, ...dedupedExpenses];
     setRows([...baseRows,...mfiRows].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)));
     setLoading(false);
-  }, [dateFrom, dateTo, orgId, summaryDate, isMicrofinance, user?.business_type, rowLimit]);
+  }, [dateFrom, dateTo, orgId, summaryDate, isMicrofinance, isSchool, user?.business_type, rowLimit]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -713,11 +721,11 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   };
 
   const exportCsv = () => {
-    downloadCsv(`${isMicrofinance?"microfinance":"general-business"}-cashbook-${dateFrom}-${dateTo}.csv`, exportRows());
+    downloadCsv(`${isMicrofinance?"microfinance":isSchool?"school":"general-business"}-cashbook-${dateFrom}-${dateTo}.csv`, exportRows());
   };
   const exportRows = (): (string|number)[][] => [["Date","Description","Party","Method","Reference","Cash In","Cash Out","Status","Source"],...filteredRows.map(row=>[row.date,row.description,row.party,row.method,row.reference,row.cashIn,row.cashOut,row.approvalStatus||row.status,row.source])];
-  const exportExcel = () => downloadXlsx(`${isMicrofinance?"microfinance":"general-business"}-cashbook-${dateFrom}-${dateTo}.xlsx`,exportRows(),{companyName:workspaceLabel,sheetName:"Cashbook"});
-  const exportPdf = () => exportAccountingPdf({title:`${workspaceLabel} Cashbook`,subtitle:`${dateFrom} to ${dateTo}`,filename:`${isMicrofinance?"microfinance":"general-business"}-cashbook-${dateFrom}-${dateTo}.pdf`,sections:[{title:"Cashbook register",head:exportRows()[0].map(String),body:exportRows().slice(1)}]});
+  const exportExcel = () => downloadXlsx(`${isMicrofinance?"microfinance":isSchool?"school":"general-business"}-cashbook-${dateFrom}-${dateTo}.xlsx`,exportRows(),{companyName:workspaceLabel,sheetName:"Cashbook"});
+  const exportPdf = () => exportAccountingPdf({title:`${workspaceLabel} Cashbook`,subtitle:`${dateFrom} to ${dateTo}`,filename:`${isMicrofinance?"microfinance":isSchool?"school":"general-business"}-cashbook-${dateFrom}-${dateTo}.pdf`,sections:[{title:"Cashbook register",head:exportRows()[0].map(String),body:exportRows().slice(1)}]});
 
   const controlDirectEntry = async (row:CashbookRow,action:"approve"|"correct"|"void") => {
     if(!orgId||!row.rawId)return;
@@ -785,7 +793,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       {view === "entry" && <section id="cashbook-entry" className="rounded-2xl border-2 bg-white p-4 shadow-sm sm:p-6" style={{ borderColor: cashbookSettings.accent_color }}>
         <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider" style={{ color: cashbookSettings.primary_color }}>Cash Book entry</p><h2 className="mt-1 text-xl font-bold text-slate-900">Post on this page</h2>{cashbookSettings.show_helper_text && <p className="mt-1 text-sm text-slate-600">{cashbookSettings.helper_text}</p>}</div><button type="button" onClick={toggleComments} className="app-btn-secondary" style={{ borderRadius: cashbookSettings.button_radius }}>Comments: {showComments ? "On" : "Off"}</button></div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3">
-          <button type="button" onClick={() => openEntryFor("sale")} className="flex items-center gap-3 border bg-emerald-50 px-4 py-3 text-left font-semibold text-emerald-900 transition hover:-translate-y-0.5 hover:shadow-md" style={{ borderColor: cashbookSettings.accent_color, borderRadius: cashbookSettings.button_radius }}><span className="rounded-lg bg-emerald-100 p-2"><ShoppingCart className="h-5 w-5" /></span><span>Record sale<small className="block font-normal text-emerald-700">Customer income</small></span></button>
+          <button type="button" onClick={() => isSchool ? onNavigate(SCHOOL_PAGE.payments) : openEntryFor("sale")} className="flex items-center gap-3 border bg-emerald-50 px-4 py-3 text-left font-semibold text-emerald-900 transition hover:-translate-y-0.5 hover:shadow-md" style={{ borderColor: cashbookSettings.accent_color, borderRadius: cashbookSettings.button_radius }}><span className="rounded-lg bg-emerald-100 p-2"><ShoppingCart className="h-5 w-5" /></span><span>{isSchool?"Receive school fees":"Record sale"}<small className="block font-normal text-emerald-700">{isSchool?"Student fee collection":"Customer income"}</small></span></button>
           <button type="button" onClick={() => openEntryFor("purchase")} className="flex items-center gap-3 border border-amber-200 bg-amber-50 px-4 py-3 text-left font-semibold text-amber-900 transition hover:-translate-y-0.5 hover:shadow-md" style={{ borderRadius: cashbookSettings.button_radius }}><span className="rounded-lg bg-amber-100 p-2"><PackagePlus className="h-5 w-5" /></span><span>Record purchase<small className="block font-normal text-amber-700">Supplier payment</small></span></button>
           <button type="button" onClick={() => openEntryFor("transfer")} className="flex items-center gap-3 border border-blue-200 bg-blue-50 px-4 py-3 text-left font-semibold text-blue-900 transition hover:-translate-y-0.5 hover:shadow-md" style={{ borderRadius: cashbookSettings.button_radius }}><span className="rounded-lg bg-blue-100 p-2"><ArrowLeftRight className="h-5 w-5" /></span><span>Transfer funds<small className="block font-normal text-blue-700">Cash, bank or MOMO</small></span></button>
         </div>

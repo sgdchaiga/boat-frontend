@@ -637,6 +637,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   // Cashbook mode is a core General Business workspace. Individual treasury
   // actions remain feature-gated, but the entry register itself must not vanish.
   if (["general_business_cashbook", "general_business_cashbook_entry", "general_business_daily_summary"].includes(page)) return "general_business_dashboard";
+  if (["school_cashbook_register", "school_cashbook_entry", "school_cashbook_daily"].includes(page)) return "accounting";
   if (["sacco_cashbook_register", "sacco_cashbook_entry", "sacco_cashbook_daily"].includes(page)) return "sacco";
   if (["microfinance_cashbook_register", "microfinance_cashbook_entry", "microfinance_cashbook_daily"].includes(page)) return "microfinance";
   if (page === "general_business_projects") return "general_business_projects";

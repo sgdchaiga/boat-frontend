@@ -779,6 +779,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const schoolNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: GraduationCap, page: SCHOOL_PAGE.dashboard },
+      ...(generalBusinessCashbookEnabled ? [{ name: 'Cashbook', icon: Receipt, page: 'school_cashbook_register' } as NavItem] : []),
       { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
@@ -955,7 +956,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Ecosystem', icon: Link2, page: 'ecosystem' },
       { name: 'Admin', icon: Settings, page: 'admin' },
     ],
-    [enableFixedAssets, enableBudget, enablePayroll, allowManufacturing]
+    [enableFixedAssets, enableBudget, enablePayroll, allowManufacturing, generalBusinessCashbookEnabled]
   );
 
   const vslaNavigation: NavItem[] = useMemo(
@@ -1094,6 +1095,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ] },
     { name: 'Money & Approvals', icon: Landmark, children: [
       { name: 'Money overview', page: 'finance_overview' },
+      ...(generalBusinessCashbookEnabled ? [{ name: 'School cashbook', page: 'school_cashbook_register' }] : []),
       { name: 'Cash & bank balances', page: 'treasury' },
       { name: 'Record expense', page: 'purchases_expenses' },
       { name: 'Payment requests & approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
