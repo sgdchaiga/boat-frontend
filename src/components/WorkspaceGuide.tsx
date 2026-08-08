@@ -34,6 +34,13 @@ import { loadLiveActionItems, type LiveActionItem } from "@/lib/boatAssistantAct
 import { inspectAssistantDocument, type AssistantDocumentResult } from "@/lib/boatAssistantDocuments";
 import { loadAssistantInsights, type AssistantInsight } from "@/lib/boatAssistantInsights";
 import { proposeAssistantConfiguration, saveAssistantOnboarding, type AssistantOnboardingAnswers } from "@/lib/boatAssistantOnboarding";
+import {
+  deleteAssistantAutomationRule,
+  loadAssistantAutomationRules,
+  saveAssistantAutomationRule,
+  setAssistantAutomaticEnabled,
+  type AssistantAutomationRule,
+} from "@/lib/boatAssistantAutomation";
 
 type OnboardingStateRow = {
   organization_id: string;
@@ -59,6 +66,8 @@ const ASSISTANCE_MODES: { value: AssistanceMode; label: string; description: str
   { value: "accountant_supervised", label: "Accountant supervised", description: "Send exceptions to an assigned accountant or manager." },
 ];
 const EMPTY_ONBOARDING: AssistantOnboardingAnswers = { businessType: "", productsServices: "", creditSales: false, stock: false, paymentMethods: ["cash"], vatRegistered: false, employees: false, branches: false, approvals: true, assistanceMode: "guided" };
+type AutomationForm = { name: string; action_type: "create_action_item" | "prepare_transaction_draft"; instruction: string; target_page: string; requires_approval: boolean; assigned_role: "admin" | "manager" | "accountant"; schedule_kind: "daily" | "weekly" | "monthly"; run_time: string; timezone: string; weekday: number; day_of_month: number; active: boolean };
+const EMPTY_RULE: AutomationForm = { name: "", action_type: "create_action_item", instruction: "", target_page: "", requires_approval: false, assigned_role: "admin", schedule_kind: "daily", run_time: "08:00", timezone: "Africa/Kampala", weekday: 1, day_of_month: 1, active: true };
 
 type WorkspaceGuideProps = {
   currentPage: string;
@@ -96,6 +105,10 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
   const [savingStep, setSavingStep] = useState<string | null>(null);
   const [databaseArticle, setDatabaseArticle] = useState<LearningArticle | null>(null);
   const [assistanceMode, setAssistanceMode] = useState<AssistanceMode>("guided");
+  const [automationRules, setAutomationRules] = useState<AssistantAutomationRule[]>([]);
+  const [automationForm, setAutomationForm] = useState(EMPTY_RULE);
+  const [automationMessage, setAutomationMessage] = useState("");
+  const [savingAutomation, setSavingAutomation] = useState(false);
 
   const tourSteps = useMemo(() => guidedTourSteps(businessType), [businessType]);
   const pageGuide = useMemo(() => {
@@ -131,7 +144,7 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
 
   useEffect(() => {
     if (!orgId || !assistantEnabled) return;
-    void Promise.all([loadAssistantAttention(orgId), loadLiveActionItems(orgId), loadAssistantInsights(orgId)]).then(([assistantItems, liveItems, insightItems]) => { setDurableAttention(assistantItems); setLiveActionItems(liveItems); setInsights(insightItems); });
+    void Promise.all([loadAssistantAttention(orgId), loadLiveActionItems(orgId), loadAssistantInsights(orgId), loadAssistantAutomationRules(orgId), loadAssistantPolicy(orgId)]).then(([assistantItems, liveItems, insightItems, automation, policy]) => { setDurableAttention(assistantItems); setLiveActionItems(liveItems); setInsights(insightItems); setAutomationRules(automation.rules); if (policy.automaticEnabled) setAssistanceMode("automatic"); });
   }, [assistantEnabled, orgId]);
 
   const inspectDocument = async (file?: File) => {
@@ -148,9 +161,18 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
     }
   };
 
-  const changeAssistanceMode = (nextMode: AssistanceMode) => {
-    if (!orgId) return;
+  const changeAssistanceMode = async (nextMode: AssistanceMode) => {
+    if (!orgId || !user?.id) return;
     if (nextMode === "automatic") {
+      if (["admin", "manager"].includes(user.role ?? "")) {
+        const error = await setAssistantAutomaticEnabled(orgId, user.id, true);
+        if (!error) {
+          setAssistanceMode("automatic");
+          setAutomationMessage("Automatic mode is active. The worker checks due rules every five minutes.");
+          return;
+        }
+        setAutomationMessage(error);
+      }
       setAnswer({
         title: "Explicit authorisation required",
         message: "Automatic mode cannot activate recurring work by itself. An authorised administrator must configure the permitted rule, limits and approvals.",
@@ -168,8 +190,32 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
       });
       return;
     }
+    if (assistanceMode === "automatic" && ["admin", "manager"].includes(user.role ?? "")) await setAssistantAutomaticEnabled(orgId, user.id, false);
     setAssistanceMode(nextMode);
     window.localStorage.setItem(`boat-assistance-mode:${orgId}`, nextMode);
+  };
+
+  const refreshAutomationRules = async () => {
+    if (!orgId) return;
+    const result = await loadAssistantAutomationRules(orgId);
+    setAutomationRules(result.rules);
+    if (result.error) setAutomationMessage(result.error);
+  };
+
+  const createAutomationRule = async () => {
+    if (!orgId || !user?.id || !automationForm.name.trim() || !automationForm.instruction.trim()) { setAutomationMessage("Rule name and instruction are required."); return; }
+    setSavingAutomation(true);
+    const error = await saveAssistantAutomationRule({ ...automationForm, organization_id: orgId, draft: {}, id: undefined, userId: user.id });
+    setSavingAutomation(false);
+    setAutomationMessage(error ?? "Automation rule saved. Activate Automatic mode when ready.");
+    if (!error) { setAutomationForm(EMPTY_RULE); await refreshAutomationRules(); }
+  };
+
+  const removeAutomationRule = async (id: string) => {
+    if (!orgId) return;
+    const error = await deleteAssistantAutomationRule(orgId, id);
+    setAutomationMessage(error ?? "Automation rule removed.");
+    if (!error) await refreshAutomationRules();
   };
 
   useEffect(() => {
@@ -397,7 +443,7 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
                     <select
                       id="assistance-mode"
                       value={assistanceMode}
-                      onChange={(event) => changeAssistanceMode(event.target.value as AssistanceMode)}
+                      onChange={(event) => void changeAssistanceMode(event.target.value as AssistanceMode)}
                       className="mt-1 min-h-10 w-full rounded-md border border-slate-300 bg-white px-3 text-sm text-slate-800"
                     >
                       {ASSISTANCE_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
@@ -423,6 +469,26 @@ export function WorkspaceGuide({ currentPage, businessType, onNavigate }: Worksp
                     <button type="button" onClick={() => setShowOnboarding((value) => !value)} className="w-full p-3 text-left"><span className="block text-sm font-bold text-slate-900">Assistant setup</span><span className="block text-xs text-slate-500">Propose workflows before activation</span></button>
                     {showOnboarding ? <div className="space-y-3 border-t border-slate-200 p-3"><input value={onboardingAnswers.productsServices} onChange={(event) => setOnboardingAnswers((value) => ({ ...value, productsServices: event.target.value }))} placeholder="Products and services" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" /><div className="grid grid-cols-2 gap-2 text-xs">{[["creditSales", "Credit sales"], ["stock", "Keep stock"], ["vatRegistered", "VAT registered"], ["employees", "Employees"], ["branches", "Branches"], ["approvals", "Require approvals"]].map(([key, label]) => <label key={key} className="flex items-center gap-2 rounded border border-slate-200 p-2"><input type="checkbox" checked={Boolean(onboardingAnswers[key as keyof AssistantOnboardingAnswers])} onChange={(event) => setOnboardingAnswers((value) => ({ ...value, [key]: event.target.checked }))} />{label}</label>)}</div><div><p className="text-xs font-bold text-slate-600">Payment methods</p><div className="mt-1 flex flex-wrap gap-2">{["cash", "mobile_money", "bank", "wallet"].map((method) => <label key={method} className="text-xs"><input type="checkbox" className="mr-1" checked={onboardingAnswers.paymentMethods.includes(method)} onChange={(event) => setOnboardingAnswers((value) => ({ ...value, paymentMethods: event.target.checked ? Array.from(new Set([...value.paymentMethods, method])) : value.paymentMethods.filter((item) => item !== method) }))} />{method.replace(/_/g, " ")}</label>)}</div></div><button type="button" onClick={reviewOnboardingProposal} className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white">Review proposed configuration</button>{proposedConfiguration ? <div className="rounded-md bg-slate-50 p-3"><pre className="whitespace-pre-wrap text-[11px] text-slate-700">{JSON.stringify(proposedConfiguration, null, 2)}</pre><div className="mt-2 flex gap-2"><button type="button" onClick={() => void persistOnboarding(false)} className="rounded border border-slate-300 px-2 py-1 text-xs font-bold">Save proposal</button>{["admin", "manager"].includes(user?.role ?? "") ? <button type="button" onClick={() => void persistOnboarding(true)} className="rounded bg-emerald-700 px-2 py-1 text-xs font-bold text-white">Activate after review</button> : null}</div></div> : null}{onboardingMessage ? <p className="text-xs font-semibold text-slate-600">{onboardingMessage}</p> : null}</div> : null}
                   </section>
+                  {canReviewAssistant ? <section className="rounded-lg border border-slate-200 bg-white p-3">
+                    <p className="text-sm font-bold text-slate-900">Automatic rules</p>
+                    <p className="mt-1 text-xs text-slate-500">The worker creates action items or approval-controlled drafts. It never posts directly to the ledger.</p>
+                    <div className="mt-3 space-y-2">
+                      <input value={automationForm.name} onChange={(event) => setAutomationForm((value) => ({ ...value, name: event.target.value }))} placeholder="Rule name" className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <textarea value={automationForm.instruction} onChange={(event) => setAutomationForm((value) => ({ ...value, instruction: event.target.value }))} placeholder="Recurring instruction" className="min-h-20 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" />
+                      <div className="grid grid-cols-2 gap-2">
+                        <select value={automationForm.action_type} onChange={(event) => setAutomationForm((value) => ({ ...value, action_type: event.target.value as typeof value.action_type, requires_approval: event.target.value === "prepare_transaction_draft" ? true : value.requires_approval }))} className="rounded-md border border-slate-300 px-2 py-2 text-xs"><option value="create_action_item">Create action item</option><option value="prepare_transaction_draft">Prepare transaction draft</option></select>
+                        <select value={automationForm.schedule_kind} onChange={(event) => setAutomationForm((value) => ({ ...value, schedule_kind: event.target.value as typeof value.schedule_kind }))} className="rounded-md border border-slate-300 px-2 py-2 text-xs"><option value="daily">Daily</option><option value="weekly">Weekly</option><option value="monthly">Monthly</option></select>
+                        <input type="time" value={automationForm.run_time} onChange={(event) => setAutomationForm((value) => ({ ...value, run_time: event.target.value }))} className="rounded-md border border-slate-300 px-2 py-2 text-xs" />
+                        <select value={automationForm.assigned_role} onChange={(event) => setAutomationForm((value) => ({ ...value, assigned_role: event.target.value as typeof value.assigned_role }))} className="rounded-md border border-slate-300 px-2 py-2 text-xs"><option value="admin">Administrator</option><option value="manager">Manager</option><option value="accountant">Accountant</option></select>
+                      </div>
+                      {automationForm.schedule_kind === "weekly" ? <select value={automationForm.weekday} onChange={(event) => setAutomationForm((value) => ({ ...value, weekday: Number(event.target.value) }))} className="w-full rounded-md border border-slate-300 px-2 py-2 text-xs">{["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map((day,index) => <option key={day} value={index}>{day}</option>)}</select> : null}
+                      {automationForm.schedule_kind === "monthly" ? <input type="number" min="1" max="28" value={automationForm.day_of_month} onChange={(event) => setAutomationForm((value) => ({ ...value, day_of_month: Number(event.target.value) }))} className="w-full rounded-md border border-slate-300 px-2 py-2 text-xs" aria-label="Day of month" /> : null}
+                      <label className="flex items-center gap-2 text-xs text-slate-700"><input type="checkbox" checked={automationForm.requires_approval} disabled={automationForm.action_type === "prepare_transaction_draft"} onChange={(event) => setAutomationForm((value) => ({ ...value, requires_approval: event.target.checked }))} />Require approval</label>
+                      <button type="button" disabled={savingAutomation} onClick={() => void createAutomationRule()} className="rounded-md bg-slate-900 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">{savingAutomation ? "Saving..." : "Save active rule"}</button>
+                    </div>
+                    {automationRules.length ? <div className="mt-3 space-y-2">{automationRules.map((rule) => <div key={rule.id} className="rounded-md bg-slate-50 p-2"><div className="flex items-start justify-between gap-2"><div><p className="text-xs font-bold text-slate-900">{rule.name}</p><p className="text-[11px] text-slate-500">{rule.schedule_kind} at {rule.run_time.slice(0,5)} · {rule.requires_approval ? "approval required" : "authorised action"}</p></div><button type="button" onClick={() => void removeAutomationRule(rule.id)} className="text-[11px] font-bold text-red-700">Remove</button></div></div>)}</div> : null}
+                    {automationMessage ? <p className="mt-2 text-xs font-semibold text-slate-600">{automationMessage}</p> : null}
+                  </section> : null}
                   <div className="grid grid-cols-2 gap-2">
                     {["I made a sale", "I received money", "I bought stock", "I paid an expense", "I bought equipment", "Check my profit"].map((action) => (
                       <button key={action} type="button" onClick={() => setPrompt(action)} className="rounded-md border border-slate-200 px-3 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50">{action}</button>

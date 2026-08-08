@@ -83,3 +83,21 @@ test("General Business Cashbook mode is Super Admin controlled and defaults off"
   assert.match(app, /currentPage\.startsWith\("general_business_cashbook"\)/);
   assert.match(app, /currentPage === "general_business_daily_summary"/);
 });
+
+test("Automatic Assistant rules are scheduled, tenant scoped and idempotent", async () => {
+  const sql = await source("supabase/migrations/20260808110000_boat_assistant_automation.sql");
+  const worker = await source("supabase/functions/run-boat-assistant-automations/index.ts");
+  const automation = await source("src/lib/boatAssistantAutomation.ts");
+  const guide = await source("src/components/WorkspaceGuide.tsx");
+  assert.match(sql, /UNIQUE \(rule_id, scheduled_for\)/);
+  assert.match(sql, /FOR UPDATE OF ar SKIP LOCKED/);
+  assert.match(sql, /o\.enable_assistant = true/);
+  assert.match(sql, /p\.automatic_enabled = true/);
+  assert.match(sql, /action_type <> 'prepare_transaction_draft' OR requires_approval = true/);
+  assert.match(sql, /'\*\/5 \* \* \* \*'/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.run_due_boat_assistant_automations/);
+  assert.match(worker, /CRON_SECRET/);
+  assert.match(worker, /run_due_boat_assistant_automations/);
+  assert.match(automation, /Create and activate at least one rule first/);
+  assert.match(guide, /It never posts directly to the ledger/);
+});
