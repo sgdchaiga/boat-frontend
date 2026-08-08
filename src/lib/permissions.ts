@@ -15,6 +15,9 @@ export const PERMISSION_KEYS = [
   "stock_adjustments_delete",
   "cost_allocation_manage",
   "cost_allocation_post",
+  "budget_prepare",
+  "budget_review",
+  "budget_approve",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -41,6 +44,9 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "stock_adjustments_delete", label: "Delete inventory movements", group: "Inventory", description: "Delete complete inventory movement batches." },
   { key: "cost_allocation_manage", label: "Cost allocation setup", group: "Accounting", description: "Create cost centres, drivers, and allocation rules." },
   { key: "cost_allocation_post", label: "Cost allocation post", group: "Accounting", description: "Approve, post, reverse, and rerun cost allocation journals." },
+  { key: "budget_prepare", label: "Budget preparation", group: "Accounting", description: "Create, edit and submit budgets." },
+  { key: "budget_review", label: "Budget review", group: "Accounting", description: "Review submitted budgets and request corrections." },
+  { key: "budget_approve", label: "Budget approval", group: "Accounting", description: "Approve, activate, revise and close budgets." },
 ];
 
 const CACHE_KEY = "boat.permissions.snapshot.v2";
@@ -285,6 +291,9 @@ function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean 
   if (permission === "stock_adjustments_delete") return roleKey === "admin" || roleKey === "manager";
   if (permission === "cost_allocation_manage") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
   if (permission === "cost_allocation_post") return roleKey === "admin" || roleKey === "accountant";
+  if (permission === "budget_prepare") return ["admin","manager","accountant","bursar","department_head"].includes(roleKey);
+  if (permission === "budget_review") return ["admin","manager","accountant","bursar","headteacher"].includes(roleKey);
+  if (permission === "budget_approve") return ["admin","manager","headteacher","director"].includes(roleKey);
   return false;
 }
 

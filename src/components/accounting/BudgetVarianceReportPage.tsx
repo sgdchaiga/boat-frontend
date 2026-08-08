@@ -14,6 +14,9 @@ type BudgetRow = {
   period_label: string | null;
   start_date: string | null;
   end_date: string | null;
+  financial_year: number | null;
+  status: string;
+  version_no: number;
 };
 
 type LineRow = {
@@ -21,6 +24,13 @@ type LineRow = {
   gl_account_id: string | null;
   line_label: string;
   amount: number;
+  department_id: string | null;
+  budget_type: string;
+  term_1_amount: number;
+  term_2_amount: number;
+  term_3_amount: number;
+  annual_other_amount: number;
+  departments?: { name: string } | null;
   gl_accounts?: { account_code: string; account_name: string } | null;
 };
 
@@ -54,6 +64,7 @@ export function BudgetVarianceReportPage() {
   const [err, setErr] = useState<string | null>(null);
   const [actualByGlId, setActualByGlId] = useState<Map<string, number>>(new Map());
   const [actualsLoading, setActualsLoading] = useState(false);
+  const [departmentFilter, setDepartmentFilter] = useState("all");
 
   const loadBudgets = useCallback(async () => {
     if (!orgId) {
@@ -63,7 +74,7 @@ export function BudgetVarianceReportPage() {
     setLoading(true);
     const { data, error } = await supabase
       .from("budgets")
-      .select("id,name,period_label,start_date,end_date")
+      .select("id,name,period_label,start_date,end_date,financial_year,status,version_no")
       .eq("organization_id", orgId)
       .order("created_at", { ascending: false });
     setErr(error?.message ?? null);
@@ -94,7 +105,7 @@ export function BudgetVarianceReportPage() {
     setLinesLoading(true);
     const { data, error } = await supabase
       .from("budget_lines")
-      .select("id,gl_account_id,line_label,amount,gl_accounts(account_code,account_name)")
+      .select("id,gl_account_id,line_label,amount,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,departments(name),gl_accounts(account_code,account_name)")
       .eq("budget_id", budgetId)
       .order("sort_order", { ascending: true })
       .order("id", { ascending: true });
@@ -117,22 +128,24 @@ export function BudgetVarianceReportPage() {
   }, [selectedId, loadLines]);
 
   const selectedBudget = useMemo(() => budgets.find((b) => b.id === selectedId), [budgets, selectedId]);
+  const departmentOptions = useMemo(() => [...new Map(lines.filter((l) => l.department_id).map((l) => [l.department_id!, l.departments?.name || "Department"])).entries()], [lines]);
+  const visibleLines = useMemo(() => departmentFilter === "all" ? lines : departmentFilter === "central" ? lines.filter((l) => !l.department_id) : lines.filter((l) => l.department_id === departmentFilter), [lines, departmentFilter]);
 
-  const lineTotal = useMemo(() => lines.reduce((s, l) => s + Number(l.amount ?? 0), 0), [lines]);
+  const lineTotal = useMemo(() => visibleLines.reduce((s, l) => s + Number(l.amount ?? 0), 0), [visibleLines]);
 
   const budgetSumByGl = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of lines) {
+    for (const l of visibleLines) {
       if (!l.gl_account_id) continue;
       const g = l.gl_account_id;
       m.set(g, (m.get(g) || 0) + Number(l.amount ?? 0));
     }
     return m;
-  }, [lines]);
+  }, [visibleLines]);
 
   const lineActualDisplay = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of lines) {
+    for (const l of visibleLines) {
       if (!l.gl_account_id) {
         m.set(l.id, 0);
         continue;
@@ -147,11 +160,11 @@ export function BudgetVarianceReportPage() {
       m.set(l.id, (amt / share) * total);
     }
     return m;
-  }, [lines, actualByGlId, budgetSumByGl]);
+  }, [visibleLines, actualByGlId, budgetSumByGl]);
 
   const lineVariance = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of lines) {
+    for (const l of visibleLines) {
       if (!l.gl_account_id) {
         m.set(l.id, 0);
         continue;
@@ -162,7 +175,7 @@ export function BudgetVarianceReportPage() {
       m.set(l.id, budgetVariance(bud, act, at));
     }
     return m;
-  }, [lines, lineActualDisplay, accountTypeById]);
+  }, [visibleLines, lineActualDisplay, accountTypeById]);
 
   const loadActuals = useCallback(async () => {
     if (!orgId || !selectedBudget || lines.length === 0) {
@@ -244,9 +257,15 @@ export function BudgetVarianceReportPage() {
             {budgets.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
-                {b.period_label ? ` (${b.period_label})` : ""}
+                {` (FY ${b.financial_year ?? "—"} · v${b.version_no} · ${b.status})`}
               </option>
             ))}
+          </select>
+        </div>
+        <div className="min-w-[200px]">
+          <label className="block text-xs font-medium text-slate-600 mb-1">Department</label>
+          <select className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>
+            <option value="all">All departments</option><option value="central">Central / shared</option>{departmentOptions.map(([id,name]) => <option key={id} value={id}>{name}</option>)}
           </select>
         </div>
         {selectedBudget && periodHint && (
@@ -312,7 +331,7 @@ export function BudgetVarianceReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {lines.map((l) => {
+                  {visibleLines.map((l) => {
                     const hasGl = Boolean(l.gl_account_id);
                     const bud = Number(l.amount ?? 0);
                     const act = lineActualDisplay.get(l.id) ?? 0;
@@ -329,6 +348,8 @@ export function BudgetVarianceReportPage() {
                       <tr key={l.id} className="border-b border-slate-100">
                         <td className="p-2">
                           <div className="font-medium text-slate-800">{l.line_label}</div>
+                          <div className="text-xs text-indigo-700">{l.departments?.name || "Central / shared"} · {l.budget_type.replaceAll("_", " ")}</div>
+                          <div className="text-[10px] text-slate-500">T1 {Number(l.term_1_amount).toLocaleString()} · T2 {Number(l.term_2_amount).toLocaleString()} · T3 {Number(l.term_3_amount).toLocaleString()} · Annual {Number(l.annual_other_amount).toLocaleString()}</div>
                           {l.gl_accounts && (
                             <div className="text-xs text-slate-500 font-mono">
                               {l.gl_accounts.account_code} · {l.gl_accounts.account_name}

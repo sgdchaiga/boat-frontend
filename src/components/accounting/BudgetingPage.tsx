@@ -8,6 +8,7 @@ import { PageNotes } from "@/components/common/PageNotes";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { budgetPeriodRange, budgetVariance, frequencyPeriodMultiplier, netJournalActivity } from "@/lib/budgetActuals";
 import { randomUuid } from "@/lib/randomUuid";
+import { canApprove } from "@/lib/permissions";
 
 type BudgetRow = {
   id: string;
@@ -17,6 +18,11 @@ type BudgetRow = {
   end_date: string | null;
   notes: string | null;
   is_active: boolean;
+  financial_year: number | null;
+  period_mode: string;
+  status: "draft" | "submitted" | "reviewed" | "approved" | "active" | "revised" | "closed";
+  version_no: number;
+  submitted_by: string | null;
 };
 
 type LineRow = {
@@ -30,8 +36,18 @@ type LineRow = {
   frequency: string | null;
   quantity: number | null;
   unit_price: number | null;
+  department_id: string | null;
+  budget_type: string;
+  term_1_amount: number;
+  term_2_amount: number;
+  term_3_amount: number;
+  annual_other_amount: number;
+  assumptions: string | null;
   gl_accounts?: { account_code: string; account_name: string } | null;
 };
+
+type DepartmentPick = { id: string; name: string };
+type WorkflowRow = { id: string; from_status: string | null; to_status: string; note: string | null; acted_at: string; acted_by: string | null };
 
 const BUDGET_FREQUENCIES = [
   { value: "one_time", label: "One-time" },
@@ -71,6 +87,13 @@ function lineRowChanged(a: LineRow, b: LineRow) {
     (a.frequency ?? "one_time") !== (b.frequency ?? "one_time") ||
     (a.quantity ?? null) !== (b.quantity ?? null) ||
     (a.unit_price ?? null) !== (b.unit_price ?? null)
+    || a.department_id !== b.department_id
+    || a.budget_type !== b.budget_type
+    || Number(a.term_1_amount) !== Number(b.term_1_amount)
+    || Number(a.term_2_amount) !== Number(b.term_2_amount)
+    || Number(a.term_3_amount) !== Number(b.term_3_amount)
+    || Number(a.annual_other_amount) !== Number(b.annual_other_amount)
+    || (a.assumptions ?? null) !== (b.assumptions ?? null)
   );
 }
 
@@ -81,14 +104,18 @@ type Props = { readOnly?: boolean };
 export function BudgetingPage({ readOnly }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
+  const canPrepareBudget = canApprove("budget_prepare", user?.role);
+  const canReviewBudget = canApprove("budget_review", user?.role);
+  const canApproveBudget = canApprove("budget_approve", user?.role);
   const [budgets, setBudgets] = useState<BudgetRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lines, setLines] = useState<LineRow[]>([]);
   const [accounts, setAccounts] = useState<GLPick[]>([]);
+  const [departments, setDepartments] = useState<DepartmentPick[]>([]);
   const [loading, setLoading] = useState(true);
   const [linesLoading, setLinesLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const [newBudget, setNewBudget] = useState({ name: "", period_label: "", start_date: "", end_date: "", notes: "" });
+  const [newBudget, setNewBudget] = useState({ name: "", financial_year: String(new Date().getFullYear()), start_date: "", end_date: "", notes: "" });
   const [draftLine, setDraftLine] = useState({
     gl_account_id: "",
     line_label: "",
@@ -97,6 +124,13 @@ export function BudgetingPage({ readOnly }: Props) {
     quantity: "",
     unit_price: "",
     amount: "",
+    department_id: "",
+    budget_type: "operating_expense",
+    term_1_amount: "",
+    term_2_amount: "",
+    term_3_amount: "",
+    annual_other_amount: "",
+    assumptions: "",
   });
   const [actualByGlId, setActualByGlId] = useState<Map<string, number>>(new Map());
   const [actualsLoading, setActualsLoading] = useState(false);
@@ -105,6 +139,7 @@ export function BudgetingPage({ readOnly }: Props) {
   const [editedLines, setEditedLines] = useState<LineRow[]>([]);
   const [baselineLines, setBaselineLines] = useState<LineRow[]>([]);
   const [linesSaving, setLinesSaving] = useState(false);
+  const [workflowHistory, setWorkflowHistory] = useState<WorkflowRow[]>([]);
 
   const loadBudgets = useCallback(async () => {
     if (!orgId) {
@@ -114,7 +149,7 @@ export function BudgetingPage({ readOnly }: Props) {
     setLoading(true);
     const { data, error } = await supabase
       .from("budgets")
-      .select("id,name,period_label,start_date,end_date,notes,is_active")
+      .select("id,name,period_label,start_date,end_date,notes,is_active,financial_year,period_mode,status,version_no,submitted_by")
       .eq("organization_id", orgId)
       .order("created_at", { ascending: false });
     setErr(error?.message ?? null);
@@ -131,6 +166,12 @@ export function BudgetingPage({ readOnly }: Props) {
     setAccounts(normalized as GLPick[]);
   }, [user?.business_type]);
 
+  const loadDepartments = useCallback(async () => {
+    if (!orgId) return setDepartments([]);
+    const { data } = await supabase.from("departments").select("id,name").eq("organization_id", orgId).order("name");
+    setDepartments((data as DepartmentPick[]) || []);
+  }, [orgId]);
+
   const accountTypeById = useMemo(() => new Map(accounts.map((a) => [a.id, a.account_type])), [accounts]);
 
   const loadLines = useCallback(
@@ -139,7 +180,7 @@ export function BudgetingPage({ readOnly }: Props) {
       const { data, error } = await supabase
         .from("budget_lines")
         .select(
-          "id,budget_id,gl_account_id,line_label,amount,sort_order,unit,frequency,quantity,unit_price,gl_accounts(account_code,account_name)"
+          "id,budget_id,gl_account_id,line_label,amount,sort_order,unit,frequency,quantity,unit_price,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,assumptions,gl_accounts(account_code,account_name)"
         )
         .eq("budget_id", budgetId)
         .order("sort_order", { ascending: true })
@@ -153,6 +194,13 @@ export function BudgetingPage({ readOnly }: Props) {
           frequency: l.frequency ?? "one_time",
           quantity: l.quantity ?? null,
           unit_price: l.unit_price ?? null,
+          department_id: l.department_id ?? null,
+          budget_type: l.budget_type ?? "operating_expense",
+          term_1_amount: Number(l.term_1_amount ?? 0),
+          term_2_amount: Number(l.term_2_amount ?? 0),
+          term_3_amount: Number(l.term_3_amount ?? 0),
+          annual_other_amount: Number(l.annual_other_amount ?? 0),
+          assumptions: l.assumptions ?? null,
         }))
       );
       setLinesLoading(false);
@@ -160,18 +208,26 @@ export function BudgetingPage({ readOnly }: Props) {
     []
   );
 
+  const loadWorkflowHistory = useCallback(async (budgetId: string) => {
+    const { data } = await supabase.from("budget_workflow_history")
+      .select("id,from_status,to_status,note,acted_at,acted_by")
+      .eq("budget_id", budgetId).order("acted_at", { ascending: false });
+    setWorkflowHistory((data as WorkflowRow[]) || []);
+  }, []);
+
   useEffect(() => {
     loadAccounts();
   }, [loadAccounts]);
+  useEffect(() => { void loadDepartments(); }, [loadDepartments]);
 
   useEffect(() => {
     loadBudgets();
   }, [loadBudgets]);
 
   useEffect(() => {
-    if (selectedId) loadLines(selectedId);
-    else setLines([]);
-  }, [selectedId, loadLines]);
+    if (selectedId) { void loadLines(selectedId); void loadWorkflowHistory(selectedId); }
+    else { setLines([]); setWorkflowHistory([]); }
+  }, [selectedId, loadLines, loadWorkflowHistory]);
 
   useEffect(() => {
     setEditingLines(false);
@@ -184,6 +240,14 @@ export function BudgetingPage({ readOnly }: Props) {
   const linesForCalcs = useMemo(() => (editingLines ? editedLines : lines), [editingLines, editedLines, lines]);
 
   const lineTotal = useMemo(() => linesForCalcs.reduce((s, l) => s + Number(l.amount ?? 0), 0), [linesForCalcs]);
+  const budgetSummary = useMemo(() => {
+    const income = linesForCalcs.filter((l) => l.budget_type === "income").reduce((s,l) => s + Number(l.amount || 0), 0);
+    const expenditure = linesForCalcs.filter((l) => l.budget_type !== "income").reduce((s,l) => s + Number(l.amount || 0), 0);
+    const terms = ["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"].map((key) => linesForCalcs.reduce((s,l) => s + Number(l[key as keyof LineRow] || 0), 0));
+    const departmentTotals = new Map<string,number>();
+    for (const line of linesForCalcs) { const key=line.department_id || "central"; departmentTotals.set(key,(departmentTotals.get(key)||0)+Number(line.amount||0)); }
+    return { income, expenditure, net: income-expenditure, terms, departmentTotals };
+  }, [linesForCalcs]);
 
   const loadActuals = useCallback(async () => {
     if (!orgId || !selectedBudget || linesForCalcs.length === 0) {
@@ -330,7 +394,7 @@ export function BudgetingPage({ readOnly }: Props) {
   }, [editingLines, editedLines, baselineLines]);
 
   const beginEditLines = () => {
-    if (readOnly || !selectedId || linesLoading) return;
+    if (readOnly || !selectedId || linesLoading || !selectedBudget || !["draft", "submitted", "reviewed"].includes(selectedBudget.status)) return;
     const snapshot = lines.map(cloneLine);
     setBaselineLines(snapshot);
     setEditedLines(snapshot);
@@ -383,7 +447,11 @@ export function BudgetingPage({ readOnly }: Props) {
         ? computeLineBudgetAmount(selectedBudget, qtyParsed, priceParsed, draftLine.frequency)
         : null;
     const amtManual = Number(draftLine.amount);
-    const amt = fromDetail != null ? fromDetail : amtManual;
+    const terms = [draftLine.term_1_amount, draftLine.term_2_amount, draftLine.term_3_amount, draftLine.annual_other_amount]
+      .map((value) => value.trim() === "" ? 0 : Number(value));
+    const hasTerms = terms.some((value) => value > 0);
+    const termTotal = terms.reduce((sum, value) => sum + value, 0);
+    const amt = hasTerms ? termTotal : fromDetail != null ? fromDetail : amtManual;
     if (!Number.isFinite(amt) || amt < 0) {
       setErr("Enter quantity and unit price, or a valid budget amount (0 or more).");
       return;
@@ -403,6 +471,13 @@ export function BudgetingPage({ readOnly }: Props) {
       frequency: draftLine.frequency || "one_time",
       quantity: qtyParsed != null && Number.isFinite(qtyParsed) ? qtyParsed : null,
       unit_price: priceParsed != null && Number.isFinite(priceParsed) ? priceParsed : null,
+      department_id: draftLine.department_id || null,
+      budget_type: draftLine.budget_type,
+      term_1_amount: hasTerms ? terms[0] : 0,
+      term_2_amount: hasTerms ? terms[1] : 0,
+      term_3_amount: hasTerms ? terms[2] : 0,
+      annual_other_amount: hasTerms ? terms[3] : amt,
+      assumptions: draftLine.assumptions.trim() || null,
       gl_accounts: g ? { account_code: g.account_code, account_name: g.account_name } : null,
     };
     setEditedLines((prev) => [...prev, newRow]);
@@ -414,6 +489,13 @@ export function BudgetingPage({ readOnly }: Props) {
       quantity: "",
       unit_price: "",
       amount: "",
+      department_id: "",
+      budget_type: "operating_expense",
+      term_1_amount: "",
+      term_2_amount: "",
+      term_3_amount: "",
+      annual_other_amount: "",
+      assumptions: "",
     });
   };
 
@@ -453,6 +535,13 @@ export function BudgetingPage({ readOnly }: Props) {
             frequency: el.frequency ?? "one_time",
             quantity: el.quantity,
             unit_price: el.unit_price,
+            department_id: el.department_id,
+            budget_type: el.budget_type,
+            term_1_amount: el.term_1_amount,
+            term_2_amount: el.term_2_amount,
+            term_3_amount: el.term_3_amount,
+            annual_other_amount: el.annual_other_amount,
+            assumptions: el.assumptions,
             sort_order: el.sort_order,
           })
           .eq("id", el.id);
@@ -469,6 +558,13 @@ export function BudgetingPage({ readOnly }: Props) {
           frequency: el.frequency ?? "one_time",
           quantity: el.quantity,
           unit_price: el.unit_price,
+          department_id: el.department_id,
+          budget_type: el.budget_type,
+          term_1_amount: el.term_1_amount,
+          term_2_amount: el.term_2_amount,
+          term_3_amount: el.term_3_amount,
+          annual_other_amount: el.annual_other_amount,
+          assumptions: el.assumptions,
           sort_order: el.sort_order,
         });
         if (error) throw error;
@@ -497,7 +593,11 @@ export function BudgetingPage({ readOnly }: Props) {
       .from("budgets")
       .insert({
         name,
-        period_label: newBudget.period_label.trim() || null,
+        period_label: `FY ${newBudget.financial_year}`,
+        financial_year: Number(newBudget.financial_year),
+        period_mode: "annual_terms",
+        status: "draft",
+        is_active: false,
         start_date: newBudget.start_date || null,
         end_date: newBudget.end_date || null,
         notes: newBudget.notes.trim() || null,
@@ -508,7 +608,7 @@ export function BudgetingPage({ readOnly }: Props) {
       setErr(error.message);
       return;
     }
-    setNewBudget({ name: "", period_label: "", start_date: "", end_date: "", notes: "" });
+    setNewBudget({ name: "", financial_year: String(new Date().getFullYear()), start_date: "", end_date: "", notes: "" });
     await loadBudgets();
     if (data && "id" in data) {
       setSelectedId((data as { id: string }).id);
@@ -535,13 +635,26 @@ export function BudgetingPage({ readOnly }: Props) {
     }
   };
 
-  const setBudgetActive = async (budget: BudgetRow, isActive: boolean) => {
+  const changeBudgetStatus = async (budget: BudgetRow, toStatus: BudgetRow["status"]) => {
     if (readOnly || hasUnsavedLineChanges) return;
-    if (isActive && !confirm("Activate this budget? It will become available to budget-versus-actual reporting and any configured spending controls.")) return;
+    const note = prompt(`Optional note for ${toStatus}:`) || null;
     setErr(null);
-    const { error } = await supabase.from("budgets").update({ is_active: isActive }).eq("id", budget.id);
+    const { error } = await supabase.rpc("change_budget_status", { p_budget_id: budget.id, p_to_status: toStatus, p_note: note });
     if (error) setErr(error.message);
     else await loadBudgets();
+  };
+
+  const nextStatus = (status: BudgetRow["status"]): BudgetRow["status"] | null =>
+    ({ draft: "submitted", submitted: "reviewed", reviewed: "approved", approved: "active", active: "closed", revised: "closed", closed: null } as const)[status];
+  const canMoveTo = (status: BudgetRow["status"] | null) => status === "submitted" ? canPrepareBudget : status === "reviewed" ? canReviewBudget : status ? canApproveBudget : false;
+
+  const createRevision = async (budget: BudgetRow) => {
+    const reason = prompt("Reason for this budget revision:");
+    if (!reason?.trim()) return;
+    const { data, error } = await supabase.rpc("create_budget_revision", { p_budget_id: budget.id, p_reason: reason.trim() });
+    if (error) return setErr(error.message);
+    await loadBudgets();
+    if (typeof data === "string") setSelectedId(data);
   };
 
   const displayLines = editingLines ? editedLines : lines;
@@ -571,7 +684,7 @@ export function BudgetingPage({ readOnly }: Props) {
       {readOnly && <ReadOnlyNotice />}
       {err && <p className="text-red-600 text-sm">{err}</p>}
 
-      {!readOnly && (
+      {!readOnly && canPrepareBudget && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <input
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm lg:col-span-2"
@@ -581,9 +694,12 @@ export function BudgetingPage({ readOnly }: Props) {
           />
           <input
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            placeholder="Period label (e.g. FY 2025)"
-            value={newBudget.period_label}
-            onChange={(e) => setNewBudget((n) => ({ ...n, period_label: e.target.value }))}
+            type="number"
+            min={2000}
+            max={2200}
+            placeholder="Financial year"
+            value={newBudget.financial_year}
+            onChange={(e) => setNewBudget((n) => ({ ...n, financial_year: e.target.value }))}
           />
           <input type="date" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={newBudget.start_date} onChange={(e) => setNewBudget((n) => ({ ...n, start_date: e.target.value }))} />
           <input type="date" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={newBudget.end_date} onChange={(e) => setNewBudget((n) => ({ ...n, end_date: e.target.value }))} />
@@ -596,6 +712,13 @@ export function BudgetingPage({ readOnly }: Props) {
           <button type="button" onClick={createBudget} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 w-fit">
             Create budget
           </button>
+        </div>
+      )}
+
+      {selectedBudget && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
+          {[{label:"Income",value:budgetSummary.income,tone:"text-emerald-700"},{label:"Expenditure",value:budgetSummary.expenditure,tone:"text-slate-900"},{label:"Surplus / deficit",value:budgetSummary.net,tone:budgetSummary.net>=0?"text-emerald-700":"text-red-700"}].map((card) => <div key={card.label} className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{card.label}</p><p className={`mt-1 text-lg font-bold tabular-nums ${card.tone}`}>{card.value.toLocaleString()}</p></div>)}
+          {budgetSummary.terms.slice(0,3).map((value,index) => <div key={index} className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Term {index+1}</p><p className="mt-1 text-lg font-bold tabular-nums text-indigo-700">{value.toLocaleString()}</p></div>)}
         </div>
       )}
 
@@ -616,10 +739,10 @@ export function BudgetingPage({ readOnly }: Props) {
                       onClick={() => setSelectedId(b.id)}
                       className={`flex-1 text-left text-sm ${selectedId === b.id ? "text-indigo-800 font-medium" : "text-slate-800"}`}
                     >
-                      <span className="flex items-center gap-2"><span>{b.name}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${b.is_active ? "bg-emerald-100 text-emerald-700" : "bg-amber-100 text-amber-700"}`}>{b.is_active ? "Active" : "Draft"}</span></span>
-                      {b.period_label && <span className="text-xs text-slate-500">{b.period_label}</span>}
+                      <span className="flex items-center gap-2"><span>{b.name}</span><span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${b.status === "active" ? "bg-emerald-100 text-emerald-700" : b.status === "approved" ? "bg-blue-100 text-blue-700" : "bg-amber-100 text-amber-700"}`}>{b.status}</span></span>
+                      <span className="text-xs text-slate-500">FY {b.financial_year ?? "—"} · Version {b.version_no}</span>
                     </button>
-                    {!readOnly && (
+                    {!readOnly && canPrepareBudget && b.status === "draft" && (
                       <button type="button" onClick={() => deleteBudget(b.id)} className="p-1 text-slate-400 hover:text-red-600" title="Delete budget">
                         <Trash2 className="w-4 h-4" />
                       </button>
@@ -642,12 +765,13 @@ export function BudgetingPage({ readOnly }: Props) {
             <div className="flex flex-wrap items-center gap-2 justify-end">
               {selectedBudget && !readOnly && (
                 <>
-                  {!editingLines && <button type="button" onClick={() => void setBudgetActive(selectedBudget, !selectedBudget.is_active)} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium ${selectedBudget.is_active ? "border border-slate-300 bg-white text-slate-700" : "bg-emerald-700 text-white"}`}>{selectedBudget.is_active ? "Return to draft" : "Activate budget"}</button>}
+                  {!editingLines && nextStatus(selectedBudget.status) && canMoveTo(nextStatus(selectedBudget.status)) && <button type="button" onClick={() => void changeBudgetStatus(selectedBudget, nextStatus(selectedBudget.status)!)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white">{nextStatus(selectedBudget.status) === "submitted" ? "Submit" : nextStatus(selectedBudget.status) === "reviewed" ? "Mark reviewed" : nextStatus(selectedBudget.status) === "approved" ? "Approve" : nextStatus(selectedBudget.status) === "active" ? "Activate" : "Close"}</button>}
+                  {!editingLines && canApproveBudget && ["approved", "active"].includes(selectedBudget.status) && <button type="button" onClick={() => void createRevision(selectedBudget)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium">Create revision</button>}
                   {!editingLines ? (
                     <button
                       type="button"
                       onClick={beginEditLines}
-                      disabled={linesLoading}
+                      disabled={linesLoading || !canPrepareBudget || !["draft", "submitted", "reviewed"].includes(selectedBudget.status)}
                       className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-300 bg-white text-slate-800 hover:bg-slate-50 disabled:opacity-50"
                     >
                       <Pencil className="w-3.5 h-3.5" />
@@ -745,6 +869,7 @@ export function BudgetingPage({ readOnly }: Props) {
                               {showReadOnlyLines ? (
                                 <>
                                   <div className="font-medium">{l.line_label}</div>
+                                  <div className="text-xs text-indigo-700">{departments.find((d) => d.id === l.department_id)?.name || "Central / unassigned"} · {l.budget_type.replaceAll("_", " ")}</div>
                                   {l.gl_accounts && (
                                     <div className="text-xs text-slate-500 font-mono">
                                       {l.gl_accounts.account_code} · {l.gl_accounts.account_name}
@@ -778,6 +903,18 @@ export function BudgetingPage({ readOnly }: Props) {
                                       </option>
                                     ))}
                                   </select>
+                                  <div className="grid grid-cols-2 gap-1">
+                                    <select className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.department_id ?? ""} onChange={(e) => updateEditedLine(l.id, { department_id: e.target.value || null })}>
+                                      <option value="">Central / shared</option>
+                                      {departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                                    </select>
+                                    <select className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.budget_type} onChange={(e) => updateEditedLine(l.id, { budget_type: e.target.value })}>
+                                      <option value="income">Income</option><option value="operating_expense">Operating expense</option><option value="staff_cost">Staff cost</option><option value="capital_expenditure">Capital expenditure</option>
+                                    </select>
+                                  </div>
+                                  <div className="grid grid-cols-4 gap-1">
+                                    {(["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"] as const).map((key, index) => <input key={key} type="number" min={0} step="0.01" title={["Term 1","Term 2","Term 3","Annual/holiday"][index]} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-right" value={l[key]} onChange={(e) => { const value=Math.max(0,Number(e.target.value)||0); const next={...l,[key]:value}; updateEditedLine(l.id,{[key]:value,amount:next.term_1_amount+next.term_2_amount+next.term_3_amount+next.annual_other_amount}); }} />)}
+                                  </div>
                                 </>
                               )}
                             </td>
@@ -919,6 +1056,12 @@ export function BudgetingPage({ readOnly }: Props) {
                         </option>
                       ))}
                     </select>
+                    <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" value={draftLine.department_id} onChange={(e) => setDraftLine((d) => ({ ...d, department_id: e.target.value }))}>
+                      <option value="">Central / shared department</option>{departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+                    </select>
+                    <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" value={draftLine.budget_type} onChange={(e) => setDraftLine((d) => ({ ...d, budget_type: e.target.value }))}>
+                      <option value="income">Income</option><option value="operating_expense">Operating expense</option><option value="staff_cost">Staff cost</option><option value="capital_expenditure">Capital expenditure</option>
+                    </select>
                     <input
                       className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm lg:col-span-2 xl:col-span-2"
                       placeholder="Description *"
@@ -969,6 +1112,8 @@ export function BudgetingPage({ readOnly }: Props) {
                       value={draftLine.amount}
                       onChange={(e) => setDraftLine((d) => ({ ...d, amount: e.target.value }))}
                     />
+                    {(["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"] as const).map((key,index) => <input key={key} type="number" min={0} step="0.01" className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" placeholder={["Term 1 amount","Term 2 amount","Term 3 amount","Holiday / annual amount"][index]} value={draftLine[key]} onChange={(e) => setDraftLine((d) => ({...d,[key]:e.target.value}))}/>)}
+                    <input className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm xl:col-span-2" placeholder="Assumptions / notes" value={draftLine.assumptions} onChange={(e) => setDraftLine((d) => ({...d,assumptions:e.target.value}))}/>
                   </div>
                   {draftComputedAmount != null && (
                     <p className="text-xs text-slate-600">
@@ -992,6 +1137,24 @@ export function BudgetingPage({ readOnly }: Props) {
           )}
         </div>
       </div>
+      {selectedBudget && (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">Department consolidation</div>
+            <div className="divide-y divide-slate-100">
+              {[...budgetSummary.departmentTotals.entries()].sort((a,b)=>b[1]-a[1]).map(([id,total]) => <div key={id} className="flex items-center justify-between px-4 py-2.5 text-sm"><span>{id==="central"?"Central / shared":departments.find((d)=>d.id===id)?.name||"Department"}</span><span className="font-semibold tabular-nums">{total.toLocaleString()}</span></div>)}
+              {budgetSummary.departmentTotals.size===0 && <p className="p-4 text-sm text-slate-500">Department totals appear after budget lines are added.</p>}
+            </div>
+          </div>
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+            <div className="border-b border-slate-200 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-700">Workflow history</div>
+            <div className="max-h-72 divide-y divide-slate-100 overflow-y-auto">
+              {workflowHistory.map((item) => <div key={item.id} className="px-4 py-3 text-sm"><div className="flex items-center justify-between gap-3"><span className="font-semibold capitalize">{item.from_status ? `${item.from_status} → `:""}{item.to_status}</span><time className="text-xs text-slate-500">{new Date(item.acted_at).toLocaleString()}</time></div>{item.note&&<p className="mt-1 text-xs text-slate-600">{item.note}</p>}</div>)}
+              {workflowHistory.length===0 && <p className="p-4 text-sm text-slate-500">No workflow actions recorded yet.</p>}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
