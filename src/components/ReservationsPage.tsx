@@ -222,22 +222,36 @@ export function ReservationsPage() {
     if (!error) setReservations((data || []) as Reservation[]);
   };
 
-  /** Room picker: small reservation query + available rooms (avoids stale React state after saves). */
-  const fetchRooms = async () => {
+  /** Load rooms that are free for the requested date range. */
+  const fetchRooms = async (
+    checkInDate = "",
+    checkOutDate = "",
+    excludedReservationId?: string
+  ) => {
     if (!orgId && !superAdmin) {
       setRooms([]);
       return;
     }
-    const today = new Date().toISOString().slice(0, 10);
-    const { data: reservationsData } = await filterByOrganizationId(
-      supabase
-        .from("reservations")
-        .select("room_id, check_out_date, status")
-        .in("status", ["pending", "confirmed", "checked_in"])
-        .gte("check_out_date", today),
-      orgId,
-      superAdmin
-    );
+    let reservationsData: Array<{ id: string; room_id: string | null }> = [];
+    if (checkInDate && checkOutDate && checkOutDate > checkInDate) {
+      let reservationQuery = filterByOrganizationId(
+        supabase
+          .from("reservations")
+          .select("id, room_id")
+          .in("status", ["pending", "confirmed", "checked_in"])
+          .lt("check_in_date", checkOutDate)
+          .gt("check_out_date", checkInDate),
+        orgId,
+        superAdmin
+      );
+      if (excludedReservationId) reservationQuery = reservationQuery.neq("id", excludedReservationId);
+      const reservationResult = await reservationQuery;
+      if (reservationResult.error) {
+        console.error("Room availability load error:", reservationResult.error);
+        return;
+      }
+      reservationsData = reservationResult.data || [];
+    }
     const reservedRoomIds = new Set(
       (reservationsData || []).map((r) => r.room_id).filter(Boolean) as string[]
     );
@@ -310,6 +324,8 @@ export function ReservationsPage() {
       number_of_adults: String((reservation as any).number_of_adults ?? 1),
       number_of_children: String((reservation as any).number_of_children ?? 0),
     });
+
+    void fetchRooms(reservation.check_in_date, reservation.check_out_date, reservation.id);
 
     setShowForm(true);
   };
@@ -623,8 +639,9 @@ export function ReservationsPage() {
               type="date"
               value={form.check_in_date}
               onChange={(e) => {
-                setForm({ ...form, check_in_date: e.target.value });
-                void fetchRooms();
+                const checkInDate = e.target.value;
+                setForm({ ...form, check_in_date: checkInDate, room_id: "" });
+                void fetchRooms(checkInDate, form.check_out_date, editingReservation?.id);
               }}
               className="w-full border p-2 rounded"
             />
@@ -632,9 +649,11 @@ export function ReservationsPage() {
             <input
               type="date"
               value={form.check_out_date}
-              onChange={(e) =>
-                setForm({ ...form, check_out_date: e.target.value })
-              }
+              onChange={(e) => {
+                const checkOutDate = e.target.value;
+                setForm({ ...form, check_out_date: checkOutDate, room_id: "" });
+                void fetchRooms(form.check_in_date, checkOutDate, editingReservation?.id);
+              }}
               className="w-full border p-2 rounded"
             />
 
