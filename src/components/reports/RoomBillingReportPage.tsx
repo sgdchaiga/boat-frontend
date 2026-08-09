@@ -20,6 +20,14 @@ type RoomBillingRow = {
   } | null;
 };
 type BillingSortKey = "charged_at" | "stay_night_date" | "room" | "guest" | "description" | "source" | "amount";
+type ReconciliationStay = {
+  id: string;
+  actual_check_in: string | null;
+  actual_check_out: string | null;
+  rooms: { room_number: string } | null;
+  hotel_customers: { first_name: string; last_name: string } | null;
+};
+type FolioAmount = { stay_id: string | null; amount: number; charge_type?: string; stay_night_date?: string | null; charged_at?: string };
 
 type RoomChargeJournalLine = {
   debit: number | null;
@@ -61,6 +69,9 @@ export function RoomBillingReportPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [rows, setRows] = useState<RoomBillingRow[]>([]);
+  const [reconciliationStays, setReconciliationStays] = useState<ReconciliationStay[]>([]);
+  const [folioBillings, setFolioBillings] = useState<FolioAmount[]>([]);
+  const [folioPayments, setFolioPayments] = useState<FolioAmount[]>([]);
   const [sort, setSort] = useState<{ key: BillingSortKey; dir: "asc" | "desc" }>({ key: "charged_at", dir: "desc" });
 
   const load = useCallback(async () => {
@@ -91,7 +102,10 @@ export function RoomBillingReportPage() {
       const scopedJournalLines = superAdmin
         ? filterJournalLinesByOrganizationId(journalLinesQuery, orgId, true)
         : journalLinesQuery;
-      const [byChargeDate, byFolioNight, journalLines] = await Promise.all([
+      const staysQuery = filterByOrganizationId(supabase.from("stays").select("id,actual_check_in,actual_check_out,rooms(room_number),hotel_customers(first_name,last_name)").order("actual_check_in", { ascending: false }).limit(1000), orgId, superAdmin);
+      const allBillingsQuery = filterByOrganizationId(supabase.from("billing").select("stay_id,amount,charge_type,stay_night_date,charged_at").not("stay_id", "is", null).limit(10000), orgId, superAdmin);
+      const paymentsQuery = filterByOrganizationId(supabase.from("payments").select("stay_id,amount").eq("payment_status", "completed").not("stay_id", "is", null).limit(10000), orgId, superAdmin);
+      const [byChargeDate, byFolioNight, journalLines, staysResult, allBillingsResult, paymentsResult] = await Promise.all([
         filterByOrganizationId(
           supabase
             .from("billing")
@@ -115,6 +129,9 @@ export function RoomBillingReportPage() {
           superAdmin
         ),
         scopedJournalLines,
+        staysQuery,
+        allBillingsQuery,
+        paymentsQuery,
       ]);
       if (byChargeDate.error && byFolioNight.error) throw byChargeDate.error;
       const rowMap = new Map<string, RoomBillingRow>();
@@ -151,6 +168,12 @@ export function RoomBillingReportPage() {
         });
       }
       setRows(Array.from(rowMap.values()));
+      if (staysResult.error) throw staysResult.error;
+      if (allBillingsResult.error) throw allBillingsResult.error;
+      if (paymentsResult.error) throw paymentsResult.error;
+      setReconciliationStays((staysResult.data || []) as unknown as ReconciliationStay[]);
+      setFolioBillings((allBillingsResult.data || []) as unknown as FolioAmount[]);
+      setFolioPayments((paymentsResult.data || []) as unknown as FolioAmount[]);
     } catch (e) {
       console.error("[Room billing report]", e);
       setRows([]);
@@ -169,6 +192,18 @@ export function RoomBillingReportPage() {
     () => new Set(rows.map((row) => row.stays?.rooms?.room_number).filter(Boolean)).size,
     [rows]
   );
+  const reconciliations = useMemo(() => reconciliationStays.map((stay) => {
+    const stayBillings = folioBillings.filter((row) => row.stay_id === stay.id);
+    const roomCharges = stayBillings.filter((row) => row.charge_type === "room");
+    const start = stay.actual_check_in ? new Date(stay.actual_check_in) : null;
+    const end = stay.actual_check_out ? new Date(stay.actual_check_out) : new Date();
+    const expectedNights = start ? Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000)) : 0;
+    const chargedNights = new Set(roomCharges.map((row) => row.stay_night_date || row.charged_at?.slice(0, 10))).size;
+    const billed = stayBillings.reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    const paid = folioPayments.filter((row) => row.stay_id === stay.id).reduce((sum, row) => sum + Number(row.amount || 0), 0);
+    return { stay, expectedNights, chargedNights, nightDifference: chargedNights - expectedNights, billed, paid, balance: billed - paid };
+  }).filter((row) => row.billed !== 0 || row.paid !== 0 || row.nightDifference !== 0), [reconciliationStays, folioBillings, folioPayments]);
+  const exceptionCount = reconciliations.filter((row) => row.nightDifference !== 0 || Math.abs(row.balance) > 0.01).length;
   const valueForSort = (row: RoomBillingRow, key: BillingSortKey): string | number => {
     if (key === "room") return row.stays?.rooms?.room_number || "";
     if (key === "guest") return row.stays?.hotel_customers
@@ -232,9 +267,9 @@ export function RoomBillingReportPage() {
     <div className="p-6 md:p-8">
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-3xl font-bold text-slate-900">Room billing report</h1>
+          <h1 className="text-3xl font-bold text-slate-900">Room billing &amp; cash-in reconciliation</h1>
           <PageNotes ariaLabel="Room billing report help">
-            <p>Room charges posted to guest billing, plus posted room-charge ledger entries whose source billing row is unavailable.</p>
+            <p>One review page for expected room nights, posted charges, payments received and outstanding guest balances.</p>
           </PageNotes>
         </div>
         <button
@@ -304,6 +339,26 @@ export function RoomBillingReportPage() {
               <p className="text-2xl font-bold text-slate-900">{roomCount}</p>
             </div>
           </div>
+
+          <div className="app-card mb-6 overflow-x-auto">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+              <div>
+                <h2 className="font-semibold text-slate-900">Combined reconciliation</h2>
+                <p className="text-xs text-slate-500">Check room nights and cash received on the same row. Investigate only rows marked Review.</p>
+              </div>
+              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${exceptionCount ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>{exceptionCount} to review</span>
+            </div>
+            <table className="w-full min-w-[920px] text-sm">
+              <thead className="bg-slate-50"><tr><th className="p-3 text-left">Guest / room</th><th className="p-3 text-right">Expected nights</th><th className="p-3 text-right">Charged nights</th><th className="p-3 text-right">Billed</th><th className="p-3 text-right">Paid</th><th className="p-3 text-right">Balance</th><th className="p-3 text-left">Result</th></tr></thead>
+              <tbody>{reconciliations.length === 0 ? <tr><td colSpan={7} className="p-8 text-center text-emerald-700">All room stays are reconciled.</td></tr> : reconciliations.map(({stay,expectedNights,chargedNights,nightDifference,billed,paid,balance}) => {
+                const needsReview = nightDifference !== 0 || Math.abs(balance) > 0.01;
+                const guest = stay.hotel_customers ? `${stay.hotel_customers.first_name} ${stay.hotel_customers.last_name}`.trim() : "Guest";
+                return <tr key={stay.id} className="border-t border-slate-100"><td className="p-3 font-medium">{guest} · Room {stay.rooms?.room_number || "—"}{stay.actual_check_out ? " · checked out" : ""}</td><td className="p-3 text-right">{expectedNights}</td><td className={`p-3 text-right ${nightDifference ? "font-semibold text-amber-700" : ""}`}>{chargedNights}{nightDifference ? ` (${nightDifference > 0 ? "+" : ""}${nightDifference})` : ""}</td><td className="p-3 text-right tabular-nums">{formatMoney(billed)}</td><td className="p-3 text-right tabular-nums">{formatMoney(paid)}</td><td className={`p-3 text-right font-semibold tabular-nums ${balance > 0.01 ? "text-amber-700" : balance < -0.01 ? "text-blue-700" : "text-emerald-700"}`}>{formatMoney(balance)}</td><td className="p-3"><span className={`rounded-full px-2 py-1 text-xs font-semibold ${needsReview ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>{needsReview ? "Review" : "Reconciled"}</span></td></tr>;
+              })}</tbody>
+            </table>
+          </div>
+
+          <h2 className="mb-3 text-lg font-semibold text-slate-900">Room charge detail</h2>
 
           <div className="app-card overflow-x-auto">
             <table className="w-full min-w-[900px] text-sm">

@@ -89,7 +89,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     { name: "Balance sheet", page: "accounting_balance" },
     ...(isHotelOrMixed
       ? [
-          { name: "Room billing", page: "reports_room_billing" },
+          { name: "Room billing & cash-in", page: "reports_room_billing" },
           { name: "POS income reconciliation", page: "accounting_pos_income_reconciliation" },
           {
             name: "Debtors (invoice balances)",
@@ -260,6 +260,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Customer payments", page: "payments" },
     ...(isHotelOrMixed ? [{ name: "Invoices", page: "retail_credit_invoices" as const }] : []),
     ...(isHotelOrMixed ? [{ name: "Guest billing", page: "billing" as const }] : []),
+    ...(isHotelOrMixed ? [{ name: "Room reconciliation", page: "reports_room_billing" as const }] : []),
     { name: transactionsMoneyInLabel, page: "transactions" },
     ...(allowWallet ? [{ name: "Wallet", page: "wallet" as const }] : []),
   ];

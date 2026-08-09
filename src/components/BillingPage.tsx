@@ -39,7 +39,6 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const [billings, setBillings] = useState<BillingWithCustomer[]>([]);
-  const [folioPayments, setFolioPayments] = useState<Array<{ stay_id: string | null; amount: number }>>([]);
   const [activeStays, setActiveStays] = useState<BillingStayOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -150,20 +149,6 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
     });
   }, [filteredBillings, billingSort]);
 
-  const billingReconciliation = useMemo(() => activeStays.map((stay) => {
-    const start = stay.actual_check_in ? new Date(stay.actual_check_in) : null;
-    const end = stay.actual_check_out ? new Date(stay.actual_check_out) : new Date();
-    const expectedNights = start ? Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000)) : 0;
-    const roomCharges = billings.filter((row) => row.stay_id === stay.id && row.charge_type === "room");
-    const chargedNights = new Set(roomCharges.map((row) => row.stay_night_date || row.charged_at.slice(0, 10))).size;
-    return { stay, expectedNights, chargedNights, difference: chargedNights - expectedNights, total: roomCharges.reduce((sum, row) => sum + Number(row.amount || 0), 0) };
-  }).filter((row) => row.difference !== 0), [activeStays, billings]);
-
-  const cashInReconciliation = useMemo(() => activeStays.map((stay) => {
-    const billed = billings.filter((row) => row.stay_id===stay.id).reduce((sum,row)=>sum+Number(row.amount||0),0);
-    const paid = folioPayments.filter((row) => row.stay_id===stay.id).reduce((sum,row)=>sum+Number(row.amount||0),0);
-    return { stay, billed, paid, balance: billed-paid };
-  }).filter((row) => row.billed!==0 || row.paid!==0), [activeStays,billings,folioPayments]);
 
   const toggleBillingSort = (key: BillingSortKey) => {
     setBillingSort((prev) => {
@@ -244,18 +229,12 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         orgId,
         superAdmin
       );
-      const paymentsQuery = filterByOrganizationId(
-        supabase.from("payments").select("stay_id,amount").eq("payment_status","completed").not("stay_id","is",null).limit(5000),
-        orgId,
-        superAdmin
-      );
-      const [billingsResult, staysResult, paymentsResult] = await Promise.all([billingsQuery, staysQuery, paymentsQuery]);
+      const [billingsResult, staysResult] = await Promise.all([billingsQuery, staysQuery]);
 
       if (billingsResult.error) throw billingsResult.error;
 
       setBillings((billingsResult.data || []) as BillingWithCustomer[]);
       setActiveStays((staysResult.data || []) as unknown as BillingStayOption[]);
-      if (!paymentsResult.error) setFolioPayments((paymentsResult.data || []) as Array<{ stay_id: string | null; amount: number }>);
     } catch (error) {
       console.error("Error fetching billing:", error);
       setLoadError(error instanceof Error ? error.message : "Failed to load data");
@@ -627,19 +606,6 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
             <option value="last_month">Last month</option>
           </select>
         </label>
-      </div>
-
-      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex items-center justify-between gap-3">
-          <div><h2 className="font-semibold text-slate-900">Room billing reconciliation</h2><p className="text-xs text-slate-500">Expected stay nights compared with posted room-night charges, including checked-out stays.</p></div>
-          <span className={`rounded-full px-2 py-1 text-xs font-semibold ${billingReconciliation.length ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>{billingReconciliation.length} exception(s)</span>
-        </div>
-        {billingReconciliation.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Guest / room</th><th className="p-2 text-right">Expected</th><th className="p-2 text-right">Charged</th><th className="p-2 text-right">Difference</th><th className="p-2 text-right">Amount</th></tr></thead><tbody>{billingReconciliation.map(({stay,expectedNights,chargedNights,difference,total}) => <tr key={stay.id} className="border-t"><td className="p-2">{guestDisplayName(stay.hotel_customers)} · Room {stay.rooms?.room_number || "—"}{stay.actual_check_out ? " · checked out" : ""}</td><td className="p-2 text-right">{expectedNights}</td><td className="p-2 text-right">{chargedNights}</td><td className="p-2 text-right font-semibold text-amber-700">{difference > 0 ? `+${difference}` : difference}</td><td className="p-2 text-right">{total.toFixed(2)}</td></tr>)}</tbody></table></div> : <p className="mt-3 text-sm text-emerald-700">No room-night billing differences detected.</p>}
-      </div>
-
-      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4">
-        <div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-900">Room cash-in reconciliation</h2><p className="text-xs text-slate-500">Room folio charges compared with completed payments received.</p></div><span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">{cashInReconciliation.filter((row)=>Math.abs(row.balance)>0.01).length} outstanding</span></div>
-        {cashInReconciliation.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Guest / room</th><th className="p-2 text-right">Billed</th><th className="p-2 text-right">Paid</th><th className="p-2 text-right">Balance</th><th className="p-2 text-left">Status</th></tr></thead><tbody>{cashInReconciliation.map(({stay,billed,paid,balance})=><tr key={stay.id} className="border-t"><td className="p-2">{guestDisplayName(stay.hotel_customers)} · Room {stay.rooms?.room_number||"—"}{stay.actual_check_out?" · checked out":""}</td><td className="p-2 text-right">{billed.toFixed(2)}</td><td className="p-2 text-right">{paid.toFixed(2)}</td><td className={`p-2 text-right font-semibold ${balance>0.01?"text-amber-700":balance<-.01?"text-blue-700":"text-emerald-700"}`}>{balance.toFixed(2)}</td><td className="p-2">{balance>0.01?"Underpaid":balance<-.01?"Overpaid":"Reconciled"}</td></tr>)}</tbody></table></div>:<p className="mt-3 text-sm text-slate-500">No billed or paid room folios found.</p>}
       </div>
 
       {sortedBillings.length === 0 ? (
