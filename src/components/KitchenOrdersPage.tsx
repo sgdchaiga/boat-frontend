@@ -35,6 +35,7 @@ interface KitchenOrder {
   kitchen_order_items: KitchenItem[];
   payments_total?: number;
   journal_transaction_id?: string | null;
+  included_breakfast?: boolean;
 }
 
 type KitchenDateRangeKey = DateRangeKey | "all";
@@ -222,7 +223,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
       let paymentsMap: Record<string, number> = {};
       const journalTransactionByOrderId: Record<string, string> = {};
       if (orderIds.length > 0) {
-        const [paymentsResult, journalsResult] = await Promise.all([
+        const [paymentsResult, journalsResult, breakfastClaimsResult] = await Promise.all([
           filterByOrganizationId(
             supabase.from("payments").select("amount, payment_status, transaction_id").in("transaction_id", orderIds),
             orgId,
@@ -235,6 +236,11 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
               .eq("reference_type", "pos")
               .eq("is_deleted", false)
               .in("reference_id", orderIds),
+            orgId,
+            superAdmin
+          ),
+          filterByOrganizationId(
+            supabase.from("hotel_breakfast_claims").select("kitchen_order_id").in("kitchen_order_id", orderIds),
             orgId,
             superAdmin
           ),
@@ -258,12 +264,18 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
             if (journal.reference_id && journal.transaction_id) journalTransactionByOrderId[journal.reference_id] = journal.transaction_id;
           });
         }
+        if (!breakfastClaimsResult.error) {
+          ((breakfastClaimsResult.data || []) as Array<{ kitchen_order_id: string }>).forEach((claim) => {
+            journalTransactionByOrderId[`breakfast:${claim.kitchen_order_id}`] = "room_package";
+          });
+        }
       }
 
       const withPayments = data.map((o) => ({
         ...o,
         payments_total: paymentsMap[o.id] || 0,
         journal_transaction_id: journalTransactionByOrderId[o.id] || null,
+        included_breakfast: journalTransactionByOrderId[`breakfast:${o.id}`] === "room_package",
       }));
 
       setOrders(withPayments);
@@ -285,7 +297,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
       const price = item.products?.sales_price ?? 0;
       return sum + item.quantity * Number(price);
     }, 0);
-    const paid = order.payments_total || 0;
+    const paid = order.included_breakfast ? total : order.payments_total || 0;
     const balance = Math.max(0, total - paid);
     return { total, paid, balance };
   };
@@ -552,7 +564,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
                   return (
                     <>
                       <p>Total: {total.toFixed(2)}</p>
-                      <p>Paid: {paid.toFixed(2)}</p>
+                      <p>{order.included_breakfast ? "Covered by room package" : `Paid: ${paid.toFixed(2)}`}</p>
                       <p className="font-semibold">
                         Outstanding: {balance.toFixed(2)}
                       </p>
