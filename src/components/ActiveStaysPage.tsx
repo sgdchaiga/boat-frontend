@@ -414,7 +414,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                   Edit customer
                 </button>
                 <button type="button" onClick={() => { setCheckoutStay(stay); setCheckoutDate(stay.actual_check_out?.slice(0,10) || ""); }} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Correct checkout date</button>
-                {onNavigate ? <button type="button" onClick={() => onNavigate("billing")} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Edit bill</button> : null}
+                {onNavigate ? <button type="button" onClick={() => onNavigate("billing", { focusStayId: stay.id })} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Edit bill</button> : null}
               </div>
             ))}
           </div>

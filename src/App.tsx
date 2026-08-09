@@ -1517,7 +1517,7 @@ function AppContent() {
       case 'kitchen_menu':
         return <KitchenMenuPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'billing':
-        return <BillingPage onNavigate={navigate} readOnly={access.readOnly} />;
+        return <BillingPage onNavigate={navigate} readOnly={access.readOnly} focusStayId={pageState?.focusStayId as string | undefined} />;
       case 'payments':
         return (
           <PaymentsPage

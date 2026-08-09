@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -20,6 +20,7 @@ import { PageNotes } from "./common/PageNotes";
 interface BillingPageProps {
   onNavigate?: (page: string) => void;
   readOnly?: boolean;
+  focusStayId?: string;
 }
 type BillingStayOption = ActiveStayOption & { actual_check_in?: string; actual_check_out?: string | null };
 
@@ -33,7 +34,7 @@ type BillingSortKey =
   | "stay_night_date"
   | "auto_charge_source";
 
-export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) {
+export function BillingPage({ onNavigate, readOnly = false, focusStayId }: BillingPageProps) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
@@ -64,6 +65,8 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   const [nightAuditBusy, setNightAuditBusy] = useState(false);
   const [nightAuditOverrideDate, setNightAuditOverrideDate] = useState("");
   const [nightAuditBanner, setNightAuditBanner] = useState<string | null>(null);
+  const [folioStayId, setFolioStayId] = useState(focusStayId || "");
+  const handledFocusStayRef = useRef("");
   const { from: billingDateFrom, to: billingDateTo } = useMemo(
     () => billingRangeToDates(billingRange),
     [billingRange]
@@ -75,8 +78,8 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
   }, [billingRange]);
 
   const filteredBillings = useMemo(() => {
-    if (!billingDateFrom && !billingDateTo) return billings;
     return billings.filter((b) => {
+      if (folioStayId && b.stay_id !== folioStayId) return false;
       const t = new Date(b.charged_at).getTime();
       if (billingDateFrom) {
         const start = new Date(`${billingDateFrom}T00:00:00`).getTime();
@@ -88,7 +91,19 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
       }
       return true;
     });
-  }, [billings, billingDateFrom, billingDateTo]);
+  }, [billings, billingDateFrom, billingDateTo, folioStayId]);
+
+  useEffect(() => {
+    if (!focusStayId || loading || handledFocusStayRef.current === focusStayId) return;
+    handledFocusStayRef.current = focusStayId;
+    setFolioStayId(focusStayId);
+    const folioCharges = billings.filter((row) => row.stay_id === focusStayId);
+    if (folioCharges.length === 1) openEditBilling(folioCharges[0]);
+    if (folioCharges.length === 0) {
+      setChargeStayId(focusStayId);
+      setShowAddCharge(true);
+    }
+  }, [focusStayId, loading, billings]);
 
   const sortedBillings = useMemo(() => {
     if (!billingSort) return filteredBillings;
@@ -524,6 +539,13 @@ export function BillingPage({ onNavigate, readOnly = false }: BillingPageProps) 
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-3 border-b border-slate-200 mb-4 pb-2">
+        <label className="flex items-center gap-2 text-xs text-slate-600">
+          <span>Folio</span>
+          <select value={folioStayId} onChange={(e) => setFolioStayId(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
+            <option value="">All guests</option>
+            {activeStays.map((stay) => <option key={stay.id} value={stay.id}>{guestDisplayName(stay.hotel_customers)} · Room {stay.rooms?.room_number || "—"}{stay.actual_check_out ? " · checked out" : ""}</option>)}
+          </select>
+        </label>
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <span className="whitespace-nowrap">Date range</span>
           <select
