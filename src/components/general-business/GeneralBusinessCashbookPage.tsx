@@ -18,7 +18,7 @@ type CashbookDirection = "in" | "out";
 
 type CashbookRow = {
   id: string;
-  source: "cashbook_entry" | "receipt" | "supplier_payment" | "expense" | "school_fee" | "mf_repayment" | "mf_disbursement" | "mf_recovery";
+  source: "cashbook_entry" | "receipt" | "supplier_payment" | "expense" | "school_fee" | "mf_repayment" | "mf_disbursement" | "mf_recovery" | "modern_gl";
   date: string;
   description: string;
   party: string;
@@ -235,7 +235,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
     const queryToValues = [dateTo, summaryDate].filter(Boolean).sort();
     const queryTo = queryToValues[queryToValues.length - 1] || dateTo;
 
-    const [paymentsRes, vendorPaymentsInitial, expensesRes, directEntriesRes, glAccountsRes] = await Promise.all([
+    const [paymentsRes, vendorPaymentsInitial, expensesRes, directEntriesRes, glAccountsRes, modernGlRes] = await Promise.all([
       supabase
         .from("payments")
         .select("id,amount,paid_at,payment_method,payment_status,payment_source,transaction_id,property_customer_id,retail_customer_id")
@@ -266,6 +266,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         .eq("organization_id", orgId).gte("transaction_date", queryFrom).lte("transaction_date", queryTo)
         .order("transaction_date", { ascending: false }).limit(rowLimit),
       supabase.from("gl_accounts").select("id,account_code,account_name,account_type,category").eq("organization_id", orgId).eq("is_active", true).order("account_code"),
+      (supabase as any).rpc("cashbook_modern_gl_entries", { p_organization_id: orgId, p_date_from: queryFrom, p_date_to: queryTo, p_limit: rowLimit }),
     ]);
     if (!glAccountsRes.error) setGlOptions(((glAccountsRes.data || []) as GlOption[]).filter((account) => isGlAccountRelevantForBusinessType(account, user?.business_type)));
 
@@ -284,6 +285,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
     const errors = [paymentsRes.error, vendorPaymentsRes.error, expensesRes.error].filter(Boolean);
     if (errors.length) setWarning(`Some cashbook sources could not be loaded: ${errors.map(errorMessage).join(" · ")}`);
     else if (directEntriesRes.error) setWarning("Direct Cash Book entry requires the latest Supabase migration. Existing BOAT transactions are still shown.");
+    else if (modernGlRes.error) setWarning("Modern-mode GL transactions require the latest Cash Book bridge migration. Other cashbook sources are still shown.");
     else if ([paymentsRes.data?.length, vendorPaymentsRes.data?.length, expensesRes.data?.length,directEntriesRes.data?.length].some((count) => Number(count||0) >= rowLimit)) setWarning(`This period reached the ${rowLimit.toLocaleString()}-row page limit for at least one source. Load the next page or narrow the date range.`);
 
     const paymentRows = (paymentsRes.data || []) as unknown as PaymentWithCustomer[];
@@ -393,6 +395,29 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       createdBy: entry.created_by,
       approvalStatus: entry.approval_status || "pending",
     }));
+    const representedSourceIds = new Set<string>([
+      ...paymentRows.map((row) => row.id),
+      ...((vendorPaymentsRes.data || []) as Array<{ id: string }>).map((row) => row.id),
+      ...((expensesRes.data || []) as Array<{ id: string }>).map((row) => row.id),
+      ...((directEntriesRes.data || []) as Array<{ id: string }>).map((row) => row.id),
+    ]);
+    const modernGlRows: CashbookRow[] = ((modernGlRes.data || []) as Array<any>)
+      .filter((entry) => !entry.reference_id || !representedSourceIds.has(entry.reference_id))
+      .map((entry) => ({
+        id: `modern-gl:${entry.journal_entry_id}`,
+        rawId: entry.journal_entry_id,
+        source: "modern_gl" as const,
+        date: localDatePart(entry.entry_date),
+        description: entry.description || "Modern-mode cash movement",
+        party: "General ledger",
+        method: entry.cash_account_name || "Cash / bank",
+        reference: entry.reference_id || entry.journal_entry_id,
+        cashIn: Math.max(Number(entry.cash_movement || 0), 0),
+        cashOut: Math.max(-Number(entry.cash_movement || 0), 0),
+        status: "Posted",
+        glAccount: entry.cash_account_name || undefined,
+        postedAt: entry.created_at || undefined,
+      }));
     let mfiRows: CashbookRow[] = [];
     if (isMicrofinance) {
       const [repayments, disbursements, recoveries] = await Promise.all([
@@ -415,7 +440,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       if (schoolPayments.error) setWarning(`School fee collections could not be loaded: ${schoolPayments.error.message}`);
       schoolRows=((schoolPayments.data||[]) as any[]).map(payment=>({id:`school-fee:${payment.id}`,source:"school_fee" as const,date:localDatePart(payment.paid_at),description:payment.notes?.trim()||"School fee collection",party:[payment.students?.first_name,payment.students?.last_name].filter(Boolean).join(" ")||payment.students?.admission_number||"Student",method:readable(payment.method),reference:payment.reference||payment.id,cashIn:Number(payment.amount||0),cashOut:0,status:"Completed"}));
     }
-    const baseRows = isMicrofinance ? directEntries : isSchool ? [...directEntries,...schoolRows,...supplierPayments,...dedupedExpenses] : [...directEntries, ...receipts, ...supplierPayments, ...dedupedExpenses];
+    const baseRows = isMicrofinance ? directEntries : isSchool ? [...directEntries,...schoolRows,...supplierPayments,...dedupedExpenses,...modernGlRows] : [...directEntries, ...receipts, ...supplierPayments, ...dedupedExpenses, ...modernGlRows];
     setRows([...baseRows,...mfiRows].sort((a, b) => b.date.localeCompare(a.date) || b.id.localeCompare(a.id)));
     setLoading(false);
   }, [dateFrom, dateTo, orgId, summaryDate, isMicrofinance, isSchool, user?.business_type, rowLimit]);
@@ -476,8 +501,8 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       cashIn,
       cashOut,
       net: cashIn - cashOut,
-      receipts: dayRows.filter((row) => row.source === "receipt").length,
-      payments: dayRows.filter((row) => row.source !== "receipt").length,
+      receipts: dayRows.filter((row) => row.cashIn > 0).length,
+      payments: dayRows.filter((row) => row.cashOut > 0).length,
       methods: new Set(dayRows.map((row) => row.method).filter(Boolean)).size,
     };
   }, [rows, summaryDate]);
@@ -715,6 +740,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
     if (row.source === "mf_repayment" || row.source === "mf_recovery") onNavigate("mfi_collections", { highlightTransactionId: sourceId });
     else if (row.source === "mf_disbursement") onNavigate("mfi_approvals_disbursements", { highlightTransactionId: sourceId });
     else if (row.source === "cashbook_entry") onNavigate("accounting_journal", { cashbookEntryId: sourceId });
+    else if (row.source === "modern_gl") onNavigate("accounting_journal", { journalEntryId: row.rawId || sourceId });
     else if (row.source === "receipt") onNavigate("payments", { highlightPaymentId: sourceId });
     else if (row.source === "supplier_payment") onNavigate("purchases_payments", { highlightVendorPaymentId: sourceId });
     else onNavigate("purchases_expenses", { highlightExpenseId: sourceId });
