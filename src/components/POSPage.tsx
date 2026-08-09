@@ -428,9 +428,10 @@ export function POSPage({
       const rows = (data || []) as BreakfastEntitlement[];
       setBreakfastEntitlements(rows);
       const usable = rows.find((row) => row.status === "available" || row.status === "partially_served");
-      if (usable) {
-        setSelectedBreakfastEntitlementId(usable.id);
-        setBreakfastServings(String(Math.max(1, usable.eligible_count - usable.served_count)));
+      const selectable = usable || rows[0];
+      if (selectable) {
+        setSelectedBreakfastEntitlementId(selectable.id);
+        setBreakfastServings(String(Math.max(1, selectable.eligible_count - selectable.served_count)));
       }
     })();
     return () => { cancelled = true; };
@@ -2519,7 +2520,7 @@ export function POSPage({
               onClick={() => processOrder("included_breakfast")}
               disabled={sending || cart.length === 0 || readOnly || !selectedStay || !selectedBreakfastEntitlementId}
               className="bg-amber-700 hover:bg-amber-800 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded font-medium py-1.5 text-xs"
-              title="Consume breakfast entitlement without creating a charge or payment"
+              title={!selectedStay ? "Select an active room" : !selectedBreakfastEntitlementId ? "No breakfast entitlement exists for this room today" : "Consume breakfast entitlement without creating a charge or payment; closed or extra servings require manager approval"}
             >
               {sending ? "..." : "Included in Room Package"}
             </button>

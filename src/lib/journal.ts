@@ -2387,7 +2387,10 @@ export async function syncHotelPosOrderJournal(
   const itemTotal = roundMoney(items.reduce((sum, item) => sum + item.quantity * item.salesPrice, 0));
   const total = itemTotal;
   const amountPaid = roundMoney(completedPayments.reduce((sum, payment) => sum + Number(payment.amount || 0), 0));
-  if (total <= 0) return { ok: false, error: "Hotel POS order total is zero; journal was removed but not reposted." };
+  if (total <= 0) {
+    const remove = await deleteJournalEntryByReference("pos", orderId, organizationId);
+    return remove.ok ? { ok: true, journalId: null } : remove;
+  }
 
   const departmentIds = Array.from(new Set(items.map((item) => item.departmentId).filter((id): id is string => !!id)));
   const departmentNameById = new Map<string, string>();
