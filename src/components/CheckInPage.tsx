@@ -66,7 +66,21 @@ export function CheckInPage() {
 
       if (error) throw error;
 
-      setReservations((data as Reservation[]) || []);
+      const rows = (data as Reservation[]) || [];
+      const { data: activeStays } = await filterByOrganizationId(
+        supabase.from("stays").select("reservation_id").is("actual_check_out", null),
+        orgId,
+        superAdmin
+      );
+      const activeReservationIds = new Set((activeStays || []).map((stay) => stay.reservation_id).filter(Boolean));
+      setReservations(rows.filter((reservation) => !activeReservationIds.has(reservation.id)));
+      if (activeReservationIds.size > 0) {
+        await filterByOrganizationId(
+          supabase.from("reservations").update({ status: "checked_in" }).in("id", [...activeReservationIds]),
+          orgId,
+          superAdmin
+        );
+      }
 
     } catch (error) {
 
@@ -111,8 +125,11 @@ export function CheckInPage() {
       ).maybeSingle();
 
       if (existingStay) {
-        alert("Guest already checked in");
-       setProcessingId(null);
+        await filterByOrganizationId(supabase.from("reservations").update({ status: "checked_in" }).eq("id", reservation.id), orgId, superAdmin);
+        await filterByOrganizationId(supabase.from("rooms").update({ status: "occupied" }).eq("id", reservation.room_id), orgId, superAdmin);
+        await fetchReservations();
+        alert("Guest is already checked in. The reservation status has been synchronized.");
+        setProcessingId(null);
         return;
       }
 
@@ -135,6 +152,24 @@ export function CheckInPage() {
 
       if (stayError) throw stayError;
       if (!stayRow?.id) throw new Error("Stay was not created");
+
+      // Finalize the room lifecycle before optional folio/breakfast work so a
+      // downstream posting error cannot leave a pending reservation with an active stay.
+      const { error: reservationError } = await filterByOrganizationId(
+        supabase.from("reservations").update({ status: "checked_in" }).eq("id", reservation.id),
+        orgId,
+        superAdmin
+      );
+      if (reservationError) throw reservationError;
+      const { error: roomError } = await filterByOrganizationId(
+        supabase.from("rooms").update({ status: "occupied" }).eq("id", reservation.room_id),
+        orgId,
+        superAdmin
+      );
+      if (roomError) throw roomError;
+
+      const { error: breakfastError } = await supabase.rpc("ensure_room_breakfast_entitlement", { p_stay_id: stayRow.id });
+      if (breakfastError) console.error("Breakfast entitlement setup:", breakfastError);
 
       if (user.hotel_enable_smart_room_charges !== false) {
         const { data: folioRpc, error: folioErr } = await supabase.rpc("post_hotel_room_night_charge", {
@@ -159,32 +194,6 @@ export function CheckInPage() {
           );
         }
       }
-
-      /* Update reservation */
-
-      const { error: reservationError } = await filterByOrganizationId(
-        supabase
-          .from("reservations")
-          .update({ status: "checked_in" })
-          .eq("id", reservation.id),
-        orgId,
-        superAdmin
-      );
-
-      if (reservationError) throw reservationError;
-
-      /* Update room status */
-
-      const { error: roomError } = await filterByOrganizationId(
-        supabase
-          .from("rooms")
-          .update({ status: "occupied" })
-          .eq("id", reservation.room_id),
-        orgId,
-        superAdmin
-      );
-
-      if (roomError) throw roomError;
 
       /* Refresh list */
 

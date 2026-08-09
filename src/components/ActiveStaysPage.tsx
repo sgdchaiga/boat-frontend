@@ -37,6 +37,8 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
   const [discountAmount, setDiscountAmount] = useState("");
   const [discountReason, setDiscountReason] = useState("");
   const [savingEdit, setSavingEdit] = useState(false);
+  const [checkoutStay, setCheckoutStay] = useState<Stay | null>(null);
+  const [checkoutDate, setCheckoutDate] = useState("");
 
   useEffect(() => {
     fetchActiveStays();
@@ -182,13 +184,22 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
       setSavingEdit(false);
     }
   };
-  const handleCheckOut = async (stay: Stay) => {
+  const openCheckout = (stay: Stay) => {
+    setCheckoutStay(stay);
+    setCheckoutDate(new Date().toISOString().slice(0, 10));
+  };
+
+  const handleCheckOut = async (stay: Stay, date = checkoutDate) => {
     if (!stay.rooms || !user) return;
+    const correctingHistoricalCheckout = !!stay.actual_check_out;
+    if (!date) return alert("Select the actual checkout date.");
+    const checkInDate = new Date(stay.actual_check_in).toISOString().slice(0, 10);
+    if (date < checkInDate) return alert("Checkout date cannot be before check-in date.");
 
     setProcessingId(stay.id);
     try {
       const updatePayload: { actual_check_out: string; checked_out_by?: string } = {
-        actual_check_out: new Date().toISOString(),
+        actual_check_out: `${date}T12:00:00`,
       };
       const { data: staffRow } = await supabase
         .from('staff')
@@ -209,7 +220,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
 
       if (stayError) throw stayError;
 
-      if (stay.reservation_id) {
+      if (!correctingHistoricalCheckout && stay.reservation_id) {
         const { error: reservationError } = await filterByOrganizationId(
           supabase
             .from('reservations')
@@ -222,7 +233,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
         if (reservationError) throw reservationError;
       }
 
-      const { error: roomError } = await filterByOrganizationId(
+      const { error: roomError } = correctingHistoricalCheckout ? { error: null } : await filterByOrganizationId(
         supabase
           .from('rooms')
           .update({ status: 'cleaning' })
@@ -233,7 +244,8 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
 
       if (roomError) throw roomError;
 
-      fetchActiveStays();
+      setCheckoutStay(null);
+      await fetchActiveStays();
     } catch (error: unknown) {
       const msg = error && typeof error === 'object' && 'message' in error
         ? String((error as { message?: string }).message)
@@ -348,7 +360,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                   Print Bill
                 </button>
                 <button
-                  onClick={() => handleCheckOut(stay)}
+                  onClick={() => openCheckout(stay)}
                   disabled={processingId === stay.id}
                   className="app-btn-primary px-6 py-3 whitespace-nowrap disabled:cursor-not-allowed"
                 >
@@ -401,11 +413,24 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                   <Edit className="w-4 h-4" />
                   Edit customer
                 </button>
+                <button type="button" onClick={() => { setCheckoutStay(stay); setCheckoutDate(stay.actual_check_out?.slice(0,10) || ""); }} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Correct checkout date</button>
+                {onNavigate ? <button type="button" onClick={() => onNavigate("billing")} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Edit bill</button> : null}
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {checkoutStay && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-6">
+            <h3 className="text-lg font-semibold">{checkoutStay.actual_check_out ? "Correct checkout date" : "Check out guest"}</h3>
+            <p className="mt-1 text-sm text-slate-600">Room {checkoutStay.rooms?.room_number || "N/A"}. Enter the date the guest actually left.</p>
+            <input type="date" value={checkoutDate} min={new Date(checkoutStay.actual_check_in).toISOString().slice(0,10)} max={new Date().toISOString().slice(0,10)} onChange={(e) => setCheckoutDate(e.target.value)} className="mt-4 w-full rounded-lg border px-3 py-2" />
+            <div className="mt-5 flex justify-end gap-2"><button onClick={() => setCheckoutStay(null)} className="rounded-lg border px-4 py-2">Cancel</button><button onClick={() => void handleCheckOut(checkoutStay)} disabled={processingId===checkoutStay.id} className="app-btn-primary rounded-lg">Save checkout</button></div>
+          </div>
+        </div>
+      )}
 
       {editStay && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">

@@ -8,6 +8,7 @@ import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 
 type Room = Database["public"]["Tables"]["rooms"]["Row"] & {
   room_types: { name: string; base_price: number } | null;
+  breakfast_included?: boolean;
 };
 
 export function RoomsPage() {
@@ -25,6 +26,7 @@ export function RoomsPage() {
   const [showAddRoom, setShowAddRoom] = useState(false);
   const [roomNumber, setRoomNumber] = useState("");
   const [floor, setFloor] = useState("");
+  const [breakfastIncluded, setBreakfastIncluded] = useState(true);
   const [savingRoom, setSavingRoom] = useState(false);
   const [editRateRoom, setEditRateRoom] = useState<Room | null>(null);
   const [editRateValue, setEditRateValue] = useState("");
@@ -120,7 +122,8 @@ const addRoom = async () => {
           organization_id: orgId ?? null,
           room_number: roomNumber,
           floor: floor,
-          status: "available"
+          status: "available",
+          breakfast_included: breakfastIncluded,
         }
       ])
       .select();
@@ -134,6 +137,7 @@ const addRoom = async () => {
     setShowAddRoom(false);
     setRoomNumber("");
     setFloor("");
+    setBreakfastIncluded(true);
 
     fetchRooms();
 
@@ -486,6 +490,11 @@ const addRoom = async () => {
               onChange={(e) => setFloor(e.target.value)}
               className="border w-full p-2 mb-3 rounded"
             />
+
+            <label className="mb-3 flex items-center gap-3 rounded border p-3 text-sm">
+              <input type="checkbox" checked={breakfastIncluded} onChange={(e) => setBreakfastIncluded(e.target.checked)} />
+              Breakfast included
+            </label>
 
             <div className="flex justify-end gap-2">
 

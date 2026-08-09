@@ -27,6 +27,21 @@ type Room = {
 };
 type RatePlan = { id: string; code: string; name: string; includes_breakfast: boolean };
 
+function supabaseErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const row = error as { message?: string; details?: string; hint?: string; code?: string };
+    return [row.message, row.details, row.hint, row.code].filter(Boolean).join(" · ");
+  }
+  return String(error || "Failed to save reservation");
+}
+
+function isMissingBreakfastSchema(error: unknown): boolean {
+  const message = supabaseErrorMessage(error);
+  return /rate_plan_id|number_of_adults|number_of_children|hotel_rate_plans|schema cache/i.test(message)
+    || /PGRST204|42703|42P01/i.test(message);
+}
+
 export function ReservationsPage() {
 
   const { user } = useAuth();
@@ -105,8 +120,7 @@ export function ReservationsPage() {
           setRooms([]);
           return;
         }
-        const today = new Date().toISOString().slice(0, 10);
-        const [resRes, customerRows, plansRes] = await Promise.all([
+        const [initialResRes, customerRows] = await Promise.all([
           filterByOrganizationId(
             supabase
               .from("reservations")
@@ -135,44 +149,48 @@ export function ReservationsPage() {
             superAdmin
           ),
           fetchHotelCustomers(),
-          filterByOrganizationId(
-            (supabase as any).from("hotel_rate_plans").select("id,code,name,includes_breakfast").eq("is_active", true).order("name"),
-            orgId,
-            superAdmin
-          ),
         ]);
         if (cancelled) return;
         setHotelCustomers(customerRows);
+        let resRes = initialResRes;
+        if (resRes.error) {
+          // Older hotel databases may not yet have the optional B&B columns.
+          // Keep the core front desk usable while the migration is pending.
+          resRes = await filterByOrganizationId(
+            supabase
+              .from("reservations")
+              .select("id,property_customer_id,room_id,check_in_date,check_out_date,status,room_discount_amount,room_discount_reason,created_at,hotel_customers(id,first_name,last_name),rooms(id,room_number)")
+              .gte("check_out_date", new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10))
+              .order("check_in_date", { ascending: true })
+              .limit(500),
+            orgId,
+            superAdmin
+          );
+        }
         if (resRes.error) throw resRes.error;
         const resData = (resRes.data || []) as Reservation[];
         setReservations(resData);
-        setRatePlans((plansRes.data || []) as RatePlan[]);
-
-        const reservedRoomIds = new Set<string>();
-        for (const r of resData) {
-          if (
-            r.room_id &&
-            ["pending", "confirmed", "checked_in"].includes(r.status) &&
-            r.check_out_date >= today
-          ) {
-            reservedRoomIds.add(r.room_id);
-          }
-        }
-        let roomQuery = filterByOrganizationId(
+        const roomQuery = filterByOrganizationId(
           supabase
             .from("rooms")
             .select("id,room_number, status")
-            .eq("status", "available")
             .order("room_number"),
           orgId,
           superAdmin
         );
-        if (reservedRoomIds.size > 0) {
-          roomQuery = roomQuery.not("id", "in", `(${[...reservedRoomIds].join(",")})`);
-        }
         const { data: roomData, error: roomErr } = await roomQuery;
         if (roomErr) throw roomErr;
-        setRooms(roomData || []);
+        setRooms(((roomData || []) as Room[]).filter((room) => room.status !== "maintenance"));
+
+        // Rate plans are optional front-desk enrichment. Do not delay or fail
+        // the core reservations and rooms UI when that migration is absent.
+        void filterByOrganizationId(
+          (supabase as any).from("hotel_rate_plans").select("id,code,name,includes_breakfast").eq("is_active", true).order("name"),
+          orgId,
+          superAdmin
+        ).then((plansRes: { data?: unknown[] | null; error?: unknown }) => {
+          if (!cancelled && !plansRes.error) setRatePlans((plansRes.data || []) as RatePlan[]);
+        });
       } catch (e) {
         console.error("Reservations load error:", e);
       } finally {
@@ -255,12 +273,24 @@ export function ReservationsPage() {
     const reservedRoomIds = new Set(
       (reservationsData || []).map((r) => r.room_id).filter(Boolean) as string[]
     );
+    // Covers walk-ins and legacy stays that may not have a reservation row.
+    if (checkInDate && checkOutDate && checkOutDate > checkInDate) {
+      const activeStaysResult = await filterByOrganizationId(
+        supabase.from("stays").select("room_id").is("actual_check_out", null),
+        orgId,
+        superAdmin
+      );
+      if (!activeStaysResult.error) {
+        for (const stay of activeStaysResult.data || []) {
+          if (stay.room_id) reservedRoomIds.add(stay.room_id);
+        }
+      }
+    }
 
     let query = filterByOrganizationId(
       supabase
         .from("rooms")
         .select("id,room_number, status")
-        .eq("status", "available")
         .order("room_number"),
       orgId,
       superAdmin
@@ -274,7 +304,7 @@ export function ReservationsPage() {
       console.error("Rooms load error:", error);
       return;
     }
-    setRooms(data || []);
+    setRooms(((data || []) as Room[]).filter((room) => room.status !== "maintenance"));
   };
 
   /* -------------------- */
@@ -341,6 +371,10 @@ export function ReservationsPage() {
       alert("Select customer and room");
       return;
     }
+    if (!form.check_in_date || !form.check_out_date || form.check_out_date <= form.check_in_date) {
+      alert("Select valid check-in and check-out dates");
+      return;
+    }
 
     setSavingReservation(true);
     try {
@@ -358,9 +392,18 @@ export function ReservationsPage() {
         number_of_adults: Math.max(0, Number.parseInt(form.number_of_adults, 10) || 0),
         number_of_children: Math.max(0, Number.parseInt(form.number_of_children, 10) || 0),
       };
+      const legacyPayload = {
+        property_customer_id: payload.property_customer_id,
+        room_id: payload.room_id,
+        check_in_date: payload.check_in_date,
+        check_out_date: payload.check_out_date,
+        status: payload.status,
+        room_discount_amount: payload.room_discount_amount,
+        room_discount_reason: payload.room_discount_reason,
+      };
 
       if (editingReservation) {
-        await filterByOrganizationId(
+        let { error } = await filterByOrganizationId(
           supabase
             .from("reservations")
             .update(payload)
@@ -368,22 +411,39 @@ export function ReservationsPage() {
           orgId,
           superAdmin
         );
+        if (error && isMissingBreakfastSchema(error) && !form.rate_plan_id) {
+          ({ error } = await filterByOrganizationId(
+            supabase.from("reservations").update(legacyPayload).eq("id", editingReservation.id),
+            orgId,
+            superAdmin
+          ));
+        }
+        if (error) throw error;
       } else {
-        await supabase
+        let { error } = await supabase
           .from("reservations")
           .insert({
             ...payload,
             organization_id: orgId ?? null,
           });
+        if (error && isMissingBreakfastSchema(error) && !form.rate_plan_id) {
+          ({ error } = await supabase.from("reservations").insert({
+            ...legacyPayload,
+            organization_id: orgId ?? null,
+          }));
+        }
+        if (error) throw error;
       }
 
       setShowForm(false);
-      fetchReservations();
+      await fetchReservations();
 
     } catch (err) {
-
-      console.error(err);
-      alert("Failed to save reservation");
+      console.error("Reservation save error:", err);
+      const message = supabaseErrorMessage(err);
+      alert(isMissingBreakfastSchema(err) && form.rate_plan_id
+        ? `Bed & Breakfast is not available until the hotel B&B database migration is applied. ${message}`
+        : message);
 
     } finally {
       setSavingReservation(false);
@@ -424,13 +484,16 @@ export function ReservationsPage() {
         .maybeSingle();
       if (staffRow?.id) insertPayload.checked_in_by = staffRow.id;
 
-      const { error } = await supabase
+      const { data: stayRow, error } = await supabase
         .from("stays")
-        .insert(insertPayload);
+        .insert(insertPayload)
+        .select("id")
+        .single();
 
       if (error) throw error;
+      if (!stayRow?.id) throw new Error("Stay was not created");
 
-      await filterByOrganizationId(
+      const { error: reservationError } = await filterByOrganizationId(
         supabase
           .from("reservations")
           .update({ status: "checked_in" })
@@ -438,8 +501,9 @@ export function ReservationsPage() {
         orgId,
         superAdmin
       );
+      if (reservationError) throw reservationError;
 
-      await filterByOrganizationId(
+      const { error: roomError } = await filterByOrganizationId(
         supabase
           .from("rooms")
           .update({ status: "occupied" })
@@ -447,6 +511,10 @@ export function ReservationsPage() {
         orgId,
         superAdmin
       );
+      if (roomError) throw roomError;
+
+      const { error: breakfastError } = await supabase.rpc("ensure_room_breakfast_entitlement", { p_stay_id: stayRow.id });
+      if (breakfastError) console.error("Breakfast entitlement setup:", breakfastError);
 
       fetchReservations();
 
@@ -616,6 +684,7 @@ export function ReservationsPage() {
               className="w-full border p-2 rounded"
             >
               <option value="">Select Room</option>
+              {rooms.length === 0 ? <option value="" disabled>No rooms available for these dates</option> : null}
               {rooms.map((r) => (
                 <option key={r.id} value={r.id}>
                   Room {r.room_number}

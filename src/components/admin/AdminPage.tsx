@@ -26,7 +26,6 @@ import { AdminMobileLitePage } from "./AdminMobileLitePage";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
-import { FeatureFlagsSummary } from "../common/FeatureFlagsSummary";
 import { ADMIN_TAB_IDS, type AdminTab } from "../../lib/adminTabs";
 
 const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
@@ -152,7 +151,6 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
       {readOnly && (
         <ReadOnlyNotice message="Subscription inactive - read-only mode. Changes are disabled." />
       )}
-      <FeatureFlagsSummary />
 
       <div className="flex flex-col lg:flex-row gap-6">
         <nav className="lg:w-64 shrink-0">

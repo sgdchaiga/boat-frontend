@@ -29,7 +29,6 @@ import {
 } from "../lib/dashboardPaymentFilters";
 import { PageNotes } from "./common/PageNotes";
 import { fetchKitchenOrderIdsForPayments } from "../lib/dashboardKitchenLookup";
-import { FeatureFlagsSummary } from "./common/FeatureFlagsSummary";
 
 interface Stats {
   totalRooms: number;
@@ -411,7 +410,6 @@ export function Dashboard({ onNavigate }: DashboardProps) {
           <div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="text-3xl font-bold text-slate-900">Dashboard</h1>
-              <FeatureFlagsSummary compact />
               <PageNotes ariaLabel="Dashboard help">
                 <p>Hotel operations, occupancy, and hospitality revenue.</p>
               </PageNotes>

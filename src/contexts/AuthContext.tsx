@@ -1179,6 +1179,11 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       };
     }
     let mounted = true;
+    // Keep a slow or unreachable auth endpoint from holding the whole app on
+    // the startup splash. Session restoration continues in the background.
+    const startupFallback = window.setTimeout(() => {
+      if (mounted) setLoading(false);
+    }, 5000);
     const handlingPasswordReset = isPasswordResetRedirect();
     passwordResetModeRef.current = handlingPasswordReset;
     supabase.auth
@@ -1242,6 +1247,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     });
     return () => {
       mounted = false;
+      window.clearTimeout(startupFallback);
       listener.subscription.unsubscribe();
     };
   }, [applySessionUser, importBootstrapAdminIfNeeded]);

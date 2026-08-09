@@ -8,6 +8,7 @@ import type { Database } from "../../lib/database.types";
 type RoomType = Database["public"]["Tables"]["room_types"]["Row"];
 type Room = Database["public"]["Tables"]["rooms"]["Row"] & {
   room_types: { name: string; base_price: number } | null;
+  breakfast_included?: boolean;
 };
 
 export function AdminRoomsPage() {
@@ -34,6 +35,7 @@ export function AdminRoomsPage() {
   const [roomFloor, setRoomFloor] = useState("");
   const [roomTypeId, setRoomTypeId] = useState("");
   const [roomNightlyRate, setRoomNightlyRate] = useState("");
+  const [roomBreakfastIncluded, setRoomBreakfastIncluded] = useState(true);
   const [editingRoom, setEditingRoom] = useState<Room | null>(null);
 
   useEffect(() => {
@@ -117,6 +119,7 @@ export function AdminRoomsPage() {
     setRoomFloor("");
     setRoomTypeId(roomTypes[0]?.id ?? "");
     setRoomNightlyRate("");
+    setRoomBreakfastIncluded(true);
     setShowRoomModal(true);
   };
 
@@ -128,6 +131,7 @@ export function AdminRoomsPage() {
     setRoomNightlyRate(
       r.nightly_rate != null && Number.isFinite(Number(r.nightly_rate)) ? String(r.nightly_rate) : ""
     );
+    setRoomBreakfastIncluded(r.breakfast_included !== false);
     setShowRoomModal(true);
   };
 
@@ -154,6 +158,7 @@ export function AdminRoomsPage() {
             floor: parseInt(roomFloor, 10) || 0,
             room_type_id: roomTypeId || null,
             nightly_rate: nr,
+            breakfast_included: roomBreakfastIncluded,
           })
           .eq("id", editingRoom.id),
         orgId,
@@ -170,6 +175,7 @@ export function AdminRoomsPage() {
         floor: parseInt(roomFloor, 10) || 0,
         room_type_id: roomTypeId || null,
         nightly_rate: nr,
+        breakfast_included: roomBreakfastIncluded,
         status: "available",
       });
       if (error) {
@@ -469,6 +475,10 @@ export function AdminRoomsPage() {
                   placeholder="Uses room type base price when empty"
                 />
               </div>
+              <label className="flex items-center gap-3 rounded-lg border p-3 text-sm text-slate-700">
+                <input type="checkbox" checked={roomBreakfastIncluded} onChange={(e) => setRoomBreakfastIncluded(e.target.checked)} />
+                Breakfast included for this room
+              </label>
             </div>
             <div className="flex justify-end gap-2 mt-6">
               <button

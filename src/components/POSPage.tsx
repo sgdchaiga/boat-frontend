@@ -416,6 +416,7 @@ export function POSPage({
     setSelectedBreakfastEntitlementId("");
     if (!selectedStay) return;
     void (async () => {
+      await (supabase as any).rpc("ensure_room_breakfast_entitlement", { p_stay_id: selectedStay.id });
       await (supabase as any).rpc("close_unused_breakfast_entitlements", { p_organization_id: orgId ?? null });
       const { data, error } = await (supabase as any)
         .from("hotel_breakfast_entitlements")

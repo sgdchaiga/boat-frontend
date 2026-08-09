@@ -92,7 +92,7 @@ DECLARE b record; rp record; v_adults int; v_children int; v_id uuid;
 BEGIN
   SELECT bi.*, s.reservation_id, COALESCE(s.rate_plan_id, bi.rate_plan_id, r.rate_plan_id) effective_plan
     INTO b FROM billing bi JOIN stays s ON s.id=bi.stay_id
-    LEFT JOIN reservations r ON r.id=s.reservation_id WHERE bi.id=p_billing_id FOR UPDATE;
+    LEFT JOIN reservations r ON r.id=s.reservation_id WHERE bi.id=p_billing_id FOR UPDATE OF bi;
   IF NOT FOUND OR b.charge_type <> 'room' OR b.stay_night_date IS NULL OR b.effective_plan IS NULL THEN RETURN NULL; END IF;
   SELECT * INTO rp FROM hotel_rate_plans WHERE id=b.effective_plan AND organization_id=b.organization_id AND includes_breakfast AND is_active;
   IF NOT FOUND THEN RETURN NULL; END IF;
@@ -205,13 +205,13 @@ DECLARE n int; BEGIN
 GRANT EXECUTE ON FUNCTION public.close_unused_breakfast_entitlements(uuid) TO authenticated,service_role;
 
 CREATE OR REPLACE VIEW public.hotel_breakfast_performance AS
-SELECT e.organization_id,e.service_date,e.stay_id,s.room_id,rm.room_number,s.guest_id,
+SELECT e.organization_id,e.service_date,e.stay_id,s.room_id,rm.room_number,s.property_customer_id,
   trim(concat(c.first_name,' ',c.last_name)) guest_name,e.status,e.eligible_count,e.served_count,
   e.allocated_revenue,e.actual_ingredient_cost,e.allocated_revenue-e.actual_ingredient_cost gross_profit,
   CASE WHEN e.eligible_count>0 THEN round(100.0*LEAST(e.served_count,e.eligible_count)/e.eligible_count,2) ELSE 0 END uptake_percentage,
   cl.waiter_id,w.full_name waiter_name,cl.claim_type,cl.kitchen_order_id
 FROM hotel_breakfast_entitlements e JOIN stays s ON s.id=e.stay_id JOIN rooms rm ON rm.id=s.room_id
-LEFT JOIN hotel_customers c ON c.id=s.guest_id LEFT JOIN hotel_breakfast_claims cl ON cl.entitlement_id=e.id
+LEFT JOIN hotel_customers c ON c.id=s.property_customer_id LEFT JOIN hotel_breakfast_claims cl ON cl.entitlement_id=e.id
 LEFT JOIN staff w ON w.id=cl.waiter_id;
 GRANT SELECT ON public.hotel_breakfast_performance TO authenticated;
 
