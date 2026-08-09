@@ -39,6 +39,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
   const [billings, setBillings] = useState<BillingWithCustomer[]>([]);
+  const [folioPayments, setFolioPayments] = useState<Array<{ stay_id: string | null; amount: number }>>([]);
   const [activeStays, setActiveStays] = useState<BillingStayOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -65,6 +66,9 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   const [nightAuditBusy, setNightAuditBusy] = useState(false);
   const [nightAuditOverrideDate, setNightAuditOverrideDate] = useState("");
   const [nightAuditBanner, setNightAuditBanner] = useState<string | null>(null);
+  const [auditTime, setAuditTime] = useState("02:00");
+  const [auditTimezone, setAuditTimezone] = useState("Africa/Kampala");
+  const [savingAuditSchedule, setSavingAuditSchedule] = useState(false);
   const [folioStayId, setFolioStayId] = useState(focusStayId || "");
   const handledFocusStayRef = useRef("");
   const { from: billingDateFrom, to: billingDateTo } = useMemo(
@@ -155,6 +159,12 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
     return { stay, expectedNights, chargedNights, difference: chargedNights - expectedNights, total: roomCharges.reduce((sum, row) => sum + Number(row.amount || 0), 0) };
   }).filter((row) => row.difference !== 0), [activeStays, billings]);
 
+  const cashInReconciliation = useMemo(() => activeStays.map((stay) => {
+    const billed = billings.filter((row) => row.stay_id===stay.id).reduce((sum,row)=>sum+Number(row.amount||0),0);
+    const paid = folioPayments.filter((row) => row.stay_id===stay.id).reduce((sum,row)=>sum+Number(row.amount||0),0);
+    return { stay, billed, paid, balance: billed-paid };
+  }).filter((row) => row.billed!==0 || row.paid!==0), [activeStays,billings,folioPayments]);
+
   const toggleBillingSort = (key: BillingSortKey) => {
     setBillingSort((prev) => {
       if (prev?.key === key) return { key, dir: prev.dir === "asc" ? "desc" : "asc" };
@@ -191,6 +201,20 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
     void fetchData();
   }, [orgId, superAdmin, billingDateFrom, billingDateTo]);
 
+  useEffect(() => {
+    if (!orgId) return;
+    void supabase
+      .from("organizations")
+      .select("hotel_night_audit_time,hotel_timezone")
+      .eq("id", orgId)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error || !data) return;
+        if (data.hotel_night_audit_time) setAuditTime(String(data.hotel_night_audit_time).slice(0, 5));
+        if (data.hotel_timezone) setAuditTimezone(String(data.hotel_timezone));
+      });
+  }, [orgId]);
+
   const fetchData = async () => {
     try {
       setLoadError(null);
@@ -220,12 +244,18 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         orgId,
         superAdmin
       );
-      const [billingsResult, staysResult] = await Promise.all([billingsQuery, staysQuery]);
+      const paymentsQuery = filterByOrganizationId(
+        supabase.from("payments").select("stay_id,amount").eq("payment_status","completed").not("stay_id","is",null).limit(5000),
+        orgId,
+        superAdmin
+      );
+      const [billingsResult, staysResult, paymentsResult] = await Promise.all([billingsQuery, staysQuery, paymentsQuery]);
 
       if (billingsResult.error) throw billingsResult.error;
 
       setBillings((billingsResult.data || []) as BillingWithCustomer[]);
       setActiveStays((staysResult.data || []) as unknown as BillingStayOption[]);
+      if (!paymentsResult.error) setFolioPayments((paymentsResult.data || []) as Array<{ stay_id: string | null; amount: number }>);
     } catch (error) {
       console.error("Error fetching billing:", error);
       setLoadError(error instanceof Error ? error.message : "Failed to load data");
@@ -425,6 +455,25 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
     }
   };
 
+  const saveAuditSchedule = async () => {
+    if (!orgId || readOnly || !canEditBillingByRole || savingAuditSchedule) return;
+    setSavingAuditSchedule(true);
+    try {
+      const { data, error } = await supabase.rpc("set_hotel_night_audit_schedule", {
+        p_time: auditTime,
+        p_timezone: auditTimezone.trim(),
+      });
+      if (error) throw error;
+      const result = data as { ok?: boolean; error?: string } | null;
+      if (result?.ok === false) throw new Error(result.error || "Unable to save schedule");
+      setNightAuditBanner(`Daily room charges will run at ${auditTime} (${auditTimezone.trim()}).`);
+    } catch (error) {
+      setNightAuditBanner(friendlyErrorMessage(error, "Failed to save daily charge schedule"));
+    } finally {
+      setSavingAuditSchedule(false);
+    }
+  };
+
   if (loading) {
     return <div className="p-6">Loading...</div>;
   }
@@ -483,6 +532,24 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
 
       <div className="mb-4 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Daily charge time</label>
+          <input type="time" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={auditTime}
+            onChange={(e) => setAuditTime(e.target.value)} disabled={readOnly || !canEditBillingByRole} />
+        </div>
+        <div>
+          <label className="block text-xs font-medium text-slate-600 mb-1">Property timezone</label>
+          <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm w-48" value={auditTimezone}
+            onChange={(e) => setAuditTimezone(e.target.value)} disabled={readOnly || !canEditBillingByRole}
+            placeholder="Africa/Kampala" />
+        </div>
+        {canEditBillingByRole && (
+          <button type="button" onClick={() => void saveAuditSchedule()}
+            disabled={readOnly || savingAuditSchedule || !orgId || !auditTime || !auditTimezone.trim()}
+            className="border border-brand-700 text-brand-700 rounded-lg px-3 py-2 text-sm font-medium disabled:opacity-50">
+            {savingAuditSchedule ? "Saving…" : "Save schedule"}
+          </button>
+        )}
+        <div>
           <label className="block text-xs font-medium text-slate-600 mb-1">Optional folio night (YYYY-MM-DD)</label>
           <input
             type="date"
@@ -493,8 +560,8 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
           />
         </div>
         <p className="text-xs text-slate-500 max-w-xl pb-1">
-          Leave blank to use <strong>yesterday</strong> in the property timezone (see organizations.hotel_timezone in the
-          database, default UTC). Charges duplicate nights only once (check-in + audit share the same folio night).
+          Automatic charges run daily at the configured property time. Leave the date blank when running manually to
+          charge yesterday. Each room night is posted only once.
         </p>
       </div>
 
@@ -568,6 +635,11 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
           <span className={`rounded-full px-2 py-1 text-xs font-semibold ${billingReconciliation.length ? "bg-amber-100 text-amber-800" : "bg-emerald-100 text-emerald-800"}`}>{billingReconciliation.length} exception(s)</span>
         </div>
         {billingReconciliation.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Guest / room</th><th className="p-2 text-right">Expected</th><th className="p-2 text-right">Charged</th><th className="p-2 text-right">Difference</th><th className="p-2 text-right">Amount</th></tr></thead><tbody>{billingReconciliation.map(({stay,expectedNights,chargedNights,difference,total}) => <tr key={stay.id} className="border-t"><td className="p-2">{guestDisplayName(stay.hotel_customers)} · Room {stay.rooms?.room_number || "—"}{stay.actual_check_out ? " · checked out" : ""}</td><td className="p-2 text-right">{expectedNights}</td><td className="p-2 text-right">{chargedNights}</td><td className="p-2 text-right font-semibold text-amber-700">{difference > 0 ? `+${difference}` : difference}</td><td className="p-2 text-right">{total.toFixed(2)}</td></tr>)}</tbody></table></div> : <p className="mt-3 text-sm text-emerald-700">No room-night billing differences detected.</p>}
+      </div>
+
+      <div className="mb-6 rounded-xl border border-slate-200 bg-white p-4">
+        <div className="flex items-center justify-between gap-3"><div><h2 className="font-semibold text-slate-900">Room cash-in reconciliation</h2><p className="text-xs text-slate-500">Room folio charges compared with completed payments received.</p></div><span className="rounded-full bg-blue-100 px-2 py-1 text-xs font-semibold text-blue-800">{cashInReconciliation.filter((row)=>Math.abs(row.balance)>0.01).length} outstanding</span></div>
+        {cashInReconciliation.length ? <div className="mt-3 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Guest / room</th><th className="p-2 text-right">Billed</th><th className="p-2 text-right">Paid</th><th className="p-2 text-right">Balance</th><th className="p-2 text-left">Status</th></tr></thead><tbody>{cashInReconciliation.map(({stay,billed,paid,balance})=><tr key={stay.id} className="border-t"><td className="p-2">{guestDisplayName(stay.hotel_customers)} · Room {stay.rooms?.room_number||"—"}{stay.actual_check_out?" · checked out":""}</td><td className="p-2 text-right">{billed.toFixed(2)}</td><td className="p-2 text-right">{paid.toFixed(2)}</td><td className={`p-2 text-right font-semibold ${balance>0.01?"text-amber-700":balance<-.01?"text-blue-700":"text-emerald-700"}`}>{balance.toFixed(2)}</td><td className="p-2">{balance>0.01?"Underpaid":balance<-.01?"Overpaid":"Reconciled"}</td></tr>)}</tbody></table></div>:<p className="mt-3 text-sm text-slate-500">No billed or paid room folios found.</p>}
       </div>
 
       {sortedBillings.length === 0 ? (
