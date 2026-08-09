@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { StatementYear } from "../../lib/phase1FinancialEngine";
+import { annualDriverAmountForYear, monthlyDriverAmountsForYear, type ModelProject } from "../../lib/projectPortfolioEngine";
 
 export interface MonthlyActual {
   revenue: number;
@@ -18,11 +19,18 @@ interface Props {
   currency: string;
   onStartYear: (year: number) => void;
   onChange: (actuals: MonthlyActuals) => void;
+  projects?: ModelProject[];
 }
 
-export function MonthlyActualsForecast({ statements, startYear, actuals, currency, onStartYear, onChange }: Props) {
+export function MonthlyActualsForecast({ statements, startYear, actuals, currency, onStartYear, onChange, projects = [] }: Props) {
   const [selectedYear, setSelectedYear] = useState(1);
   const annual = statements[selectedYear - 1];
+  const driverIncome = projects.filter(project => project.enabled && project.startYear <= selectedYear).flatMap(project => project.revenueDrivers ?? []);
+  const driverExpenses = projects.filter(project => project.enabled && project.startYear <= selectedYear).flatMap(project => project.costDrivers ?? []);
+  const incomeByMonth = driverIncome.reduce((totals, driver) => monthlyDriverAmountsForYear(driver, selectedYear).map((amount, index) => totals[index] + amount), Array(12).fill(0) as number[]);
+  const expensesByMonth = driverExpenses.reduce((totals, driver) => monthlyDriverAmountsForYear(driver, selectedYear).map((amount, index) => totals[index] + amount), Array(12).fill(0) as number[]);
+  const driverIncomeAnnual = driverIncome.reduce((sum, driver) => sum + annualDriverAmountForYear(driver, selectedYear), 0);
+  const driverExpensesAnnual = driverExpenses.reduce((sum, driver) => sum + annualDriverAmountForYear(driver, selectedYear), 0);
   const patch = (key: string, field: keyof MonthlyActual, value: number) => {
     const current = actuals[key] ?? { revenue: 0, costOfSales: 0, operatingExpenses: 0 };
     onChange({ ...actuals, [key]: { ...current, [field]: value } });
@@ -33,7 +41,7 @@ export function MonthlyActualsForecast({ statements, startYear, actuals, currenc
       <div>
         <p className="text-xs font-bold uppercase tracking-wider text-teal-700">Monthly management reporting</p>
         <h3 className="mt-1 text-xl font-bold">Actual versus forecast</h3>
-        <p className="mt-1 text-sm text-slate-500">Annual model values are phased monthly; entered actuals remain editable and are saved with the model.</p>
+        <p className="mt-1 text-sm text-slate-500">Year 1 is broken into 12 months using each income and expenditure driver's timing. Unscheduled annual values are spread evenly; actuals remain editable.</p>
       </div>
       <div className="flex gap-2">
         <input type="number" value={startYear} onChange={event => onStartYear(Math.max(2000, Number(event.target.value) || new Date().getFullYear()))} className="w-24 rounded-lg border border-teal-200 bg-white px-2 py-2 text-sm" />
@@ -49,9 +57,9 @@ export function MonthlyActualsForecast({ statements, startYear, actuals, currenc
           const calendarYear = startYear + selectedYear - 1;
           const key = `${calendarYear}-${String(index + 1).padStart(2, "0")}`;
           const actual = actuals[key] ?? { revenue: 0, costOfSales: 0, operatingExpenses: 0 };
-          const revenueForecast = (annual?.revenue ?? 0) / 12;
+          const revenueForecast = incomeByMonth[index] + Math.max(0, (annual?.revenue ?? 0) - driverIncomeAnnual) / 12;
           const costForecast = (annual?.costOfSales ?? 0) / 12;
-          const opexForecast = (annual?.operatingExpenses ?? 0) / 12;
+          const opexForecast = expensesByMonth[index] + Math.max(0, (annual?.operatingExpenses ?? 0) - driverExpensesAnnual) / 12;
           return <tr key={key} className="border-t border-slate-100">
             <td className="p-2 font-bold">{month} {calendarYear}</td>
             <td className="p-2 text-right">{currency} {revenueForecast.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>

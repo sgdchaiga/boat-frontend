@@ -1,5 +1,5 @@
 export type ProjectBusinessType = "education-technology" | "hardware" | "subscription" | "services" | "fintech" | "agritech" | "government" | "social-impact";
-export type DriverFrequency = "monthly" | "quarterly" | "annual" | "one-off";
+export type DriverFrequency = "monthly" | "quarterly" | "nine_monthly" | "annual" | "one-off";
 export type ProjectDriver = {
   id: string; name: string; amount: number; quantity?: number; unitAmount?: number; frequency?: DriverFrequency;
   linkedRevenueDriverId?: string; revenueUnitsPerCostUnit?: number;
@@ -38,6 +38,22 @@ export function annualDriverAmountForYear(driver: ProjectDriver, year: number, l
   const values = driverValuesForYear(driver, year, linkedRevenueQuantity);
   const multiplier = driver.frequency === "monthly" ? 12 : driver.frequency === "quarterly" ? 4 : 1;
   return values.quantity * values.unitAmount * multiplier;
+}
+
+export function monthlyDriverAmountsForYear(driver: ProjectDriver, year: number, linkedRevenueQuantity?: number) {
+  if (driver.frequency === "one-off" && year !== 1) return Array(12).fill(0) as number[];
+  const { quantity, unitAmount } = driverValuesForYear(driver, year, linkedRevenueQuantity);
+  const occurrenceAmount = quantity * unitAmount;
+  const months = driver.frequency === "monthly"
+    ? [0,1,2,3,4,5,6,7,8,9,10,11]
+    : driver.frequency === "quarterly"
+      ? [2,5,8,11]
+      : driver.frequency === "nine_monthly"
+        ? [8]
+        : driver.frequency === "one-off"
+          ? [0]
+          : [11];
+  return Array.from({ length: 12 }, (_, index) => months.includes(index) ? occurrenceAmount : 0);
 }
 
 function driverAmountForProjectYear(driver: ProjectDriver, activeYears: number, linkedRevenueQuantity?: number) {
