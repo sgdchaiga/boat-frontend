@@ -126,6 +126,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
             kitchen_order_items(quantity, unit_price, notes, product_id)
           `
                 )
+                .not("order_status", "in", "(draft,failed)")
                 .order("created_at", { ascending: true });
               if (search) {
                 q = q.in("id", searchedOrderIds.size > 0 ? Array.from(searchedOrderIds) : ["00000000-0000-0000-0000-000000000000"]);

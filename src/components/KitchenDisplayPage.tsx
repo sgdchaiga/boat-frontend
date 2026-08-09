@@ -73,6 +73,7 @@ export function KitchenDisplayPage({ hidePricing: _hidePricing = false }: Kitche
             supabase
               .from("kitchen_orders")
               .select(`id, room_id, table_number, customer_name, order_status, created_at, kitchen_order_items(quantity, unit_price, notes, product_id)`)
+              .not("order_status", "in", "(draft,failed)")
               .gte("created_at", from.toISOString())
               .lt("created_at", to.toISOString())
               .order("created_at", { ascending: true }),

@@ -1642,6 +1642,7 @@ export function POSPage({
 
     submitLockRef.current = true;
     setSending(true);
+    let createdOrderId: string | null = null;
     try {
       const entryDate = transactionDateOverride || queueDate || businessTodayISO();
       await validateStockBeforeSubmit(entryDate);
@@ -1677,7 +1678,7 @@ export function POSPage({
       } = {
         room_id: roomId,
         table_number: orderTable,
-        order_status: "pending",
+        order_status: "draft",
         created_at: transactionTimestamp,
       };
       if (staffRow?.id) basePayload.created_by = staffRow.id;
@@ -1694,6 +1695,7 @@ export function POSPage({
         orderErr = fallback.error as { message?: string; details?: string } | null;
       }
       if (orderErr || !orderData?.id) throw new Error(orderErr?.message || orderErr?.details || "Failed to create order.");
+      createdOrderId = orderData.id;
 
       const items = cart.map((item) => ({
         order_id: orderData!.id,
@@ -1878,6 +1880,9 @@ export function POSPage({
         }
       }
 
+      const { error: releaseError } = await supabase.from("kitchen_orders").update({ order_status: "pending" }).eq("id", orderData.id);
+      if (releaseError) throw new Error(releaseError.message || "Order was saved but could not be released to the kitchen.");
+
       setCart([]);
       setSelectedStay(null);
       setBreakfastEntitlements([]);
@@ -1903,6 +1908,10 @@ export function POSPage({
             : "Order billed to room successfully."
       );
     } catch (err: unknown) {
+      if (createdOrderId) {
+        await supabase.from("kitchen_order_items").delete().eq("order_id", createdOrderId);
+        await supabase.from("kitchen_orders").delete().eq("id", createdOrderId).eq("order_status", "draft");
+      }
       const msg =
         err instanceof Error
           ? err.message
