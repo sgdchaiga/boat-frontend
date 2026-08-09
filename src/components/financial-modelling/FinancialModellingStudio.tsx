@@ -259,12 +259,38 @@ export function FinancialModellingStudio() {
     if(!versionResult.error)setVersionRefreshKey(value=>value+1);
     setModelStatus(nextStatus); setSaved(true); setTimeout(()=>setSaved(false),1600);
   };
+  const startNewModel = () => {
+    const freshInputs = { ...getFinancialModelTemplate("Education Technology").defaults };
+    const firstProject = blankProject();
+    setModelId(null);
+    setModelStatus("draft");
+    setCompany("Untitled financial model");
+    setIndustry("Education Technology");
+    setScenario("base");
+    setActiveStep(0);
+    setInputs(freshInputs);
+    setEarlyYearCustomers({ 2: "", 3: "" });
+    setExistingInvestment(0);
+    setProjects([firstProject]);
+    setSelectedProjectId(firstProject.id);
+    setUses(defaultUses.map(use => ({ ...use })));
+    setPersonnelRoles([]);
+    setCapitalAssets([]);
+    setMonthlyActuals({});
+    setForecastStartYear(new Date().getFullYear());
+    setValuationAssumptions({ discountRate: 18, terminalGrowthRate: 4, initialInvestment: freshInputs.fundingRequired });
+    setScenarioConfiguration(DEFAULT_SCENARIO_CONFIGURATION);
+    setTaxProfile(getCountryTaxPack("UG"));
+    setSaveError("");
+    setSaved(false);
+    if (user?.organization_id) localStorage.removeItem(`boat-financial-model:${user.organization_id}`);
+  };
 
   return <div className="min-h-screen bg-[#f5f7f4] text-slate-900">
     <div className="border-b border-slate-200 bg-white px-5 py-3 lg:px-8">
       <div className="mx-auto flex max-w-[1500px] items-center justify-between gap-4">
         <div className="flex items-center gap-3"><div className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-700 text-white"><BarChart3 size={20}/></div><div><p className="text-xs font-bold uppercase tracking-[.18em] text-emerald-700">BOAT</p><h1 className="text-lg font-bold">Financial Modelling Studio</h1></div></div>
-        <div className="flex flex-wrap items-center justify-end gap-2"><span className="hidden text-xs text-slate-500 md:block">{saveError || (modelStatus==="submitted"?"Locked for review":modelId?`Cloud · ${modelStatus.replace("_"," ")}`:"New draft")}</span><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800"><Upload size={16}/> Import EdTech workbook<input type="file" accept=".xlsx,.xls" className="hidden" onChange={e=>{void importEdTechWorkbook(e.target.files?.[0]);e.currentTarget.value="";}}/></label><button onClick={saveDraft} disabled={saving||modelStatus==="submitted"} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60">{saved ? <Check size={16}/> : <Save size={16}/>} {saving ? "Saving..." : saved ? "Saved" : "Save draft"}</button><button onClick={exportWorkbook} className="flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800"><Download size={16}/> Export Excel</button></div>
+        <div className="flex flex-wrap items-center justify-end gap-2"><span className="hidden text-xs text-slate-500 md:block">{saveError || (modelStatus==="submitted"?"Locked for review":modelId?`Cloud · ${modelStatus.replace("_"," ")}`:"New draft")}</span><button type="button" onClick={startNewModel} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50"><Plus size={16}/> New model</button><label className="flex cursor-pointer items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-800"><Upload size={16}/> Import EdTech workbook<input type="file" accept=".xlsx,.xls" className="hidden" onChange={e=>{void importEdTechWorkbook(e.target.files?.[0]);e.currentTarget.value="";}}/></label><button onClick={saveDraft} disabled={saving||modelStatus==="submitted"} className="flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold hover:bg-slate-50 disabled:opacity-60">{saved ? <Check size={16}/> : <Save size={16}/>} {saving ? "Saving..." : saved ? "Saved" : "Save draft"}</button><button onClick={exportWorkbook} className="flex items-center gap-2 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-800"><Download size={16}/> Export Excel</button></div>
       </div>
     </div>
     {workbookImportMessage&&<div className={`border-b px-5 py-2 text-center text-xs font-semibold ${workbookImportMessage.startsWith("Imported")?"border-emerald-200 bg-emerald-50 text-emerald-800":"border-amber-200 bg-amber-50 text-amber-800"}`}>{workbookImportMessage}</div>}
