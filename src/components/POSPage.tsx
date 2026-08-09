@@ -6,6 +6,8 @@ import { useAuth } from "../contexts/AuthContext";
 import {
   createJournalForPosOrder,
   createJournalForBillToRoom,
+  deleteJournalEntryByReference,
+  syncRoomChargeJournal,
   syncHotelPosOrderJournal,
   sumPosCogsByDept,
   sumPosSalesByDept,
@@ -1303,8 +1305,25 @@ export function POSPage({
         const { error: insErr } = await supabase.from("kitchen_order_items").insert(nextItems);
         if (insErr) throw insErr;
       }
-      const journal = await syncHotelPosOrderJournal(editingOrderId, user?.id ?? null, orgId ?? null);
-      if (!journal.ok) throw new Error(`Order saved, but GL sync failed: ${journal.error}`);
+      const { data: linkedBilling } = await (supabase as any).from("billing").select("id").eq("source_pos_order_id", editingOrderId).maybeSingle();
+      if (linkedBilling?.id) {
+        const nextTotal = nextItems.reduce((sum, item) => sum + Number(item.quantity) * Number(item.unit_price || 0), 0);
+        if (nextTotal <= 0) {
+          const removedJournal = await deleteJournalEntryByReference("room_charge", linkedBilling.id, orgId ?? null);
+          if (!removedJournal.ok) throw new Error(`Order saved, but room-charge GL removal failed: ${removedJournal.error}`);
+          const { error: billingDeleteError } = await supabase.from("billing").delete().eq("id", linkedBilling.id);
+          if (billingDeleteError) throw billingDeleteError;
+        } else {
+          const nextDescription = nextItems.map((item) => `${item.quantity}× ${products.find((p) => p.id === item.product_id)?.name || "Item"}`).join(", ");
+          const { error: billingUpdateError } = await supabase.from("billing").update({ amount: nextTotal, description: nextDescription, charged_at: iso }).eq("id", linkedBilling.id);
+          if (billingUpdateError) throw billingUpdateError;
+          const roomJournal = await syncRoomChargeJournal(linkedBilling.id);
+          if (!roomJournal.ok) throw new Error(`Order saved, but room-charge GL sync failed: ${roomJournal.error}`);
+        }
+      } else {
+        const journal = await syncHotelPosOrderJournal(editingOrderId, user?.id ?? null, orgId ?? null);
+        if (!journal.ok) throw new Error(`Order saved, but GL sync failed: ${journal.error}`);
+      }
       setEditingOrderId(null);
       setEditingOrderDate("");
       setEditingOrderItems([]);
@@ -1724,6 +1743,7 @@ export function POSPage({
             description: cartDescription,
             amount: payableTotal,
             charge_type: "food",
+            source_pos_order_id: orderData.id,
             charged_at: `${entryDate}T12:00:00`,
             created_by: staffRow?.id || null,
           })
