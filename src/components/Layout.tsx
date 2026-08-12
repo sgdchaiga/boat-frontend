@@ -250,11 +250,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       setGeneralBusinessMode('modern');
     }
   }, [businessType, generalBusinessCashbookEnabled, generalBusinessMode, setGeneralBusinessMode]);
-  const organizationAppVersion = user?.app_version || "1.0";
-  const usesVersionedLayout = organizationAppVersion
-    .split(".")
-    .map((part) => Number(part) || 0)
-    .reduce((score, part, index) => score + part * (index === 0 ? 10000 : index === 1 ? 100 : 1), 0) >= 10100;
+  const standardSchoolMode = user?.school_layout_mode === 'standard';
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [litePreference, setLitePreference] = useState<MobileLitePreference>(readMobileLitePreference);
@@ -1063,51 +1059,72 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
   const schoolRole = normalizeNavRoleKey(user?.role);
   const canUseAdvancedAccounting = isSuperAdmin || ["accountant", "finance_manager", "manager", "admin", "super_admin", "owner"].includes(schoolRole);
+  const canUseSchoolPayroll = isSuperAdmin || ["bursar", "accountant", "headteacher", "head_teacher", "finance_manager", "manager", "admin", "super_admin", "owner"].includes(schoolRole);
   const professionalSchoolNavigation: NavItem[] = [
-    { name: 'Home', icon: LayoutDashboard, page: SCHOOL_PAGE.dashboard },
-    { name: 'Students', icon: UsersRound, children: [
+    { name: 'School Dashboard', icon: LayoutDashboard, page: SCHOOL_PAGE.dashboard },
+    { name: 'Students & Billing', icon: UsersRound, children: [
       { name: 'Student register', page: SCHOOL_PAGE.studentsList },
       { name: 'Add student', page: SCHOOL_PAGE.students },
       { name: 'Parents & guardians', page: SCHOOL_PAGE.parents },
       { name: 'Health alerts', page: SCHOOL_PAGE.healthIssues },
-    ] },
-    { name: 'Fees & Collections', icon: Receipt, children: [
-      { name: 'Student balances', page: SCHOOL_PAGE.invoices },
-      { name: 'Receive payment', page: SCHOOL_PAGE.payments },
-      { name: 'Create term charges', page: SCHOOL_PAGE.invoices },
       { name: 'Fee structures', page: SCHOOL_PAGE.feeStructures },
       { name: 'Special fee structures', page: SCHOOL_PAGE.specialFeeStructures },
-      { name: 'Invoices & receipts', page: SCHOOL_PAGE.collections },
+      { name: 'Create term charges', page: SCHOOL_PAGE.invoices },
+      { name: 'Student invoices & balances', page: SCHOOL_PAGE.invoices },
+      { name: 'Receive fee payment', page: SCHOOL_PAGE.payments },
+      { name: 'Statements & collections', page: SCHOOL_PAGE.collections },
       { name: 'Discounts, bursaries & waivers', page: SCHOOL_PAGE.bursary },
-      { name: 'Other revenue', page: SCHOOL_PAGE.otherRevenue },
     ] },
     { name: 'School Operations', icon: Building2, children: [
       { name: 'Classes & streams', page: SCHOOL_PAGE.classes },
       { name: 'Streams', page: SCHOOL_PAGE.streams },
       { name: 'Staff directory', page: 'staff' },
       { name: 'Teachers', page: SCHOOL_PAGE.teachers },
-      ...(enablePayroll ? [{ name: 'Payroll', page: PAYROLL_PAGE.hub }] : []),
       ...(allowCommunications ? [{ name: 'Messages & announcements', page: 'communications' }] : []),
-    ] },
-    { name: 'Academics', icon: GraduationCap, children: [
       { name: 'Subjects', page: SCHOOL_PAGE.subjects },
       { name: 'Term performance', page: 'reports_school_term_performance' },
     ] },
-    { name: 'Money & Approvals', icon: Landmark, children: [
-      { name: 'Money overview', page: 'finance_overview' },
+    { name: 'Finance', icon: Landmark, children: [
+      { name: 'Finance overview', page: 'finance_overview' },
+      { name: 'Record other income', page: SCHOOL_PAGE.otherRevenue },
+      { name: 'Record expense', page: 'purchases_expenses' },
       ...(generalBusinessCashbookEnabled ? [{ name: 'School cashbook', page: 'school_cashbook_register' }] : []),
       { name: 'Cash & bank balances', page: 'treasury' },
-      { name: 'Record expense', page: 'purchases_expenses' },
       { name: 'Payment requests & approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { name: 'Bank & mobile-money reconciliation', page: 'accounting_bank_reconciliation' },
-      { name: 'Suppliers & purchasing', page: 'purchases_vendors' },
       { name: 'Pay suppliers', page: 'purchases_payments' },
-      { name: 'Vote book & movement report', page: SCHOOL_PAGE.voteBook },
-      { name: 'Budget formulation', page: 'accounting_budgeting' },
-      ...(user?.school_enable_inventory === true ? [{ name: 'Stock & inventory', page: 'Products' }] : []),
-      ...(enableAssetVerification ? [{ name: 'Assets', page: 'asset_verification' }] : []),
       ...(user?.school_enable_fixed_deposit === true ? [{ name: 'Fixed deposits', page: SCHOOL_PAGE.fixedDeposit }] : []),
     ] },
+    { name: 'Procurement & Stock', icon: ShoppingCart, children: [
+      { name: 'Purchase requests & orders', page: 'purchases_orders' },
+      { name: 'Goods received & bills', page: 'purchases_bills' },
+      { name: 'Suppliers', page: 'purchases_vendors' },
+      { name: 'Supplier returns', page: 'purchases_credits' },
+      ...(user?.school_enable_inventory === true ? [
+        { name: 'Stock & inventory', page: 'Products' },
+        { name: 'Stock issues to departments', page: 'inventory_store_requisitions' },
+        { name: 'Stock counts & adjustments', page: 'inventory_stock_adjustments' },
+        { name: 'Stock movement report', page: 'reports_stock_movement' },
+      ] : []),
+      ...(enableAssetVerification ? [{ name: 'Assets & verification', page: 'asset_verification' }] : []),
+    ] },
+    { name: 'Budget & Vote Book', icon: BookOpen, children: [
+      { name: 'Budget overview & formulation', page: 'accounting_budgeting' },
+      { name: 'Department budgets', page: 'accounting_budgeting' },
+      { name: 'Budget approval', page: 'accounting_budgeting' },
+      { name: 'Vote book & commitments', page: SCHOOL_PAGE.voteBook },
+      { name: 'Budget vs actual', page: 'reports_budget_variance' },
+      { name: 'Transfers & supplementary budgets', page: SCHOOL_PAGE.voteBook },
+    ] },
+    ...(enablePayroll && canUseSchoolPayroll ? [{ name: 'Payroll', icon: Wallet, children: [
+      { name: 'Payroll overview', page: PAYROLL_PAGE.hub },
+      { name: 'Staff & salaries', page: PAYROLL_PAGE.staff },
+      { name: 'Payroll settings & GL', page: PAYROLL_PAGE.settings },
+      { name: 'Loans & advances', page: PAYROLL_PAGE.loans },
+      { name: 'Payroll periods', page: PAYROLL_PAGE.periods },
+      { name: 'Process & post payroll', page: PAYROLL_PAGE.run },
+      { name: 'Payroll audit trail', page: PAYROLL_PAGE.audit },
+    ] } as NavItem] : []),
     { name: 'Reports', icon: TrendingUp, page: 'reports_school_fee_collections' },
     { name: 'Settings', icon: Settings, children: [
       { group: 'School administration', items: [
@@ -1177,7 +1194,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       : businessType === 'microfinance'
         ? mfiNavigation
       : businessType === 'school'
-        ? (usesVersionedLayout ? professionalSchoolNavigation : schoolNavigation)
+        ? (standardSchoolMode ? professionalSchoolNavigation : schoolNavigation)
         : businessType === 'vsla'
           ? vslaNavigation
           : simpleNavigation;

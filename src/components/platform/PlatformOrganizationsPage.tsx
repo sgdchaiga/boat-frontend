@@ -27,6 +27,7 @@ type Org = {
   enable_agent?: boolean | null;
   enable_assistant?: boolean | null;
   enable_cashbook_mode?: boolean | null;
+  school_layout_mode?: "legacy" | "standard" | null;
   enable_boat_connect?: boolean | null;
   enable_hotel_assessment?: boolean | null;
   enable_manufacturing?: boolean | null;
@@ -210,6 +211,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableAgent, setEditEnableAgent] = useState(true);
   const [editEnableAssistant, setEditEnableAssistant] = useState(false);
   const [editEnableCashbookMode, setEditEnableCashbookMode] = useState(false);
+  const [editSchoolLayoutMode, setEditSchoolLayoutMode] = useState<"legacy" | "standard">("legacy");
   const [editEnableBoatConnect, setEditEnableBoatConnect] = useState(true);
   const [editEnableReports, setEditEnableReports] = useState(true);
   const [editEnableAccounting, setEditEnableAccounting] = useState(true);
@@ -644,6 +646,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableAgent(org.enable_agent !== false);
     setEditEnableAssistant(org.enable_assistant === true);
     setEditEnableCashbookMode(org.enable_cashbook_mode === true);
+    setEditSchoolLayoutMode(org.school_layout_mode === "standard" ? "standard" : "legacy");
     setEditEnableBoatConnect(org.enable_boat_connect !== false);
     setEditEnableReports(org.enable_reports !== false);
     setEditEnableAccounting(org.enable_accounting !== false);
@@ -698,6 +701,7 @@ export function PlatformOrganizationsPage() {
         enable_agent: editEnableAgent,
         enable_assistant: editEnableAssistant,
         enable_cashbook_mode: editEnableCashbookMode,
+        school_layout_mode: editBiz === "school" ? editSchoolLayoutMode : "legacy",
         enable_boat_connect: editEnableBoatConnect,
         enable_hotel_assessment: editEnableHotelAssessment,
         enable_manufacturing: editEnableManufacturing,
@@ -1444,6 +1448,7 @@ export function PlatformOrganizationsPage() {
                 When off, property staff post room revenue only via Billing → Add Charge.
               </label>
             )}
+            {editBiz === "school" && <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3"><label className="block text-xs font-semibold uppercase tracking-wide text-indigo-800">School module layout</label><select value={editSchoolLayoutMode} onChange={(e) => setEditSchoolLayoutMode(e.target.value as "legacy" | "standard")} className="mt-2 w-full rounded-lg border border-indigo-200 bg-white px-3 py-2 text-sm"><option value="legacy">Legacy mode — first BOAT school layout</option><option value="standard">Standard mode — workflow-based school layout</option></select><p className="mt-1 text-xs text-indigo-700">Only the platform Super Admin can change this organization setting.</p></div>}
             {(editBiz === "hotel" || editBiz === "mixed") && (
               <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
                 <input
