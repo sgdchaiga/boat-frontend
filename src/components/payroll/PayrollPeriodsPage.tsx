@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PayrollGuide } from "@/components/payroll/PayrollGuide";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
+import { Pencil, Save, X } from "lucide-react";
 
 type PeriodRow = {
   id: string;
@@ -23,6 +24,8 @@ export function PayrollPeriodsPage({ readOnly }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [form, setForm] = useState({ label: "", period_start: "", period_end: "" });
+  const [editing, setEditing] = useState<PeriodRow | null>(null);
+  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -56,6 +59,40 @@ export function PayrollPeriodsPage({ readOnly }: Props) {
     if (error) setErr(error.message);
     setForm({ label: "", period_start: "", period_end: "" });
     load();
+  };
+
+  const savePeriod = async () => {
+    if (!editing || readOnly || !payrollAccess.canPrepare || saving) return;
+    if (!editing.label.trim() || !editing.period_start || !editing.period_end) return setErr("Enter a label and both dates.");
+    if (editing.period_end < editing.period_start) return setErr("Period end cannot be before period start.");
+    setSaving(true);
+    setErr(null);
+    const { data: linkedRuns, error: runError } = await supabase
+      .from("payroll_runs")
+      .select("status,approved_at")
+      .eq("payroll_period_id", editing.id);
+    if (runError) {
+      setErr(runError.message);
+      setSaving(false);
+      return;
+    }
+    const locked = ((linkedRuns || []) as Array<{ status: string; approved_at?: string | null }>).some(
+      (run) => run.status === "posted" || Boolean(run.approved_at)
+    );
+    if (locked) {
+      setErr("This period cannot be changed because its payroll has been approved or posted.");
+      setSaving(false);
+      return;
+    }
+    const { error } = await supabase.from("payroll_periods").update({
+      label: editing.label.trim(),
+      period_start: editing.period_start,
+      period_end: editing.period_end,
+    }).eq("id", editing.id).eq("organization_id", orgId);
+    if (error) setErr(error.message);
+    else setEditing(null);
+    setSaving(false);
+    await load();
   };
 
   if (!orgId) return <p className="p-6 text-slate-600">No organization.</p>;
@@ -109,20 +146,22 @@ export function PayrollPeriodsPage({ readOnly }: Props) {
                 <th className="text-left p-3 font-semibold text-slate-700">From</th>
                 <th className="text-left p-3 font-semibold text-slate-700">To</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Status</th>
+                <th className="text-right p-3 font-semibold text-slate-700">Actions</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100">
-                  <td className="p-3 font-medium text-slate-900">{r.label}</td>
-                  <td className="p-3 text-slate-700">{r.period_start}</td>
-                  <td className="p-3 text-slate-700">{r.period_end}</td>
+                  <td className="p-3 font-medium text-slate-900">{editing?.id === r.id ? <input className="w-full border rounded-lg px-2 py-1.5" value={editing.label} onChange={(e) => setEditing({ ...editing, label: e.target.value })} /> : r.label}</td>
+                  <td className="p-3 text-slate-700">{editing?.id === r.id ? <input type="date" className="border rounded-lg px-2 py-1.5" value={editing.period_start} onChange={(e) => setEditing({ ...editing, period_start: e.target.value })} /> : r.period_start}</td>
+                  <td className="p-3 text-slate-700">{editing?.id === r.id ? <input type="date" className="border rounded-lg px-2 py-1.5" value={editing.period_end} onChange={(e) => setEditing({ ...editing, period_end: e.target.value })} /> : r.period_end}</td>
                   <td className="p-3 capitalize text-slate-600">{r.status}</td>
+                  <td className="p-3"><div className="flex justify-end gap-1">{editing?.id === r.id ? <><button type="button" disabled={saving} onClick={() => void savePeriod()} className="p-2 text-emerald-700 hover:bg-emerald-50 rounded-lg" title="Save"><Save className="w-4 h-4" /></button><button type="button" onClick={() => setEditing(null)} className="p-2 text-slate-500 hover:bg-slate-100 rounded-lg" title="Cancel"><X className="w-4 h-4" /></button></> : <button type="button" disabled={readOnly || !payrollAccess.canPrepare} onClick={() => setEditing({ ...r })} className="p-2 text-slate-700 hover:bg-slate-100 rounded-lg disabled:opacity-30" title="Edit period"><Pencil className="w-4 h-4" /></button>}</div></td>
                 </tr>
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={4} className="p-6 text-slate-500">
+                  <td colSpan={5} className="p-6 text-slate-500">
                     No periods yet.
                   </td>
                 </tr>

@@ -78,7 +78,9 @@ function buildPayslipDetail(
   period: PeriodRow | undefined,
   orgName: string | null,
   staffName: string,
-  empCode: string | null | undefined
+  empCode: string | null | undefined,
+  organizationAddress?: string | null,
+  organizationLogoUrl?: string | null
 ): PayslipDetail {
   const daysAbsent = Number(line.days_absent ?? 0);
   const fullGross = line.line_detail?.full_gross ?? Number(line.gross_pay);
@@ -89,6 +91,8 @@ function buildPayslipDetail(
     periodLabel: period?.label ?? "—",
     periodStart: period?.period_start ?? "",
     periodEnd: period?.period_end ?? "",
+    organizationAddress: organizationAddress ?? null,
+    organizationLogoUrl: organizationLogoUrl ?? null,
     staffName,
     employeeCode: empCode ?? null,
     fullGross: showAbsent ? fullGross : undefined,
@@ -130,6 +134,8 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [orgName, setOrgName] = useState<string | null>(null);
+  const [orgAddress, setOrgAddress] = useState<string | null>(null);
+  const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
   const [empCodes, setEmpCodes] = useState<Record<string, string | null>>({});
   const [payslipModal, setPayslipModal] = useState<PayslipDetail | null>(null);
   /** Current DOM values for days absent (so Calculate works without blurring every field). */
@@ -197,10 +203,15 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
     loadPeriods().finally(() => setLoading(false));
     void supabase
       .from("organizations")
-      .select("name")
+      .select("name,address,logo_url")
       .eq("id", orgId)
       .maybeSingle()
-      .then(({ data }) => setOrgName((data as { name?: string } | null)?.name ?? null));
+      .then(({ data }) => {
+        const organization = data as { name?: string; address?: string | null; logo_url?: string | null } | null;
+        setOrgName(organization?.name ?? null);
+        setOrgAddress(organization?.address ?? null);
+        setOrgLogoUrl(organization?.logo_url ?? null);
+      });
   }, [orgId, loadPeriods]);
 
   useEffect(() => {
@@ -549,7 +560,9 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       periodForPayslip,
       orgName,
       staffNames[line.staff_id] ?? line.staff_id,
-      empCodes[line.staff_id]
+      empCodes[line.staff_id],
+      orgAddress,
+      orgLogoUrl
     );
     setPayslipModal(d);
   };
@@ -557,9 +570,9 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
   const downloadAllPayslips = () => {
     if (!lines.length) return;
     const list = lines.map((l) =>
-      buildPayslipDetail(l, periodForPayslip, orgName, staffNames[l.staff_id] ?? l.staff_id, empCodes[l.staff_id])
+      buildPayslipDetail(l, periodForPayslip, orgName, staffNames[l.staff_id] ?? l.staff_id, empCodes[l.staff_id], orgAddress, orgLogoUrl)
     );
-    downloadAllPayslipsPdf(list);
+    void downloadAllPayslipsPdf(list);
   };
 
   if (!orgId) return <p className="p-6 text-slate-600">No organization.</p>;
@@ -748,13 +761,15 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
                         <button
                           type="button"
                           onClick={() =>
-                            downloadPayslipPdf(
+                            void downloadPayslipPdf(
                               buildPayslipDetail(
                                 l,
                                 periodForPayslip,
                                 orgName,
                                 staffNames[l.staff_id] ?? l.staff_id,
-                                empCodes[l.staff_id]
+                                empCodes[l.staff_id],
+                                orgAddress,
+                                orgLogoUrl
                               )
                             )
                           }

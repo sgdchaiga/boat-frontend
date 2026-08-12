@@ -3,16 +3,16 @@ import { APP_SHORT_NAME } from "@/constants/branding";
 
 export type PayslipDetail = {
   organizationName: string;
+  organizationAddress?: string | null;
+  organizationLogoUrl?: string | null;
   periodLabel: string;
   periodStart: string;
   periodEnd: string;
   staffName: string;
   employeeCode?: string | null;
-  /** Full contractual monthly gross before absence deduction (optional display). */
   fullGross?: number;
   daysAbsent?: number;
   absentDeduction?: number;
-  /** Gross after absence; PAYE/NSSF use this amount. */
   grossPay: number;
   paye: number;
   nssfEmployee: number;
@@ -21,101 +21,63 @@ export type PayslipDetail = {
   netPay: number;
 };
 
-function payslipTableRows(d: PayslipDetail): [string, string][] {
-  const rows: [string, string][] = [];
-  if (d.fullGross != null && (d.daysAbsent ?? 0) > 0) {
-    rows.push(["Full gross (contract)", String(d.fullGross)]);
-    rows.push(["Days absent", String(d.daysAbsent)]);
-    rows.push(["Absent deduction", String(-(d.absentDeduction ?? 0))]);
-  }
-  rows.push(
-    ["Gross pay (taxable)", String(d.grossPay)],
-    ["PAYE", String(d.paye)],
-    ["NSSF (employee)", String(d.nssfEmployee)],
-    ["NSSF (employer)", String(d.nssfEmployer)],
-    ["Loan / advance", String(d.loanDeduction)],
-    ["Net pay", String(d.netPay)]
-  );
-  return rows;
+const money = (value: number) => Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function loadLogo(url?: string | null): Promise<string | null> {
+  if (!url) return null;
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return await new Promise((resolve) => { const reader = new FileReader(); reader.onload = () => resolve(String(reader.result)); reader.onerror = () => resolve(null); reader.readAsDataURL(blob); });
+  } catch { return null; }
 }
 
-export function downloadPayslipPdf(d: PayslipDetail): void {
+function drawRow(doc: jsPDF, label: string, value: number, y: number, x = 18, width = 78): number {
+  doc.setFont("helvetica", "normal"); doc.setFontSize(9); doc.setTextColor(75, 85, 99); doc.text(label, x, y);
+  doc.setFont("helvetica", "bold"); doc.setTextColor(15, 23, 42); doc.text(money(value), x + width, y, { align: "right" });
+  return y + 7;
+}
+
+function drawPayslip(doc: jsPDF, d: PayslipDetail, logo: string | null): void {
+  doc.setFillColor(15, 23, 42); doc.roundedRect(12, 12, 186, 35, 3, 3, "F");
+  let textX = 20;
+  if (logo) { try { doc.addImage(logo, 18, 17, 25, 25, undefined, "FAST"); textX = 49; } catch { /* text header remains */ } }
+  doc.setTextColor(255, 255, 255); doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.text(d.organizationName || "Organization", textX, 26);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(203, 213, 225);
+  if (d.organizationAddress) doc.text(d.organizationAddress, textX, 32, { maxWidth: 135 });
+  doc.text("OFFICIAL EMPLOYEE PAYSLIP", textX, 40);
+
+  doc.setFillColor(248, 250, 252); doc.setDrawColor(226, 232, 240); doc.roundedRect(12, 52, 186, 26, 2, 2, "FD");
+  doc.setTextColor(100, 116, 139); doc.setFontSize(7); doc.text("EMPLOYEE", 18, 60); doc.text("PAY PERIOD", 112, 60);
+  doc.setTextColor(15, 23, 42); doc.setFont("helvetica", "bold"); doc.setFontSize(10); doc.text(d.staffName, 18, 67); doc.text(d.periodLabel, 112, 67);
+  doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(100, 116, 139); if (d.employeeCode) doc.text(`Code: ${d.employeeCode}`, 18, 73); doc.text(`${d.periodStart} to ${d.periodEnd}`, 112, 73);
+
+  doc.setTextColor(4, 120, 87); doc.setFont("helvetica", "bold"); doc.setFontSize(9); doc.text("EARNINGS", 18, 90);
+  doc.setDrawColor(167, 243, 208); doc.line(18, 93, 96, 93);
+  doc.setTextColor(190, 18, 60); doc.text("DEDUCTIONS", 112, 90); doc.setDrawColor(254, 205, 211); doc.line(112, 93, 190, 93);
+  let earningsY = 102;
+  if (d.fullGross != null && (d.daysAbsent ?? 0) > 0) { earningsY = drawRow(doc, "Full gross (contract)", d.fullGross, earningsY); earningsY = drawRow(doc, "Days absent", d.daysAbsent ?? 0, earningsY); earningsY = drawRow(doc, "Absent deduction", -(d.absentDeduction ?? 0), earningsY); }
+  drawRow(doc, "Gross pay (taxable)", d.grossPay, earningsY);
+  let deductionsY = 102; deductionsY = drawRow(doc, "PAYE", d.paye, deductionsY, 112); deductionsY = drawRow(doc, "NSSF (employee)", d.nssfEmployee, deductionsY, 112); drawRow(doc, "Loan / advance", d.loanDeduction, deductionsY, 112);
+
+  doc.setFillColor(236, 253, 245); doc.setDrawColor(167, 243, 208); doc.roundedRect(12, 142, 186, 22, 2, 2, "FD");
+  doc.setTextColor(6, 78, 59); doc.setFontSize(10); doc.setFont("helvetica", "bold"); doc.text("NET PAY", 18, 155); doc.setFontSize(16); doc.text(money(d.netPay), 190, 156, { align: "right" });
+  doc.setFontSize(8); doc.setFont("helvetica", "normal"); doc.setTextColor(100, 116, 139); doc.text("Employer NSSF contribution", 18, 176); doc.setFont("helvetica", "bold"); doc.text(money(d.nssfEmployer), 190, 176, { align: "right" });
+  doc.setDrawColor(226, 232, 240); doc.line(12, 188, 198, 188); doc.setFont("helvetica", "normal"); doc.setFontSize(7); doc.setTextColor(148, 163, 184); doc.text(`Computer-generated payslip · Generated by ${APP_SHORT_NAME}`, 12, 194);
+}
+
+export async function downloadPayslipPdf(d: PayslipDetail): Promise<void> {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  let y = 18;
-  doc.setFontSize(12);
-  doc.setFont("helvetica", "bold");
-  doc.text(d.organizationName || "—", 14, y);
-  y += 7;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(9);
-  doc.setTextColor(80, 80, 80);
-  doc.text(`Period: ${d.periodLabel} (${d.periodStart} → ${d.periodEnd})`, 14, y);
-  y += 10;
-  doc.setTextColor(0, 0, 0);
-  doc.setFontSize(14);
-  doc.setFont("helvetica", "bold");
-  doc.text("Payslip", 14, y);
-  y += 10;
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(10);
-  doc.text(`Employee: ${d.staffName}`, 14, y);
-  y += 6;
-  if (d.employeeCode) {
-    doc.text(`Code: ${d.employeeCode}`, 14, y);
-    y += 6;
-  }
-  const rows = payslipTableRows(d);
-  for (const [k, v] of rows) {
-    doc.text(k, 14, y);
-    doc.text(v, 120, y, { align: "right" });
-    y += 7;
-  }
-  y += 6;
-  doc.setFontSize(7);
-  doc.setTextColor(130, 130, 130);
-  doc.text(`Generated by ${APP_SHORT_NAME}`, 14, y);
+  drawPayslip(doc, d, await loadLogo(d.organizationLogoUrl));
   const safe = `${d.staffName}-${d.periodLabel}`.replace(/[^\w.-]+/g, "_").slice(0, 80);
   doc.save(`payslip-${safe}.pdf`);
 }
 
-export function downloadAllPayslipsPdf(payslips: PayslipDetail[]): void {
+export async function downloadAllPayslipsPdf(payslips: PayslipDetail[]): Promise<void> {
   if (payslips.length === 0) return;
   const doc = new jsPDF({ unit: "mm", format: "a4" });
-  payslips.forEach((d, idx) => {
-    if (idx > 0) doc.addPage();
-    let y = 18;
-    doc.setFontSize(12);
-    doc.setFont("helvetica", "bold");
-    doc.text(d.organizationName || "—", 14, y);
-    y += 7;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(80, 80, 80);
-    doc.text(`Period: ${d.periodLabel} (${d.periodStart} → ${d.periodEnd})`, 14, y);
-    y += 10;
-    doc.setTextColor(0, 0, 0);
-    doc.setFontSize(14);
-    doc.setFont("helvetica", "bold");
-    doc.text("Payslip", 14, y);
-    y += 10;
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(10);
-    doc.text(`Employee: ${d.staffName}`, 14, y);
-    y += 6;
-    if (d.employeeCode) {
-      doc.text(`Code: ${d.employeeCode}`, 14, y);
-      y += 6;
-    }
-    const rows = payslipTableRows(d);
-    for (const [k, v] of rows) {
-      doc.text(k, 14, y);
-      doc.text(v, 120, y, { align: "right" });
-      y += 7;
-    }
-    y += 6;
-    doc.setFontSize(7);
-    doc.setTextColor(130, 130, 130);
-    doc.text(`Generated by ${APP_SHORT_NAME}`, 14, y);
-  });
-  doc.save(`payslips-batch.pdf`);
+  const logo = await loadLogo(payslips[0].organizationLogoUrl);
+  payslips.forEach((detail, index) => { if (index > 0) doc.addPage(); drawPayslip(doc, detail, logo); });
+  doc.save("payslips-batch.pdf");
 }

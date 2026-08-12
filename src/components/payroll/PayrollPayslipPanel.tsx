@@ -3,98 +3,41 @@ import { APP_SHORT_NAME } from "@/constants/branding";
 import type { PayslipDetail } from "@/lib/payrollPayslipPdf";
 import { downloadPayslipPdf } from "@/lib/payrollPayslipPdf";
 
-type Props = {
-  detail: PayslipDetail;
-  printId?: string;
-  /** When true, omit toolbar (e.g. standalone print page). */
-  hideActions?: boolean;
-};
+type Props = { detail: PayslipDetail; printId?: string; hideActions?: boolean };
 
 export function PayrollPayslipPanel({ detail, printId = "payroll-payslip-print", hideActions }: Props) {
-  const handlePrint = () => window.print();
-
   return (
     <div className="space-y-4">
-      {!hideActions && (
-        <div className="flex flex-wrap gap-2 print:hidden">
-          <button
-            type="button"
-            onClick={handlePrint}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800"
-          >
-            <Printer className="w-4 h-4 shrink-0" aria-hidden />
-            Print
-          </button>
-          <button
-            type="button"
-            onClick={() => downloadPayslipPdf(detail)}
-            className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50"
-          >
-            Download PDF
-          </button>
-        </div>
-      )}
-      <style>{`
-        @page { size: A4; margin: 12mm; }
-        @media print {
-          body * { visibility: hidden; }
-          #${printId}, #${printId} * { visibility: visible; }
-          #${printId} {
-            position: absolute;
-            left: 0;
-            top: 0;
-            width: 100%;
-            padding: 0;
-            background: white;
-          }
-        }
-      `}</style>
-      <div id={printId} className="border-2 border-slate-800 rounded-sm bg-white p-6 max-w-md print:border-slate-900 print:shadow-none">
-        <header className="border-b border-slate-200 pb-4 mb-4">
-          <p className="text-lg font-bold text-slate-900">{detail.organizationName || "—"}</p>
-          <p className="text-xs text-slate-600 mt-1">
-            Period: {detail.periodLabel} ({detail.periodStart} → {detail.periodEnd})
-          </p>
-          <h2 className="text-xl font-semibold text-slate-900 mt-4">Payslip</h2>
+      {!hideActions && <div className="flex flex-wrap gap-2 print:hidden">
+        <button type="button" onClick={() => window.print()} className="inline-flex items-center gap-2 px-4 py-2 bg-slate-900 text-white rounded-lg text-sm font-medium hover:bg-slate-800"><Printer className="w-4 h-4" />Print</button>
+        <button type="button" onClick={() => void downloadPayslipPdf(detail)} className="px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50">Download PDF</button>
+      </div>}
+      <style>{`@page { size: A4; margin: 12mm; } @media print { body * { visibility: hidden; } #${printId}, #${printId} * { visibility: visible; } #${printId} { position: absolute; left: 0; top: 0; width: 100%; background: white; } }`}</style>
+      <div id={printId} className="overflow-hidden border border-slate-200 rounded-2xl bg-white max-w-2xl shadow-sm print:shadow-none">
+        <header className="bg-slate-900 text-white px-6 py-5 flex items-center gap-4">
+          {detail.organizationLogoUrl ? <img src={detail.organizationLogoUrl} alt="Organization logo" className="w-16 h-16 rounded-xl bg-white object-contain p-1" /> : <div className="w-16 h-16 rounded-xl bg-white/10 border border-white/20 grid place-items-center text-2xl font-bold">{(detail.organizationName || "O").slice(0, 1)}</div>}
+          <div className="min-w-0"><p className="text-xl font-bold tracking-tight">{detail.organizationName || "Organization"}</p>{detail.organizationAddress ? <p className="text-xs text-slate-300 mt-1">{detail.organizationAddress}</p> : null}<p className="text-xs uppercase tracking-[0.2em] text-slate-300 mt-2">Official employee payslip</p></div>
         </header>
-        <p className="text-sm text-slate-800">
-          <span className="text-slate-600">Employee:</span> {detail.staffName}
-        </p>
-        {detail.employeeCode ? (
-          <p className="text-sm text-slate-800 mt-1">
-            <span className="text-slate-600">Code:</span> {detail.employeeCode}
-          </p>
-        ) : null}
-        <dl className="mt-6 space-y-2 text-sm">
-          {detail.fullGross != null && (detail.daysAbsent ?? 0) > 0 ? (
-            <>
-              <PayslipRow label="Full gross (contract)" value={detail.fullGross} />
-              <PayslipRow label="Days absent" value={detail.daysAbsent ?? 0} />
-              <PayslipRow label="Absent deduction" value={-(detail.absentDeduction ?? 0)} />
-            </>
-          ) : null}
-          <PayslipRow label="Gross pay (taxable)" value={detail.grossPay} />
-          <PayslipRow label="PAYE" value={detail.paye} />
-          <PayslipRow label="NSSF (employee)" value={detail.nssfEmployee} />
-          <PayslipRow label="NSSF (employer)" value={detail.nssfEmployer} />
-          <PayslipRow label="Loan / advance" value={detail.loanDeduction} />
-          <PayslipRow label="Net pay" value={detail.netPay} strong />
-        </dl>
-        <p className="text-[10px] text-slate-400 mt-8 pt-3 border-t border-slate-200">
-          Generated by {APP_SHORT_NAME}
-        </p>
+        <div className="p-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 rounded-xl bg-slate-50 border border-slate-200 p-4">
+            <div><p className="text-[11px] uppercase tracking-wide text-slate-500">Employee</p><p className="font-semibold text-slate-900">{detail.staffName}</p>{detail.employeeCode ? <p className="text-xs text-slate-500">Code: {detail.employeeCode}</p> : null}</div>
+            <div className="sm:text-right"><p className="text-[11px] uppercase tracking-wide text-slate-500">Pay period</p><p className="font-semibold text-slate-900">{detail.periodLabel}</p><p className="text-xs text-slate-500">{detail.periodStart} to {detail.periodEnd}</p></div>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 mt-5">
+            <section><h3 className="text-xs font-bold uppercase tracking-wider text-emerald-700 border-b border-emerald-200 pb-2">Earnings</h3><dl className="mt-3 space-y-2 text-sm">
+              {detail.fullGross != null && (detail.daysAbsent ?? 0) > 0 ? <><PayslipRow label="Full gross (contract)" value={detail.fullGross} /><PayslipRow label="Days absent" value={detail.daysAbsent ?? 0} /><PayslipRow label="Absent deduction" value={-(detail.absentDeduction ?? 0)} /></> : null}
+              <PayslipRow label="Gross pay (taxable)" value={detail.grossPay} />
+            </dl></section>
+            <section><h3 className="text-xs font-bold uppercase tracking-wider text-rose-700 border-b border-rose-200 pb-2">Deductions</h3><dl className="mt-3 space-y-2 text-sm"><PayslipRow label="PAYE" value={detail.paye} /><PayslipRow label="NSSF (employee)" value={detail.nssfEmployee} /><PayslipRow label="Loan / advance" value={detail.loanDeduction} /></dl></section>
+          </div>
+          <div className="mt-5 rounded-xl bg-emerald-50 border border-emerald-200 p-4 flex items-center justify-between"><span className="text-sm font-semibold text-emerald-900">Net pay</span><span className="text-2xl font-bold text-emerald-900">{money(detail.netPay)}</span></div>
+          <div className="mt-4 flex justify-between gap-4 text-xs text-slate-500"><span>Employer NSSF contribution</span><span className="font-medium text-slate-700">{money(detail.nssfEmployer)}</span></div>
+          <p className="text-[10px] text-slate-400 mt-8 pt-3 border-t border-slate-200">Computer-generated payslip · Generated by {APP_SHORT_NAME}</p>
+        </div>
       </div>
     </div>
   );
 }
 
-function PayslipRow({ label, value, strong }: { label: string; value: number; strong?: boolean }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <dt className="text-slate-600">{label}</dt>
-      <dd className={strong ? "font-semibold text-slate-900" : "text-slate-900"}>
-        {Number(value).toLocaleString()}
-      </dd>
-    </div>
-  );
-}
+const money = (value: number) => Number(value).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+function PayslipRow({ label, value }: { label: string; value: number }) { return <div className="flex justify-between gap-4"><dt className="text-slate-600">{label}</dt><dd className="font-medium text-slate-900 tabular-nums">{money(value)}</dd></div>; }
