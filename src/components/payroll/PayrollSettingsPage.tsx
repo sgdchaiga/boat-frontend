@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { getPayrollAccess } from "@/lib/payrollAccess";
 import { supabase } from "@/lib/supabase";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
 import { useAuth } from "@/contexts/AuthContext";
 import { PayrollGuide } from "@/components/payroll/PayrollGuide";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
@@ -49,7 +50,10 @@ export function PayrollSettingsPage({ readOnly }: Props) {
       supabase.from("payroll_org_settings").select("*").eq("organization_id", orgId).maybeSingle(),
     ]);
     setErr(gRes.error?.message || sRes.error?.message || null);
-    const normalizedGl = normalizeGlAccountRows((gRes.data || []) as unknown[]).map((row) => ({
+    const normalizedGl = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((gRes.data || []) as unknown[]),
+      user?.business_type
+    ).map((row) => ({
       id: row.id,
       account_code: row.account_code,
       account_name: row.account_name,
@@ -57,7 +61,7 @@ export function PayrollSettingsPage({ readOnly }: Props) {
     setGl(normalizedGl as GlAcc[]);
     setRow((sRes.data as SettingsRow) || {});
     setLoading(false);
-  }, [orgId]);
+  }, [orgId, user?.business_type]);
 
   useEffect(() => {
     load();

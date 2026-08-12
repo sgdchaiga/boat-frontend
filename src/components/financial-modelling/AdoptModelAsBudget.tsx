@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, CheckCircle2, Link2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
+import { useAuth } from "@/contexts/AuthContext";
 import { buildModelBudgetLines, suggestBudgetGlAccount, type BudgetGlAccount, type ModelBudgetLine } from "@/lib/modelBudgetBridge";
 import type { StatementYear } from "@/lib/phase1FinancialEngine";
 import type { ProjectionYear, ModelScenario } from "@/lib/financialModellingEngine";
@@ -20,6 +22,7 @@ interface Props {
 }
 
 export function AdoptModelAsBudget({ organizationId, company, scenario, forecastStartYear, statements, projections, projectRows, currency, money }: Props) {
+  const { user } = useAuth();
   const [modelYear, setModelYear] = useState(1);
   const [accounts, setAccounts] = useState<BudgetGlAccount[]>([]);
   const [lines, setLines] = useState<ModelBudgetLine[]>([]);
@@ -33,11 +36,14 @@ export function AdoptModelAsBudget({ organizationId, company, scenario, forecast
     let active = true;
     void supabase.from("gl_accounts").select("*").order("account_code").then(({ data }) => {
       if (!active) return;
-      const normalized = normalizeGlAccountRows((data || []) as unknown[]).filter(row => row.is_active);
+      const normalized = filterGlAccountsForBusinessType(
+        normalizeGlAccountRows((data || []) as unknown[]),
+        user?.business_type
+      ).filter(row => row.is_active);
       setAccounts(normalized.map(row => ({ id: row.id, account_code: row.account_code, account_name: row.account_name, account_type: row.account_type })));
     });
     return () => { active = false; };
-  }, []);
+  }, [user?.business_type]);
 
   useEffect(() => {
     setLines(generatedLines.map(line => ({ ...line, glAccountId: suggestBudgetGlAccount(line, accounts) })));

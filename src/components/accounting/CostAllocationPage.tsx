@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { BarChart3, Calculator, CheckCircle2, Download, RotateCcw, Save, ShieldCheck } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { createJournalEntry } from "../../lib/journal";
 import { resolveJournalAccountSettings } from "../../lib/journalAccountSettings";
@@ -230,7 +231,7 @@ export function CostAllocationPage({ readOnly = false }: { readOnly?: boolean })
       if (rulesRes.error) throw rulesRes.error;
       if (ruleCentresRes.error) throw ruleCentresRes.error;
       if (runsRes.error) throw runsRes.error;
-      setAccounts((accountsRes.data || []) as GLAccount[]);
+      setAccounts(filterGlAccountsForBusinessType((accountsRes.data || []) as GLAccount[], user?.business_type));
       setCentres((centresRes.data || []) as CostCentre[]);
       setDrivers((driversRes.data || []) as DriverValue[]);
       setRules((rulesRes.data || []) as AllocationRule[]);

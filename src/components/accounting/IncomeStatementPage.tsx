@@ -8,6 +8,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import type { BusinessType } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 import { syncRoomChargeJournal } from "../../lib/journal";
 import {
   type AccountTotal,
@@ -444,7 +445,10 @@ export function IncomeStatementPage() {
         if (type === "expense" || /^([5-9])/.test(code) || /\b(expense|purchase|cogs|cost)\b/.test(label)) return "expense";
         return null;
       };
-      const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+      const accounts = filterGlAccountsForBusinessType(
+        normalizeGlAccountRows((accRes.data || []) as unknown[]),
+        businessType
+      )
         .filter((row) => row.is_active && classifyAccountType(row) !== null)
         .map((row) => ({
           id: row.id,

@@ -7,6 +7,7 @@ import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 
 type AccountBalance = {
   account_id: string;
@@ -91,7 +92,10 @@ export function TrialBalancePage() {
       return;
     }
 
-    const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+    const accounts = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accRes.data || []) as unknown[]),
+      user?.business_type
+    )
       .filter((row) => row.is_active)
       .map((row) => ({
         id: row.id,

@@ -4,6 +4,7 @@ export type NormalizedGlAccount = {
   account_name: string;
   account_type: string;
   category: string | null;
+  business_type: string | null;
   is_active: boolean;
 };
 
@@ -14,6 +15,7 @@ export function normalizeGlAccountRow(row: Record<string, unknown>): NormalizedG
     account_name: String(row.account_name ?? row.name ?? ""),
     account_type: String(row.account_type ?? row.type ?? "").toLowerCase(),
     category: row.category == null ? null : String(row.category),
+    business_type: row.business_type == null ? null : String(row.business_type),
     is_active: Boolean(row.is_active ?? true),
   };
 }

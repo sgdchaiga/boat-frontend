@@ -7,6 +7,7 @@ import { PageNotes } from "../common/PageNotes";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { normalizeGlAccountRow, normalizeGlAccountRows } from "../../lib/glAccountNormalize";
+import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
 import { accountBalanceDelta, isCashEquivalentAccount } from "../../lib/cashFlowStatement";
 import { Info } from "lucide-react";
 
@@ -103,7 +104,10 @@ export function BalanceSheetPage() {
     ]);
     if (accRes.error) throw new Error(accRes.error.message);
 
-    const accounts = normalizeGlAccountRows((accRes.data || []) as unknown[])
+    const accounts = filterGlAccountsForBusinessType(
+      normalizeGlAccountRows((accRes.data || []) as unknown[]),
+      user?.business_type
+    )
       .filter((row) =>
         row.is_active &&
         ["asset", "liability", "equity", "income", "expense"].includes(row.account_type)

@@ -12,6 +12,7 @@ type GLAccount = {
   account_name: string;
   account_type: "asset" | "liability" | "equity" | "income" | "expense";
   category: string | null;
+  business_type: string | null;
   parent_id: string | null;
   is_active: boolean;
   created_at: string;
@@ -97,6 +98,7 @@ export function GLAccountsPage() {
         account_name: String(row.account_name ?? row.name ?? ""),
         account_type: accountType,
         category: row.category == null ? null : String(row.category),
+        business_type: row.business_type == null ? null : String(row.business_type),
         parent_id: row.parent_id == null ? null : String(row.parent_id),
         is_active: Boolean(row.is_active ?? true),
         created_at: String(row.created_at ?? new Date().toISOString()),

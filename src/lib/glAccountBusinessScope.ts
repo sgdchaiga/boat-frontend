@@ -1,4 +1,9 @@
-type AccountLike = { account_code?: string | null; account_name?: string | null; category?: string | null };
+type AccountLike = {
+  account_code?: string | null;
+  account_name?: string | null;
+  category?: string | null;
+  business_type?: string | null;
+};
 
 const INDUSTRY_PATTERNS: Record<string, RegExp> = {
   hotel: /\b(hotel|guest|room revenue|room charge|accommodation|housekeeping|sauna|bar pos|kitchen pos)\b/i,
@@ -6,12 +11,16 @@ const INDUSTRY_PATTERNS: Record<string, RegExp> = {
   school: /\b(school|student|tuition|bursary|school fees?|term fees?)\b/i,
   sacco: /\b(sacco|member savings|loan portfolio|teller vault)\b/i,
   vsla: /\b(vsla|member savings|share[- ]?out)\b/i,
-  manufacturing: /\b(manufacturing wip|work in progress|finished goods production|production overhead|scrap inventory)\b/i,
+  manufacturing: /\b(raw materials? inventory|raw materials?|manufacturing wip|work in progress|finished goods(?: production| inventory)?|factory overhead|production overhead|production clearing|cost of goods manufactured|scrap inventory)\b/i,
 };
 
 export function isGlAccountRelevantForBusinessType(account: AccountLike, businessType?: string | null): boolean {
   const selectedType = String(businessType || "").toLowerCase();
   if (!selectedType || selectedType === "mixed") return true;
+  const accountType = String(account.business_type || "").trim().toLowerCase();
+  // An explicit industry tag is authoritative. Untagged accounts remain eligible
+  // so schools can keep administrator-created accounts and common accounting heads.
+  if (accountType && accountType !== "mixed" && accountType !== selectedType) return false;
   const text = `${account.account_code || ""} ${account.account_name || ""} ${account.category || ""}`;
   const taggedIndustries = Object.entries(INDUSTRY_PATTERNS).filter(([, pattern]) => pattern.test(text)).map(([industry]) => industry);
   if (taggedIndustries.length === 0) return true;
