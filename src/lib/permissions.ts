@@ -172,6 +172,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "accounting_balance", label: "Balance sheet", group: "Accounting" },
   { page: "accounting_cashflow", label: "Cash flow", group: "Accounting" },
   { page: "accounting_budgeting", label: "Budgeting", group: "Accounting" },
+  { page: "admin_school_budget_completion", label: "School implementation completion centre", group: "Admin" },
   { page: "school_cashbook_register", label: "School cashbook register", group: "Accounting" },
   { page: "school_cashbook_entry", label: "School cashbook entry", group: "Accounting" },
   { page: "school_cashbook_daily", label: "School daily cash summary", group: "Accounting" },

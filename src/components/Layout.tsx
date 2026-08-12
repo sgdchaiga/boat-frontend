@@ -960,6 +960,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Admin', icon: Settings, children: [
         { group: 'Administration', items: [
           { name: 'Organization settings', page: 'admin' },
+          { name: 'Implementation completion centre', page: 'admin_school_budget_completion' },
           { name: 'Ecosystem', page: 'ecosystem' },
         ] },
         { group: 'Import', items: [
@@ -1153,6 +1154,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Mobile & local access', page: 'admin', state: { adminTab: 'mobile_lite' } },
         { name: 'Backup & sync', page: 'admin', state: { adminTab: 'sync_queue' } },
         { name: 'Bulk import', page: 'admin', state: { adminTab: 'local_import' } },
+        { name: 'Implementation completion centre', page: 'admin_school_budget_completion' },
         { name: 'Ecosystem', page: 'ecosystem' },
         { name: 'Subscription renewal', page: 'admin', state: { adminTab: 'subscription_renewal' } },
       ] },

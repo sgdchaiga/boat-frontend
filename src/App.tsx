@@ -136,6 +136,7 @@ const VendorPaymentsPage = lazyNamed(() => import('./components/purchases/Vendor
 const VendorCreditsPage = lazyNamed(() => import('./components/purchases/VendorCreditsPage'), 'VendorCreditsPage');
 const CashOutReconciliationPage = lazyNamed(() => import('./components/purchases/CashOutReconciliationPage'), 'CashOutReconciliationPage');
 const AdminPage = lazyNamed(() => import('./components/admin/AdminPage'), 'AdminPage');
+const SchoolBudgetCompletionAdminPage = lazyNamed(() => import('./components/admin/SchoolBudgetCompletionAdminPage'), 'SchoolBudgetCompletionAdminPage');
 const JournalEntriesPage = lazyNamed(() => import('./components/accounting/JournalEntriesPage'), 'JournalEntriesPage');
 const ManualJournalsPage = lazyNamed(() => import('./components/accounting/ManualJournalsPage'), 'ManualJournalsPage');
 const GeneralLedgerPage = lazyNamed(() => import('./components/accounting/GeneralLedgerPage'), 'GeneralLedgerPage');
@@ -1659,6 +1660,8 @@ function AppContent() {
             initialTab={parseAdminTabParam(pageState?.adminTab as string | undefined) ?? null}
           />
         );
+      case 'admin_school_budget_completion':
+        return <SchoolBudgetCompletionAdminPage readOnly={access.readOnly} />;
       case 'system_integrations':
         return <IntegrationsHubPage onNavigate={navigate} />;
       case 'ecosystem':
