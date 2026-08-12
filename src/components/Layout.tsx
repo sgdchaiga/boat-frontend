@@ -775,7 +775,11 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const schoolNavigation: NavItem[] = useMemo(
     () => [
       { name: 'Dashboard', icon: GraduationCap, page: SCHOOL_PAGE.dashboard },
-      ...(generalBusinessCashbookEnabled ? [{ name: 'Cashbook', icon: Receipt, page: 'school_cashbook_register' } as NavItem] : []),
+      ...(generalBusinessCashbookEnabled ? [{ name: 'Cashbook', icon: Receipt, children: [
+        { name: 'Cashbook register', page: 'school_cashbook_register' },
+        { name: 'Cashbook entry', page: 'school_cashbook_entry' },
+        { name: 'Daily summary', page: 'school_cashbook_daily' },
+      ] } as NavItem] : []),
       { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
@@ -813,7 +817,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         ],
       },
       { name: 'Fixed deposits', icon: PiggyBank, page: SCHOOL_PAGE.fixedDeposit },
-      { name: 'Vote book & budgets', icon: BookOpen, page: SCHOOL_PAGE.voteBook },
+      { name: 'Vote book & budgets', icon: BookOpen, children: [
+        { name: 'Budget workflow & approval', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'formulation' } },
+        { name: 'Vote book report', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'vote' } },
+        { name: 'Commitments & excess approvals', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'approvals' } },
+        { name: 'Budget transfers', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'transfers' } },
+        { name: 'Spending limits & approval levels', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'controls' } },
+      ] },
       { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },
       {
         name: 'Reports',
@@ -1095,6 +1105,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Record other income', page: SCHOOL_PAGE.otherRevenue },
       { name: 'Record expense', page: 'purchases_expenses' },
       ...(generalBusinessCashbookEnabled ? [{ name: 'School cashbook', page: 'school_cashbook_register' }] : []),
+      ...(generalBusinessCashbookEnabled ? [{ name: 'Daily cash summary', page: 'school_cashbook_daily' }] : []),
       { name: 'Cash & bank balances', page: 'treasury' },
       { name: 'Payment requests & approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { name: 'Bank & mobile-money reconciliation', page: 'accounting_bank_reconciliation' },
@@ -1115,12 +1126,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ...(enableAssetVerification ? [{ name: 'Assets & verification', page: 'asset_verification' }] : []),
     ] },
     { name: 'Budget & Vote Book', icon: BookOpen, children: [
-      { name: 'Budget overview & formulation', page: 'accounting_budgeting' },
-      { name: 'Department budgets', page: 'accounting_budgeting' },
-      { name: 'Budget approval', page: 'accounting_budgeting' },
-      { name: 'Vote book & commitments', page: SCHOOL_PAGE.voteBook },
+      { name: 'Budget preparation & workflow', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'formulation' } },
+      { name: 'Department budgets & consolidation', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'formulation' } },
+      { name: 'Budget review & approval', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'formulation' } },
+      { name: 'Approved budget & vote book', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'vote' } },
+      { name: 'Commitments & excess spending approvals', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'approvals' } },
+      { name: 'Transfers & supplementary budgets', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'transfers' } },
+      { name: 'Spending limits & approval levels', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'controls' } },
       { name: 'Budget vs actual', page: 'reports_budget_variance' },
-      { name: 'Transfers & supplementary budgets', page: SCHOOL_PAGE.voteBook },
     ] },
     ...(enablePayroll && canUseSchoolPayroll ? [{ name: 'Payroll', icon: Wallet, children: [
       { name: 'Payroll overview', page: PAYROLL_PAGE.hub },

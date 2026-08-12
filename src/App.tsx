@@ -1322,7 +1322,7 @@ function AppContent() {
       case SCHOOL_PAGE.fixedDeposit:
         return <SchoolFixedDepositPage readOnly={access.readOnly} />;
       case SCHOOL_PAGE.voteBook:
-        return <SchoolVoteBookPage readOnly={access.readOnly} />;
+        return <SchoolVoteBookPage readOnly={access.readOnly} initialTab={pageState?.voteBookTab as "vote"|"formulation"|"approvals"|"transfers"|"controls"|undefined} />;
       case VSLA_PAGE.dashboard:
         return <VslaDashboardPage onNavigate={navigate} readOnly={access.readOnly} />;
       case VSLA_PAGE.members:

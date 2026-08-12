@@ -8,15 +8,15 @@ import { BudgetVarianceReportPage } from "@/components/accounting/BudgetVariance
 type RequestRow = { id:string; budget_line_id:string; description:string; quantity:number; unit_rate:number; amount:number; reason:string; status:string; created_at:string; budget_lines?:{line_label?:string}|null };
 type VoteLine = { id:string; line_label:string; amount:number };
 type TransferRow = { id:string; source_line_id:string; destination_line_id:string; amount:number; reason:string; status:string; created_at:string };
-type Props = { readOnly?: boolean };
+type Props = { readOnly?: boolean; initialTab?: Tab };
 type Tab = "vote"|"formulation"|"approvals"|"transfers"|"controls";
 
 const money = (value:number) => Number(value||0).toLocaleString(undefined,{maximumFractionDigits:2});
 
-export function SchoolVoteBookPage({ readOnly }: Props) {
+export function SchoolVoteBookPage({ readOnly, initialTab = "vote" }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
-  const [tab,setTab] = useState<Tab>("vote");
+  const [tab,setTab] = useState<Tab>(initialTab);
   const [requests,setRequests] = useState<RequestRow[]>([]);
   const [voteLines,setVoteLines] = useState<VoteLine[]>([]);
   const [transfers,setTransfers] = useState<TransferRow[]>([]);
@@ -40,6 +40,7 @@ export function SchoolVoteBookPage({ readOnly }: Props) {
     if(x) setThresholds({amber:String(x.school_budget_amber_percent??80),headteacher:String(x.school_headteacher_approval_percent??100),board:String(x.school_board_approval_percent??120)});
   },[orgId]);
   useEffect(()=>{void load()},[load]);
+  useEffect(()=>{setTab(initialTab)},[initialTab]);
 
   const transferNet = useMemo(()=>{
     const map=new Map<string,number>();
