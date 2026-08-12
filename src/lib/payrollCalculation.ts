@@ -19,25 +19,33 @@ export type PayeTaxBand = {
   /** Exclusive upper edge; null means no upper limit. */
   upper: number | null;
   ratePct: number;
+  /** Tax already due when gross pay reaches this band's lower edge. */
+  minimumTax: number;
 };
 
 export const DEFAULT_PAYE_TAX_BANDS: PayeTaxBand[] = [
-  { lower: 0, upper: 235_000, ratePct: 0 },
-  { lower: 235_000, upper: 335_000, ratePct: 10 },
-  { lower: 335_000, upper: 410_000, ratePct: 20 },
-  { lower: 410_000, upper: 10_000_000, ratePct: 30 },
-  { lower: 10_000_000, upper: null, ratePct: 40 },
+  { lower: 0, upper: 235_000, ratePct: 0, minimumTax: 0 },
+  { lower: 235_000, upper: 335_000, ratePct: 10, minimumTax: 0 },
+  { lower: 335_000, upper: 410_000, ratePct: 20, minimumTax: 10_000 },
+  { lower: 410_000, upper: 10_000_000, ratePct: 30, minimumTax: 25_000 },
+  { lower: 10_000_000, upper: null, ratePct: 40, minimumTax: 2_902_000 },
 ];
 
 export function normalizePayeTaxBands(value: unknown): PayeTaxBand[] {
   if (!Array.isArray(value)) return DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band }));
+  let inferredMinimum = 0;
   const bands = value.map((item) => {
     const row = (item || {}) as Record<string, unknown>;
-    return {
+    const band = {
       lower: Number(row.lower),
       upper: row.upper == null || row.upper === "" ? null : Number(row.upper),
       ratePct: Number(row.ratePct ?? row.rate_pct),
+      minimumTax: row.minimumTax == null && row.minimum_tax == null
+        ? roundMoney(inferredMinimum)
+        : Number(row.minimumTax ?? row.minimum_tax),
     };
+    if (band.upper != null) inferredMinimum = band.minimumTax + (band.upper - band.lower) * band.ratePct / 100;
+    return band;
   });
   return validatePayeTaxBands(bands).length === 0 ? bands : DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band }));
 }
@@ -49,6 +57,7 @@ export function validatePayeTaxBands(bands: PayeTaxBand[]): string[] {
     if (!Number.isFinite(band.lower) || band.lower < 0) errors.push(`Band ${index + 1} has an invalid lower limit.`);
     if (band.upper != null && (!Number.isFinite(band.upper) || band.upper <= band.lower)) errors.push(`Band ${index + 1} must end above its lower limit.`);
     if (!Number.isFinite(band.ratePct) || band.ratePct < 0 || band.ratePct > 100) errors.push(`Band ${index + 1} rate must be between 0% and 100%.`);
+    if (!Number.isFinite(band.minimumTax) || band.minimumTax < 0) errors.push(`Band ${index + 1} minimum tax must be zero or more.`);
     if (index === 0 && band.lower !== 0) errors.push("The first PAYE band must start at 0.");
     if (index > 0 && band.lower !== bands[index - 1].upper) errors.push(`Band ${index + 1} must start where band ${index} ends.`);
     if (index < bands.length - 1 && band.upper == null) errors.push(`Only the last PAYE band may have no upper limit.`);
@@ -61,12 +70,9 @@ export function validatePayeTaxBands(bands: PayeTaxBand[]): string[] {
 export function computePayeFromBands(grossPay: number, configuredBands?: unknown): number {
   const gross = Math.max(0, Number(grossPay) || 0);
   const bands = normalizePayeTaxBands(configuredBands);
-  const tax = bands.reduce((total, band) => {
-    if (gross <= band.lower) return total;
-    const taxableInBand = Math.max(0, Math.min(gross, band.upper ?? gross) - band.lower);
-    return total + taxableInBand * band.ratePct / 100;
-  }, 0);
-  return roundMoney(tax);
+  const band = bands.find((item) => gross >= item.lower && (item.upper == null || gross < item.upper));
+  if (!band) return 0;
+  return roundMoney(band.minimumTax + Math.max(0, gross - band.lower) * band.ratePct / 100);
 }
 
 const DEFAULT_STATUTORY: PayrollStatutoryInput = {

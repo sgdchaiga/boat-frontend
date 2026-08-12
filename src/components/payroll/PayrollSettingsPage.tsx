@@ -237,12 +237,13 @@ function PayeBandsEditor({ bands, onChange }: { bands: PayeTaxBand[]; onChange: 
         <button type="button" className="text-xs px-3 py-1.5 border rounded-lg bg-white" onClick={() => onChange(DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band })))}>Restore defaults</button>
       </div>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[540px] text-sm">
-          <thead><tr className="text-left text-slate-600"><th className="p-2">From</th><th className="p-2">Up to</th><th className="p-2">Rate %</th><th className="p-2"></th></tr></thead>
+        <table className="w-full min-w-[680px] text-sm">
+          <thead><tr className="text-left text-slate-600"><th className="p-2">From</th><th className="p-2">Up to</th><th className="p-2">Minimum tax</th><th className="p-2">Rate %</th><th className="p-2"></th></tr></thead>
           <tbody>{bands.map((band, index) => (
             <tr key={index} className="border-t border-slate-200">
               <td className="p-2"><input type="number" min="0" value={band.lower} onChange={(event) => update(index, { lower: Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
               <td className="p-2"><input type="number" min="0" placeholder="No limit" value={band.upper ?? ""} onChange={(event) => update(index, { upper: event.target.value === "" ? null : Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
+              <td className="p-2"><input type="number" min="0" value={band.minimumTax} onChange={(event) => update(index, { minimumTax: Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
               <td className="p-2"><input type="number" min="0" max="100" step="0.01" value={band.ratePct} onChange={(event) => update(index, { ratePct: Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
               <td className="p-2 text-right"><button type="button" disabled={bands.length === 1} onClick={() => onChange(bands.filter((_, bandIndex) => bandIndex !== index))} className="text-red-600 disabled:opacity-30">Remove</button></td>
             </tr>
@@ -255,7 +256,8 @@ function PayeBandsEditor({ bands, onChange }: { bands: PayeTaxBand[]; onChange: 
         const closedBands = last?.upper == null
           ? bands.map((band, index) => index === bands.length - 1 ? { ...band, upper: lower } : band)
           : bands;
-        onChange([...closedBands, { lower, upper: null, ratePct: last?.ratePct ?? 0 }]);
+        const minimumTax = last ? last.minimumTax + Math.max(0, lower - last.lower) * last.ratePct / 100 : 0;
+        onChange([...closedBands, { lower, upper: null, ratePct: last?.ratePct ?? 0, minimumTax }]);
       }}>Add tax band</button>
     </div>
   );
