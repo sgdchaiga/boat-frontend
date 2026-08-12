@@ -779,7 +779,6 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Treasury', icon: Landmark, page: 'treasury' },
       { name: 'Agent Hub', icon: Smartphone, page: 'agent_hub' },
       { name: 'Communications', icon: MessageSquare, page: 'communications' },
-      { name: 'Image to Excel / Word', icon: FileText, page: 'image_document_converter' },
       {
         name: 'School catalog',
         icon: BookOpen,
@@ -948,9 +947,16 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           ]
         : []),
       { name: 'Staff', icon: UsersRound, page: 'staff' },
-      { name: 'Import', icon: FileUp, page: 'data_migration' },
-      { name: 'Ecosystem', icon: Link2, page: 'ecosystem' },
-      { name: 'Admin', icon: Settings, page: 'admin' },
+      { name: 'Admin', icon: Settings, children: [
+        { group: 'Administration', items: [
+          { name: 'Organization settings', page: 'admin' },
+          { name: 'Ecosystem', page: 'ecosystem' },
+        ] },
+        { group: 'Import', items: [
+          { name: 'Data migration', page: 'data_migration' },
+          { name: 'Image to Excel / Word', page: 'image_document_converter' },
+        ] },
+      ] },
     ],
     [enableFixedAssets, enableBudget, enablePayroll, allowManufacturing, generalBusinessCashbookEnabled]
   );
@@ -1126,7 +1132,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Payroll audit trail', page: PAYROLL_PAGE.audit },
     ] } as NavItem] : []),
     { name: 'Reports', icon: TrendingUp, page: 'reports_school_fee_collections' },
-    { name: 'Settings', icon: Settings, children: [
+    { name: 'Admin', icon: Settings, children: [
       { group: 'School administration', items: [
         { name: 'School profile & security', page: 'admin', state: { adminTab: 'business' } },
         { name: 'Users & roles', page: 'admin', state: { adminTab: 'users' } },
@@ -1134,6 +1140,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Mobile & local access', page: 'admin', state: { adminTab: 'mobile_lite' } },
         { name: 'Backup & sync', page: 'admin', state: { adminTab: 'sync_queue' } },
         { name: 'Bulk import', page: 'admin', state: { adminTab: 'local_import' } },
+        { name: 'Ecosystem', page: 'ecosystem' },
         { name: 'Subscription renewal', page: 'admin', state: { adminTab: 'subscription_renewal' } },
       ] },
       ...(canUseAdvancedAccounting ? [{ group: 'Advanced accounting', items: [
@@ -1146,8 +1153,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Journal account settings', page: 'admin', state: { adminTab: 'journal_accounts' } },
         { name: 'Opening balances & migration', page: 'data_migration' },
       ] }] : []),
-      { name: 'Image to Excel / Word', page: 'image_document_converter' },
-      { name: 'Ecosystem', page: 'ecosystem' },
+      { group: 'Import', items: [
+        { name: 'Data migration', page: 'data_migration' },
+        { name: 'Image to Excel / Word', page: 'image_document_converter' },
+      ] },
       { name: 'Intelligence', page: 'industry_intelligence' },
     ] },
   ];
