@@ -23,6 +23,7 @@ type SettingsRow = {
   /** Days in a typical pay month for daily rate (full gross ÷ days × days absent). */
   payroll_working_days_per_month?: number;
   salary_expense_gl_account_id: string | null;
+  nssf_employer_expense_gl_account_id: string | null;
   paye_payable_gl_account_id: string | null;
   nssf_payable_gl_account_id: string | null;
   salaries_payable_gl_account_id: string | null;
@@ -96,6 +97,7 @@ export function PayrollSettingsPage({ readOnly }: Props) {
         : Number(row.nssf_gross_ceiling),
       payroll_working_days_per_month: Number(row.payroll_working_days_per_month ?? 22),
       salary_expense_gl_account_id: row.salary_expense_gl_account_id || null,
+      nssf_employer_expense_gl_account_id: row.nssf_employer_expense_gl_account_id || null,
       paye_payable_gl_account_id: row.paye_payable_gl_account_id || null,
       nssf_payable_gl_account_id: row.nssf_payable_gl_account_id || null,
       salaries_payable_gl_account_id: row.salaries_payable_gl_account_id || null,
@@ -192,6 +194,12 @@ export function PayrollSettingsPage({ readOnly }: Props) {
               value={row.salary_expense_gl_account_id}
               gl={gl}
               onChange={(id) => setRow((r) => ({ ...r, salary_expense_gl_account_id: id }))}
+            />
+            <GlSelect
+              label="NSSF employer contribution expense"
+              value={row.nssf_employer_expense_gl_account_id}
+              gl={gl}
+              onChange={(id) => setRow((r) => ({ ...r, nssf_employer_expense_gl_account_id: id }))}
             />
             <GlSelect label="PAYE payable" value={row.paye_payable_gl_account_id} gl={gl} onChange={(id) => setRow((r) => ({ ...r, paye_payable_gl_account_id: id }))} />
             <GlSelect label="NSSF payable" value={row.nssf_payable_gl_account_id} gl={gl} onChange={(id) => setRow((r) => ({ ...r, nssf_payable_gl_account_id: id }))} />

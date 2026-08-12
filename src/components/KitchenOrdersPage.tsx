@@ -294,7 +294,7 @@ export function KitchenOrdersPage({ readOnly = false, hidePricing = false }: Kit
 
   const getOrderTotals = (order: KitchenOrder) => {
     const total = order.kitchen_order_items.reduce((sum, item) => {
-      const price = item.products?.sales_price ?? 0;
+      const price = item.unit_price ?? item.products?.sales_price ?? 0;
       return sum + item.quantity * Number(price);
     }, 0);
     const paid = order.included_breakfast ? total : order.payments_total || 0;

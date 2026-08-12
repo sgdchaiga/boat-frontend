@@ -383,6 +383,12 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         for (const invoice of invoiceRows) {
           const row = await createSchoolRow<InvRow>("invoices", orgId, { ...invoice, staff_user_id: user?.id ?? null });
           insertedRows.push(row);
+          const { journalMessage } = await syncStudentInvoiceAccounting({
+            organizationId: orgId,
+            staffUserId: user?.id ?? null,
+            invoice: row,
+          });
+          if (journalMessage) throw new Error(`Invoice ${row.invoice_number} was created, but GL posting failed: ${journalMessage}`);
         }
         setBulkRunning(false);
         setBulkSummary(
@@ -459,7 +465,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     if (canUseSchoolApi()) {
       if (!orgId) return;
       try {
-        await createSchoolRow<InvRow>("invoices", orgId, {
+        const created = await createSchoolRow<InvRow>("invoices", orgId, {
           student_id: form.student_id,
           fee_structure_id: fee.id,
           academic_year: fee.academic_year,
@@ -474,6 +480,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           status: total > 0 ? "sent" : "paid",
           staff_user_id: user?.id ?? null,
         });
+        const { journalMessage } = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: created });
+        if (journalMessage) throw new Error(`Invoice was created, but GL posting failed: ${journalMessage}`);
         setForm({ student_id: "", fee_structure_id: "", discount_amount: "", scholarship_amount: "" });
         await load();
       } catch (error) {
@@ -566,7 +574,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       const orgId = user?.organization_id;
       if (!orgId) return;
       try {
-        await updateSchoolRow<InvRow>("invoices", orgId, editingId, {
+        const updated = await updateSchoolRow<InvRow>("invoices", orgId, editingId, {
           discount_amount: disc,
           scholarship_amount: schol,
           total_due,
@@ -574,6 +582,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           notes: editDraft.notes.trim() || null,
           staff_user_id: user?.id ?? null,
         });
+        const { journalMessage } = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: updated });
+        if (journalMessage) throw new Error(`Invoice was updated, but GL posting failed: ${journalMessage}`);
         cancelEdit();
         await load();
       } catch (error) {

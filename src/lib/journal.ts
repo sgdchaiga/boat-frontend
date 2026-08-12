@@ -36,6 +36,7 @@ export type JournalReferenceType =
   | "sacco_teller"
   | "school_invoice"
   | "school_payment"
+  | "payroll_loan_disbursement"
   | "manufacturing_costing"
   | "cost_allocation";
 
@@ -2314,6 +2315,7 @@ export async function syncHotelPosOrderJournal(
     { data: rawOrderItems, error: orderItemsError },
     { data: payments, error: paymentError },
     { data: rawStockMovements, error: stockMovementsError },
+    { data: breakfastClaim, error: breakfastClaimError },
   ] = await Promise.all([
     (supabase as any).from("kitchen_order_items").select("quantity,unit_price,product_id,notes").eq("order_id", orderId),
     (supabase as any)
@@ -2327,10 +2329,23 @@ export async function syncHotelPosOrderJournal(
       .select("product_id,quantity_out,unit_cost,note")
       .eq("source_type", "sale")
       .eq("source_id", orderId),
+    (supabase as any)
+      .from("hotel_breakfast_claims")
+      .select("id")
+      .eq("kitchen_order_id", orderId)
+      .maybeSingle(),
   ]);
   if (orderItemsError) return { ok: false, error: orderItemsError.message };
   if (paymentError) return { ok: false, error: paymentError.message };
   if (stockMovementsError) return { ok: false, error: stockMovementsError.message };
+  if (breakfastClaimError) return { ok: false, error: breakfastClaimError.message };
+
+  // Included breakfast is settled by the room package. Editing or serving its
+  // kitchen ticket must never rebuild it as an unpaid POS sale.
+  if (breakfastClaim) {
+    const remove = await deleteJournalEntryByReference("pos", orderId, organizationId);
+    return remove.ok ? { ok: true, journalId: null } : remove;
+  }
 
   const voidStatus = ["cancelled", "canceled", "reversed", "void", "voided"].includes(
     String(order.order_status || "").toLowerCase()

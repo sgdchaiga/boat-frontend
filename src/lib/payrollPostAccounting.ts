@@ -2,6 +2,7 @@ import { supabase } from "@/lib/supabase";
 
 export type PayrollGlIds = {
   salaryExpenseGlAccountId: string;
+  nssfEmployerExpenseGlAccountId: string;
   payePayableGlAccountId: string;
   nssfPayableGlAccountId: string;
   salariesPayableGlAccountId: string;
@@ -29,13 +30,23 @@ export function buildPayrollJournalLines(
   const loan = totals.totalLoan;
   const net = totals.totalNet;
 
-  // Dr Salary expense (gross + employer NSSF as employer cost)
+  // Keep gross salaries and the employer's statutory cost visible as separate
+  // expenses on the income statement.
   lines.push({
     gl_account_id: gl.salaryExpenseGlAccountId,
-    debit: round2(g + nssfEr),
+    debit: round2(g),
     credit: 0,
-    line_description: "Payroll salary & employer NSSF expense",
+    line_description: "Gross salaries and wages",
   });
+
+  if (nssfEr > 0) {
+    lines.push({
+      gl_account_id: gl.nssfEmployerExpenseGlAccountId,
+      debit: round2(nssfEr),
+      credit: 0,
+      line_description: "NSSF employer contribution",
+    });
+  }
 
   lines.push({
     gl_account_id: gl.payePayableGlAccountId,
@@ -95,6 +106,7 @@ export async function postPayrollRunToJournal(params: {
   const { totals, gl } = params;
   if (
     !gl.salaryExpenseGlAccountId ||
+    !gl.nssfEmployerExpenseGlAccountId ||
     !gl.payePayableGlAccountId ||
     !gl.nssfPayableGlAccountId ||
     !gl.salariesPayableGlAccountId

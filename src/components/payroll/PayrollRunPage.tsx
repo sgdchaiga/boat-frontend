@@ -46,6 +46,7 @@ type SettingsRow = {
   nssf_gross_ceiling: number | null;
   payroll_working_days_per_month: number;
   salary_expense_gl_account_id: string | null;
+  nssf_employer_expense_gl_account_id: string | null;
   paye_payable_gl_account_id: string | null;
   nssf_payable_gl_account_id: string | null;
   salaries_payable_gl_account_id: string | null;
@@ -290,11 +291,16 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
         absentByStaff.set(l.staff_id, n);
       }
     }
-    const { data: profiles } = await supabase.from("payroll_employee_profiles").select("*").eq("organization_id", orgId).eq("is_on_payroll", true);
-    const { data: loans } = await supabase
+    const { data: profiles, error: profilesError } = await supabase.from("payroll_employee_profiles").select("*").eq("organization_id", orgId).eq("is_on_payroll", true);
+    const { data: loans, error: loansError } = await supabase
       .from("payroll_loans")
       .select("id,staff_id,installment_amount,balance_remaining,is_active,created_at")
       .eq("organization_id", orgId);
+    if (profilesError || loansError) {
+      setErr(profilesError?.message || loansError?.message || "Could not load payroll inputs.");
+      setBusy(false);
+      return;
+    }
     const loanList = (loans as PayrollLoanRow[]) || [];
     const profs = (profiles as ProfileRow[]) || [];
 
@@ -500,6 +506,7 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
     );
     const gl: PayrollGlIds = {
       salaryExpenseGlAccountId: s.salary_expense_gl_account_id || "",
+      nssfEmployerExpenseGlAccountId: s.nssf_employer_expense_gl_account_id || "",
       payePayableGlAccountId: s.paye_payable_gl_account_id || "",
       nssfPayableGlAccountId: s.nssf_payable_gl_account_id || "",
       salariesPayableGlAccountId: s.salaries_payable_gl_account_id || "",

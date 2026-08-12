@@ -72,7 +72,7 @@ const GUIDE_META: Record<PayrollGuideId, { ariaLabel: string; body: ReactNode }>
           contributable salary.
         </p>
         <p>
-          <strong>GL accounts</strong> — map salary expense, PAYE payable, NSSF payable, and net salaries payable before
+          <strong>GL accounts</strong> — map salary expense, NSSF employer contribution expense, PAYE payable, NSSF payable, and net salaries payable before
           you post payroll. Optional staff loan receivable is used if you post loan recovery to the balance sheet.
         </p>
         <p>Confirm figures with your accountant; BOAT applies the formulas you see on this screen.</p>

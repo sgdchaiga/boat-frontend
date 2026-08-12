@@ -20,6 +20,7 @@
     "test:cashbook": "node --test tests/cashbook-controls.test.mjs",
     "test:financial-model": "node --test tests/financial-model-controls.test.mjs",
     "test:assistant": "node --test tests/boat-assistant-controls.test.mjs",
+    "test:hotel-regression": "node --test tests/hotel-included-breakfast-regression.test.mjs",
     "ci": "npm run typecheck && npm run build",
     "server:dev": "npm run dev --prefix server",
     "server:build": "npm run build --prefix server",
