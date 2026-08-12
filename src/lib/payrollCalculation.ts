@@ -13,6 +13,62 @@ export type PayrollStatutoryInput = {
   nssfGrossCeiling: number | null;
 };
 
+export type PayeTaxBand = {
+  /** Inclusive lower edge of this band. */
+  lower: number;
+  /** Exclusive upper edge; null means no upper limit. */
+  upper: number | null;
+  ratePct: number;
+};
+
+export const DEFAULT_PAYE_TAX_BANDS: PayeTaxBand[] = [
+  { lower: 0, upper: 235_000, ratePct: 0 },
+  { lower: 235_000, upper: 335_000, ratePct: 10 },
+  { lower: 335_000, upper: 410_000, ratePct: 20 },
+  { lower: 410_000, upper: 10_000_000, ratePct: 30 },
+  { lower: 10_000_000, upper: null, ratePct: 40 },
+];
+
+export function normalizePayeTaxBands(value: unknown): PayeTaxBand[] {
+  if (!Array.isArray(value)) return DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band }));
+  const bands = value.map((item) => {
+    const row = (item || {}) as Record<string, unknown>;
+    return {
+      lower: Number(row.lower),
+      upper: row.upper == null || row.upper === "" ? null : Number(row.upper),
+      ratePct: Number(row.ratePct ?? row.rate_pct),
+    };
+  });
+  return validatePayeTaxBands(bands).length === 0 ? bands : DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band }));
+}
+
+export function validatePayeTaxBands(bands: PayeTaxBand[]): string[] {
+  const errors: string[] = [];
+  if (bands.length === 0) return ["Add at least one PAYE tax band."];
+  bands.forEach((band, index) => {
+    if (!Number.isFinite(band.lower) || band.lower < 0) errors.push(`Band ${index + 1} has an invalid lower limit.`);
+    if (band.upper != null && (!Number.isFinite(band.upper) || band.upper <= band.lower)) errors.push(`Band ${index + 1} must end above its lower limit.`);
+    if (!Number.isFinite(band.ratePct) || band.ratePct < 0 || band.ratePct > 100) errors.push(`Band ${index + 1} rate must be between 0% and 100%.`);
+    if (index === 0 && band.lower !== 0) errors.push("The first PAYE band must start at 0.");
+    if (index > 0 && band.lower !== bands[index - 1].upper) errors.push(`Band ${index + 1} must start where band ${index} ends.`);
+    if (index < bands.length - 1 && band.upper == null) errors.push(`Only the last PAYE band may have no upper limit.`);
+  });
+  if (bands[bands.length - 1]?.upper != null) errors.push("The last PAYE band must have no upper limit.");
+  return errors;
+}
+
+/** Progressive PAYE computed from user-configurable gross-pay bands. */
+export function computePayeFromBands(grossPay: number, configuredBands?: unknown): number {
+  const gross = Math.max(0, Number(grossPay) || 0);
+  const bands = normalizePayeTaxBands(configuredBands);
+  const tax = bands.reduce((total, band) => {
+    if (gross <= band.lower) return total;
+    const taxableInBand = Math.max(0, Math.min(gross, band.upper ?? gross) - band.lower);
+    return total + taxableInBand * band.ratePct / 100;
+  }, 0);
+  return roundMoney(tax);
+}
+
 const DEFAULT_STATUTORY: PayrollStatutoryInput = {
   payePersonalReliefMonthly: 235_000,
   payeTaxableBand1Limit: 235_000,
@@ -64,18 +120,7 @@ export function computePAYE(taxableIncome: number, s: PayrollStatutoryInput): nu
  *   IF(J8>=235000,(J8-235000)*10%,0))))`
  */
 export function computePayeFromGrossExcelBands(grossPay: number): number {
-  const J8 = Number(grossPay);
-  if (J8 <= 235_000) return 0;
-  if (J8 < 335_000) {
-    return roundMoney((J8 - 235_000) * 0.1);
-  }
-  if (J8 < 410_000) {
-    return roundMoney((J8 - 335_000) * 0.2 + 10_000);
-  }
-  if (J8 <= 10_000_000) {
-    return roundMoney((J8 - 410_000) * 0.3 + 25_000);
-  }
-  return roundMoney((J8 - 410_000) * 0.3 + 25_000 + (J8 - 10_000_000) * 0.1);
+  return computePayeFromBands(grossPay, DEFAULT_PAYE_TAX_BANDS);
 }
 
 /** Postgres `numeric` / Supabase may return number or string; normalize for UI and math. */

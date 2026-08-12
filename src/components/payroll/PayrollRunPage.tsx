@@ -8,7 +8,7 @@ import {
   computeAbsentDeduction,
   computeNssfEmployee,
   computeNssfEmployer,
-  computePayeFromGrossExcelBands,
+  computePayeFromBands,
   grossFromProfile,
   mergeStatutory,
   roundMoney,
@@ -36,6 +36,7 @@ type ProfileRow = {
   is_on_payroll: boolean;
 };
 type SettingsRow = {
+  paye_tax_bands: unknown;
   paye_personal_relief_monthly: number;
   paye_taxable_band_1_limit: number;
   paye_rate_band_1_pct: number;
@@ -296,7 +297,7 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       const nssfE = computeNssfEmployee(gross, st);
       const nssfEr = computeNssfEmployer(gross, st);
       const taxable = Math.max(0, gross - nssfE);
-      const paye = computePayeFromGrossExcelBands(gross);
+      const paye = computePayeFromBands(gross, (settings as SettingsRow).paye_tax_bands);
       const loan = computeLoanDeductionForStaff(p.staff_id, loanList);
       const net = roundMoney(gross - paye - nssfE - loan);
       linePayload.push({
@@ -319,7 +320,7 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
           gross,
           taxable,
           paye,
-          paye_basis: "gross_excel_bands",
+          paye_basis: "gross_configurable_bands",
           nssfE,
           nssfEr,
           loan,

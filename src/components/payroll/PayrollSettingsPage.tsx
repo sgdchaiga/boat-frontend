@@ -6,11 +6,13 @@ import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
 import { useAuth } from "@/contexts/AuthContext";
 import { PayrollGuide } from "@/components/payroll/PayrollGuide";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
+import { DEFAULT_PAYE_TAX_BANDS, normalizePayeTaxBands, validatePayeTaxBands, type PayeTaxBand } from "@/lib/payrollCalculation";
 
 type GlAcc = { id: string; account_code: string; account_name: string };
 
 type SettingsRow = {
   organization_id: string;
+  paye_tax_bands: PayeTaxBand[];
   paye_personal_relief_monthly: number;
   paye_taxable_band_1_limit: number;
   paye_rate_band_1_pct: number;
@@ -59,7 +61,8 @@ export function PayrollSettingsPage({ readOnly }: Props) {
       account_name: row.account_name,
     }));
     setGl(normalizedGl as GlAcc[]);
-    setRow((sRes.data as SettingsRow) || {});
+    const savedSettings = (sRes.data as SettingsRow | null) || null;
+    setRow(savedSettings ? { ...savedSettings, paye_tax_bands: normalizePayeTaxBands(savedSettings.paye_tax_bands) } : { paye_tax_bands: DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band })) });
     setLoading(false);
   }, [orgId, user?.business_type]);
 
@@ -71,8 +74,16 @@ export function PayrollSettingsPage({ readOnly }: Props) {
     if (readOnly || !orgId) return;
     setSaving(true);
     setErr(null);
+    const payeBands = row.paye_tax_bands ?? DEFAULT_PAYE_TAX_BANDS;
+    const bandErrors = validatePayeTaxBands(payeBands);
+    if (bandErrors.length > 0) {
+      setErr(bandErrors.join(" "));
+      setSaving(false);
+      return;
+    }
     const payload = {
       organization_id: orgId,
+      paye_tax_bands: normalizePayeTaxBands(payeBands),
       // Legacy DB columns; PAYE in runs uses computePayeFromGrossExcelBands (gross pay), not these values.
       paye_personal_relief_monthly: Number(row.paye_personal_relief_monthly ?? 235000),
       paye_taxable_band_1_limit: Number(row.paye_taxable_band_1_limit ?? 235000),
@@ -122,7 +133,7 @@ export function PayrollSettingsPage({ readOnly }: Props) {
         >
           <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <h2 className="font-semibold text-slate-800">Statutory parameters</h2>
-            <div className="rounded-lg border border-slate-100 bg-slate-50 p-3 text-sm text-slate-700 space-y-2">
+            <div className="hidden">
               <p className="font-medium text-slate-800">PAYE (Pay As You Earn)</p>
               <p>
                 Computed on <strong>gross pay</strong> (Excel-style bands). Let <code className="text-xs bg-white px-1 rounded border">J8</code>{" "}
@@ -136,6 +147,10 @@ export function PayrollSettingsPage({ readOnly }: Props) {
                 <li>Else → (J8 − 410,000) × 30% + 25,000 + (J8 − 10,000,000) × 10%</li>
               </ul>
             </div>
+            <PayeBandsEditor
+              bands={row.paye_tax_bands ?? DEFAULT_PAYE_TAX_BANDS}
+              onChange={(paye_tax_bands) => setRow((current) => ({ ...current, paye_tax_bands }))}
+            />
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Field label="NSSF employee %" value={row.nssf_employee_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employee_rate_pct: n === "" ? undefined : n }))} />
               <Field label="NSSF employer %" value={row.nssf_employer_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employer_rate_pct: n === "" ? undefined : n }))} />
@@ -205,6 +220,43 @@ export function PayrollSettingsPage({ readOnly }: Props) {
         </button>
         </div>
       )}
+    </div>
+  );
+}
+
+function PayeBandsEditor({ bands, onChange }: { bands: PayeTaxBand[]; onChange: (bands: PayeTaxBand[]) => void }) {
+  const update = (index: number, changes: Partial<PayeTaxBand>) =>
+    onChange(bands.map((band, bandIndex) => bandIndex === index ? { ...band, ...changes } : band));
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <p className="font-medium text-slate-800">PAYE bands on gross pay</p>
+          <p className="text-xs text-slate-500">Each rate applies only to the portion of gross pay inside that band.</p>
+        </div>
+        <button type="button" className="text-xs px-3 py-1.5 border rounded-lg bg-white" onClick={() => onChange(DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band })))}>Restore defaults</button>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[540px] text-sm">
+          <thead><tr className="text-left text-slate-600"><th className="p-2">From</th><th className="p-2">Up to</th><th className="p-2">Rate %</th><th className="p-2"></th></tr></thead>
+          <tbody>{bands.map((band, index) => (
+            <tr key={index} className="border-t border-slate-200">
+              <td className="p-2"><input type="number" min="0" value={band.lower} onChange={(event) => update(index, { lower: Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
+              <td className="p-2"><input type="number" min="0" placeholder="No limit" value={band.upper ?? ""} onChange={(event) => update(index, { upper: event.target.value === "" ? null : Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
+              <td className="p-2"><input type="number" min="0" max="100" step="0.01" value={band.ratePct} onChange={(event) => update(index, { ratePct: Number(event.target.value) })} className="w-full border rounded px-2 py-1.5" /></td>
+              <td className="p-2 text-right"><button type="button" disabled={bands.length === 1} onClick={() => onChange(bands.filter((_, bandIndex) => bandIndex !== index))} className="text-red-600 disabled:opacity-30">Remove</button></td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <button type="button" className="text-sm px-3 py-1.5 border rounded-lg bg-white" onClick={() => {
+        const last = bands[bands.length - 1];
+        const lower = last?.upper ?? (last?.lower ?? 0) + 100_000;
+        const closedBands = last?.upper == null
+          ? bands.map((band, index) => index === bands.length - 1 ? { ...band, upper: lower } : band)
+          : bands;
+        onChange([...closedBands, { lower, upper: null, ratePct: last?.ratePct ?? 0 }]);
+      }}>Add tax band</button>
     </div>
   );
 }
