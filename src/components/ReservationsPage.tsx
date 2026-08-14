@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Edit, LogIn, Plus } from "lucide-react";
+import { Edit, LogIn, Plus, X } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import type { Database } from "../lib/database.types";
@@ -76,6 +76,10 @@ export function ReservationsPage() {
   });
 
   const [processingId, setProcessingId] = useState<string | null>(null);
+  const [pendingCheckIn, setPendingCheckIn] = useState<Reservation | null>(null);
+  const [checkInPaidNow, setCheckInPaidNow] = useState(true);
+  const [checkInPaymentMethod, setCheckInPaymentMethod] = useState("cash");
+  const [checkInPaymentReference, setCheckInPaymentReference] = useState("");
   const [savingReservation, setSavingReservation] = useState(false);
   const [filterSearch, setFilterSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -481,11 +485,18 @@ export function ReservationsPage() {
     setProcessingId(reservation.id);
 
     try {
-      const { error } = await supabase.rpc("hotel_check_in_reservation", {
+      const { error } = await (supabase as any).rpc("hotel_check_in_reservation_with_payment", {
         p_reservation_id: reservation.id,
         p_actual_check_in: new Date().toISOString(),
+        p_paid_now: checkInPaidNow,
+        p_payment_method: checkInPaymentMethod,
+        p_payment_reference: checkInPaymentReference.trim() || null,
       });
       if (error) throw error;
+      setPendingCheckIn(null);
+      setCheckInPaidNow(true);
+      setCheckInPaymentMethod("cash");
+      setCheckInPaymentReference("");
       await fetchReservations();
 
     } catch (err: unknown) {
@@ -607,7 +618,7 @@ export function ReservationsPage() {
               {reservation.status === "confirmed" && (
 
                 <button
-                  onClick={() => handleCheckIn(reservation)}
+                  onClick={() => { setPendingCheckIn(reservation); setCheckInPaidNow(true); setCheckInPaymentMethod("cash"); setCheckInPaymentReference(""); }}
                   disabled={processingId === reservation.id}
                   className="bg-green-600 text-white px-4 py-2 rounded-lg flex items-center gap-2"
                 >
@@ -617,9 +628,30 @@ export function ReservationsPage() {
 
               )}
 
-            </div>
+      </div>
 
+      {pendingCheckIn && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => processingId ? undefined : setPendingCheckIn(null)}>
+          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-2xl" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Confirm guest check-in">
+            <div className="mb-5 flex items-start justify-between gap-3">
+              <div><h2 className="text-xl font-bold text-slate-900">Check in guest</h2><p className="mt-1 text-sm text-slate-500">{pendingCheckIn.hotel_customers ? `${pendingCheckIn.hotel_customers.first_name} ${pendingCheckIn.hotel_customers.last_name}` : "Guest"} · Room {pendingCheckIn.rooms?.room_number}</p></div>
+              <button type="button" disabled={!!processingId} onClick={() => setPendingCheckIn(null)} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><X className="h-5 w-5" /></button>
+            </div>
+            <label className="flex items-start gap-3 rounded-xl border border-emerald-200 bg-emerald-50 p-4">
+              <input type="checkbox" checked={checkInPaidNow} onChange={(event) => setCheckInPaidNow(event.target.checked)} className="mt-1" />
+              <span><strong className="block text-emerald-900">First room charge paid now</strong><span className="text-sm text-emerald-800">Creates a payment matching the automatic first-night room bill. Untick for credit or pay-at-checkout guests.</span></span>
+            </label>
+            {checkInPaidNow && <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="text-sm font-medium text-slate-700">Payment method<select value={checkInPaymentMethod} onChange={(event) => setCheckInPaymentMethod(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2"><option value="cash">Cash</option><option value="mtn_mobile_money">MTN Mobile Money</option><option value="airtel_money">Airtel Money</option><option value="card">Card</option><option value="bank_transfer">Bank transfer</option></select></label>
+              <label className="text-sm font-medium text-slate-700">Reference (optional)<input value={checkInPaymentReference} onChange={(event) => setCheckInPaymentReference(event.target.value)} placeholder="Receipt or transaction ref" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2" /></label>
+            </div>}
+            <p className="mt-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">Daily midday room charges are not marked paid automatically. They remain on the folio until staff records settlement.</p>
+            <div className="mt-6 flex justify-end gap-2"><button type="button" disabled={!!processingId} onClick={() => setPendingCheckIn(null)} className="app-btn-secondary">Cancel</button><button type="button" disabled={!!processingId} onClick={() => void handleCheckIn(pendingCheckIn)} className="app-btn-primary">{processingId ? "Checking in…" : checkInPaidNow ? "Check in & record payment" : "Check in as unpaid"}</button></div>
           </div>
+        </div>
+      )}
+
+    </div>
 
         ))}
 
