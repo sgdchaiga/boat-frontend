@@ -3,7 +3,6 @@ import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon, Pencil } from 
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
-import { createJournalForRoomCharge, syncRoomChargeJournal } from "../lib/journal";
 import { businessTodayISO } from "../lib/timezone";
 import {
   type ActiveStayOption,
@@ -261,33 +260,15 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
 
     setSavingCharge(true);
     try {
-      const payload = {
-        organization_id: orgId ?? null,
-        description,
-        charge_type: chargeType,
-        amount: Number(amount),
-        stay_id: chargeStayId,
-        charged_at: `${chargeDate || businessTodayISO()}T12:00:00`,
-        stay_night_date: chargeType === "room" ? chargeDate || businessTodayISO() : null,
-      };
-
-      const { data: inserted, error } = await supabase.from("billing").insert(payload).select("id, charged_at").single();
+      const { error } = await supabase.rpc("save_hotel_folio_charge", {
+        p_stay_id: chargeStayId,
+        p_description: description.trim(),
+        p_charge_type: chargeType,
+        p_amount: Number(amount),
+        p_charge_date: chargeDate || businessTodayISO(),
+        p_billing_id: null,
+      });
       if (error) throw error;
-      if (inserted && chargeType === "room") {
-        const chargedAt = (inserted as { charged_at?: string }).charged_at ?? new Date().toISOString();
-        const jr = await createJournalForRoomCharge(
-          (inserted as { id: string }).id,
-          Number(amount),
-          description,
-          chargedAt,
-          user?.id ?? null,
-          undefined,
-          orgId ?? null
-        );
-        if (!jr.ok) {
-          alert(`Charge saved but journal was not posted: ${jr.error}`);
-        }
-      }
 
       setDescription("");
       setChargeType("room");
@@ -353,19 +334,16 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
     }
     setSavingEdit(true);
     try {
-      const payload = {
-        description: editDescription.trim(),
-        charge_type: editChargeType,
-        amount: Number(editAmount),
-        charged_at: `${editChargeDate || businessTodayISO()}T12:00:00`,
-        stay_night_date: editChargeType === "room" ? editChargeDate || businessTodayISO() : null,
-      };
-      const { error } = await supabase.from("billing").update(payload).eq("id", editBilling.id);
+      if (!editBilling.stay_id) throw new Error("Folio charge is not linked to a stay.");
+      const { error } = await supabase.rpc("save_hotel_folio_charge", {
+        p_stay_id: editBilling.stay_id,
+        p_description: editDescription.trim(),
+        p_charge_type: editChargeType,
+        p_amount: Number(editAmount),
+        p_charge_date: editChargeDate || businessTodayISO(),
+        p_billing_id: editBilling.id,
+      });
       if (error) throw error;
-      const journalSync = await syncRoomChargeJournal(editBilling.id);
-      if (!journalSync.ok) {
-        alert(`Charge updated but its journal was not synchronized: ${journalSync.error}`);
-      }
       await fetchData();
       closeEditBilling();
     } catch (error) {

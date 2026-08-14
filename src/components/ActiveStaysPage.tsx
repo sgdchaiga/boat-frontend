@@ -191,58 +191,17 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
 
   const handleCheckOut = async (stay: Stay, date = checkoutDate) => {
     if (!stay.rooms || !user) return;
-    const correctingHistoricalCheckout = !!stay.actual_check_out;
     if (!date) return alert("Select the actual checkout date.");
     const checkInDate = new Date(stay.actual_check_in).toISOString().slice(0, 10);
     if (date < checkInDate) return alert("Checkout date cannot be before check-in date.");
 
     setProcessingId(stay.id);
     try {
-      const updatePayload: { actual_check_out: string; checked_out_by?: string } = {
-        actual_check_out: `${date}T12:00:00`,
-      };
-      const { data: staffRow } = await supabase
-        .from('staff')
-        .select('id')
-        .eq('id', user.id)
-        .eq('organization_id', orgId ?? '')
-        .maybeSingle();
-      if (staffRow?.id) updatePayload.checked_out_by = staffRow.id;
-
-      const { error: stayError } = await filterByOrganizationId(
-        supabase
-          .from('stays')
-          .update(updatePayload)
-          .eq('id', stay.id),
-        orgId,
-        superAdmin
-      );
-
-      if (stayError) throw stayError;
-
-      if (!correctingHistoricalCheckout && stay.reservation_id) {
-        const { error: reservationError } = await filterByOrganizationId(
-          supabase
-            .from('reservations')
-            .update({ status: 'checked_out' })
-            .eq('id', stay.reservation_id),
-          orgId,
-          superAdmin
-        );
-
-        if (reservationError) throw reservationError;
-      }
-
-      const { error: roomError } = correctingHistoricalCheckout ? { error: null } : await filterByOrganizationId(
-        supabase
-          .from('rooms')
-          .update({ status: 'cleaning' })
-          .eq('id', stay.rooms.id),
-        orgId,
-        superAdmin
-      );
-
-      if (roomError) throw roomError;
+      const { error } = await supabase.rpc("hotel_check_out_stay", {
+        p_stay_id: stay.id,
+        p_checkout_date: date,
+      });
+      if (error) throw error;
 
       setCheckoutStay(null);
       await fetchActiveStays();

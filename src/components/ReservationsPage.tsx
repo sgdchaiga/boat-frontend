@@ -465,58 +465,12 @@ export function ReservationsPage() {
     setProcessingId(reservation.id);
 
     try {
-
-      const insertPayload: Record<string, unknown> = {
-        reservation_id: reservation.id,
-        property_customer_id: reservation.property_customer_id,
-        room_id: reservation.room_id,
-        actual_check_in: new Date().toISOString(),
-        room_discount_amount: Math.max(0, Number(reservation.room_discount_amount || 0) || 0),
-        room_discount_reason: reservation.room_discount_reason ?? null,
-        rate_plan_id: (reservation as any).rate_plan_id ?? null,
-        organization_id: orgId ?? null,
-      };
-      const { data: staffRow } = await supabase
-        .from("staff")
-        .select("id")
-        .eq("id", user.id)
-        .eq("organization_id", orgId ?? "")
-        .maybeSingle();
-      if (staffRow?.id) insertPayload.checked_in_by = staffRow.id;
-
-      const { data: stayRow, error } = await supabase
-        .from("stays")
-        .insert(insertPayload)
-        .select("id")
-        .single();
-
+      const { error } = await supabase.rpc("hotel_check_in_reservation", {
+        p_reservation_id: reservation.id,
+        p_actual_check_in: new Date().toISOString(),
+      });
       if (error) throw error;
-      if (!stayRow?.id) throw new Error("Stay was not created");
-
-      const { error: reservationError } = await filterByOrganizationId(
-        supabase
-          .from("reservations")
-          .update({ status: "checked_in" })
-          .eq("id", reservation.id),
-        orgId,
-        superAdmin
-      );
-      if (reservationError) throw reservationError;
-
-      const { error: roomError } = await filterByOrganizationId(
-        supabase
-          .from("rooms")
-          .update({ status: "occupied" })
-          .eq("id", reservation.room_id),
-        orgId,
-        superAdmin
-      );
-      if (roomError) throw roomError;
-
-      const { error: breakfastError } = await supabase.rpc("ensure_room_breakfast_entitlement", { p_stay_id: stayRow.id });
-      if (breakfastError) console.error("Breakfast entitlement setup:", breakfastError);
-
-      fetchReservations();
+      await fetchReservations();
 
     } catch (err: unknown) {
 
