@@ -83,6 +83,56 @@ function findExpenseGlByNameSubs(expenseAccounts: GlAccount[], subs: string[]): 
   return null;
 }
 
+type ExpenseAutoRule = { hint: RegExp; account: RegExp };
+
+/**
+ * Description-first matching for Simple mode. Account names are matched rather
+ * than assuming one hotel's codes, so customized charts continue to work.
+ * Order is intentional: specific costs must win before broad category defaults.
+ */
+const SIMPLE_EXPENSE_AUTO_RULES: ExpenseAutoRule[] = [
+  { hint: /\b(nssf|paye|social security|statutory contribution)\b/i, account: /nssf|paye|statutory|social security|employer contribution/i },
+  { hint: /\b(salary|salaries|wage|wages|payroll|overtime)\b/i, account: /salary|salaries|wage|wages|payroll|personnel/i },
+  { hint: /\b(staff meal|staff food|staff welfare|millet for staff|employee welfare)\b/i, account: /staff welfare|employee welfare|staff meal|personnel welfare/i },
+  { hint: /\b(training|workshop|seminar|recruitment)\b/i, account: /training|workshop|recruitment|staff development/i },
+  { hint: /\b(advert|advertising|marketing|publicity|promotion|branding|social media)\b/i, account: /advert|marketing|publicity|promotion|branding/i },
+  { hint: /\b(sales commission|agent commission|booking commission)\b/i, account: /commission/i },
+  { hint: /\b(diesel|petrol|gasoline|fuel|lubricant|engine oil|generator fuel)\b/i, account: /fuel|diesel|petrol|lubricant/i },
+  { hint: /\b(transport|taxi|boda|fare|travel|delivery|freight|courier)\b/i, account: /transport|travel|delivery|freight|courier/i },
+  { hint: /\b(electricity|power|umeme|kplc|electric units)\b/i, account: /electric|power/i },
+  { hint: /\b(water|nwsc|water bill|sanitation)\b/i, account: /water|sanitation/i },
+  { hint: /\b(rent|lease|premises)\b/i, account: /rent|lease|property cost/i },
+  { hint: /\b(internet|wifi|airtime|telephone|phone|data bundle|telecom|dstv)\b/i, account: /internet|telephone|communication|airtime|telecom|subscription/i },
+  { hint: /\b(stationery|printing|photocopy|paper|toner|ink|office supplies)\b/i, account: /stationery|printing|office supplies|photocopy/i },
+  { hint: /\b(bank charge|withdraw charge|withdrawal charge|mobile money charge|transaction charge)\b/i, account: /bank charge|mobile money charge|transaction charge|finance charge/i },
+  { hint: /\b(audit|auditor|legal|lawyer|consultancy|consultant|professional fee|accounting fee)\b/i, account: /audit|legal|consult|professional|accounting fee/i },
+  { hint: /\b(insurance|premium)\b/i, account: /insurance/i },
+  { hint: /\b(licen[cs]e|permit|subscription|membership|renewal)\b/i, account: /licen[cs]e|permit|subscription|membership/i },
+  { hint: /\b(security|guard|watchman)\b/i, account: /security|guard/i },
+  { hint: /\b(cleaning|cleaner|detergent|soap|toilet paper|tissue|waste|garbage|sanitary)\b/i, account: /cleaning|housekeeping|sanitation|waste|laundry supplies/i },
+  { hint: /\b(laundry|linen|bedsheet|bed sheet|towel|duvet|pillow)\b/i, account: /laundry|linen|housekeeping/i },
+  { hint: /\b(garden|gardening|landscap|flowers|compound)\b/i, account: /garden|landscap|grounds|compound/i },
+  { hint: /\b(plumb|bomba|pipe|tap|toilet repair|drainage)\b/i, account: /plumb|water repair|building repair|repairs.*building|maintenance.*building/i },
+  { hint: /\b(vehicle repair|car repair|tyre|tire|motor vehicle|service vehicle)\b/i, account: /vehicle.*repair|repair.*vehicle|motor vehicle maintenance/i },
+  { hint: /\b(repair|maintenance|service|spare part|wire|electrical repair|equipment repair)\b/i, account: /repair|maintenance|equipment/i },
+  { hint: /\b(medical|medicine|clinic|treatment|first aid)\b/i, account: /medical|health|first aid|staff welfare/i },
+  { hint: /\b(uniform|protective wear|ppe|gumboot|glove)\b/i, account: /uniform|protective|ppe|staff welfare/i },
+  { hint: /\b(bar soap|straw|cocktail|beer|wine|spirit|soda|beverage)\b/i, account: /bar purchase|beverage cost|bar cost|beverage purchase/i },
+  { hint: /\b(chicken|fish|meat|vegetable|greens|charcoal|flour|rice|food ingredient|kitchen ingredient)\b/i, account: /kitchen purchase|food cost|kitchen cost|food purchase/i },
+];
+
+function findExpenseGlFromItem(expenseAccounts: GlAccount[], itemHint: string): GlAccount | null {
+  const hint = itemHint.trim();
+  if (!hint) return null;
+  const expenseOnly = expenseAccounts.filter((account) => account.account_type === "expense");
+  for (const rule of SIMPLE_EXPENSE_AUTO_RULES) {
+    if (!rule.hint.test(hint)) continue;
+    const match = expenseOnly.find((account) => rule.account.test(`${account.account_name} ${account.account_code}`));
+    if (match) return match;
+  }
+  return null;
+}
+
 function buildGlCodeToSimpleCategoryMap(): Map<string, SimpleCategory> {
   const m = new Map<string, SimpleCategory>();
   for (const cat of SIMPLE_EXPENSE_CATEGORIES) {
@@ -177,6 +227,9 @@ function mapCategoryToExpenseGlId(
   const expenseOnly = expenseAccounts.filter((a) => a.account_type === "expense");
   if (expenseOnly.length === 0) return expenseAccounts[0]?.id ?? null;
   const t = itemHint.toLowerCase();
+
+  const descriptionMatch = findExpenseGlFromItem(expenseOnly, itemHint);
+  if (descriptionMatch) return descriptionMatch.id;
 
   if (category === "Transport") {
     if (/fuel|diesel|petrol|gasoline|pms|generator|lubricant/.test(t)) {
