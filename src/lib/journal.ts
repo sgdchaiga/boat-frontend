@@ -543,6 +543,16 @@ function resolveStockAdjustmentLineAccounts(args: {
     account([/finished\s+goods?.*inventory/i, /finished\s+goods?.*stock/i], ["asset"]) ??
     departmentStock;
 
+  if (departmentId && !departmentGl?.stock && reason !== "production_issue" && reason !== "production_receipt") {
+    return {
+      debitGlAccountId: null,
+      creditGlAccountId: null,
+      label: "Inventory movement",
+      missingAccountMessage:
+        "Inventory movements require the product department to have a stock GL account mapped; posting was stopped to prevent COGS or generic-account fallback.",
+    };
+  }
+
   switch (reason) {
     case "purchase":
       return { debitGlAccountId: departmentStock, creditGlAccountId: payableOrCash, label: "Purchase" };
@@ -2988,18 +2998,18 @@ async function buildBillDebitLines(
     }
     const product = productById.get(row.product_id);
     if (!product) throw new Error(`Purchase-order item ${row.description || row.product_id} is not linked to a valid product.`);
-    if (!product.departmentId) throw new Error(`Product “${product.name}” has no department. Assign a department and its purchase account before posting the bill.`);
-    const purchaseGlAccountId = departmentGl.get(product.departmentId)?.purchases ?? null;
-    if (!purchaseGlAccountId) {
-      throw new Error(`Product “${product.name}” belongs to a department with no purchase account mapping.`);
+    if (!product.departmentId) throw new Error(`Product “${product.name}” has no department. Assign a department and its stock account before posting the bill.`);
+    const stockGlAccountId = departmentGl.get(product.departmentId)?.stock ?? null;
+    if (!stockGlAccountId) {
+      throw new Error(`Product “${product.name}” belongs to a department with no stock account mapping.`);
     }
-    const key = `department:${product.departmentId}:${purchaseGlAccountId}`;
+    const key = `department:${product.departmentId}:${stockGlAccountId}`;
     const existing = grouped.get(key);
     grouped.set(key, {
-      glAccountId: purchaseGlAccountId,
+      glAccountId: stockGlAccountId,
       departmentId: product.departmentId,
       amount: roundMoney((existing?.amount || 0) + lineAmount),
-      description: "Item department purchases (GRN)",
+      description: "Item department inventory (GRN)",
     });
   }
 

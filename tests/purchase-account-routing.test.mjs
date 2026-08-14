@@ -4,18 +4,21 @@ import test from "node:test";
 
 const root = new URL("../", import.meta.url);
 
-test("PO item journals require the item's department purchase account", async () => {
+test("PO item journals capitalize stock and reserve COGS for stock reductions", async () => {
   const [journal, repairMigration] = await Promise.all([
     readFile(new URL("src/lib/journal.ts", root), "utf8"),
-    readFile(new URL("supabase/migrations/20260814130000_route_po_items_to_department_purchase_accounts.sql", root), "utf8"),
+    readFile(new URL("supabase/migrations/20260814140000_capitalize_grn_inventory_and_repair_cogs.sql", root), "utf8"),
   ]);
 
   assert.match(journal, /select\("id, name, department_id"\)/);
-  assert.match(journal, /departmentGl\.get\(product\.departmentId\)\?\.purchases/);
-  assert.match(journal, /has no department\. Assign a department and its purchase account/);
-  assert.match(journal, /belongs to a department with no purchase account mapping/);
+  assert.match(journal, /departmentGl\.get\(product\.departmentId\)\?\.stock/);
+  assert.match(journal, /has no department\. Assign a department and its stock account/);
+  assert.match(journal, /belongs to a department with no stock account mapping/);
+  assert.match(journal, /Item department inventory \(GRN\)/);
+  assert.match(journal, /posting was stopped to prevent COGS or generic-account fallback/);
   assert.doesNotMatch(journal, /const isService = row\.product_id \? trackById\.get/);
-  assert.match(repairMigration, /repair_po_bill_purchase_account_journals/);
-  assert.match(repairMigration, /department_name \|\| ' purchases \(GRN\)'/);
-  assert.match(repairMigration, /WHEN 'jelly for sauna' THEN '5004'/);
+  assert.match(repairMigration, /repair_po_bill_inventory_account_journals/);
+  assert.match(repairMigration, /dgs\.stock_gl_account_id IS NULL/);
+  assert.match(repairMigration, /department_name \|\| ' inventory \(GRN\)'/);
+  assert.match(repairMigration, /reference_type = 'stock_adjustment'/);
 });
