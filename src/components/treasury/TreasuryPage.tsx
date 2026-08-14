@@ -285,7 +285,9 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
         const row = line as { gl_account_id: string; debit: number; credit: number };
         balances.set(row.gl_account_id, (balances.get(row.gl_account_id) || 0) + Number(row.debit || 0) - Number(row.credit || 0));
       }
-      setCashAccounts(allMoneyAccounts.map((account) => {
+      // Treasury is an operational workspace: inactive/retired duplicate GLs stay
+      // available in the chart of accounts but must not appear as live cash tills.
+      setCashAccounts(nextFundingAccounts.map((account) => {
         const label = `${account.account_code} ${account.account_name}`.toLowerCase();
         const kind: CashAccount["kind"] = /float/.test(label) ? "Float" : /(wallet|mobile money|momo|airtel|mtn)/.test(label) ? "Mobile / wallet" : /bank|current|checking|savings|stanbic|absa|centenary|dfcu|equity|kcb|barclays|standard chartered/.test(label) ? "Bank" : "Cash";
         return { ...account, balance: balances.get(account.id) || 0, kind };
@@ -753,19 +755,26 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       <div className="flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm">
         {([
           ["overview", "Overview", LayoutDashboard],
-          ["cash-control", "Accounts", Landmark],
-          ["movements", "Fund movements", ArrowLeftRight],
-          ["end-of-day", "End of day", ReceiptText],
-          ...(spendMoneyApprovalEnabled ? [["approvals", "Spend Money approvals", ShieldCheck] as const] : []),
-          ["disbursements", "Supplier payments", Banknote],
-          ["collections", "Incoming funds", ArrowDownRight],
-          ["history", "History", Clock3],
+          ["collections", "Money in", ArrowDownRight],
+          ["disbursements", "Money out", Banknote],
+          ["cash-control", "Cash & transfers", Landmark],
         ] as Array<[TreasuryTab, string, typeof Banknote]>).map(([tab, label, Icon]) => (
-          <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold ${activeTab === tab ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+          <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold ${activeTab === tab || (tab === "disbursements" && ["approvals","history"].includes(activeTab)) || (tab === "cash-control" && ["movements","end-of-day"].includes(activeTab)) ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
             <Icon className="h-4 w-4" />{label}
           </button>
         ))}
       </div>
+
+      {["approvals","disbursements","history"].includes(activeTab) && <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+        {spendMoneyApprovalEnabled && <button onClick={()=>setActiveTab("approvals")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="approvals"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Approvals</button>}
+        <button onClick={()=>setActiveTab("disbursements")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="disbursements"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Supplier payments</button>
+        <button onClick={()=>setActiveTab("history")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="history"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>History</button>
+      </div>}
+      {["cash-control","movements","end-of-day"].includes(activeTab) && <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+        <button onClick={()=>setActiveTab("cash-control")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="cash-control"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Cash accounts</button>
+        <button onClick={()=>setActiveTab("movements")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="movements"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Transfers</button>
+        <button onClick={()=>setActiveTab("end-of-day")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="end-of-day"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>End of day</button>
+      </div>}
 
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
         <div className="mr-auto">

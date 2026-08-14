@@ -210,23 +210,23 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         return;
       }
       const [billingRows, stayRows] = await Promise.all([
-        fetchAllPages(async (from, to) => {
-          let query = filterByOrganizationId(
-            supabase.from("billing").select("*, stays(rooms(room_number), hotel_customers(first_name, last_name))")
-              .order("charged_at", { ascending: false }).order("id", { ascending: false }).range(from, to),
-            orgId, superAdmin
-          );
-          if (billingDateFrom) query = query.gte("charged_at", `${billingDateFrom}T00:00:00`);
-          if (billingDateTo) query = query.lte("charged_at", `${billingDateTo}T23:59:59.999`);
-          return query;
-        }),
+        fetchAllPages((from, to) => (supabase as any).rpc("get_hotel_billing_register", {
+          p_from: billingDateFrom || null,
+          p_to: billingDateTo || null,
+        }).range(from, to)),
         fetchAllPages((from, to) => filterByOrganizationId(
           supabase.from("stays").select("id, room_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
             .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from, to),
           orgId, superAdmin
         )),
       ]);
-      setBillings(billingRows as BillingWithCustomer[]);
+      setBillings((billingRows as Array<Record<string, any>>).map(({ room_number, guest_first_name, guest_last_name, ...row }) => ({
+        ...row,
+        stays: {
+          rooms: room_number ? { room_number } : null,
+          hotel_customers: guest_first_name || guest_last_name ? { first_name: guest_first_name || "", last_name: guest_last_name || "" } : null,
+        },
+      })) as BillingWithCustomer[]);
       setActiveStays(stayRows as unknown as BillingStayOption[]);
     } catch (error) {
       console.error("Error fetching billing:", error);

@@ -41,7 +41,7 @@ test("checkout re-bill and combined folio cash-in reconciliation stay linked to 
   assert.match(checkoutSql, /stay_id=NEW\.id AND charge_type='room'/);
   assert.match(checkoutSql, /DELETE FROM billing WHERE id=x\.id/);
   assert.match(billing, /actual_check_out \? " · checked out"/);
-  assert.match(reconciliation, /from\("payments"\)\.select\("stay_id,amount"\)\.eq\("payment_status", "completed"\)/);
-  assert.match(reconciliation, /balance: billed - paid/);
-  assert.match(reconciliation, /nightDifference !== 0 \|\| Math\.abs\(row\.balance\) > 0\.01/);
+  assert.match(reconciliation, /get_hotel_room_reconciliation_register/);
+  assert.match(reconciliation, /balance:Number\(r\.billed\|\|0\)-Number\(r\.paid\|\|0\)/);
+  assert.match(reconciliation, /r\.nightDifference!==0\|\|Math\.abs\(r\.balance\)>\.01/);
 });
