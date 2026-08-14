@@ -335,22 +335,6 @@ export function IncomeStatementPage() {
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
-      const fetchLinesPage = (pageFrom: number, pageTo: number) => {
-        const query = supabase
-          .from("journal_entry_lines")
-          .select(
-            "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
-          )
-          .gte("journal_entries.entry_date", fromDate)
-          .lte("journal_entries.entry_date", toDateInclusive)
-          .eq("journal_entries.is_posted", true)
-          .eq("journal_entries.is_deleted", false)
-          .order("entry_date", { ascending: true, referencedTable: "journal_entries" })
-          .order("id", { ascending: true })
-          .range(pageFrom, pageTo);
-        if (basis === "cash") query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
-        return superAdmin ? filterJournalLinesByOrganizationId(query, orgId, true) : query;
-      };
       const [allLines, accRes] = await Promise.all([
         (async () => {
           const rows: Array<{
@@ -359,11 +343,41 @@ export function IncomeStatementPage() {
             gl_accounts: { id: string; account_code: string; account_name: string; account_type: string; category?: string | null } | null;
             journal_entries?: { entry_date: string; reference_type?: string | null; reference_id?: string | null } | null;
           }> = [];
+          const journalIds: string[] = [];
           for (let pageFrom = 0; ; pageFrom += JOURNAL_LINE_PAGE_SIZE) {
-            const { data, error } = await fetchLinesPage(pageFrom, pageFrom + JOURNAL_LINE_PAGE_SIZE - 1);
+            let headersQuery = supabase
+              .from("journal_entries")
+              .select("id")
+              .gte("entry_date", fromDate)
+              .lte("entry_date", toDateInclusive)
+              .eq("is_posted", true)
+              .eq("is_deleted", false)
+              .order("entry_date", { ascending: true })
+              .order("id", { ascending: true })
+              .range(pageFrom, pageFrom + JOURNAL_LINE_PAGE_SIZE - 1);
+            if (orgId) headersQuery = headersQuery.eq("organization_id", orgId);
+            if (basis === "cash") headersQuery = headersQuery.in("reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+            const { data, error } = await headersQuery;
             if (error) throw new Error(error.message);
-            rows.push(...((data || []) as typeof rows));
+            journalIds.push(...((data || []) as Array<{ id: string }>).map((entry) => entry.id));
             if ((data || []).length < JOURNAL_LINE_PAGE_SIZE) break;
+          }
+          const journalBatchSize = 200;
+          for (let batchFrom = 0; batchFrom < journalIds.length; batchFrom += journalBatchSize) {
+            const batchIds = journalIds.slice(batchFrom, batchFrom + journalBatchSize);
+            for (let pageFrom = 0; ; pageFrom += JOURNAL_LINE_PAGE_SIZE) {
+              const { data, error } = await supabase
+                .from("journal_entry_lines")
+                .select(
+                  "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
+                )
+                .in("journal_entry_id", batchIds)
+                .order("id", { ascending: true })
+                .range(pageFrom, pageFrom + JOURNAL_LINE_PAGE_SIZE - 1);
+              if (error) throw new Error(error.message);
+              rows.push(...((data || []) as typeof rows));
+              if ((data || []).length < JOURNAL_LINE_PAGE_SIZE) break;
+            }
           }
           return rows;
         })(),
