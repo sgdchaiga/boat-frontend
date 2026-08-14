@@ -14,6 +14,7 @@ const SALES_PAGES = new Set([
   "reports_room_billing",
 ]);
 const PURCHASES_PAGES = new Set([
+  "purchases_bills",
   "reports_daily_purchases_summary",
   "reports_purchases_by_item",
   "reports_expenses",
@@ -63,6 +64,7 @@ export function getSimpleOrgReportHubCategories(
         { name: "Term billing performance", page: "reports_school_term_performance" },
       ] },
       { id: "purchases", label: "Purchases & inventory", items: [
+        { name: "Goods received & supplier bills", page: "purchases_bills" },
         { name: "Purchases summary", page: "reports_daily_purchases_summary" },
         { name: "Purchases by item", page: "reports_purchases_by_item" },
         { name: "Stock summary", page: "reports_stock_summary" },

@@ -546,6 +546,13 @@ export function ReportsPage({ onNavigate }: { onNavigate?: (page: string) => voi
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={() => onNavigate?.("purchases_bills")}
+                className="border border-slate-300 rounded-lg px-3 py-2 text-sm hover:bg-slate-50"
+              >
+                Goods received & bills
+              </button>
+              <button
+                type="button"
                 onClick={() => onNavigate?.("reports_sales_by_item")}
                 className="border border-slate-300 rounded-lg px-3 py-2 text-sm hover:bg-slate-50"
               >

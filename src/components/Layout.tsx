@@ -870,6 +870,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           {
             group: 'Purchases',
             items: [
+              { name: 'Goods received & supplier bills', page: 'purchases_bills' },
               { name: 'Daily Purchases Summary', page: 'reports_daily_purchases_summary' },
               { name: 'Purchases by item', page: 'reports_purchases_by_item' },
             ],
@@ -919,6 +920,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       icon: FileText,
       children: [
         { name: 'Items', page: 'Products' },
+        { name: 'Goods received & bills', page: 'purchases_bills' },
         { name: 'Barcodes', page: 'inventory_barcodes' },
         { name: 'Inventory Movements', page: 'inventory_stock_adjustments' },
         { name: 'Stock Balances', page: 'inventory_stock_balances' },
