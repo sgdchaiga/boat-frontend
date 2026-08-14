@@ -323,6 +323,7 @@ function getPageFromUrl(defaultPage: string) {
 /** Query keys mirrored to `pageState` and kept in sync via `history.replaceState`. */
 const MANAGED_PAGE_STATE_KEYS = [
   "highlightBillId",
+  "cashPurchaseOpen",
   "payBillId",
   "payVendorId",
   "highlightTransactionId",
@@ -376,6 +377,7 @@ function getPageStateFromUrl(): Record<string, unknown> {
   const state: Record<string, unknown> = {};
   const highlightBillId = qp.get("highlightBillId");
   if (highlightBillId) state.highlightBillId = highlightBillId;
+  if (qp.get("cashPurchaseOpen") === "true") state.cashPurchaseOpen = true;
   const payBillId = qp.get("payBillId");
   if (payBillId) state.payBillId = payBillId;
   const payVendorId = qp.get("payVendorId");
@@ -1686,7 +1688,7 @@ function AppContent() {
       case 'purchases_orders':
         return <PurchaseOrdersPage onNavigate={navigate} readOnly={access.readOnly} />;
       case 'purchases_bills':
-        return <BillsPage highlightBillId={pageState?.highlightBillId as string | undefined} onNavigate={navigate} readOnly={access.readOnly} cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined} />;
+        return <BillsPage highlightBillId={pageState?.highlightBillId as string | undefined} onNavigate={navigate} readOnly={access.readOnly} cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined} openCashPurchase={pageState?.cashPurchaseOpen === true} />;
       case 'purchases_payments':
         return (
           <VendorPaymentsPage

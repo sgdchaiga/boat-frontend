@@ -22,6 +22,7 @@ import { PageNotes } from "../common/PageNotes";
 import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
 import { randomUuid } from "../../lib/randomUuid";
 import { clearCashbookDraft } from "../../lib/cashbookDraft";
+import { HotelCashPurchaseModal } from "./HotelCashPurchaseModal";
 
 interface Bill {
   id: string;
@@ -87,6 +88,7 @@ interface BillsPageProps {
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
   readOnly?: boolean;
   cashbookDraft?: Record<string, unknown>;
+  openCashPurchase?: boolean;
 }
 
 function formatBillStatusLabel(status: string | null | undefined): string {
@@ -217,12 +219,13 @@ function normalizeNumericInput(value: string): string {
   return Number(parsed.toFixed(6)).toString();
 }
 
-export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashbookDraft }: BillsPageProps = {}) {
+export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashbookDraft, openCashPurchase = false }: BillsPageProps = {}) {
   const { user } = useAuth();
   const highlightRef = useRef<HTMLTableRowElement | null>(null);
   const canApproveBills = canApprove("bills", user?.role);
   const isOrgSuperAdmin = user?.role === "super_admin" || user?.isSuperAdmin === true;
   const isAdmin = user?.role === "admin" || isOrgSuperAdmin;
+  const isHotelOrMixed = user?.business_type === "hotel" || user?.business_type === "mixed";
   const [bills, setBills] = useState<Bill[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
@@ -255,7 +258,12 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatusFilter>("all");
   const [showPaymentGapDrilldown, setShowPaymentGapDrilldown] = useState(false);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
+  const [showCashPurchase, setShowCashPurchase] = useState(false);
   const [visibleColumns, setVisibleColumns] = useState<Record<BillColumn, boolean>>(initialBillColumns);
+
+  useEffect(() => {
+    if (openCashPurchase && isHotelOrMixed && !readOnly) setShowCashPurchase(true);
+  }, [openCashPurchase, isHotelOrMixed, readOnly]);
 
   useEffect(() => {
     window.localStorage.setItem(BILL_COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns));
@@ -1357,6 +1365,11 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+        {isHotelOrMixed && (
+          <button type="button" onClick={() => setShowCashPurchase(true)} disabled={readOnly} className="app-btn-secondary disabled:opacity-50">
+            <Plus className="w-5 h-5" /> Cash purchase
+          </button>
+        )}
         <button type="button" onClick={() => void fetchData()} className="app-btn-secondary">
           Reconcile payment dates
         </button>
@@ -1710,6 +1723,12 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
           </div>
         </div>
       )}
+
+      <HotelCashPurchaseModal
+        open={showCashPurchase}
+        onClose={() => setShowCashPurchase(false)}
+        onComplete={fetchData}
+      />
 
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => !saving && closeModal()}>

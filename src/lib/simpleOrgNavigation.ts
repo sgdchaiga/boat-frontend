@@ -297,6 +297,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Items", page: "Products" },
     { name: "Buy stock", page: "purchases_orders" },
     { name: "Receive stock / GRN bills", page: "purchases_bills" },
+    ...(isHotelOrMixed ? [{ name: "Cash stock purchase", page: "purchases_bills", state: { cashPurchaseOpen: true } } as NavChild] : []),
     { name: "Suppliers", page: "purchases_vendors" },
     { name: "Stock levels", page: "inventory_stock_balances" },
     { name: "Inventory movements", page: "inventory_stock_adjustments" },
