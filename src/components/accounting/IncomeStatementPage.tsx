@@ -335,6 +335,9 @@ export function IncomeStatementPage() {
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
+      let accountsQuery = supabase.from("gl_accounts").select("*").order("account_code");
+      if (orgId) accountsQuery = accountsQuery.eq("organization_id", orgId);
+
       const [allLines, accRes] = await Promise.all([
         (async () => {
           const rows: Array<{
@@ -381,7 +384,7 @@ export function IncomeStatementPage() {
           }
           return rows;
         })(),
-        filterByOrganizationId(supabase.from("gl_accounts").select("*").order("account_code"), orgId, superAdmin),
+        accountsQuery,
       ]);
 
       if (accRes.error) throw new Error(accRes.error.message);
@@ -395,17 +398,15 @@ export function IncomeStatementPage() {
       if (basis === "cash") {
         const paidToExclusive = new Date(`${toDateInclusive}T00:00:00Z`);
         paidToExclusive.setUTCDate(paidToExclusive.getUTCDate() + 1);
-        const paymentsRes = await filterByOrganizationId(
-          supabase
-            .from("payments")
-            .select("transaction_id,amount,payment_status,paid_at")
-            .eq("payment_status", "completed")
-            .in("payment_source", ["pos_hotel", "pos_retail"])
-            .gte("paid_at", `${fromDate}T00:00:00Z`)
-            .lt("paid_at", paidToExclusive.toISOString()),
-          orgId,
-          superAdmin
-        );
+        let paymentsQuery = supabase
+          .from("payments")
+          .select("transaction_id,amount,payment_status,paid_at")
+          .eq("payment_status", "completed")
+          .in("payment_source", ["pos_hotel", "pos_retail"])
+          .gte("paid_at", `${fromDate}T00:00:00Z`)
+          .lt("paid_at", paidToExclusive.toISOString());
+        if (orgId) paymentsQuery = paymentsQuery.eq("organization_id", orgId);
+        const paymentsRes = await paymentsQuery;
         if (paymentsRes.error) throw new Error(paymentsRes.error.message);
         const paidByOrder = new Map<string, number>();
         const paidDateByOrder = new Map<string, string>();

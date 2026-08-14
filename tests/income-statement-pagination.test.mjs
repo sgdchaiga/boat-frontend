@@ -10,6 +10,8 @@ test("income statement fetches every journal-line page for long ranges", async (
   assert.match(source, /const JOURNAL_LINE_PAGE_SIZE = 1000/);
   assert.match(source, /\.from\("journal_entries"\)\s*\.select\("id"\)/s);
   assert.match(source, /if \(orgId\) headersQuery = headersQuery\.eq\("organization_id", orgId\)/);
+  assert.match(source, /if \(orgId\) accountsQuery = accountsQuery\.eq\("organization_id", orgId\)/);
+  assert.match(source, /if \(orgId\) paymentsQuery = paymentsQuery\.eq\("organization_id", orgId\)/);
   assert.match(source, /const journalBatchSize = 200/);
   assert.match(source, /\.in\("journal_entry_id", batchIds\)/);
   assert.match(source, /for \(let pageFrom = 0; ; pageFrom \+= JOURNAL_LINE_PAGE_SIZE\)/);
