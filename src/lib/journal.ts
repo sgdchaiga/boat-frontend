@@ -2890,21 +2890,13 @@ export async function createJournalForBill(
   purchaseOrderId?: string | null
 ): Promise<JournalPostResult> {
   const acc = await getDefaultGlAccounts();
+  const organizationId = await resolveOrganizationId();
   const date = toBusinessDateString(billDate);
-  const debitLines = await buildBillDebitLines(amount, description, purchaseOrderId ?? null, acc);
-  if (debitLines.some((line) => line.kind === "inventory") && !acc.purchasesInventory) {
-    return {
-      ok: false,
-      error:
-        "Missing GL account for GRN/Bills inventory (shop stock). Set “GRN/Bills — Shop stock / inventory” or a POS inventory account under Admin → Journal account settings, or add an inventory/stock asset to your chart.",
-    };
-  }
-  if (debitLines.some((line) => line.kind === "expense") && !acc.expense) {
-    return {
-      ok: false,
-      error:
-        "Missing GL account for service/non-stock purchase expenses. Set the configured Expense GL account under Admin → Journal account settings.",
-    };
+  let debitLines: BillDebitLine[];
+  try {
+    debitLines = await buildBillDebitLines(amount, description, purchaseOrderId ?? null, acc, organizationId);
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
   if (!acc.payable) {
     return {
@@ -2913,13 +2905,11 @@ export async function createJournalForBill(
     };
   }
   const lines: JournalLine[] = debitLines.map((line) => ({
-    gl_account_id: line.kind === "expense" ? acc.expense! : acc.purchasesInventory!,
+    gl_account_id: line.glAccountId,
     debit: line.amount,
     credit: 0,
-    line_description:
-      line.kind === "expense"
-        ? line.description || "Service / non-stock purchase expense"
-        : line.description || "Inventory / shop stock (GRN)",
+    line_description: line.description,
+    dimensions: line.departmentId ? { department_id: line.departmentId } : null,
   }));
   lines.push({ gl_account_id: acc.payable, debit: 0, credit: amount, line_description: "Accounts payable" });
   return createJournalEntry({
@@ -2929,11 +2919,13 @@ export async function createJournalForBill(
     reference_id: billId,
     lines,
     created_by: createdBy,
+    organizationId,
   });
 }
 
 type BillDebitLine = {
-  kind: "inventory" | "expense";
+  glAccountId: string;
+  departmentId: string | null;
   amount: number;
   description: string;
 };
@@ -2942,66 +2934,84 @@ async function buildBillDebitLines(
   billAmount: number,
   description: string | null,
   purchaseOrderId: string | null,
-  acc: Awaited<ReturnType<typeof getDefaultGlAccounts>>
+  acc: Awaited<ReturnType<typeof getDefaultGlAccounts>>,
+  organizationId: string | null
 ): Promise<BillDebitLine[]> {
   const total = roundMoney(Math.max(0, Number(billAmount || 0)));
   if (!purchaseOrderId) {
-    return [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
+    if (!acc.purchasesInventory) {
+      throw new Error("Missing GL account for a GRN/Bill that has no purchase-order items.");
+    }
+    return [{ glAccountId: acc.purchasesInventory, departmentId: null, amount: total, description: description || "Inventory / shop stock (GRN)" }];
   }
 
-  try {
-    const { data: items, error } = await supabase
-      .from("purchase_order_items")
-      .select("product_id, description, quantity, cost_price")
-      .eq("purchase_order_id", purchaseOrderId);
-    if (error) throw error;
-    const rows = (items || []) as Array<{
-      product_id: string | null;
-      description: string | null;
-      quantity: number | null;
-      cost_price: number | null;
-    }>;
-    const productIds = Array.from(new Set(rows.map((row) => row.product_id).filter((id): id is string => !!id)));
-    const trackById = new Map<string, boolean | null>();
-    if (productIds.length > 0) {
-      const { data: products, error: prodError } = await supabase
-        .from("products")
-        .select("id, track_inventory")
-        .in("id", productIds);
-      if (prodError) throw prodError;
-      ((products || []) as Array<{ id: string; track_inventory: boolean | null }>).forEach((product) => {
-        trackById.set(product.id, product.track_inventory ?? null);
+  const { data: items, error } = await supabase
+    .from("purchase_order_items")
+    .select("product_id, description, quantity, cost_price")
+    .eq("purchase_order_id", purchaseOrderId);
+  if (error) throw error;
+  const rows = (items || []) as Array<{
+    product_id: string | null;
+    description: string | null;
+    quantity: number | null;
+    cost_price: number | null;
+  }>;
+  const productIds = Array.from(new Set(rows.map((row) => row.product_id).filter((id): id is string => !!id)));
+  const productById = new Map<string, { name: string; departmentId: string | null }>();
+  if (productIds.length > 0) {
+    const { data: products, error: prodError } = await supabase
+      .from("products")
+      .select("id, name, department_id")
+      .in("id", productIds);
+    if (prodError) throw prodError;
+    ((products || []) as Array<{ id: string; name: string; department_id: string | null }>).forEach((product) => {
+      productById.set(product.id, { name: product.name, departmentId: product.department_id ?? null });
+    });
+  }
+
+  const departmentGl = await loadPosDepartmentGlMap(organizationId);
+  const grouped = new Map<string, BillDebitLine>();
+  for (const row of rows) {
+    const lineAmount = roundMoney((Number(row.quantity || 0) || 0) * (Number(row.cost_price || 0) || 0));
+    if (lineAmount <= 0) continue;
+    if (!row.product_id) {
+      if (!acc.expense) throw new Error("A non-item purchase-order line has no configured expense account.");
+      const key = `service:${acc.expense}`;
+      const existing = grouped.get(key);
+      grouped.set(key, {
+        glAccountId: acc.expense,
+        departmentId: null,
+        amount: roundMoney((existing?.amount || 0) + lineAmount),
+        description: "Service / non-item purchases",
       });
+      continue;
     }
-
-    let inventoryTotal = 0;
-    let expenseTotal = 0;
-    for (const row of rows) {
-      const lineAmount = roundMoney((Number(row.quantity || 0) || 0) * (Number(row.cost_price || 0) || 0));
-      if (lineAmount <= 0) continue;
-      const isService = row.product_id ? trackById.get(row.product_id) === false : false;
-      if (isService) expenseTotal = roundMoney(expenseTotal + lineAmount);
-      else inventoryTotal = roundMoney(inventoryTotal + lineAmount);
+    const product = productById.get(row.product_id);
+    if (!product) throw new Error(`Purchase-order item ${row.description || row.product_id} is not linked to a valid product.`);
+    if (!product.departmentId) throw new Error(`Product “${product.name}” has no department. Assign a department and its purchase account before posting the bill.`);
+    const purchaseGlAccountId = departmentGl.get(product.departmentId)?.purchases ?? null;
+    if (!purchaseGlAccountId) {
+      throw new Error(`Product “${product.name}” belongs to a department with no purchase account mapping.`);
     }
-
-    const lineTotal = roundMoney(inventoryTotal + expenseTotal);
-    if (lineTotal <= 0) {
-      return [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
-    }
-    const scale = total > 0 ? total / lineTotal : 1;
-    const scaledExpense = roundMoney(expenseTotal * scale);
-    const scaledInventory = roundMoney(total - scaledExpense);
-    const out: BillDebitLine[] = [];
-    if (scaledInventory > 0.001) {
-      out.push({ kind: "inventory", amount: scaledInventory, description: "Inventory / shop stock (GRN)" });
-    }
-    if (scaledExpense > 0.001) {
-      out.push({ kind: "expense", amount: scaledExpense, description: "Service / non-stock purchases" });
-    }
-    return out.length ? out : [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
-  } catch {
-    return [{ kind: "inventory", amount: total, description: description || "Inventory / shop stock (GRN)" }];
+    const key = `department:${product.departmentId}:${purchaseGlAccountId}`;
+    const existing = grouped.get(key);
+    grouped.set(key, {
+      glAccountId: purchaseGlAccountId,
+      departmentId: product.departmentId,
+      amount: roundMoney((existing?.amount || 0) + lineAmount),
+      description: "Item department purchases (GRN)",
+    });
   }
+
+  const unscaled = Array.from(grouped.values()).filter((line) => line.amount > 0.001);
+  const lineTotal = roundMoney(unscaled.reduce((sum, line) => sum + line.amount, 0));
+  if (lineTotal <= 0) throw new Error("The purchase order has no valued item lines to post.");
+  let remaining = total;
+  return unscaled.map((line, index) => {
+    const amount = index === unscaled.length - 1 ? roundMoney(remaining) : roundMoney(total * (line.amount / lineTotal));
+    remaining = roundMoney(remaining - amount);
+    return { ...line, amount };
+  });
 }
 
 /** Asset GL for vendor prepayment / excess (prepaid, advance, deposit, or unearned in name). */

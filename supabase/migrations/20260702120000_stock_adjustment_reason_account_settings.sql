@@ -64,7 +64,7 @@ BEGIN
         ('1170', 'Work in Progress', 'asset', 'inventory'),
         ('1171', 'Raw Materials Inventory', 'asset', 'inventory'),
         ('1172', 'Finished Goods Inventory', 'asset', 'inventory'),
-        ('4210', 'Inventory Variance Gain', 'income', 'other'),
+        ('4290', 'Inventory Variance Gain', 'income', 'other'),
         ('5010', 'Inventory Variance Expense', 'expense', 'expense'),
         ('5020', 'Damaged Goods Expense', 'expense', 'expense'),
         ('5030', 'Inventory Shrinkage Expense', 'expense', 'expense'),
@@ -96,7 +96,7 @@ BEGIN
   SELECT id INTO v_wip FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '1170' LIMIT 1;
   SELECT id INTO v_raw_materials FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '1171' LIMIT 1;
   SELECT id INTO v_finished_goods FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '1172' LIMIT 1;
-  SELECT id INTO v_variance_gain FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '4210' LIMIT 1;
+  SELECT id INTO v_variance_gain FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '4290' LIMIT 1;
   SELECT id INTO v_variance_expense FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '5010' LIMIT 1;
   SELECT id INTO v_damaged_expense FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '5020' LIMIT 1;
   SELECT id INTO v_shrinkage_expense FROM public.gl_accounts WHERE organization_id = p_organization_id AND account_code = '5030' LIMIT 1;
