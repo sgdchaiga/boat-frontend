@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useRef, useMemo } from "react";
-import { Copy, Download, FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
+import { Columns3, Copy, Download, FileText, Plus, X, CheckCircle, Pencil, ExternalLink, Printer, CreditCard, Ban, Trash2, Undo2 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "../../lib/supabase";
 import { loadHotelConfig } from "../../lib/hotelConfig";
@@ -62,6 +62,25 @@ type PaymentStatusFilter =
   | "partially_paid"
   | "date_unavailable"
   | "not_fully_paid_or_date_unavailable";
+
+type BillColumn = "date" | "vendor" | "description" | "dueDate" | "status" | "amount" | "paidTotal" | "paidOffDate" | "actions";
+const BILL_COLUMN_STORAGE_KEY = "boat.receive-stock.visible-columns.v1";
+const BILL_COLUMNS: Array<{ key: BillColumn; label: string }> = [
+  { key: "date", label: "Date" }, { key: "vendor", label: "Vendor" },
+  { key: "description", label: "Description" }, { key: "dueDate", label: "Due date" },
+  { key: "status", label: "Status" }, { key: "amount", label: "Amount" },
+  { key: "paidTotal", label: "Paid total" }, { key: "paidOffDate", label: "Paid off date" },
+  { key: "actions", label: "Actions" },
+];
+
+function initialBillColumns(): Record<BillColumn, boolean> {
+  const defaults = Object.fromEntries(BILL_COLUMNS.map(({ key }) => [key, true])) as Record<BillColumn, boolean>;
+  if (typeof window === "undefined") return defaults;
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(BILL_COLUMN_STORAGE_KEY) || "{}");
+    return Object.fromEntries(BILL_COLUMNS.map(({ key }) => [key, saved[key] !== false])) as Record<BillColumn, boolean>;
+  } catch { return defaults; }
+}
 
 interface BillsPageProps {
   highlightBillId?: string;
@@ -235,6 +254,12 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
   const [billDateToFilter, setBillDateToFilter] = useState("");
   const [paymentStatusFilter, setPaymentStatusFilter] = useState<PaymentStatusFilter>("all");
   const [showPaymentGapDrilldown, setShowPaymentGapDrilldown] = useState(false);
+  const [showColumnChooser, setShowColumnChooser] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<Record<BillColumn, boolean>>(initialBillColumns);
+
+  useEffect(() => {
+    window.localStorage.setItem(BILL_COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns));
+  }, [visibleColumns]);
 
   useEffect(() => {
     if (cashbookDraft?.type !== "purchase" || readOnly) return;
@@ -1421,19 +1446,43 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
       {loading ? (
         <p className="text-slate-500 py-4">Loading…</p>
       ) : (
-        <div className="app-card overflow-hidden">
+        <div className="app-card overflow-visible">
+          <div className="relative flex justify-end border-b border-slate-200 bg-white p-3">
+            <button type="button" onClick={() => setShowColumnChooser((open) => !open)}
+              className="inline-flex items-center gap-2 rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+              aria-expanded={showColumnChooser}>
+              <Columns3 className="h-4 w-4" /> Columns
+            </button>
+            {showColumnChooser && (
+              <div className="absolute right-3 top-14 z-20 w-56 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+                <div className="mb-2 flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-slate-900">Show columns</p>
+                  <button type="button" onClick={() => setVisibleColumns(initialBillColumns())} className="text-xs font-medium text-blue-700 hover:underline">Show all</button>
+                </div>
+                {BILL_COLUMNS.map((column) => (
+                  <label key={column.key} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-slate-700 hover:bg-slate-50">
+                    <input type="checkbox" checked={visibleColumns[column.key]}
+                      onChange={(event) => setVisibleColumns((current) => ({ ...current, [column.key]: event.target.checked }))}
+                      className="rounded border-slate-300" />
+                    {column.label}
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+          <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
               <tr>
-                <th className="text-left p-3">Date</th>
-                <th className="text-left p-3">Vendor</th>
-                <th className="text-left p-3">Description</th>
-                <th className="text-left p-3">Due Date</th>
-                <th className="text-left p-3">Status</th>
-                <th className="text-right p-3">Amount</th>
-                <th className="text-right p-3">Paid total</th>
-                <th className="text-left p-3">Paid off date</th>
-                <th className="text-right p-3">Actions</th>
+                {visibleColumns.date && <th className="text-left p-3">Date</th>}
+                {visibleColumns.vendor && <th className="text-left p-3">Vendor</th>}
+                {visibleColumns.description && <th className="text-left p-3">Description</th>}
+                {visibleColumns.dueDate && <th className="text-left p-3">Due Date</th>}
+                {visibleColumns.status && <th className="text-left p-3">Status</th>}
+                {visibleColumns.amount && <th className="text-right p-3">Amount</th>}
+                {visibleColumns.paidTotal && <th className="text-right p-3">Paid total</th>}
+                {visibleColumns.paidOffDate && <th className="text-left p-3">Paid off date</th>}
+                {visibleColumns.actions && <th className="text-right p-3">Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -1443,9 +1492,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                   ref={b.id === highlightBillId ? highlightRef : undefined}
                   className={`border-t ${b.id === highlightBillId ? "bg-blue-50 ring-1 ring-blue-200" : ""}`}
                 >
-                  <td className="p-3">{b.bill_date ? new Date(b.bill_date).toLocaleDateString() : "—"}</td>
-                  <td className="p-3">{b.vendors?.name || "—"}</td>
-                  <td className="p-3">
+                  {visibleColumns.date && <td className="p-3">{b.bill_date ? new Date(b.bill_date).toLocaleDateString() : "—"}</td>}
+                  {visibleColumns.vendor && <td className="p-3">{b.vendors?.name || "—"}</td>}
+                  {visibleColumns.description && <td className="p-3">
                     <button
                       type="button"
                       onClick={() => openDetail(b)}
@@ -1453,9 +1502,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                     >
                       {b.description || "—"}
                     </button>
-                  </td>
-                  <td className="p-3">{b.due_date ? new Date(b.due_date).toLocaleDateString() : "—"}</td>
-                  <td className="p-3">
+                  </td>}
+                  {visibleColumns.dueDate && <td className="p-3">{b.due_date ? new Date(b.due_date).toLocaleDateString() : "—"}</td>}
+                  {visibleColumns.status && <td className="p-3">
                     <span className="inline-flex items-center gap-2 flex-wrap">
                       <span
                         className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
@@ -1477,8 +1526,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                         {formatBillStatusLabel(b.status)}
                       </span>
                     </span>
-                  </td>
-                  <td className="p-3 text-right font-medium">
+                  </td>}
+                  {visibleColumns.amount && <td className="p-3 text-right font-medium">
                     <button
                       type="button"
                       onClick={() => openDetail(b)}
@@ -1486,17 +1535,17 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                     >
                       {Number(b.amount || 0).toFixed(2)}
                     </button>
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{Number(paymentReconciliation.get(b.id)?.paidTotal || 0).toFixed(2)}</td>
-                  <td className="p-3">
+                  </td>}
+                  {visibleColumns.paidTotal && <td className="p-3 text-right tabular-nums">{Number(paymentReconciliation.get(b.id)?.paidTotal || 0).toFixed(2)}</td>}
+                  {visibleColumns.paidOffDate && <td className="p-3">
                     {paymentReconciliation.get(b.id)?.paidOffDate
                       ? new Date(`${paymentReconciliation.get(b.id)?.paidOffDate}T12:00:00`).toLocaleDateString()
                       : "—"}
                     {(paymentReconciliation.get(b.id)?.paymentCount || 0) > 1 && (
                       <p className="text-xs text-slate-500">{paymentReconciliation.get(b.id)?.paymentCount} payments</p>
                     )}
-                  </td>
-                  <td className="p-3 text-right">
+                  </td>}
+                  {visibleColumns.actions && <td className="p-3 text-right">
                     <span className="inline-flex items-center gap-1 flex-wrap justify-end">
                       {((!isBillApproved(b) && !isRejectedBill(b)) || (isOrgSuperAdmin && !["rejected", "reversed"].includes(normalizedBillStatus(b)))) && (
                         <button
@@ -1571,11 +1620,12 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                         </button>
                       )}
                     </span>
-                  </td>
+                  </td>}
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
           {filteredBills.length === 0 && <p className="p-8 text-center text-slate-500">No GRN/Bills match these filters.</p>}
         </div>
       )}
