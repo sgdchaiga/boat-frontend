@@ -17,4 +17,6 @@ test("income statement fetches every journal-line page for long ranges", async (
   assert.match(source, /for \(let pageFrom = 0; ; pageFrom \+= JOURNAL_LINE_PAGE_SIZE\)/);
   assert.match(source, /if \(\(data \|\| \[\]\)\.length < JOURNAL_LINE_PAGE_SIZE\) break/);
   assert.match(source, /q\.range\(pageFrom, pageFrom \+ JOURNAL_LINE_PAGE_SIZE - 1\)/);
+  assert.match(source, /onInput=\{\(e\) => setCustomFrom\(e\.currentTarget\.value\)\}/);
+  assert.match(source, /onInput=\{\(e\) => setCustomTo\(e\.currentTarget\.value\)\}/);
 });

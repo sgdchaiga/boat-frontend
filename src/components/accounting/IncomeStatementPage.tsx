@@ -1137,8 +1137,20 @@ export function IncomeStatementPage() {
           </select>
           {dateRange === "custom" && (
             <>
-              <input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="border rounded-lg px-3 py-2" />
-              <input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="border rounded-lg px-3 py-2" />
+              <input
+                type="date"
+                value={customFrom}
+                onInput={(e) => setCustomFrom(e.currentTarget.value)}
+                onChange={(e) => setCustomFrom(e.target.value)}
+                className="border rounded-lg px-3 py-2"
+              />
+              <input
+                type="date"
+                value={customTo}
+                onInput={(e) => setCustomTo(e.currentTarget.value)}
+                onChange={(e) => setCustomTo(e.target.value)}
+                className="border rounded-lg px-3 py-2"
+              />
             </>
           )}
           <select
