@@ -14,6 +14,12 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $RepoRoot
 
+Write-Host "Validating Supabase migration filenames and versions..."
+& node (Join-Path $PSScriptRoot "validate-supabase-migrations.mjs")
+if ($LASTEXITCODE -ne 0) {
+  throw "Supabase migration validation failed (exit $LASTEXITCODE)"
+}
+
 $supabase = Get-Command supabase -ErrorAction SilentlyContinue
 if (-not $supabase) {
   throw "Supabase CLI not found. Install it and ensure 'supabase' is on PATH. See: https://supabase.com/docs/guides/cli"

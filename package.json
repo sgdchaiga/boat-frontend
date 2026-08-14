@@ -39,6 +39,7 @@
     "db:apply": "powershell -ExecutionPolicy Bypass -File scripts/apply-migrations.ps1",
     "db:push": "powershell -ExecutionPolicy Bypass -File scripts/supabase-db-push.ps1",
     "db:migrate": "powershell -ExecutionPolicy Bypass -File scripts/db-migrate.ps1",
+    "migrations:validate": "node scripts/validate-supabase-migrations.mjs",
     "supabase": "npx supabase@latest",
     "supabase:deploy:subscription-renewal-token": "npx supabase@latest functions deploy subscription-renewal-token",
     "supabase:secrets:subscription-renewal": "npx supabase@latest secrets set --env-file supabase/secrets.local.env",

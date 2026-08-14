@@ -17,6 +17,9 @@ jobs:
           node-version: "20"
           cache: npm
 
+      - name: Validate Supabase migration history
+        run: node scripts/validate-supabase-migrations.mjs
+
       - name: Install dependencies
         run: npm ci
 
