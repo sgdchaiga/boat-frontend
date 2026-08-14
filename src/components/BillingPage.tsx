@@ -209,28 +209,54 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         setLoadError("Missing organization on your staff profile. Contact admin to link your account.");
         return;
       }
-      const [billingRows, stayRows] = await Promise.all([
-        fetchAllPages((from, to) => (supabase as any).rpc("get_hotel_billing_register", {
+      const stayRows = await fetchAllPages((from, to) => filterByOrganizationId(
+        supabase.from("stays").select("id, room_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
+          .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from, to),
+        orgId, superAdmin
+      ));
+
+      let billingRows: BillingWithCustomer[];
+      try {
+        const registerRows = await fetchAllPages((from, to) => (supabase as any).rpc("get_hotel_billing_register", {
           p_from: billingDateFrom || null,
           p_to: billingDateTo || null,
-        }).range(from, to)),
-        fetchAllPages((from, to) => filterByOrganizationId(
-          supabase.from("stays").select("id, room_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
-            .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from, to),
-          orgId, superAdmin
-        )),
-      ]);
-      setBillings((billingRows as Array<Record<string, any>>).map(({ room_number, guest_first_name, guest_last_name, ...row }) => ({
-        ...row,
-        stays: {
-          rooms: room_number ? { room_number } : null,
-          hotel_customers: guest_first_name || guest_last_name ? { first_name: guest_first_name || "", last_name: guest_last_name || "" } : null,
-        },
-      })) as BillingWithCustomer[]);
+        }).range(from, to));
+        billingRows = (registerRows as Array<Record<string, any>>).map(({ room_number, guest_first_name, guest_last_name, ...row }) => ({
+          ...row,
+          stays: {
+            rooms: room_number ? { room_number } : null,
+            hotel_customers: guest_first_name || guest_last_name ? { first_name: guest_first_name || "", last_name: guest_last_name || "" } : null,
+          },
+        })) as BillingWithCustomer[];
+      } catch (registerError) {
+        // Keep the operational page available during staged deployments where
+        // the register function has not reached the database yet.
+        console.warn("Billing register unavailable; using tenant-scoped billing query.", registerError);
+        const stayIds = (stayRows as Array<{ id: string }>).map(({ id }) => id);
+        const batches: string[][] = [];
+        for (let index = 0; index < stayIds.length; index += 100) batches.push(stayIds.slice(index, index + 100));
+        const batchRows = await Promise.all(batches.map((ids) => fetchAllPages((from, to) => {
+          let query = supabase.from("billing")
+            .select("*, stays(rooms(room_number), hotel_customers(first_name, last_name))")
+            .in("stay_id", ids)
+            .order("charged_at", { ascending: false })
+            .order("id", { ascending: false });
+          if (billingDateFrom) query = query.gte("charged_at", `${billingDateFrom}T00:00:00`);
+          if (billingDateTo) query = query.lte("charged_at", `${billingDateTo}T23:59:59.999`);
+          return query.range(from, to);
+        })));
+        billingRows = batchRows.flat() as unknown as BillingWithCustomer[];
+      }
+      setBillings(billingRows);
       setActiveStays(stayRows as unknown as BillingStayOption[]);
     } catch (error) {
       console.error("Error fetching billing:", error);
-      setLoadError(error instanceof Error ? error.message : "Failed to load data");
+      const message = error instanceof Error
+        ? error.message
+        : error && typeof error === "object" && "message" in error
+          ? String(error.message)
+          : "Failed to load billing data.";
+      setLoadError(message);
     } finally {
       setLoading(false);
     }
