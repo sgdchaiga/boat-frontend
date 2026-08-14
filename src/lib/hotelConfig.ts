@@ -2,6 +2,7 @@
  * Business/organization config for headers, invoices, and reports.
  * Stored in localStorage per organization; editable in Admin > Business Configuration.
  */
+import { supabase } from "./supabase";
 
 /** Legacy single-key storage (pre per-organization keys). Migrated on first read when `organizationId` is set. */
 const LEGACY_STORAGE_KEY = "guestpro_hotel_config";
@@ -92,6 +93,37 @@ export function loadHotelConfig(organizationId?: string | null): HotelConfig {
 
 export function saveHotelConfig(config: HotelConfig, organizationId?: string | null): void {
   localStorage.setItem(storageKey(organizationId ?? null), JSON.stringify(config));
+  if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("boat-hotel-config-change", { detail: { organizationId } }));
+}
+
+/** Load the organization-owned configuration and refresh the local offline cache. */
+export async function hydrateHotelConfig(organizationId?: string | null): Promise<HotelConfig> {
+  if (!organizationId) return loadHotelConfig(organizationId);
+  const { data, error } = await supabase
+    .from("organizations")
+    .select("name,address,hotel_config")
+    .eq("id", organizationId)
+    .maybeSingle();
+  if (error || !data) return loadHotelConfig(organizationId);
+  const cloud = data.hotel_config && typeof data.hotel_config === "object" && !Array.isArray(data.hotel_config)
+    ? data.hotel_config as Partial<HotelConfig>
+    : {};
+  const merged = mergeHotelConfigWithOrg({ ...DEFAULT_CONFIG, ...cloud }, data);
+  saveHotelConfig(merged, organizationId);
+  return merged;
+}
+
+/** Persist centrally first; localStorage remains an offline/read-through cache only. */
+export async function saveHotelConfigToCloud(config: HotelConfig, organizationId?: string | null): Promise<HotelConfig> {
+  if (!organizationId) {
+    saveHotelConfig(config, organizationId);
+    return config;
+  }
+  const { data, error } = await supabase.rpc("save_organization_hotel_config", { p_config: config });
+  if (error) throw error;
+  const saved = data && typeof data === "object" && !Array.isArray(data) ? { ...DEFAULT_CONFIG, ...(data as Partial<HotelConfig>) } : config;
+  saveHotelConfig(saved, organizationId);
+  return saved;
 }
 
 /**

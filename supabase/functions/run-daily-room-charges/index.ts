@@ -41,9 +41,7 @@ Deno.serve(async (req) => {
 
   const supabase = createClient(url, serviceKey);
   const { data: orgs, error: orgErr } = await supabase
-    .from("organizations")
-    .select("id")
-    .eq("business_type", "hotel");
+    .rpc("eligible_hotel_night_audit_organizations");
 
   if (orgErr) {
     return new Response(JSON.stringify({ ok: false, error: orgErr.message }), {

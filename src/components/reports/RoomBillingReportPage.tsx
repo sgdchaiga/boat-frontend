@@ -3,6 +3,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { PageNotes } from "../common/PageNotes";
+import { fetchAllPages } from "../../lib/supabasePagination";
 
 type ReconciliationStay = {
   id: string;
@@ -38,14 +39,11 @@ export function RoomBillingReportPage() {
     setError(null);
     try {
       if (!orgId && !superAdmin) throw new Error("Missing organization on your staff profile.");
-      const staysQuery = filterByOrganizationId(
-        supabase.from("stays").select("id,actual_check_in,actual_check_out,rooms(room_number),hotel_customers(first_name,last_name)").order("actual_check_in", { ascending: false }).limit(1000),
-        orgId,
-        superAdmin
-      );
-      const staysResult = await staysQuery;
-      if (staysResult.error) throw staysResult.error;
-      const stayRows = (staysResult.data || []) as unknown as ReconciliationStay[];
+      const stayRows = await fetchAllPages((from,to) => filterByOrganizationId(
+        supabase.from("stays").select("id,actual_check_in,actual_check_out,rooms(room_number),hotel_customers(first_name,last_name)")
+          .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from,to),
+        orgId, superAdmin
+      )) as unknown as ReconciliationStay[];
       const stayIds = stayRows.map((stay) => stay.id);
       if (stayIds.length === 0) {
         setStays([]);
@@ -57,16 +55,12 @@ export function RoomBillingReportPage() {
       // by its IDs also keeps this report aligned with the rows shown on Guest Billing.
       const stayIdBatches = Array.from({ length: Math.ceil(stayIds.length / 100) }, (_, index) => stayIds.slice(index * 100, index * 100 + 100));
       const [billingResults, paymentResults] = await Promise.all([
-        Promise.all(stayIdBatches.map((ids) => supabase.from("billing").select("stay_id,amount,charge_type,stay_night_date,charged_at").in("stay_id", ids).limit(10000))),
-        Promise.all(stayIdBatches.map((ids) => supabase.from("payments").select("stay_id,amount").eq("payment_status", "completed").in("stay_id", ids).limit(10000))),
+        Promise.all(stayIdBatches.map((ids) => fetchAllPages((from,to) => supabase.from("billing").select("stay_id,amount,charge_type,stay_night_date,charged_at").in("stay_id", ids).order("id").range(from,to)))),
+        Promise.all(stayIdBatches.map((ids) => fetchAllPages((from,to) => supabase.from("payments").select("stay_id,amount").eq("payment_status", "completed").in("stay_id", ids).order("id").range(from,to)))),
       ]);
-      const billingError = billingResults.find((result) => result.error)?.error;
-      const paymentError = paymentResults.find((result) => result.error)?.error;
-      if (billingError) throw billingError;
-      if (paymentError) throw paymentError;
       setStays(stayRows);
-      setBillings(billingResults.flatMap((result) => result.data || []) as unknown as FolioAmount[]);
-      setPayments(paymentResults.flatMap((result) => result.data || []) as unknown as FolioAmount[]);
+      setBillings(billingResults.flat() as unknown as FolioAmount[]);
+      setPayments(paymentResults.flat() as unknown as FolioAmount[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load room reconciliation.");
     } finally {

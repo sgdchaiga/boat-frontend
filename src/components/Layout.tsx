@@ -71,6 +71,7 @@ import { MobileLiteCenter } from './mobile/MobileLiteCenter';
 import { MobilePrivacyLock } from './mobile/MobilePrivacyLock';
 import { observeMobileTableCards } from '@/lib/mobileTableCards';
 import { setMobileTelemetryOrganization } from '@/lib/mobilePerformance';
+import { hydrateHotelConfig } from '@/lib/hotelConfig';
 import {
   networkInformation,
   readMobileLitePreference,
@@ -245,6 +246,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const { mode: generalBusinessMode, setMode: setGeneralBusinessMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
   const generalBusinessCashbookEnabled = user?.enable_cashbook_mode === true;
   const effectiveGeneralBusinessMode = generalBusinessCashbookEnabled ? generalBusinessMode : 'modern';
+  useEffect(() => {
+    if (!user?.organization_id || !['hotel', 'mixed'].includes(user.business_type || '')) return;
+    void hydrateHotelConfig(user.organization_id);
+  }, [user?.organization_id, user?.business_type]);
   useEffect(() => {
     if (businessType === 'general_business' && !generalBusinessCashbookEnabled && generalBusinessMode === 'cashbook') {
       setGeneralBusinessMode('modern');

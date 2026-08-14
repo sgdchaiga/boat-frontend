@@ -2,7 +2,9 @@ import { useEffect, useState } from "react";
 import { Building2, Save, MapPin, Phone, Mail, DollarSign } from "lucide-react";
 import {
   loadHotelConfig,
+  hydrateHotelConfig,
   saveHotelConfig,
+  saveHotelConfigToCloud,
   mergeHotelConfigWithOrg,
   type HotelConfig,
   DEFAULT_CONFIG,
@@ -62,7 +64,7 @@ export function AdminHotelConfigPage() {
     async function load() {
       setLoading(true);
       try {
-        const base = loadHotelConfig(organizationId);
+        const base = USE_LOCAL_SQLITE ? loadHotelConfig(organizationId) : await hydrateHotelConfig(organizationId);
         if (!organizationId) {
           if (!cancelled) {
             setConfig(base);
@@ -159,7 +161,10 @@ export function AdminHotelConfigPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      saveHotelConfig(config, organizationId);
+      let savedConfig = config;
+      if (organizationId && !USE_LOCAL_SQLITE) savedConfig = await saveHotelConfigToCloud(config, organizationId);
+      else saveHotelConfig(config, organizationId);
+      setConfig(savedConfig);
       if (organizationId && !USE_LOCAL_SQLITE) {
         const { error: rpcErr } = await supabase.rpc("save_organization_guest_bill_profile", {
           p_address: config.address?.trim() ?? "",

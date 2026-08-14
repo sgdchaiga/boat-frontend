@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import type { Database } from '../lib/database.types';
 import { PageNotes } from './common/PageNotes';
 import { filterByOrganizationId } from '../lib/supabaseOrgFilter';
+import { fetchAllPages } from '../lib/supabasePagination';
 
 type Stay = Database['public']['Tables']['stays']['Row'] & {
   /** Returned from `select('*')` on stays; used for printed guest bill header. */
@@ -62,40 +63,34 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
       setStays([]);
       return;
     }
-    const [activeRes, checkedOutRes, customersRes] = await Promise.all([
-      filterByOrganizationId(
+    const [activeRows, checkedOutRows, customerRows] = await Promise.all([
+      fetchAllPages((from,to) => filterByOrganizationId(
         supabase
           .from("stays")
           .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
           .is("actual_check_out", null)
-          .order("actual_check_in", { ascending: false }),
+          .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from,to),
         orgId,
         superAdmin
-      ),
-      filterByOrganizationId(
+      )),
+      fetchAllPages((from,to) => filterByOrganizationId(
         supabase
           .from("stays")
           .select("*, hotel_customers(first_name,last_name,email), rooms(id,room_number)")
           .not("actual_check_out", "is", null)
-          .order("actual_check_out", { ascending: false })
-          .limit(30),
+          .order("actual_check_out", { ascending: false }).order("id", { ascending: false }).range(from,to),
         orgId,
         superAdmin
-      ),
-      filterByOrganizationId(
-        supabase.from("hotel_customers").select("id, first_name, last_name").order("first_name", { ascending: true }),
+      )),
+      fetchAllPages((from,to) => filterByOrganizationId(
+        supabase.from("hotel_customers").select("id, first_name, last_name").order("first_name", { ascending: true }).order("id").range(from,to),
         orgId,
         superAdmin
-      ),
+      )),
     ]);
-
-    if (activeRes.error) throw activeRes.error;
-    if (checkedOutRes.error) throw checkedOutRes.error;
-    if (customersRes.error) throw customersRes.error;
-
-    setStays((activeRes.data || []) as Stay[]);
-    setCheckedOutStays((checkedOutRes.data || []) as Stay[]);
-    setCustomers((customersRes.data || []) as Array<{ id: string; first_name: string; last_name: string }>);
+    setStays(activeRows as Stay[]);
+    setCheckedOutStays(checkedOutRows as Stay[]);
+    setCustomers(customerRows as Array<{ id: string; first_name: string; last_name: string }>);
   } catch (error) {
     console.error("Error fetching stays:", error);
   } finally {

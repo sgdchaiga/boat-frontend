@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import { businessTodayISO } from "../lib/timezone";
+import { fetchAllPages } from "../lib/supabasePagination";
 import {
   type ActiveStayOption,
   type BillingWithCustomer,
@@ -208,32 +209,25 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         setLoadError("Missing organization on your staff profile. Contact admin to link your account.");
         return;
       }
-      let billingsQuery = filterByOrganizationId(
-        supabase
-          .from("billing")
-          .select("*, stays(rooms(room_number), hotel_customers(first_name, last_name))")
-          .order("charged_at", { ascending: false }),
-        orgId,
-        superAdmin
-      );
-      if (billingDateFrom) billingsQuery = billingsQuery.gte("charged_at", `${billingDateFrom}T00:00:00`);
-      if (billingDateTo) billingsQuery = billingsQuery.lte("charged_at", `${billingDateTo}T23:59:59.999`);
-      if (!billingDateFrom && !billingDateTo) billingsQuery = billingsQuery.limit(500);
-      const staysQuery = filterByOrganizationId(
-        supabase
-          .from("stays")
-          .select("id, room_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
-          .order("actual_check_in", { ascending: false })
-          .limit(500),
-        orgId,
-        superAdmin
-      );
-      const [billingsResult, staysResult] = await Promise.all([billingsQuery, staysQuery]);
-
-      if (billingsResult.error) throw billingsResult.error;
-
-      setBillings((billingsResult.data || []) as BillingWithCustomer[]);
-      setActiveStays((staysResult.data || []) as unknown as BillingStayOption[]);
+      const [billingRows, stayRows] = await Promise.all([
+        fetchAllPages(async (from, to) => {
+          let query = filterByOrganizationId(
+            supabase.from("billing").select("*, stays(rooms(room_number), hotel_customers(first_name, last_name))")
+              .order("charged_at", { ascending: false }).order("id", { ascending: false }).range(from, to),
+            orgId, superAdmin
+          );
+          if (billingDateFrom) query = query.gte("charged_at", `${billingDateFrom}T00:00:00`);
+          if (billingDateTo) query = query.lte("charged_at", `${billingDateTo}T23:59:59.999`);
+          return query;
+        }),
+        fetchAllPages((from, to) => filterByOrganizationId(
+          supabase.from("stays").select("id, room_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
+            .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from, to),
+          orgId, superAdmin
+        )),
+      ]);
+      setBillings(billingRows as BillingWithCustomer[]);
+      setActiveStays(stayRows as unknown as BillingStayOption[]);
     } catch (error) {
       console.error("Error fetching billing:", error);
       setLoadError(error instanceof Error ? error.message : "Failed to load data");
