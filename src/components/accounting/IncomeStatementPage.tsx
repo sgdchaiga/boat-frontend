@@ -28,6 +28,7 @@ import {
 } from "../../lib/hotelOperationalRevenue";
 
 type TrendPoint = { period: string; revenue: number; expenses: number };
+const JOURNAL_LINE_PAGE_SIZE = 1000;
 type ExpenseSlice = { name: string; value: number };
 type DrillLine = {
   id: string;
@@ -334,31 +335,44 @@ export function IncomeStatementPage() {
       const cached = totalsCacheRef.current.get(cacheKey);
       if (cached) return cached;
 
-      const linesQuery = supabase
-        .from("journal_entry_lines")
-        .select(
-          "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
-        )
-        .gte("journal_entries.entry_date", fromDate)
-        .lte("journal_entries.entry_date", toDateInclusive)
-        .eq("journal_entries.is_posted", true)
-        .eq("journal_entries.is_deleted", false);
-      if (basis === "cash") {
-        linesQuery.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
-      }
-
-      // Tenant RLS already scopes legacy journal lines. Some older POS journal headers
-      // have no organization_id, so an explicit header filter would hide valid sales.
-      const scopedLinesQuery = superAdmin ? filterJournalLinesByOrganizationId(linesQuery, orgId, true) : linesQuery;
-      const [linesRes, accRes] = await Promise.all([
-        scopedLinesQuery,
+      const fetchLinesPage = (pageFrom: number, pageTo: number) => {
+        const query = supabase
+          .from("journal_entry_lines")
+          .select(
+            "debit, credit, gl_accounts!inner(id, account_code, account_name, account_type, category), journal_entries!inner(entry_date,reference_type,reference_id)"
+          )
+          .gte("journal_entries.entry_date", fromDate)
+          .lte("journal_entries.entry_date", toDateInclusive)
+          .eq("journal_entries.is_posted", true)
+          .eq("journal_entries.is_deleted", false)
+          .order("entry_date", { ascending: true, referencedTable: "journal_entries" })
+          .order("id", { ascending: true })
+          .range(pageFrom, pageTo);
+        if (basis === "cash") query.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
+        return superAdmin ? filterJournalLinesByOrganizationId(query, orgId, true) : query;
+      };
+      const [allLines, accRes] = await Promise.all([
+        (async () => {
+          const rows: Array<{
+            debit: number;
+            credit: number;
+            gl_accounts: { id: string; account_code: string; account_name: string; account_type: string; category?: string | null } | null;
+            journal_entries?: { entry_date: string; reference_type?: string | null; reference_id?: string | null } | null;
+          }> = [];
+          for (let pageFrom = 0; ; pageFrom += JOURNAL_LINE_PAGE_SIZE) {
+            const { data, error } = await fetchLinesPage(pageFrom, pageFrom + JOURNAL_LINE_PAGE_SIZE - 1);
+            if (error) throw new Error(error.message);
+            rows.push(...((data || []) as typeof rows));
+            if ((data || []).length < JOURNAL_LINE_PAGE_SIZE) break;
+          }
+          return rows;
+        })(),
         filterByOrganizationId(supabase.from("gl_accounts").select("*").order("account_code"), orgId, superAdmin),
       ]);
 
-      if (linesRes.error) throw new Error(linesRes.error.message);
       if (accRes.error) throw new Error(accRes.error.message);
 
-      let effectiveLines = (linesRes.data || []) as Array<{
+      let effectiveLines = allLines as Array<{
         debit: number;
         credit: number;
         gl_accounts: { id: string; account_code: string; account_name: string; account_type: string; category?: string | null } | null;
@@ -809,19 +823,29 @@ export function IncomeStatementPage() {
         .lte("journal_entries.entry_date", toStrInclusive)
         .eq("journal_entries.is_posted", true)
         .eq("journal_entries.is_deleted", false)
-        .order("entry_date", { ascending: false, referencedTable: "journal_entries" });
+        .order("entry_date", { ascending: false, referencedTable: "journal_entries" })
+        .order("id", { ascending: true });
       if (basis === "cash") {
         q.in("journal_entries.reference_type", [...CASH_BASIS_REFERENCE_TYPES]);
       }
-      const { data, error } = await filterJournalLinesByOrganizationId(q, orgId, superAdmin);
-      if (error) throw new Error(error.message);
-      const rows = ((data || []) as Array<{
+      const data: Array<{
         id: string;
         debit: number;
         credit: number;
         line_description: string | null;
         journal_entries: { entry_date: string; description: string; transaction_id: string | null; reference_type: string | null } | null;
-      }>).map((r) => ({
+      }> = [];
+      for (let pageFrom = 0; ; pageFrom += JOURNAL_LINE_PAGE_SIZE) {
+        const { data: pageData, error } = await filterJournalLinesByOrganizationId(
+          q.range(pageFrom, pageFrom + JOURNAL_LINE_PAGE_SIZE - 1),
+          orgId,
+          superAdmin
+        );
+        if (error) throw new Error(error.message);
+        data.push(...((pageData || []) as typeof data));
+        if ((pageData || []).length < JOURNAL_LINE_PAGE_SIZE) break;
+      }
+      const rows = data.map((r) => ({
         id: r.id,
         entry_date: r.journal_entries?.entry_date || "",
         description: r.journal_entries?.description || "",
