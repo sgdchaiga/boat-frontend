@@ -71,7 +71,7 @@ import { MobileLiteCenter } from './mobile/MobileLiteCenter';
 import { MobilePrivacyLock } from './mobile/MobilePrivacyLock';
 import { observeMobileTableCards } from '@/lib/mobileTableCards';
 import { setMobileTelemetryOrganization } from '@/lib/mobilePerformance';
-import { hydrateHotelConfig } from '@/lib/hotelConfig';
+import { hydrateHotelConfig, loadHotelConfig } from '@/lib/hotelConfig';
 import {
   networkInformation,
   readMobileLitePreference,
@@ -246,9 +246,21 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const { mode: generalBusinessMode, setMode: setGeneralBusinessMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
   const generalBusinessCashbookEnabled = user?.enable_cashbook_mode === true;
   const effectiveGeneralBusinessMode = generalBusinessCashbookEnabled ? generalBusinessMode : 'modern';
+  const [advancedPmsEnabled, setAdvancedPmsEnabled] = useState(
+    () => Boolean(loadHotelConfig(user?.organization_id).pms_full_enabled)
+  );
   useEffect(() => {
-    if (!user?.organization_id || !['hotel', 'mixed'].includes(user.business_type || '')) return;
-    void hydrateHotelConfig(user.organization_id);
+    if (!user?.organization_id || !['hotel', 'mixed'].includes(user.business_type || '')) {
+      setAdvancedPmsEnabled(false);
+      return;
+    }
+    let cancelled = false;
+    const refresh = () => setAdvancedPmsEnabled(Boolean(loadHotelConfig(user.organization_id).pms_full_enabled));
+    void hydrateHotelConfig(user.organization_id).then((config) => {
+      if (!cancelled) setAdvancedPmsEnabled(Boolean(config.pms_full_enabled));
+    });
+    window.addEventListener('boat-hotel-config-change', refresh);
+    return () => { cancelled = true; window.removeEventListener('boat-hotel-config-change', refresh); };
   }, [user?.organization_id, user?.business_type]);
   useEffect(() => {
     if (businessType === 'general_business' && !generalBusinessCashbookEnabled && generalBusinessMode === 'cashbook') {
@@ -381,6 +393,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         canManageAccounting: Boolean(
           isSuperAdmin || ["admin", "manager", "accountant"].includes(String(user?.role || "").trim().toLowerCase())
         ),
+        allowAdvancedPms: advancedPmsEnabled,
       });
       if (businessType !== 'general_business' || effectiveGeneralBusinessMode !== 'cashbook') return fullNavigation;
       return [
@@ -434,6 +447,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       effectiveGeneralBusinessMode,
       user?.role,
       isSuperAdmin,
+      advancedPmsEnabled,
     ]
   );
 

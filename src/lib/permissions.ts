@@ -104,6 +104,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "checkin", label: "Check in", group: "Front desk" },
   { page: "stays", label: "Active stays", group: "Front desk" },
   { page: "housekeeping", label: "Housekeeping", group: "Front desk" },
+  { page: "hotel_advanced_pms", label: "Advanced PMS", group: "Front desk" },
   { page: "POS", label: "Hotel POS", group: "POS" },
   { page: "hotel_pos_waiter", label: "Waiter POS", group: "POS" },
   { page: "hotel_pos_kitchen_bar", label: "Kitchen / bar POS", group: "POS" },

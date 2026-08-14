@@ -6,6 +6,7 @@ export const HOTEL_PAGE = {
   posKitchenBar: "hotel_pos_kitchen_bar",
   posSupervisor: "hotel_pos_supervisor",
   posReports: "hotel_pos_reports",
+  advancedPms: "hotel_advanced_pms",
 } as const;
 
 /** Assessment & onboarding (prospect hotels, scoring, proposals). */

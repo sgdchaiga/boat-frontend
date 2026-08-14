@@ -155,6 +155,7 @@ export const ROLE_PAGE_ALLOW: Record<Exclude<NavRoleExperience, "full">, Set<str
     "hotel_customers",
     "billing",
     "rooms",
+    HOTEL_PAGE.advancedPms,
     "reservations",
     "checkin",
     "stays",

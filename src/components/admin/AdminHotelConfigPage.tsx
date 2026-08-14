@@ -442,6 +442,28 @@ export function AdminHotelConfigPage() {
         </div>
       </div>
 
+      {(user?.business_type === "hotel" || user?.business_type === "mixed") && (
+        <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-3">
+          <h3 className="text-base font-semibold text-slate-900">Advanced property management system</h3>
+          <p className="text-sm text-slate-600">
+            Enables group and room blocks, rate/inventory controls, guest deposits, maintenance work orders,
+            housekeeping inspections and accounting-period close controls. It is off by default so current front-desk workflows remain unchanged.
+          </p>
+          <label className="flex items-start gap-3 rounded-lg border border-slate-200 p-4 cursor-pointer">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={config.pms_full_enabled === true}
+              onChange={(event) => setConfig({ ...config, pms_full_enabled: event.target.checked })}
+            />
+            <span>
+              <span className="block font-medium text-slate-800">Enable Advanced PMS workspace</span>
+              <span className="block text-xs text-slate-500 mt-1">Save above, then the workspace appears under Front Desk. Turning it off hides the workspace without deleting its records.</span>
+            </span>
+          </label>
+        </div>
+      )}
+
       {(user?.business_type === "hotel" ||
         user?.business_type === "mixed" ||
         user?.business_type === "restaurant" ||

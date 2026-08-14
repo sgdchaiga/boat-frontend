@@ -28,6 +28,8 @@ export interface HotelConfig {
   email: string;
   currency: string;
   timezone: string;
+  /** Opt-in advanced PMS workspace. False by default so established hotel workflows are unchanged. */
+  pms_full_enabled?: boolean;
   /**
    * `auto`: selecting a table opens a POS table session immediately; session closes when the table has no active kitchen orders.
    * `manual`: waiter must tap Open session (legacy).
@@ -61,6 +63,7 @@ const DEFAULT_CONFIG: HotelConfig = {
   email: "",
   currency: "USD",
   timezone: "Africa/Kampala",
+  pms_full_enabled: false,
   pos_table_session_mode: "manual",
   pos_kitchen_status_flow: ["pending", "preparing", "ready", "served"],
   pos_bar_status_flow: ["pending", "preparing", "ready", "served"],

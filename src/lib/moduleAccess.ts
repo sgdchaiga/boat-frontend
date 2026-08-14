@@ -482,6 +482,7 @@ const HOTEL_EXCLUSIVE_PAGE_IDS = new Set([
   "stays",
   "housekeeping",
   "hotel_rooms_setup",
+  "hotel_advanced_pms",
   "billing",
   "hotel_pos_waiter",
   "hotel_pos_kitchen_bar",
@@ -511,6 +512,7 @@ const HOTEL_LODGING_ONLY_PAGE_IDS = new Set([
   "stays",
   "housekeeping",
   "hotel_rooms_setup",
+  "hotel_advanced_pms",
   "billing",
   "reports_room_billing",
   "hotel_assessment",
@@ -647,7 +649,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (["retail_credit_invoices"].includes(page)) return "retail_credit_invoices";
   if (["retail_customers", "hotel_customers", "customers"].includes(page)) return "retail_customers";
   if (["retail_credit_sales_report"].includes(page)) return "retail_credit_sales_report";
-  if (["rooms", "reservations", "checkin", "stays", "housekeeping", "hotel_rooms_setup"].includes(page))
+  if (["rooms", "reservations", "checkin", "stays", "housekeeping", "hotel_rooms_setup", "hotel_advanced_pms"].includes(page))
     return "frontdesk";
   if (["POS", "hotel_pos_waiter", "hotel_pos_supervisor"].includes(page)) return "hotel_pos";
   if (["retail_pos", "retail_pos_orders", "clinic_pos"].includes(page)) return "retail_pos";

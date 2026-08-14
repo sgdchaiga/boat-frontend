@@ -106,6 +106,7 @@ const CashReceiptsPage = lazyNamed(() => import('./components/CashReceiptsPage')
 const TransactionsPage = lazyNamed(() => import('./components/TransactionsPage'), 'TransactionsPage');
 const KitchenDisplayPage = lazyNamed(() => import('./components/KitchenDisplayPage'), 'KitchenDisplayPage');
 const HousekeepingPage = lazyNamed(() => import('./components/HousekeepingPage'), 'HousekeepingPage');
+const PmsAdvancedPage = lazyNamed(() => import('./components/PmsAdvancedPage'), 'PmsAdvancedPage');
 const ProductsPage = lazy(() => import('./components/ProductsPage'));
 const InventoryBarcodesPage = lazyNamed(() => import('./components/InventoryBarcodesPage'), 'InventoryBarcodesPage');
 const ReportsPage = lazyNamed(() => import('./components/ReportsPage'), 'ReportsPage');
@@ -1541,6 +1542,8 @@ function AppContent() {
         return <KitchenDisplayPage hidePricing={getRoleCapabilities(user?.role).hidePricing} />;
       case 'housekeeping':
         return <HousekeepingPage />;
+      case HOTEL_PAGE.advancedPms:
+        return <PmsAdvancedPage />;
       case 'Products':
         return <ProductsPage readOnly={access.readOnly} />;
       case 'reports':

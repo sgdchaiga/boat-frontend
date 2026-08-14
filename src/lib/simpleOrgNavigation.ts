@@ -42,6 +42,7 @@ export type BuildSimpleOrgNavArgs = {
   allowFixedAssets?: boolean;
   salesWorkflow?: "invoice" | "quick_sale" | "both";
   canManageAccounting?: boolean;
+  allowAdvancedPms?: boolean;
 };
 
 /** Flat report links for simple-org tenants (sidebar + in-app report hub). */
@@ -120,6 +121,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     allowFixedAssets = false,
     salesWorkflow = "both",
     canManageAccounting = false,
+    allowAdvancedPms = false,
   } = args;
 
   if (businessType === "general_business") {
@@ -331,6 +333,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
           { name: "Customers", page: "hotel_customers" },
           { name: "Housekeeping", page: "housekeeping" },
           { name: "Rooms setup", page: "rooms" },
+          ...(allowAdvancedPms ? [{ name: "Advanced PMS", page: HOTEL_PAGE.advancedPms }] : []),
         ],
       }
     : null;
