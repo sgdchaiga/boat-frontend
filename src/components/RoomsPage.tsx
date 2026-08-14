@@ -10,6 +10,7 @@ type Room = Database["public"]["Tables"]["rooms"]["Row"] & {
   room_types: { name: string; base_price: number } | null;
   breakfast_included?: boolean;
 };
+type OccupancyStay = { id:string; room_id:string|null; actual_check_in:string; hotel_customers:{first_name:string;last_name:string}|null };
 
 export function RoomsPage() {
   const { user } = useAuth();
@@ -18,6 +19,7 @@ export function RoomsPage() {
   const [rooms, setRooms] = useState<Room[]>([]);
   const [occupiedRoomIds, setOccupiedRoomIds] = useState<Set<string>>(new Set());
   const [reservedRoomIds, setReservedRoomIds] = useState<Set<string>>(new Set());
+  const [occupancyByRoom, setOccupancyByRoom] = useState<Map<string, OccupancyStay>>(new Map());
   const [loading, setLoading] = useState(true);
 
   const [searchTerm, setSearchTerm] = useState("");
@@ -31,6 +33,10 @@ export function RoomsPage() {
   const [editRateRoom, setEditRateRoom] = useState<Room | null>(null);
   const [editRateValue, setEditRateValue] = useState("");
   const [savingRate, setSavingRate] = useState(false);
+  const [correctingRoom, setCorrectingRoom] = useState<Room | null>(null);
+  const [correctionCheckoutDate, setCorrectionCheckoutDate] = useState(() => new Date().toISOString().slice(0,10));
+  const [correctionRoomStatus, setCorrectionRoomStatus] = useState<"cleaning"|"available">("cleaning");
+  const [savingCorrection, setSavingCorrection] = useState(false);
 
   useEffect(() => {
     fetchRooms();
@@ -46,6 +52,7 @@ export function RoomsPage() {
       if (!orgId && !superAdmin) {
         setRooms([]);
         setOccupiedRoomIds(new Set());
+        setOccupancyByRoom(new Map());
         setReservedRoomIds(new Set());
         return;
       }
@@ -64,7 +71,7 @@ export function RoomsPage() {
         filterByOrganizationId(
           supabase
             .from("stays")
-            .select("room_id")
+            .select("id,room_id,actual_check_in,hotel_customers(first_name,last_name)")
             .is("actual_check_out", null),
           orgId,
           superAdmin
@@ -85,10 +92,13 @@ export function RoomsPage() {
       setRooms(roomsRes.data || []);
 
       const occupied = new Set<string>();
+      const occupancy = new Map<string, OccupancyStay>();
       (staysRes.data || []).forEach((s) => {
         if (s.room_id) occupied.add(s.room_id);
+        if (s.room_id) occupancy.set(s.room_id, s as unknown as OccupancyStay);
       });
       setOccupiedRoomIds(occupied);
+      setOccupancyByRoom(occupancy);
 
       const reserved = new Set<string>();
       (reservationsRes.data || []).forEach((r) => {
@@ -213,6 +223,32 @@ const addRoom = async () => {
     } catch (error) {
       console.error("Error updating room:", error);
     }
+  };
+
+  const openOccupancyCorrection = (room: Room) => {
+    setCorrectingRoom(room);
+    setCorrectionCheckoutDate(new Date().toISOString().slice(0,10));
+    setCorrectionRoomStatus("cleaning");
+  };
+
+  const saveOccupancyCorrection = async () => {
+    if (!correctingRoom || savingCorrection) return;
+    const stay = occupancyByRoom.get(correctingRoom.id);
+    if (!stay) { alert("No open stay was found for this room. Refresh and try again."); return; }
+    if (!correctionCheckoutDate) { alert("Enter the guest's actual checkout date."); return; }
+    if (correctionCheckoutDate < stay.actual_check_in.slice(0,10)) { alert("Checkout cannot be before check-in."); return; }
+    setSavingCorrection(true);
+    try {
+      const { error: checkoutError } = await supabase.rpc("hotel_check_out_stay", { p_stay_id: stay.id, p_checkout_date: correctionCheckoutDate });
+      if (checkoutError) throw checkoutError;
+      const { error: roomError } = await filterByOrganizationId(supabase.from("rooms").update({ status: correctionRoomStatus }).eq("id", correctingRoom.id), orgId, superAdmin);
+      if (roomError) throw roomError;
+      setCorrectingRoom(null);
+      await fetchRooms();
+    } catch (error) {
+      console.error("Occupancy correction failed:", error);
+      alert(error instanceof Error ? error.message : "Could not correct room occupancy.");
+    } finally { setSavingCorrection(false); }
   };
 
   /* ----------------------------- */
@@ -398,10 +434,10 @@ const addRoom = async () => {
               const isComputed = occupiedRoomIds.has(room.id) || reservedRoomIds.has(room.id);
               if (isComputed) {
                 return (
-                  <div
-                    className={`w-full px-3 py-2 rounded-lg border ${getStatusColor(effectiveStatus)}`}
-                  >
-                    {effectiveStatus.charAt(0).toUpperCase() + effectiveStatus.slice(1)}
+                  <div className="space-y-2">
+                    <div className={`w-full px-3 py-2 rounded-lg border ${getStatusColor(effectiveStatus)}`}>{effectiveStatus.charAt(0).toUpperCase() + effectiveStatus.slice(1)}</div>
+                    {occupiedRoomIds.has(room.id) && <button type="button" onClick={() => openOccupancyCorrection(room)} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Correct occupancy / release room</button>}
+                    {reservedRoomIds.has(room.id) && !occupiedRoomIds.has(room.id) && <p className="text-xs text-slate-500">Status comes from an active reservation. Edit or cancel the reservation to release this room.</p>}
                   </div>
                 );
               }
@@ -468,6 +504,8 @@ const addRoom = async () => {
           </div>
         </div>
       )}
+
+      {correctingRoom && (() => { const stay=occupancyByRoom.get(correctingRoom.id); return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"><div className="w-full max-w-md rounded-xl bg-white p-6 shadow-xl"><h2 className="text-xl font-bold">Release Room {correctingRoom.room_number}</h2><p className="mt-2 text-sm text-slate-600">This room is occupied because {stay?.hotel_customers ? `${stay.hotel_customers.first_name} ${stay.hotel_customers.last_name}` : "a guest"} has an open stay from {stay?.actual_check_in?.slice(0,10) || "an unknown date"}. Closing that stay will make the room status editable again.</p><label className="mt-4 block text-sm font-medium text-slate-700">Actual checkout date<input type="date" min={stay?.actual_check_in?.slice(0,10)} max={new Date().toISOString().slice(0,10)} value={correctionCheckoutDate} onChange={(e)=>setCorrectionCheckoutDate(e.target.value)} className="mt-1 w-full rounded-lg border px-3 py-2"/></label><label className="mt-3 block text-sm font-medium text-slate-700">Room status after checkout<select value={correctionRoomStatus} onChange={(e)=>setCorrectionRoomStatus(e.target.value as "cleaning"|"available")} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="cleaning">Cleaning required</option><option value="available">Available now</option></select></label><div className="mt-5 flex justify-end gap-2"><button disabled={savingCorrection} onClick={()=>setCorrectingRoom(null)} className="rounded-lg border px-4 py-2">Cancel</button><button disabled={savingCorrection} onClick={()=>void saveOccupancyCorrection()} className="app-btn-primary rounded-lg">{savingCorrection?"Saving…":"Close stay and release room"}</button></div></div></div> })()}
 
       {showAddRoom && (
 
