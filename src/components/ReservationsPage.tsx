@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Edit, LogIn, Plus } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -77,6 +77,22 @@ export function ReservationsPage() {
 
   const [processingId, setProcessingId] = useState<string | null>(null);
   const [savingReservation, setSavingReservation] = useState(false);
+  const [filterSearch, setFilterSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState("all");
+  const [filterRoom, setFilterRoom] = useState("all");
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+
+  const filteredReservations = useMemo(() => reservations.filter((reservation) => {
+    const q = filterSearch.trim().toLowerCase();
+    const label = `${reservation.hotel_customers?.first_name || ""} ${reservation.hotel_customers?.last_name || ""} ${reservation.rooms?.room_number || ""}`.toLowerCase();
+    if (q && !label.includes(q)) return false;
+    if (filterStatus !== "all" && reservation.status !== filterStatus) return false;
+    if (filterRoom !== "all" && reservation.room_id !== filterRoom) return false;
+    if (filterFrom && reservation.check_out_date < filterFrom) return false;
+    if (filterTo && reservation.check_in_date > filterTo) return false;
+    return true;
+  }), [reservations, filterSearch, filterStatus, filterRoom, filterFrom, filterTo]);
 
   const fetchHotelCustomers = useCallback(async (): Promise<PropertyCustomer[]> => {
     if (useDesktopLocalCustomers) {
@@ -524,9 +540,19 @@ export function ReservationsPage() {
 
       {/* RESERVATIONS LIST */}
 
+      <div className="mb-5 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <label className="min-w-52 flex-1 text-xs font-medium text-slate-600">Guest or room<input value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} placeholder="Search guest or room" className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        <label className="text-xs font-medium text-slate-600">Status<select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="all">All statuses</option><option value="pending">Pending</option><option value="confirmed">Confirmed</option><option value="checked_in">Checked in</option><option value="checked_out">Checked out</option><option value="cancelled">Cancelled</option></select></label>
+        <label className="text-xs font-medium text-slate-600">Room<select value={filterRoom} onChange={(e) => setFilterRoom(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="all">All rooms</option>{rooms.map((room) => <option key={room.id} value={room.id}>{room.room_number}</option>)}</select></label>
+        <label className="text-xs font-medium text-slate-600">Staying from<input type="date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        <label className="text-xs font-medium text-slate-600">Staying to<input type="date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        <button type="button" onClick={() => { setFilterSearch(""); setFilterStatus("all"); setFilterRoom("all"); setFilterFrom(""); setFilterTo(""); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">Clear</button>
+        <p className="w-full text-xs text-slate-500">Showing {filteredReservations.length} of {reservations.length} reservations</p>
+      </div>
+
       <div className="space-y-4">
 
-        {reservations.map((reservation) => (
+        {filteredReservations.map((reservation) => (
 
           <div
             key={reservation.id}
@@ -596,6 +622,12 @@ export function ReservationsPage() {
           </div>
 
         ))}
+
+        {filteredReservations.length === 0 && (
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center text-slate-500">
+            No reservations match these filters.
+          </div>
+        )}
 
       </div>
 

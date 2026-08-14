@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { DoorOpen, LogOut, Printer, Edit } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { GuestBill } from './GuestBill';
@@ -40,6 +40,29 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
   const [savingEdit, setSavingEdit] = useState(false);
   const [checkoutStay, setCheckoutStay] = useState<Stay | null>(null);
   const [checkoutDate, setCheckoutDate] = useState("");
+  const [filterSearch, setFilterSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "checked_out">("all");
+  const [filterRoom, setFilterRoom] = useState("all");
+  const [filterFrom, setFilterFrom] = useState("");
+  const [filterTo, setFilterTo] = useState("");
+  const matchesFilters = (stay: Stay) => {
+    const q = filterSearch.trim().toLowerCase();
+    const label = `${stay.hotel_customers?.first_name || ""} ${stay.hotel_customers?.last_name || ""} ${stay.hotel_customers?.email || ""} ${stay.rooms?.room_number || ""}`.toLowerCase();
+    if (q && !label.includes(q)) return false;
+    if (filterRoom !== "all" && stay.room_id !== filterRoom) return false;
+    const arrival = stay.actual_check_in?.slice(0, 10) || "";
+    const departure = stay.actual_check_out?.slice(0, 10) || new Date().toISOString().slice(0, 10);
+    if (filterFrom && departure < filterFrom) return false;
+    if (filterTo && arrival > filterTo) return false;
+    return true;
+  };
+  const filteredActiveStays = useMemo(() => filterStatus === "checked_out" ? [] : stays.filter(matchesFilters), [stays, filterSearch, filterStatus, filterRoom, filterFrom, filterTo]);
+  const filteredCheckedOutStays = useMemo(() => filterStatus === "active" ? [] : checkedOutStays.filter(matchesFilters), [checkedOutStays, filterSearch, filterStatus, filterRoom, filterFrom, filterTo]);
+  const stayRooms = useMemo(() => {
+    const map = new Map<string, string>();
+    [...stays, ...checkedOutStays].forEach((stay) => { if (stay.room_id && stay.rooms?.room_number) map.set(stay.room_id, stay.rooms.room_number); });
+    return [...map.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+  }, [stays, checkedOutStays]);
 
   useEffect(() => {
     fetchActiveStays();
@@ -245,8 +268,18 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
         </div>
       </div>
 
+      <div className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
+        <label className="min-w-52 flex-1 text-xs font-medium text-slate-600">Guest, email or room<input value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} placeholder="Search guest, email or room" className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        <label className="text-xs font-medium text-slate-600">Stay status<select value={filterStatus} onChange={(e) => setFilterStatus(e.target.value as typeof filterStatus)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="all">Active and checked out</option><option value="active">Active only</option><option value="checked_out">Checked out only</option></select></label>
+        <label className="text-xs font-medium text-slate-600">Room<select value={filterRoom} onChange={(e) => setFilterRoom(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="all">All rooms</option>{stayRooms.map(([id, number]) => <option key={id} value={id}>{number}</option>)}</select></label>
+        <label className="text-xs font-medium text-slate-600">Stay from<input type="date" value={filterFrom} onChange={(e) => setFilterFrom(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        <label className="text-xs font-medium text-slate-600">Stay to<input type="date" value={filterTo} onChange={(e) => setFilterTo(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+        <button type="button" onClick={() => { setFilterSearch(""); setFilterStatus("all"); setFilterRoom("all"); setFilterFrom(""); setFilterTo(""); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm">Clear</button>
+        <p className="w-full text-xs text-slate-500">Showing {filteredActiveStays.length} active and {filteredCheckedOutStays.length} checked-out stays</p>
+      </div>
+
       <div className="space-y-4">
-        {stays.map((stay) => (
+        {filteredActiveStays.map((stay) => (
           <div
             key={stay.id}
             id={stay.property_customer_id ? `stay-guest-${stay.property_customer_id}` : undefined}
@@ -335,7 +368,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
         </div>
       )}
 
-      {stays.length === 0 && (
+      {filteredActiveStays.length === 0 && filterStatus !== "checked_out" && (
         <div className="text-center py-12 bg-white rounded-xl border border-slate-200">
           <DoorOpen className="w-16 h-16 text-slate-300 mx-auto mb-4" />
           <p className="text-slate-500 text-lg">No active stays</p>
@@ -343,13 +376,13 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
         </div>
       )}
 
-      <div className="mt-10">
+      {filterStatus !== "active" && <div className="mt-10">
         <h2 className="text-xl font-semibold text-slate-900 mb-3">Recently Checked Out</h2>
-        {checkedOutStays.length === 0 ? (
+        {filteredCheckedOutStays.length === 0 ? (
           <p className="text-slate-500 text-sm">No checked-out entries yet.</p>
         ) : (
           <div className="space-y-3">
-            {checkedOutStays.map((stay) => (
+            {filteredCheckedOutStays.map((stay) => (
               <div key={stay.id} className="bg-white rounded-xl border border-slate-200 p-4 flex items-center justify-between gap-3">
                 <div>
                   <p className="font-medium text-slate-900">
@@ -373,7 +406,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
             ))}
           </div>
         )}
-      </div>
+      </div>}
 
       {checkoutStay && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
