@@ -43,23 +43,30 @@ export function RoomBillingReportPage() {
         orgId,
         superAdmin
       );
-      const billingsQuery = filterByOrganizationId(
-        supabase.from("billing").select("stay_id,amount,charge_type,stay_night_date,charged_at").not("stay_id", "is", null).limit(10000),
-        orgId,
-        superAdmin
-      );
-      const paymentsQuery = filterByOrganizationId(
-        supabase.from("payments").select("stay_id,amount").eq("payment_status", "completed").not("stay_id", "is", null).limit(10000),
-        orgId,
-        superAdmin
-      );
-      const [staysResult, billingsResult, paymentsResult] = await Promise.all([staysQuery, billingsQuery, paymentsQuery]);
+      const staysResult = await staysQuery;
       if (staysResult.error) throw staysResult.error;
-      if (billingsResult.error) throw billingsResult.error;
-      if (paymentsResult.error) throw paymentsResult.error;
-      setStays((staysResult.data || []) as unknown as ReconciliationStay[]);
-      setBillings((billingsResult.data || []) as unknown as FolioAmount[]);
-      setPayments((paymentsResult.data || []) as unknown as FolioAmount[]);
+      const stayRows = (staysResult.data || []) as unknown as ReconciliationStay[];
+      const stayIds = stayRows.map((stay) => stay.id);
+      if (stayIds.length === 0) {
+        setStays([]);
+        setBillings([]);
+        setPayments([]);
+        return;
+      }
+      // A stay is the authoritative tenant link for room folio activity. Querying
+      // by its IDs also keeps this report aligned with the rows shown on Guest Billing.
+      const stayIdBatches = Array.from({ length: Math.ceil(stayIds.length / 100) }, (_, index) => stayIds.slice(index * 100, index * 100 + 100));
+      const [billingResults, paymentResults] = await Promise.all([
+        Promise.all(stayIdBatches.map((ids) => supabase.from("billing").select("stay_id,amount,charge_type,stay_night_date,charged_at").in("stay_id", ids).limit(10000))),
+        Promise.all(stayIdBatches.map((ids) => supabase.from("payments").select("stay_id,amount").eq("payment_status", "completed").in("stay_id", ids).limit(10000))),
+      ]);
+      const billingError = billingResults.find((result) => result.error)?.error;
+      const paymentError = paymentResults.find((result) => result.error)?.error;
+      if (billingError) throw billingError;
+      if (paymentError) throw paymentError;
+      setStays(stayRows);
+      setBillings(billingResults.flatMap((result) => result.data || []) as unknown as FolioAmount[]);
+      setPayments(paymentResults.flatMap((result) => result.data || []) as unknown as FolioAmount[]);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load room reconciliation.");
     } finally {
