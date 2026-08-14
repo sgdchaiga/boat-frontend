@@ -4,6 +4,7 @@ import { computeRangeInTimezone, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { PageNotes } from "../common/PageNotes";
+import { formatUnitOfMeasure } from "../../lib/unitOfMeasure";
 
 interface VendorSummaryRow {
   vendor: string;
@@ -75,7 +76,7 @@ export function DailyPurchasesSummaryPage() {
         filterByOrganizationId(
           supabase
             .from("purchase_orders")
-            .select("id, order_date, created_at, vendor_id, vendors(name), purchase_order_items(description, quantity, cost_price)")
+            .select("id, order_date, created_at, vendor_id, vendors(name), purchase_order_items(product_id, description, quantity, cost_price)")
             .gte("created_at", fromStr)
             .lt("created_at", toStr),
           orgId,
@@ -156,8 +157,24 @@ export function DailyPurchasesSummaryPage() {
         created_at: string | null;
         vendor_id: string | null;
         vendors?: { name?: string | null } | null;
-        purchase_order_items?: Array<{ description: string; quantity: number | null; cost_price: number | null }> | null;
+        purchase_order_items?: Array<{ product_id: string | null; description: string; quantity: number | null; cost_price: number | null }> | null;
       }>;
+
+      const productIds = Array.from(
+        new Set(
+          purchaseOrders.flatMap((po) => (po.purchase_order_items || []).map((item) => item.product_id).filter((id): id is string => !!id))
+        )
+      );
+      const unitByProductId = new Map<string, string>();
+      if (productIds.length > 0) {
+        let productsQuery = supabase.from("products").select("id,unit_of_measure").in("id", productIds);
+        if (orgId) productsQuery = productsQuery.eq("organization_id", orgId);
+        const { data: products, error: productsError } = await productsQuery;
+        if (productsError) throw productsError;
+        ((products || []) as Array<{ id: string; unit_of_measure: string | null }>).forEach((product) => {
+          unitByProductId.set(product.id, formatUnitOfMeasure(product.unit_of_measure));
+        });
+      }
 
       const details: PurchaseLineDetail[] = [];
 
@@ -176,7 +193,7 @@ export function DailyPurchasesSummaryPage() {
             description: (it.description || "").trim() || "—",
             quantity: qty,
             rate,
-            unit: "ea",
+            unit: it.product_id ? unitByProductId.get(it.product_id) || "Each" : "Each",
             amount: qty * rate,
           });
         }
@@ -192,7 +209,7 @@ export function DailyPurchasesSummaryPage() {
           description: (b.description || "").trim() || "Bill / GRN",
           quantity: 1,
           rate: amt,
-          unit: "ea",
+          unit: "Each",
           amount: amt,
         });
       }
