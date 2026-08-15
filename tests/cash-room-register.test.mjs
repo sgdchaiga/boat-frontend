@@ -20,6 +20,7 @@ test("cash register posts occupancy, daily bill, discount and default cash payme
   assert.match(page, /paid: stay \? paidStayIds\.has\(stay\.id\) : true/);
   assert.match(page, /save_daily_cash_room_register_customer_entry/);
   assert.match(page, /savedStayIds/);
+  assert.match(page, /stay\.billing_mode === "cash_register" && !savedStayIds\.has\(stay\.id\)/);
   assert.match(page, /Select customer/);
   assert.match(page, /effectiveRoomRate/);
   assert.match(page, /Automatic rate/);

@@ -70,6 +70,9 @@ export function CashRoomRegisterPage() {
     const activeByRoom = new Map<string, any>();
     for (const stay of (staysResult.data || []) as any[]) {
       if (!stay.room_id || dateInTimeZone(stay.actual_check_in, timeZone) > registerDate) continue;
+      // Cash Room Register occupancy is strictly daily. A legacy stay shell
+      // must never mark another date occupied without that date's transaction.
+      if (stay.billing_mode === "cash_register" && !savedStayIds.has(stay.id)) continue;
       // Checkout is an exclusive occupancy boundary: a guest checking out on
       // the 15th occupied through the 14th, not the night of the 15th.
       if (stay.actual_check_out && dateInTimeZone(stay.actual_check_out, timeZone) <= registerDate) continue;
