@@ -72,7 +72,11 @@ export function CashRoomRegisterPage() {
       // Checkout is an exclusive occupancy boundary: a guest checking out on
       // the 15th occupied through the 14th, not the night of the 15th.
       if (stay.actual_check_out && dateInTimeZone(stay.actual_check_out, timeZone) <= registerDate) continue;
-      if (!activeByRoom.has(stay.room_id)) activeByRoom.set(stay.room_id, stay);
+      const current = activeByRoom.get(stay.room_id);
+      // Legacy imports can leave more than one cash-register stay overlapping a
+      // date. Prefer the stay carrying that date's room bill so saved entries
+      // remain editable instead of an orphan shell masking them.
+      if (!current || (billedStayIds.has(stay.id) && !billedStayIds.has(current.id))) activeByRoom.set(stay.room_id, stay);
     }
     const next = ((roomsResult.data || []) as any[]).map((room): RoomRow => {
       const stay = activeByRoom.get(room.id);
