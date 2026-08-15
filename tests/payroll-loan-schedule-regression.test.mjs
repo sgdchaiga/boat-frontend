@@ -8,4 +8,7 @@ test("loan schedule supports flat default and declining interest", async () => {
   assert.match(math, /method: PayrollLoanInterestMethod = "flat"/);
   assert.match(math, /method === "declining" \? openingBalance \* monthlyRate : flatInterest/);
   assert.match(page, /Edit/); assert.match(page, /Schedule/); assert.match(page, /Cancel/);
+  assert.match(page, /Repayment period \(months\)/);
+  assert.match(page, /Total amount payable/);
+  assert.match(page, /const i = repaymentPreview\.installment/);
 });

@@ -23,7 +23,7 @@ type LoanRow = {
   status: "active" | "completed" | "cancelled";
 };
 
-const emptyForm = { staff_id: "", reference: "", principal_amount: "", balance_remaining: "", installment_amount: "", interest_rate_pct: "0", interest_method: "flat" as PayrollLoanInterestMethod, term_months: "1" };
+const emptyForm = { staff_id: "", reference: "", principal_amount: "", balance_remaining: "", interest_rate_pct: "0", interest_method: "flat" as PayrollLoanInterestMethod, term_months: "1" };
 
 type Props = { readOnly?: boolean };
 
@@ -38,6 +38,16 @@ export function PayrollLoansPage({ readOnly }: Props) {
   const [form, setForm] = useState(emptyForm);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [scheduleId, setScheduleId] = useState<string | null>(null);
+  const repaymentPreview = useMemo(() => {
+    const principal = Math.max(0, Number(form.principal_amount) || 0);
+    const rate = Math.max(0, Number(form.interest_rate_pct) || 0);
+    const months = Math.max(1, Math.trunc(Number(form.term_months) || 1));
+    const schedule = buildPayrollLoanSchedule(principal, rate, months, form.interest_method);
+    return {
+      total: payrollLoanTotalRepayable(principal, rate, months, form.interest_method),
+      installment: schedule[0]?.payment ?? 0,
+    };
+  }, [form.principal_amount, form.interest_rate_pct, form.interest_method, form.term_months]);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -70,7 +80,7 @@ export function PayrollLoansPage({ readOnly }: Props) {
     const existing = loans.find((loan) => loan.id === editingId);
     const alreadyRecovered = existing ? Math.max(0, Number(existing.total_repayable || existing.principal_amount) - Number(existing.balance_remaining)) : 0;
     const b = form.balance_remaining.trim() === "" ? Math.max(0, totalRepayable - alreadyRecovered) : Number(form.balance_remaining);
-    const i = form.installment_amount.trim() === "" ? roundInstallment(totalRepayable / term) : Number(form.installment_amount);
+    const i = repaymentPreview.installment;
     if (!(p > 0 && b > 0 && i > 0)) {
       setErr("Principal, outstanding balance, and monthly installment must be greater than zero.");
       return;
@@ -114,7 +124,7 @@ export function PayrollLoansPage({ readOnly }: Props) {
 
   const editLoan = (loan: LoanRow) => {
     setEditingId(loan.id);
-    setForm({ staff_id: loan.staff_id, reference: loan.reference || "", principal_amount: String(loan.principal_amount), balance_remaining: String(loan.balance_remaining), installment_amount: String(loan.installment_amount), interest_rate_pct: String(loan.interest_rate_pct || 0), interest_method: loan.interest_method || "flat", term_months: String(loan.term_months || 1) });
+    setForm({ staff_id: loan.staff_id, reference: loan.reference || "", principal_amount: String(loan.principal_amount), balance_remaining: String(loan.balance_remaining), interest_rate_pct: String(loan.interest_rate_pct || 0), interest_method: loan.interest_method || "flat", term_months: String(loan.term_months || 1) });
   };
 
   const cancelLoan = async (loan: LoanRow) => {
@@ -174,7 +184,7 @@ export function PayrollLoansPage({ readOnly }: Props) {
             <option value="flat">Flat interest</option><option value="declining">Declining balance</option>
           </select>
           <input type="number" min="0" step="0.01" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Annual interest %" value={form.interest_rate_pct} onChange={(e) => setForm((f) => ({ ...f, interest_rate_pct: e.target.value }))} />
-          <input type="number" min="1" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Term (months)" value={form.term_months} onChange={(e) => setForm((f) => ({ ...f, term_months: e.target.value }))} />
+          <label className="text-sm"><span className="text-slate-600">Repayment period (months)</span><input type="number" min="1" className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={form.term_months} onChange={(e) => setForm((f) => ({ ...f, term_months: e.target.value }))} /></label>
           <input
             type="number"
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
@@ -182,13 +192,10 @@ export function PayrollLoansPage({ readOnly }: Props) {
             value={form.balance_remaining}
             onChange={(e) => setForm((f) => ({ ...f, balance_remaining: e.target.value }))}
           />
-          <input
-            type="number"
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm md:col-span-2"
-            placeholder="Monthly installment (auto if blank)"
-            value={form.installment_amount}
-            onChange={(e) => setForm((f) => ({ ...f, installment_amount: e.target.value }))}
-          />
+          <div className="md:col-span-2 grid grid-cols-2 gap-3 rounded-lg border border-indigo-100 bg-indigo-50 p-3 text-sm">
+            <div><span className="block text-xs text-slate-500">Total amount payable</span><strong>{repaymentPreview.total.toLocaleString()}</strong></div>
+            <div><span className="block text-xs text-slate-500">{form.interest_method === "declining" ? "First payroll deduction" : "Monthly amount payable"}</span><strong>{repaymentPreview.installment.toLocaleString()}</strong></div>
+          </div>
           <button type="button" onClick={() => void saveLoan()} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 w-fit">
             {editingId ? "Save changes" : "Add loan"}
           </button>
@@ -236,7 +243,6 @@ export function PayrollLoansPage({ readOnly }: Props) {
   );
 }
 
-function roundInstallment(value: number) { return Math.round(value * 100) / 100; }
 function LoanSchedule({ loan }: { loan: LoanRow }) {
   const rows = buildPayrollLoanSchedule(loan.principal_amount, loan.interest_rate_pct || 0, loan.term_months || 1, loan.interest_method || "flat");
   return <div className="overflow-x-auto"><p className="font-medium mb-2">Repayment schedule · Total {rows.reduce((s, r) => s + r.payment, 0).toLocaleString()}</p><table className="w-full text-xs"><thead><tr><th className="text-left p-2">#</th><th className="text-right p-2">Opening</th><th className="text-right p-2">Principal</th><th className="text-right p-2">Interest</th><th className="text-right p-2">Payment</th><th className="text-right p-2">Closing</th></tr></thead><tbody>{rows.map(r => <tr key={r.installment} className="border-t"><td className="p-2">{r.installment}</td>{[r.openingBalance,r.principal,r.interest,r.payment,r.closingBalance].map((v,i)=><td key={i} className="p-2 text-right">{v.toLocaleString()}</td>)}</tr>)}</tbody></table></div>;
