@@ -6,8 +6,9 @@ const root = new URL("../", import.meta.url);
 const source = (path) => readFile(new URL(path, root), "utf8");
 
 test("VSLA financial postings use atomic database functions", async () => {
-  const [migration, meetings, repayments, loans, savings] = await Promise.all([
+  const [migration, consensusMigration, meetings, repayments, loans, savings] = await Promise.all([
     source("supabase/migrations/20260815123000_vsla_atomic_posting_controls.sql"),
+    source("supabase/migrations/20260815239000_vsla_consensus_meeting_loans.sql"),
     source("src/components/vsla/VslaMeetingsPage.tsx"),
     source("src/components/vsla/VslaRepaymentsPage.tsx"),
     source("src/components/vsla/VslaLoansPage.tsx"),
@@ -21,11 +22,13 @@ test("VSLA financial postings use atomic database functions", async () => {
   ]) {
     assert.match(migration, new RegExp(`FUNCTION public\\.${fn}`));
   }
-  assert.match(meetings, /rpc\("vsla_disburse_loan"/);
+  assert.match(consensusMigration, /FUNCTION public\.vsla_record_meeting_loan/);
+  assert.match(meetings, /rpc\("vsla_record_meeting_loan"/);
   assert.match(meetings, /"vsla_post_loan_repayment"/);
   assert.match(meetings, /"vsla_set_member_meeting_shares"/);
   assert.match(repayments, /rpc\("vsla_post_loan_repayment"/);
-  assert.match(loans, /"vsla_post_loan_repayment"/);
+  assert.match(loans, /VSLA Loan Register/);
+  assert.doesNotMatch(loans, /Approve/);
   assert.match(savings, /"vsla_set_member_meeting_shares"/);
 });
 

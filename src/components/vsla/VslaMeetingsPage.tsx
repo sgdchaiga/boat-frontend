@@ -35,8 +35,11 @@ type LoanRow = {
   principal_amount: number;
   interest_rate_percent: number;
   interest_type: "flat" | "declining";
+  duration_meetings: number;
   disbursed_on: string | null;
+  disbursement_meeting_id: string | null;
 };
+type RepaymentRow = { id: string; meeting_id: string | null; loan_id: string; principal_paid: number; interest_paid: number; penalty_paid: number; paid_on: string };
 type VslaSettingsRow = { share_value: number; max_shares_per_meeting: number };
 type TxnKind =
   | "loan_issue"
@@ -83,6 +86,7 @@ export function VslaMeetingsPage({
   const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
   const [txns, setTxns] = useState<MeetingTxnRow[]>([]);
   const [shareTxns, setShareTxns] = useState<ShareTxnRow[]>([]);
+  const [repayments, setRepayments] = useState<RepaymentRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -100,7 +104,10 @@ export function VslaMeetingsPage({
   const [txnNote, setTxnNote] = useState("");
   const [shareValue, setShareValue] = useState("2000");
   const [maxStamps, setMaxStamps] = useState(5);
-  const [disburseLoanId, setDisburseLoanId] = useState("");
+  const [loanMemberId, setLoanMemberId] = useState("");
+  const [loanAmount, setLoanAmount] = useState("");
+  const [loanPeriod, setLoanPeriod] = useState("3");
+  const [loanInterest, setLoanInterest] = useState("10");
   const [loanId, setLoanId] = useState("");
   const [principalPaid, setPrincipalPaid] = useState("0");
   const [interestPaid, setInterestPaid] = useState("0");
@@ -138,7 +145,7 @@ export function VslaMeetingsPage({
       supabase
         .from("vsla_loans")
         .select(
-          "id,member_id,status,outstanding_balance,principal_amount,interest_rate_percent,interest_type,disbursed_on",
+          "id,member_id,status,outstanding_balance,principal_amount,interest_rate_percent,interest_type,duration_meetings,disbursed_on,disbursement_meeting_id",
         )
         .order("applied_at", { ascending: false }),
       orgId,
@@ -168,6 +175,10 @@ export function VslaMeetingsPage({
       orgId,
       superAdmin,
     );
+    const repaymentQ = filterByOrganizationId(
+      supabase.from("vsla_loan_repayments").select("id,meeting_id,loan_id,principal_paid,interest_paid,penalty_paid,paid_on").order("created_at", { ascending: false }),
+      orgId, superAdmin,
+    );
     const [
       meetingsRes,
       membersRes,
@@ -175,8 +186,8 @@ export function VslaMeetingsPage({
       loansRes,
       txRes,
       shareRes,
-      settingsRes,
-    ] = await Promise.all([mq, memQ, atQ, lnQ, txQ, shareQ, settingsQ]);
+      settingsRes, repaymentsRes,
+    ] = await Promise.all([mq, memQ, atQ, lnQ, txQ, shareQ, settingsQ, repaymentQ]);
     if (
       meetingsRes.error ||
       membersRes.error ||
@@ -184,7 +195,7 @@ export function VslaMeetingsPage({
       loansRes.error ||
       txRes.error ||
       shareRes.error ||
-      settingsRes.error
+      settingsRes.error || repaymentsRes.error
     ) {
       setError(
         meetingsRes.error?.message ??
@@ -194,6 +205,7 @@ export function VslaMeetingsPage({
           txRes.error?.message ??
           shareRes.error?.message ??
           settingsRes.error?.message ??
+          repaymentsRes.error?.message ??
           "Failed to load meetings.",
       );
     } else {
@@ -204,6 +216,7 @@ export function VslaMeetingsPage({
       setLoans((loansRes.data ?? []) as LoanRow[]);
       setTxns((txRes.data ?? []) as MeetingTxnRow[]);
       setShareTxns((shareRes.data ?? []) as ShareTxnRow[]);
+      setRepayments((repaymentsRes.data ?? []) as RepaymentRow[]);
       const settings = settingsRes.data as VslaSettingsRow | null;
       if (settings?.share_value != null)
         setShareValue(String(settings.share_value));
@@ -227,10 +240,15 @@ export function VslaMeetingsPage({
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab);
     if (initialDisburseLoanId) {
-      setDisburseLoanId(initialDisburseLoanId);
       setActiveTab("loans");
+      const legacyLoan = loans.find((loan) => loan.id === initialDisburseLoanId);
+      if (legacyLoan) {
+        setLoanMemberId(legacyLoan.member_id);
+        setLoanAmount(String(legacyLoan.principal_amount));
+        setLoanInterest(String(legacyLoan.interest_rate_percent));
+      }
     }
-  }, [initialDisburseLoanId, initialTab]);
+  }, [initialDisburseLoanId, initialTab, loans]);
 
   const selectedMeeting =
     meetings.find((m) => m.id === selectedMeetingId) ?? null;
@@ -333,26 +351,28 @@ export function VslaMeetingsPage({
     await load();
   };
 
-  const disburseApprovedLoan = async () => {
-    if (readOnly || !selectedMeetingId || meetingClosed || !disburseLoanId)
-      return;
-    const loan = loans.find((l) => l.id === disburseLoanId);
-    if (!loan || loan.status !== "approved") {
-      setError("Selected loan must be approved before disbursement.");
-      return;
+  const recordMeetingLoan = async () => {
+    if (readOnly || !selectedMeetingId || !meetingOpen) return;
+    const amount = Number(loanAmount); const period = Number(loanPeriod); const interest = Number(loanInterest);
+    if (!loanMemberId || amount <= 0 || !Number.isInteger(period) || period <= 0 || interest < 0) {
+      setError("Member, loan disbursed, period and interest are required."); return;
     }
     setSaving(true);
     setError(null);
-    const { error: postingError } = await supabase.rpc("vsla_disburse_loan", {
-      p_loan_id: loan.id,
+    const { error: postingError } = await supabase.rpc("vsla_record_meeting_loan", {
       p_meeting_id: selectedMeetingId,
+      p_member_id: loanMemberId,
+      p_principal: amount,
+      p_period_months: period,
+      p_interest_rate: interest,
+      p_interest_type: "flat",
     });
     if (postingError) {
       setError(postingError.message);
       setSaving(false);
       return;
     }
-    setDisburseLoanId("");
+    setLoanMemberId(""); setLoanAmount(""); setLoanPeriod("3");
     setSaving(false);
     await load();
   };
@@ -493,6 +513,8 @@ export function VslaMeetingsPage({
   const memberName = new Map(
     members.map((m) => [m.id, formatVslaMemberLabel(m)]),
   );
+  const loansForMeeting = loans.filter((loan) => loan.disbursement_meeting_id === selectedMeetingId);
+  const repaymentsForMeeting = repayments.filter((repayment) => repayment.meeting_id === selectedMeetingId);
   const expectedCash =
     Number(openingCash || 0) +
     savingsTotal +
@@ -765,49 +787,20 @@ export function VslaMeetingsPage({
 
         {activeTab === "loans" ? (
           <div className="space-y-3">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-              <label className="text-xs text-slate-600 md:col-span-2">
-                Approved Loan To Disburse
-                <select
-                  value={disburseLoanId}
-                  onChange={(e) => setDisburseLoanId(e.target.value)}
-                  className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                >
-                  <option value="">Select approved loan</option>
-                  {loans
-                    .filter((l) => l.status === "approved")
-                    .map((l) => (
-                      <option key={l.id} value={l.id}>
-                        {memberName.get(l.member_id) ?? "Unknown"} -{" "}
-                        {Number(l.principal_amount || 0).toLocaleString()}
-                      </option>
-                    ))}
-                </select>
-              </label>
-              <div className="flex items-end">
-                <button
-                  type="button"
-                  onClick={() => void disburseApprovedLoan()}
-                  disabled={
-                    !selectedMeetingId ||
-                    readOnly ||
-                     !meetingOpen ||
-                    saving ||
-                    !disburseLoanId
-                  }
-                  className="px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50"
-                >
-                  Disburse Selected Loan
-                </button>
-              </div>
-              <div className="text-xs text-slate-600 flex items-end">
-                Loan details and approvals are managed in Loan Management.
-              </div>
+            <p className="text-sm text-slate-600">Record the loan agreed by members during this meeting. It is disbursed immediately without a separate approval stage.</p>
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+              <label className="text-xs text-slate-600">Member<select value={loanMemberId} onChange={(e) => setLoanMemberId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">Select member</option>{members.map((member) => <option key={member.id} value={member.id}>{formatVslaMemberLabel(member)}</option>)}</select></label>
+              <label className="text-xs text-slate-600">Loan disbursed<input type="number" min="1" value={loanAmount} onChange={(e) => setLoanAmount(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></label>
+              <label className="text-xs text-slate-600">Period (months)<input type="number" min="1" step="1" value={loanPeriod} onChange={(e) => setLoanPeriod(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></label>
+              <label className="text-xs text-slate-600">Interest % / month<input type="number" min="0" step="0.01" value={loanInterest} onChange={(e) => setLoanInterest(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></label>
+              <div className="flex items-end"><button type="button" onClick={() => void recordMeetingLoan()} disabled={!meetingOpen || readOnly || saving || !loanMemberId} className="w-full px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50">Disburse Loan</button></div>
             </div>
+            <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[620px] text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Member</th><th className="p-3 text-right">Loan disbursed</th><th className="p-3 text-right">Period</th><th className="p-3 text-right">Interest</th><th className="p-3 text-right">Balance</th></tr></thead><tbody>{loansForMeeting.map((loan) => <tr key={loan.id} className="border-t"><td className="p-3">{memberName.get(loan.member_id) ?? "Unknown"}</td><td className="p-3 text-right">{Number(loan.principal_amount).toLocaleString()}</td><td className="p-3 text-right">{loan.duration_meetings} months</td><td className="p-3 text-right">{loan.interest_rate_percent}%</td><td className="p-3 text-right font-semibold">{Number(loan.outstanding_balance).toLocaleString()}</td></tr>)}{!loansForMeeting.length && <tr><td colSpan={5} className="p-5 text-center text-slate-500">No loans disbursed in this meeting.</td></tr>}</tbody></table></div>
             <p className="text-sm text-slate-700">
               Loans issued in this meeting:{" "}
               <strong>{loansIssued.toLocaleString()}</strong>
             </p>
+            <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[620px] text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Member</th><th className="p-3 text-right">Loan paid</th><th className="p-3 text-right">Interest paid</th><th className="p-3 text-right">Total paid</th><th className="p-3 text-right">Balance</th></tr></thead><tbody>{repaymentsForMeeting.map((repayment) => { const loan = loans.find((item) => item.id === repayment.loan_id); const total = Number(repayment.principal_paid)+Number(repayment.interest_paid)+Number(repayment.penalty_paid); return <tr key={repayment.id} className="border-t"><td className="p-3">{loan ? memberName.get(loan.member_id) ?? "Unknown" : "Unknown"}</td><td className="p-3 text-right">{Number(repayment.principal_paid).toLocaleString()}</td><td className="p-3 text-right">{Number(repayment.interest_paid).toLocaleString()}</td><td className="p-3 text-right font-semibold">{total.toLocaleString()}</td><td className="p-3 text-right">{Number(loan?.outstanding_balance || 0).toLocaleString()}</td></tr>; })}{!repaymentsForMeeting.length && <tr><td colSpan={5} className="p-5 text-center text-slate-500">No repayments recorded in this meeting.</td></tr>}</tbody></table></div>
           </div>
         ) : null}
 
