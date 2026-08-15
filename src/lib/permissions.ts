@@ -102,6 +102,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "rooms", label: "Rooms", group: "Front desk" },
   { page: "reservations", label: "Reservations", group: "Front desk" },
   { page: "checkin", label: "Check in", group: "Front desk" },
+  { page: "cash_room_register", label: "Cash room register", group: "Front desk" },
   { page: "stays", label: "Active stays", group: "Front desk" },
   { page: "housekeeping", label: "Housekeeping", group: "Front desk" },
   { page: "hotel_advanced_pms", label: "Advanced PMS", group: "Front desk" },

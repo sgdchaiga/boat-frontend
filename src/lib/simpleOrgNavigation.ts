@@ -297,7 +297,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Items", page: "Products" },
     { name: "Buy stock", page: "purchases_orders" },
     { name: "Receive stock / GRN bills", page: "purchases_bills" },
-    ...(isHotelOrMixed ? [{ name: "Cash stock purchase", page: "purchases_bills", state: { cashPurchaseOpen: true } } as NavChild] : []),
+    { name: "Cash stock purchase", page: "purchases_bills", state: { cashPurchaseOpen: true } },
     { name: "Suppliers", page: "purchases_vendors" },
     { name: "Stock levels", page: "inventory_stock_balances" },
     { name: "Inventory movements", page: "inventory_stock_adjustments" },
@@ -332,6 +332,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
         children: [
           { name: "Reservations", page: "reservations" },
           { name: "Check-in", page: "checkin" },
+          { name: "Cash room register", page: "cash_room_register" },
           { name: "Active stays", page: "stays" },
           { name: "Customers", page: "hotel_customers" },
           { name: "Housekeeping", page: "housekeeping" },

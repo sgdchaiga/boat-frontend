@@ -6,12 +6,16 @@ const modal = await readFile(new URL("../src/components/purchases/HotelCashPurch
 const bills = await readFile(new URL("../src/components/purchases/BillsPage.tsx", import.meta.url), "utf8");
 const nav = await readFile(new URL("../src/lib/simpleOrgNavigation.ts", import.meta.url), "utf8");
 
-test("hotel stock exposes a multi-line cash purchase workflow", () => {
+test("BOAT exposes a native multi-line cash stock purchase workflow", () => {
   assert.match(nav, /Cash stock purchase/);
   assert.match(bills, /HotelCashPurchaseModal/);
   assert.match(modal, /Add item/);
   assert.match(modal, /quantity \* rate/);
   assert.match(nav, /cashPurchaseOpen: true/);
+  assert.doesNotMatch(nav, /isHotelOrMixed \? \[\{ name: "Cash stock purchase"/);
+  assert.doesNotMatch(bills, /openCashPurchase && isHotelOrMixed/);
+  assert.match(bills, /Cash stock purchase/);
+  assert.match(modal, /BOAT inventory/);
 });
 
 test("cash stock purchase receives inventory and can pay immediately", () => {

@@ -80,6 +80,7 @@ const GeneralBusinessCashbookPage = lazyNamed(() => import('./components/general
 const RoomsPage = lazyNamed(() => import('./components/RoomsPage'), 'RoomsPage');
 const ReservationsPage = lazyNamed(() => import('./components/ReservationsPage'), 'ReservationsPage');
 const CheckInPage = lazyNamed(() => import('./components/CheckInPage'), 'CheckInPage');
+const CashRoomRegisterPage = lazyNamed(() => import('./components/CashRoomRegisterPage'), 'CashRoomRegisterPage');
 const CustomersPage = lazyNamed(() => import('./components/CustomersPage'), 'CustomersPage');
 const ActiveStaysPage = lazyNamed(() => import('./components/ActiveStaysPage'), 'ActiveStaysPage');
 const POSPage = lazyNamed(() => import('./components/POSPage'), 'POSPage');
@@ -1387,6 +1388,8 @@ function AppContent() {
         return <ReservationsPage />;
       case 'checkin':
         return <CheckInPage />;
+      case 'cash_room_register':
+        return <CashRoomRegisterPage />;
       case 'hotel_customers':
         return (
           <CustomersPage
@@ -1653,7 +1656,7 @@ function AppContent() {
       case 'wallet':
         return <WalletPage readOnly={access.readOnly} />;
       case 'treasury':
-        return <TreasuryPage readOnly={access.readOnly} initialTab={(pageState?.treasuryTab as "overview" | "cash-control" | "movements" | "end-of-day" | "approvals" | "disbursements" | "collections" | "history" | undefined) ?? "overview"} cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined} />;
+        return <TreasuryPage readOnly={access.readOnly} initialTab={(pageState?.treasuryTab as "overview" | "cash-control" | "movements" | "end-of-day" | "daily-method" | "daily-department" | "approvals" | "disbursements" | "collections" | "history" | undefined) ?? "overview"} cashbookDraft={pageState?.cashbookDraft as Record<string, unknown> | undefined} />;
       case 'finance_overview':
         return <FinanceOverviewPage onNavigate={navigate} />;
       case 'staff':

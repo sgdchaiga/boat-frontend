@@ -225,7 +225,6 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
   const canApproveBills = canApprove("bills", user?.role);
   const isOrgSuperAdmin = user?.role === "super_admin" || user?.isSuperAdmin === true;
   const isAdmin = user?.role === "admin" || isOrgSuperAdmin;
-  const isHotelOrMixed = user?.business_type === "hotel" || user?.business_type === "mixed";
   const [bills, setBills] = useState<Bill[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
@@ -262,8 +261,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
   const [visibleColumns, setVisibleColumns] = useState<Record<BillColumn, boolean>>(initialBillColumns);
 
   useEffect(() => {
-    if (openCashPurchase && isHotelOrMixed && !readOnly) setShowCashPurchase(true);
-  }, [openCashPurchase, isHotelOrMixed, readOnly]);
+    if (openCashPurchase && !readOnly) setShowCashPurchase(true);
+  }, [openCashPurchase, readOnly]);
 
   useEffect(() => {
     window.localStorage.setItem(BILL_COLUMN_STORAGE_KEY, JSON.stringify(visibleColumns));
@@ -1365,11 +1364,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-        {isHotelOrMixed && (
-          <button type="button" onClick={() => setShowCashPurchase(true)} disabled={readOnly} className="app-btn-secondary disabled:opacity-50">
-            <Plus className="w-5 h-5" /> Cash purchase
-          </button>
-        )}
+        <button type="button" onClick={() => setShowCashPurchase(true)} disabled={readOnly} className="app-btn-secondary disabled:opacity-50">
+          <Plus className="w-5 h-5" /> Cash stock purchase
+        </button>
         <button type="button" onClick={() => void fetchData()} className="app-btn-secondary">
           Reconcile payment dates
         </button>

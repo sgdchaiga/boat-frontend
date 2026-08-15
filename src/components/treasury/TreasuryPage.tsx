@@ -43,7 +43,7 @@ type Disbursement = {
   reference: string | null;
   status: string | null;
 };
-type TreasuryTab = "overview" | "cash-control" | "movements" | "end-of-day" | "approvals" | "disbursements" | "collections" | "history";
+type TreasuryTab = "overview" | "cash-control" | "movements" | "end-of-day" | "daily-method" | "daily-department" | "approvals" | "disbursements" | "collections" | "history";
 type PaymentMethod = "cash" | "bank_transfer" | "mobile_money" | "wallet" | "card";
 type FundingAccount = { id: string; account_code: string; account_name: string; account_type: string; category: string | null; is_active: boolean };
 type CashAccount = FundingAccount & { balance: number; kind: "Cash" | "Bank" | "Mobile / wallet" | "Float" };
@@ -139,6 +139,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const [spendMoneyApprovalEnabled, setSpendMoneyApprovalEnabled] = useState(true);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [summaryDate, setSummaryDate] = useState(() => businessTodayISO());
   const [transferForm, setTransferForm] = useState<TransferForm>({
     fromAccountId: "",
     toAccountId: "",
@@ -486,22 +487,24 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const eodExternalOutflows = eodMovement.spendMoney + eodMovement.supplierPayments + eodMovement.otherOutflows;
   const eodGrossOutflows = eodExternalOutflows + eodMovement.transfers;
   const eodCashEquivalentChange = eodMovement.inflows - eodExternalOutflows;
-  const eodRows = useMemo(() => {
+  const dailySummaryCollections = useMemo(() => collections.filter((collection) => localDatePart(collection.paid_at) === summaryDate), [collections, summaryDate]);
+  const dailySummaryDisbursements = useMemo(() => disbursements.filter((disbursement) => localDatePart(disbursement.date) === summaryDate), [disbursements, summaryDate]);
+  const dailyMethodRows = useMemo(() => {
     const byMethod = new Map<string, { method: string; collections: number; disbursements: number }>();
     const ensure = (method: string) => {
       if (!byMethod.has(method)) byMethod.set(method, { method, collections: 0, disbursements: 0 });
       return byMethod.get(method)!;
     };
-    for (const collection of eodCollections) ensure(methodLabel(collection.payment_method)).collections += Number(collection.amount || 0);
-    for (const disbursement of eodDisbursements) ensure(methodLabel(disbursement.payment_method)).disbursements += Number(disbursement.amount || 0);
+    for (const collection of dailySummaryCollections) ensure(methodLabel(collection.payment_method)).collections += Number(collection.amount || 0);
+    for (const disbursement of dailySummaryDisbursements) ensure(methodLabel(disbursement.payment_method)).disbursements += Number(disbursement.amount || 0);
     return Array.from(byMethod.values()).sort((a, b) => a.method.localeCompare(b.method));
-  }, [eodCollections, eodDisbursements]);
-  const eodDepartmentRows = useMemo(() => {
+  }, [dailySummaryCollections, dailySummaryDisbursements]);
+  const dailyDepartmentRows = useMemo(() => {
     const sharesByOrder = new Map<string, HotelDepartmentShare[]>();
     for (const share of hotelDepartmentShares) sharesByOrder.set(share.orderId, [...(sharesByOrder.get(share.orderId) || []), share]);
     const totals = new Map<string, number>();
     let hotelCollections = 0;
-    for (const collection of eodCollections.filter((row) => row.payment_source === "pos_hotel")) {
+    for (const collection of dailySummaryCollections.filter((row) => row.payment_source === "pos_hotel")) {
       const amount = Number(collection.amount || 0);
       hotelCollections += amount;
       const shares = sharesByOrder.get(baseTransactionId(collection.transaction_id)) || [{ orderId: "", department: "Unassigned", share: 1 }];
@@ -510,7 +513,8 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     return [...totals.entries()]
       .map(([department, amount]) => ({ department, amount, percentage: hotelCollections > 0 ? (amount / hotelCollections) * 100 : 0 }))
       .sort((a, b) => b.amount - a.amount);
-  }, [eodCollections, hotelDepartmentShares]);
+  }, [dailySummaryCollections, hotelDepartmentShares]);
+  const dailyMethodTotals = useMemo(() => dailyMethodRows.reduce((sum, row) => ({ collections: sum.collections + row.collections, disbursements: sum.disbursements + row.disbursements }), { collections: 0, disbursements: 0 }), [dailyMethodRows]);
 
   const setStatus = async (request: TreasuryRequest, status: "approved" | "rejected") => {
     if (readOnly) return;
@@ -812,7 +816,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
           ["disbursements", "Money out", Banknote],
           ["cash-control", "Cash & transfers", Landmark],
         ] as Array<[TreasuryTab, string, typeof Banknote]>).map(([tab, label, Icon]) => (
-          <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold ${activeTab === tab || (tab === "disbursements" && ["approvals","history"].includes(activeTab)) || (tab === "cash-control" && ["movements","end-of-day"].includes(activeTab)) ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
+          <button key={tab} type="button" onClick={() => setActiveTab(tab)} className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold ${activeTab === tab || (tab === "disbursements" && ["approvals","history"].includes(activeTab)) || (tab === "cash-control" && ["movements","end-of-day","daily-method","daily-department"].includes(activeTab)) ? "bg-slate-900 text-white" : "text-slate-600 hover:bg-slate-100"}`}>
             <Icon className="h-4 w-4" />{label}
           </button>
         ))}
@@ -823,10 +827,12 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
         <button onClick={()=>setActiveTab("disbursements")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="disbursements"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Supplier payments</button>
         <button onClick={()=>setActiveTab("history")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="history"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>History</button>
       </div>}
-      {["cash-control","movements","end-of-day"].includes(activeTab) && <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
+      {["cash-control","movements","end-of-day","daily-method","daily-department"].includes(activeTab) && <div className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2">
         <button onClick={()=>setActiveTab("cash-control")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="cash-control"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Cash accounts</button>
         <button onClick={()=>setActiveTab("movements")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="movements"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Transfers</button>
         <button onClick={()=>setActiveTab("end-of-day")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="end-of-day"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>End of day</button>
+        <button onClick={()=>setActiveTab("daily-method")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="daily-method"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Daily by payment method</button>
+        {user?.business_type === "hotel" && <button onClick={()=>setActiveTab("daily-department")} className={`rounded-lg px-3 py-1.5 text-sm ${activeTab==="daily-department"?"bg-white font-semibold shadow-sm":"text-slate-600"}`}>Daily by department</button>}
       </div>}
 
       <div className="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
@@ -1102,38 +1108,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
             <div className="rounded-xl bg-slate-100 p-4"><p className="text-xs font-bold uppercase text-slate-700">Gross total</p><p className="mt-2 text-lg font-bold">{money.format(eodGrossOutflows)}</p></div>
           </div>
         </section>
-        <div className={`grid gap-4 ${user?.business_type === "hotel" ? "xl:grid-cols-3" : "lg:grid-cols-2"}`}>
-          <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">End-of-day by method</h2><p data-treasury-comment className="text-sm text-slate-500">Compare expected cash, bank transfer, mobile money, card, and wallet totals against actual till and statements.</p></div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Method</th><th className="px-5 py-3 text-right">Collections</th><th className="px-5 py-3 text-right">Disbursements</th><th className="px-5 py-3 text-right">Expected net</th></tr></thead>
-                <tbody className="divide-y divide-slate-100">
-                  {eodRows.length === 0 ? <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No end-of-day activity for the selected dates.</td></tr> : eodRows.map((row) => (
-                    <tr key={row.method}>
-                      <td className="px-5 py-4 font-semibold capitalize text-slate-800">{row.method}</td>
-                      <td className="px-5 py-4 text-right font-bold text-emerald-700">{money.format(row.collections)}</td>
-                      <td className="px-5 py-4 text-right font-bold text-rose-700">{money.format(row.disbursements)}</td>
-                      <td className="px-5 py-4 text-right font-bold text-slate-900">{money.format(row.collections - row.disbursements)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-          {user?.business_type === "hotel" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Hotel cash contribution by department</h2><p data-treasury-comment className="text-sm text-slate-500">Shows how each department contributed to collected hotel POS cash for the selected day or date range.</p></div>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Department</th><th className="px-5 py-3 text-right">Contribution</th><th className="px-5 py-3 text-right">Share</th></tr></thead>
-                <tbody className="divide-y divide-slate-100">
-                  {eodDepartmentRows.length === 0 ? <tr><td colSpan={3} className="px-5 py-8 text-center text-slate-500">No hotel POS collections for the selected dates.</td></tr> : eodDepartmentRows.map((row) => (
-                    <tr key={row.department}><td className="px-5 py-4 font-semibold text-slate-800">{row.department}</td><td className="px-5 py-4 text-right font-bold text-emerald-700">{money.format(row.amount)}</td><td className="px-5 py-4 text-right font-semibold text-slate-600">{row.percentage.toFixed(1)}%</td></tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section> : null}
+        <div className="grid gap-4 lg:grid-cols-1">
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Account balances to count</h2><p data-treasury-comment className="text-sm text-slate-500">Current posted balances by money account. Count cash/float and compare statements for bank and mobile money.</p></div>
             <div className="divide-y divide-slate-100">
@@ -1147,6 +1122,18 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
           </section>
         </div>
       </section> : null}
+
+      {activeTab === "daily-method" ? <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">Daily summary</p><h2 className="mt-1 text-xl font-bold text-slate-900">Cash position by payment method</h2><p className="mt-1 text-sm text-slate-500">Collections, payments, and net movement for each cash channel.</p></div><div className="flex items-end gap-2"><label className="text-xs font-semibold text-slate-600">Summary date<input type="date" value={summaryDate} onChange={(event)=>setSummaryDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"/></label><button type="button" onClick={()=>window.print()} className="app-btn-secondary">Print</button></div></div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3"><MetricCard label="Cash in" value={money.format(dailyMethodTotals.collections)} hint="Collections received on this date" icon={ArrowDownRight}/><MetricCard label="Cash out" value={money.format(dailyMethodTotals.disbursements)} hint="Supplier and expense payments" icon={ArrowUpRight}/><MetricCard label="Net movement" value={money.format(dailyMethodTotals.collections-dailyMethodTotals.disbursements)} hint="Cash in less cash out" icon={ReceiptText}/></div>
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-4 py-3 text-left">Payment method</th><th className="px-4 py-3 text-right">Cash in</th><th className="px-4 py-3 text-right">Cash out</th><th className="px-4 py-3 text-right">Net position</th></tr></thead><tbody className="divide-y divide-slate-100">{dailyMethodRows.length===0?<tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No activity for this date.</td></tr>:dailyMethodRows.map(row=><tr key={row.method}><td className="px-4 py-3 font-semibold capitalize">{row.method}</td><td className="px-4 py-3 text-right font-bold text-emerald-700">{money.format(row.collections)}</td><td className="px-4 py-3 text-right font-bold text-rose-700">{money.format(row.disbursements)}</td><td className="px-4 py-3 text-right font-bold">{money.format(row.collections-row.disbursements)}</td></tr>)}</tbody><tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-4 py-3">Daily totals</td><td className="px-4 py-3 text-right text-emerald-700">{money.format(dailyMethodTotals.collections)}</td><td className="px-4 py-3 text-right text-rose-700">{money.format(dailyMethodTotals.disbursements)}</td><td className="px-4 py-3 text-right">{money.format(dailyMethodTotals.collections-dailyMethodTotals.disbursements)}</td></tr></tfoot></table></div>
+      </section>:null}
+
+      {activeTab === "daily-department" && user?.business_type === "hotel" ? <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">Daily summary</p><h2 className="mt-1 text-xl font-bold text-slate-900">Cash contribution by department</h2><p className="mt-1 text-sm text-slate-500">How each hotel department contributed to collected hotel POS cash.</p></div><div className="flex items-end gap-2"><label className="text-xs font-semibold text-slate-600">Summary date<input type="date" value={summaryDate} onChange={(event)=>setSummaryDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"/></label><button type="button" onClick={()=>window.print()} className="app-btn-secondary">Print</button></div></div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2"><MetricCard label="Hotel POS cash collected" value={money.format(dailyDepartmentRows.reduce((sum,row)=>sum+row.amount,0))} hint="Department-attributed collections for this date" icon={Banknote}/><MetricCard label="Contributing departments" value={String(dailyDepartmentRows.length)} hint="Departments represented in collected cash" icon={Building2}/></div>
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-4 py-3 text-left">Department</th><th className="px-4 py-3 text-right">Cash contribution</th><th className="px-4 py-3 text-right">Share</th></tr></thead><tbody className="divide-y divide-slate-100">{dailyDepartmentRows.length===0?<tr><td colSpan={3} className="px-4 py-8 text-center text-slate-500">No hotel POS collections for this date.</td></tr>:dailyDepartmentRows.map(row=><tr key={row.department}><td className="px-4 py-3 font-semibold">{row.department}</td><td className="px-4 py-3 text-right font-bold text-emerald-700">{money.format(row.amount)}</td><td className="px-4 py-3 text-right font-semibold">{row.percentage.toFixed(1)}%</td></tr>)}</tbody><tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-4 py-3">Daily total</td><td className="px-4 py-3 text-right text-emerald-700">{money.format(dailyDepartmentRows.reduce((sum,row)=>sum+row.amount,0))}</td><td className="px-4 py-3 text-right">100%</td></tr></tfoot></table></div>
+      </section>:null}
 
       {false ? null : null}
       {false ? <section className="space-y-4">
