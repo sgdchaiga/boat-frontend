@@ -727,8 +727,11 @@ export function ReservationsPage() {
               value={form.check_in_date}
               onChange={(e) => {
                 const checkInDate = e.target.value;
-                setForm({ ...form, check_in_date: checkInDate, room_id: "" });
-                void fetchRooms(checkInDate, form.check_out_date, editingReservation?.id);
+                const checkOutDate = form.check_out_date && form.check_out_date > checkInDate
+                  ? form.check_out_date
+                  : "";
+                setForm({ ...form, check_in_date: checkInDate, check_out_date: checkOutDate, room_id: "" });
+                void fetchRooms(checkInDate, checkOutDate, editingReservation?.id);
               }}
               className="w-full border p-2 rounded"
             />
@@ -736,6 +739,7 @@ export function ReservationsPage() {
             <input
               type="date"
               value={form.check_out_date}
+              min={form.check_in_date || undefined}
               onChange={(e) => {
                 const checkOutDate = e.target.value;
                 setForm({ ...form, check_out_date: checkOutDate, room_id: "" });
