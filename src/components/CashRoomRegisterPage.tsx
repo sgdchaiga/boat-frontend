@@ -130,7 +130,7 @@ export function CashRoomRegisterPage() {
         setMessage(correctingCashEntry ? `Room ${row.roomNumber}: the incorrect occupied entry and its accounting were reversed.` : `Room ${row.roomNumber} checked out and moved to cleaning.`);
       } else if (row.occupied) {
         const editingSavedDay = row.stayId && row.billingMode === "cash_register" && row.cashEntryOnDate;
-        const rpcName = editingSavedDay ? "edit_cash_room_register_entry" : "save_cash_room_register_customer_entry";
+        const rpcName = editingSavedDay ? "edit_cash_room_register_entry" : "save_daily_cash_room_register_customer_entry";
         const args = editingSavedDay ? {
           p_stay_id: row.stayId,
           p_customer_id: row.guestId,
@@ -161,7 +161,7 @@ export function CashRoomRegisterPage() {
   if (loading) return <div className="p-6">Loading cash room register...</div>;
   return <div className="p-6 md:p-8">
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-      <div><div className="flex items-center gap-2"><BedDouble className="h-7 w-7 text-emerald-700"/><h1 className="text-3xl font-bold">Cash Room Register</h1></div><p className="mt-2 text-sm text-slate-600">Daily cash-based room occupancy, billing, discounts, and payment in one register.</p></div>
+      <div><div className="flex items-center gap-2"><BedDouble className="h-7 w-7 text-emerald-700"/><h1 className="text-3xl font-bold">Cash Room Register</h1></div><p className="mt-2 text-sm text-slate-600">One entry records one room-day. Record every occupied date separately for multi-day guests.</p></div>
       <div className="flex items-end gap-2"><label className="text-sm font-semibold text-slate-700">Register date<input type="date" value={registerDate} onChange={(e)=>setRegisterDate(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 font-normal"/></label><button type="button" onClick={()=>void load()} className="app-btn-secondary"><RefreshCw className="h-4 w-4"/> Refresh</button></div>
     </div>
     {message ? <p className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{message}</p> : null}
@@ -182,6 +182,6 @@ export function CashRoomRegisterPage() {
             <td className="px-4 py-3">{locked ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700"><CheckCircle2 className="h-4 w-4"/> Reservation check-in</span> : row.stayId && row.billingMode === "cash_register" && row.cashEntryOnDate ? <div className="flex items-center gap-2">{editing ? <><button type="button" disabled={savingId===row.id} onClick={()=>void saveRow(row)} className="app-btn-primary disabled:opacity-40">{savingId===row.id?"Saving...":"Save changes"}</button><button type="button" aria-label={`Cancel editing room ${row.roomNumber}`} onClick={()=>{setEditingId(null);void load();}} className="rounded-lg border border-slate-300 p-2 text-slate-600 hover:bg-slate-50"><X className="h-4 w-4"/></button></> : <><span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600"><CheckCircle2 className="h-4 w-4"/>{historicalCheckout?"Occupied on this date":"Saved"}</span><button type="button" onClick={()=>setEditingId(row.id)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50"><Edit2 className="h-3.5 w-3.5"/>Edit</button></>}</div> : <button type="button" disabled={savingId===row.id || (!row.occupied&&!row.stayId)} onClick={()=>void saveRow(row)} className="app-btn-primary disabled:opacity-40">{savingId===row.id?"Saving...":row.occupied?"Save day":"Check out"}</button>}</td></tr>;
         })}{visibleRows.length===0?<tr><td colSpan={8} className="px-4 py-10 text-center text-slate-500">No rooms match these filters.</td></tr>:null}</tbody></table>
     </div>
-    <p className="mt-4 text-xs text-slate-500">Rates load automatically from each room's nightly rate, falling back to its room type rate. Net charge recalculates immediately as automatic rate less discount. Rooms checked in through reservations appear occupied and locked here.</p>
+    <p className="mt-4 text-xs text-slate-500">Each saved room-day checks out automatically before the next date. A four-day stay must be entered on all four dates. Rates load from room setup, and reservation check-ins remain locked to prevent duplicates.</p>
   </div>;
 }
