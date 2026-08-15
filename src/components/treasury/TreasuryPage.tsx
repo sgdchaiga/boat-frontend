@@ -29,7 +29,7 @@ type TreasuryRequest = {
   payment_method: string | null;
   payment_reference: string | null;
 };
-type Collection = { amount: number; payment_source: string | null; paid_at: string; payment_method: string | null; transaction_id: string | null };
+type Collection = { id: string; amount: number; payment_source: string | null; paid_at: string; payment_method: string | null; transaction_id: string | null; billing_id: string | null; stay_id: string | null; details?: string; department?: string };
 type HotelDepartmentShare = { orderId: string; department: string; share: number };
 type VendorRef = { name: string | null } | { name: string | null }[] | null;
 type Disbursement = {
@@ -163,9 +163,12 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const fetchData = useCallback(async () => {
     if (!user?.organization_id) return;
     setLoading(true);
-    const [requestRes, collectionRes, accountRes, workflowRes, initialVendorPaymentRes, expenseRes] = await Promise.all([
+    const summaryWindowStart = new Date(`${summaryDate}T00:00:00.000Z`); summaryWindowStart.setUTCDate(summaryWindowStart.getUTCDate() - 1);
+    const summaryWindowEnd = new Date(`${summaryDate}T00:00:00.000Z`); summaryWindowEnd.setUTCDate(summaryWindowEnd.getUTCDate() + 2);
+    const [requestRes, collectionRes, summaryCollectionRes, accountRes, workflowRes, initialVendorPaymentRes, expenseRes] = await Promise.all([
       supabase.from("treasury_requests").select("*").eq("organization_id", user.organization_id).order("requested_at", { ascending: false }),
-      supabase.from("payments").select("amount,payment_source,paid_at,payment_method,transaction_id").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).order("paid_at", { ascending: false }).limit(300),
+      supabase.from("payments").select("id,amount,payment_source,paid_at,payment_method,transaction_id,billing_id,stay_id").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).order("paid_at", { ascending: false }).limit(5000),
+      supabase.from("payments").select("id,amount,payment_source,paid_at,payment_method,transaction_id,billing_id,stay_id").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).gte("paid_at", summaryWindowStart.toISOString()).lt("paid_at", summaryWindowEnd.toISOString()).order("paid_at", { ascending: false }),
       supabase.from("gl_accounts").select("id,account_code,account_name,account_type,category,is_active").eq("organization_id", user.organization_id).order("account_code"),
       supabase.from("organization_permissions").select("allowed").eq("organization_id", user.organization_id).eq("role_key", "__org__").eq("permission_key", "treasury_spend_money_approval_enabled").maybeSingle(),
       supabase.from("vendor_payments").select("id,amount,payment_date,payment_method,reference,status,vendors(name)").eq("organization_id", user.organization_id).order("payment_date", { ascending: false }).limit(300),
@@ -173,6 +176,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     ]);
     if (requestRes.error) console.error("Unable to load Treasury requests:", requestRes.error);
     if (collectionRes.error) console.error("Unable to load Treasury collections:", collectionRes.error);
+    if (summaryCollectionRes.error) console.error("Unable to load Treasury daily collections:", summaryCollectionRes.error);
     if (accountRes.error) console.error("Unable to load Treasury funding accounts:", accountRes.error);
     let vendorPaymentRes = initialVendorPaymentRes;
     if (vendorPaymentRes.error && vendorPaymentRes.error.message.toLowerCase().includes("status")) {
@@ -181,7 +185,9 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     if (vendorPaymentRes.error) console.error("Unable to load Treasury supplier payments:", vendorPaymentRes.error);
     if (expenseRes.error) console.error("Unable to load Treasury expenses:", expenseRes.error);
     setRequests((requestRes.data || []) as TreasuryRequest[]);
-    const loadedCollections = (collectionRes.data || []) as Collection[];
+    const collectionsById = new Map<string, Collection>();
+    for (const row of [...(collectionRes.data || []), ...(summaryCollectionRes.data || [])] as Collection[]) collectionsById.set(row.id, row);
+    const loadedCollections = [...collectionsById.values()];
     const retailSaleIds = [...new Set(
       loadedCollections
         .filter((row) => row.payment_source === "pos_retail" && row.transaction_id)
@@ -197,9 +203,34 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       : { data: [], error: null };
     if (activeRetailSalesError) console.error("Unable to validate Treasury retail POS collections:", activeRetailSalesError);
     const activeRetailSaleIds = new Set((activeRetailSales || []).map((sale) => sale.id));
-    setCollections(loadedCollections.filter(
+    const validCollections = loadedCollections.filter(
       (row) => row.payment_source !== "pos_retail" || (!!row.transaction_id && activeRetailSaleIds.has(row.transaction_id))
-    ));
+    );
+    const billingIds = [...new Set(validCollections.map((row) => row.billing_id).filter((id): id is string => Boolean(id)))];
+    const { data: billingRows, error: billingError } = billingIds.length
+      ? await supabase.from("billing").select("id,stay_id,description,charge_type").eq("organization_id", user.organization_id).in("id", billingIds)
+      : { data: [], error: null };
+    if (billingError) console.error("Unable to load Treasury collection details:", billingError);
+    const billingById = new Map(((billingRows || []) as Array<{ id: string; stay_id: string; description: string | null; charge_type: string | null }>).map((row) => [row.id, row]));
+    const stayIds = [...new Set(validCollections.map((row) => row.stay_id || (row.billing_id ? billingById.get(row.billing_id)?.stay_id : null)).filter((id): id is string => Boolean(id)))];
+    const { data: stayRows, error: stayError } = stayIds.length
+      ? await supabase.from("stays").select("id,rooms(room_number),hotel_customers(first_name,last_name)").eq("organization_id", user.organization_id).in("id", stayIds)
+      : { data: [], error: null };
+    if (stayError) console.error("Unable to load Treasury room collection details:", stayError);
+    const stayById = new Map(((stayRows || []) as Array<{ id: string; rooms: { room_number: string } | { room_number: string }[] | null; hotel_customers: { first_name: string; last_name: string } | { first_name: string; last_name: string }[] | null }>).map((row) => [row.id, row]));
+    setCollections(validCollections.map((row) => {
+      const billing = row.billing_id ? billingById.get(row.billing_id) : null;
+      const stay = stayById.get(row.stay_id || billing?.stay_id || "");
+      const room = Array.isArray(stay?.rooms) ? stay?.rooms[0] : stay?.rooms;
+      const guest = Array.isArray(stay?.hotel_customers) ? stay?.hotel_customers[0] : stay?.hotel_customers;
+      const guestName = guest ? `${guest.first_name || ""} ${guest.last_name || ""}`.trim() : "";
+      const isRoom = billing?.charge_type === "room" || Boolean(room?.room_number);
+      return {
+        ...row,
+        details: billing?.description || (isRoom ? `Room ${room?.room_number || "charge"}${guestName ? ` · ${guestName}` : ""}` : methodLabel(row.payment_source)),
+        department: isRoom ? "Rooms" : row.payment_source === "pos_retail" ? "Retail" : row.payment_source === "pos_clinic" ? "Clinic" : row.payment_source === "pos_hotel" ? "Hotel POS" : "Billing",
+      };
+    }));
     const hotelOrderIds = [...new Set(loadedCollections
       .filter((row) => row.payment_source === "pos_hotel")
       .map((row) => baseTransactionId(row.transaction_id))
@@ -341,7 +372,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       setMoneyJournals([]);
     }
     setLoading(false);
-  }, [balanceAsOfDate, user?.organization_id]);
+  }, [balanceAsOfDate, summaryDate, user?.organization_id]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -489,32 +520,26 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const eodCashEquivalentChange = eodMovement.inflows - eodExternalOutflows;
   const dailySummaryCollections = useMemo(() => collections.filter((collection) => localDatePart(collection.paid_at) === summaryDate), [collections, summaryDate]);
   const dailySummaryDisbursements = useMemo(() => disbursements.filter((disbursement) => localDatePart(disbursement.date) === summaryDate), [disbursements, summaryDate]);
-  const dailyMethodRows = useMemo(() => {
-    const byMethod = new Map<string, { method: string; collections: number; disbursements: number }>();
-    const ensure = (method: string) => {
-      if (!byMethod.has(method)) byMethod.set(method, { method, collections: 0, disbursements: 0 });
-      return byMethod.get(method)!;
-    };
-    for (const collection of dailySummaryCollections) ensure(methodLabel(collection.payment_method)).collections += Number(collection.amount || 0);
-    for (const disbursement of dailySummaryDisbursements) ensure(methodLabel(disbursement.payment_method)).disbursements += Number(disbursement.amount || 0);
-    return Array.from(byMethod.values()).sort((a, b) => a.method.localeCompare(b.method));
-  }, [dailySummaryCollections, dailySummaryDisbursements]);
+  const dailyMethodRows = useMemo(() => [
+    ...dailySummaryCollections.map((row) => ({ id: `in-${row.id}`, details: row.details || methodLabel(row.payment_source), method: methodLabel(row.payment_method), cashIn: Number(row.amount || 0), cashOut: 0 })),
+    ...dailySummaryDisbursements.map((row) => ({ id: `out-${row.source}-${row.id}`, details: `${row.purpose}${row.payee ? ` · ${row.payee}` : ""}`, method: methodLabel(row.payment_method), cashIn: 0, cashOut: Number(row.amount || 0) })),
+  ].sort((a, b) => a.method.localeCompare(b.method) || a.details.localeCompare(b.details)), [dailySummaryCollections, dailySummaryDisbursements]);
   const dailyDepartmentRows = useMemo(() => {
     const sharesByOrder = new Map<string, HotelDepartmentShare[]>();
     for (const share of hotelDepartmentShares) sharesByOrder.set(share.orderId, [...(sharesByOrder.get(share.orderId) || []), share]);
-    const totals = new Map<string, number>();
-    let hotelCollections = 0;
-    for (const collection of dailySummaryCollections.filter((row) => row.payment_source === "pos_hotel")) {
+    const rows: Array<{ id: string; details: string; department: string; method: string; cashIn: number; cashOut: number }> = [];
+    for (const collection of dailySummaryCollections) {
       const amount = Number(collection.amount || 0);
-      hotelCollections += amount;
-      const shares = sharesByOrder.get(baseTransactionId(collection.transaction_id)) || [{ orderId: "", department: "Unassigned", share: 1 }];
-      for (const share of shares) totals.set(share.department, (totals.get(share.department) || 0) + amount * share.share);
+      const shares = collection.payment_source === "pos_hotel"
+        ? sharesByOrder.get(baseTransactionId(collection.transaction_id)) || [{ orderId: "", department: collection.department || "Hotel POS", share: 1 }]
+        : [{ orderId: "", department: collection.department || "Unassigned", share: 1 }];
+      for (const [index, share] of shares.entries()) rows.push({ id: `in-${collection.id}-${index}`, details: collection.details || methodLabel(collection.payment_source), department: share.department, method: methodLabel(collection.payment_method), cashIn: amount * share.share, cashOut: 0 });
     }
-    return [...totals.entries()]
-      .map(([department, amount]) => ({ department, amount, percentage: hotelCollections > 0 ? (amount / hotelCollections) * 100 : 0 }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [dailySummaryCollections, hotelDepartmentShares]);
-  const dailyMethodTotals = useMemo(() => dailyMethodRows.reduce((sum, row) => ({ collections: sum.collections + row.collections, disbursements: sum.disbursements + row.disbursements }), { collections: 0, disbursements: 0 }), [dailyMethodRows]);
+    for (const disbursement of dailySummaryDisbursements) rows.push({ id: `out-${disbursement.source}-${disbursement.id}`, details: `${disbursement.purpose}${disbursement.payee ? ` · ${disbursement.payee}` : ""}`, department: disbursement.source === "expense" ? "Operating expenses" : "Supplier payments", method: methodLabel(disbursement.payment_method), cashIn: 0, cashOut: Number(disbursement.amount || 0) });
+    return rows.sort((a, b) => a.department.localeCompare(b.department) || a.details.localeCompare(b.details));
+  }, [dailySummaryCollections, dailySummaryDisbursements, hotelDepartmentShares]);
+  const dailyMethodTotals = useMemo(() => dailyMethodRows.reduce((sum, row) => ({ collections: sum.collections + row.cashIn, disbursements: sum.disbursements + row.cashOut }), { collections: 0, disbursements: 0 }), [dailyMethodRows]);
+  const dailyDepartmentTotals = useMemo(() => dailyDepartmentRows.reduce((sum, row) => ({ cashIn: sum.cashIn + row.cashIn, cashOut: sum.cashOut + row.cashOut }), { cashIn: 0, cashOut: 0 }), [dailyDepartmentRows]);
 
   const setStatus = async (request: TreasuryRequest, status: "approved" | "rejected") => {
     if (readOnly) return;
@@ -1126,13 +1151,13 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       {activeTab === "daily-method" ? <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">Daily summary</p><h2 className="mt-1 text-xl font-bold text-slate-900">Cash position by payment method</h2><p className="mt-1 text-sm text-slate-500">Collections, payments, and net movement for each cash channel.</p></div><div className="flex items-end gap-2"><label className="text-xs font-semibold text-slate-600">Summary date<input type="date" value={summaryDate} onChange={(event)=>setSummaryDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"/></label><button type="button" onClick={()=>window.print()} className="app-btn-secondary">Print</button></div></div>
         <div className="mt-4 grid gap-3 sm:grid-cols-3"><MetricCard label="Cash in" value={money.format(dailyMethodTotals.collections)} hint="Collections received on this date" icon={ArrowDownRight}/><MetricCard label="Cash out" value={money.format(dailyMethodTotals.disbursements)} hint="Supplier and expense payments" icon={ArrowUpRight}/><MetricCard label="Net movement" value={money.format(dailyMethodTotals.collections-dailyMethodTotals.disbursements)} hint="Cash in less cash out" icon={ReceiptText}/></div>
-        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-4 py-3 text-left">Payment method</th><th className="px-4 py-3 text-right">Cash in</th><th className="px-4 py-3 text-right">Cash out</th><th className="px-4 py-3 text-right">Net position</th></tr></thead><tbody className="divide-y divide-slate-100">{dailyMethodRows.length===0?<tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No activity for this date.</td></tr>:dailyMethodRows.map(row=><tr key={row.method}><td className="px-4 py-3 font-semibold capitalize">{row.method}</td><td className="px-4 py-3 text-right font-bold text-emerald-700">{money.format(row.collections)}</td><td className="px-4 py-3 text-right font-bold text-rose-700">{money.format(row.disbursements)}</td><td className="px-4 py-3 text-right font-bold">{money.format(row.collections-row.disbursements)}</td></tr>)}</tbody><tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-4 py-3">Daily totals</td><td className="px-4 py-3 text-right text-emerald-700">{money.format(dailyMethodTotals.collections)}</td><td className="px-4 py-3 text-right text-rose-700">{money.format(dailyMethodTotals.disbursements)}</td><td className="px-4 py-3 text-right">{money.format(dailyMethodTotals.collections-dailyMethodTotals.disbursements)}</td></tr></tfoot></table></div>
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-4 py-3 text-left">Details</th><th className="px-4 py-3 text-left">Payment method</th><th className="px-4 py-3 text-right">Cash in</th><th className="px-4 py-3 text-right">Cash out</th><th className="px-4 py-3 text-right">Balance effect</th></tr></thead><tbody className="divide-y divide-slate-100">{dailyMethodRows.length===0?<tr><td colSpan={5} className="px-4 py-8 text-center text-slate-500">No activity for this date.</td></tr>:dailyMethodRows.map(row=><tr key={row.id}><td className="px-4 py-3 font-semibold">{row.details}</td><td className="px-4 py-3 capitalize">{row.method}</td><td className="px-4 py-3 text-right font-bold text-emerald-700">{row.cashIn ? money.format(row.cashIn) : "—"}</td><td className="px-4 py-3 text-right font-bold text-rose-700">{row.cashOut ? money.format(row.cashOut) : "—"}</td><td className="px-4 py-3 text-right font-bold">{money.format(row.cashIn-row.cashOut)}</td></tr>)}</tbody><tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-4 py-3" colSpan={2}>Daily totals</td><td className="px-4 py-3 text-right text-emerald-700">{money.format(dailyMethodTotals.collections)}</td><td className="px-4 py-3 text-right text-rose-700">{money.format(dailyMethodTotals.disbursements)}</td><td className="px-4 py-3 text-right">{money.format(dailyMethodTotals.collections-dailyMethodTotals.disbursements)}</td></tr></tfoot></table></div>
       </section>:null}
 
       {activeTab === "daily-department" && user?.business_type === "hotel" ? <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
         <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">Daily summary</p><h2 className="mt-1 text-xl font-bold text-slate-900">Cash contribution by department</h2><p className="mt-1 text-sm text-slate-500">How each hotel department contributed to collected hotel POS cash.</p></div><div className="flex items-end gap-2"><label className="text-xs font-semibold text-slate-600">Summary date<input type="date" value={summaryDate} onChange={(event)=>setSummaryDate(event.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"/></label><button type="button" onClick={()=>window.print()} className="app-btn-secondary">Print</button></div></div>
-        <div className="mt-4 grid gap-3 sm:grid-cols-2"><MetricCard label="Hotel POS cash collected" value={money.format(dailyDepartmentRows.reduce((sum,row)=>sum+row.amount,0))} hint="Department-attributed collections for this date" icon={Banknote}/><MetricCard label="Contributing departments" value={String(dailyDepartmentRows.length)} hint="Departments represented in collected cash" icon={Building2}/></div>
-        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-4 py-3 text-left">Department</th><th className="px-4 py-3 text-right">Cash contribution</th><th className="px-4 py-3 text-right">Share</th></tr></thead><tbody className="divide-y divide-slate-100">{dailyDepartmentRows.length===0?<tr><td colSpan={3} className="px-4 py-8 text-center text-slate-500">No hotel POS collections for this date.</td></tr>:dailyDepartmentRows.map(row=><tr key={row.department}><td className="px-4 py-3 font-semibold">{row.department}</td><td className="px-4 py-3 text-right font-bold text-emerald-700">{money.format(row.amount)}</td><td className="px-4 py-3 text-right font-semibold">{row.percentage.toFixed(1)}%</td></tr>)}</tbody><tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-4 py-3">Daily total</td><td className="px-4 py-3 text-right text-emerald-700">{money.format(dailyDepartmentRows.reduce((sum,row)=>sum+row.amount,0))}</td><td className="px-4 py-3 text-right">100%</td></tr></tfoot></table></div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-3"><MetricCard label="Cash in" value={money.format(dailyDepartmentTotals.cashIn)} hint="Department-attributed collections" icon={ArrowDownRight}/><MetricCard label="Cash out" value={money.format(dailyDepartmentTotals.cashOut)} hint="Department-attributed payments" icon={ArrowUpRight}/><MetricCard label="Net cash position" value={money.format(dailyDepartmentTotals.cashIn-dailyDepartmentTotals.cashOut)} hint="How departments changed cash" icon={Building2}/></div>
+        <div className="mt-4 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-4 py-3 text-left">Details</th><th className="px-4 py-3 text-left">Department</th><th className="px-4 py-3 text-left">Method</th><th className="px-4 py-3 text-right">Cash in</th><th className="px-4 py-3 text-right">Cash out</th><th className="px-4 py-3 text-right">Balance effect</th></tr></thead><tbody className="divide-y divide-slate-100">{dailyDepartmentRows.length===0?<tr><td colSpan={6} className="px-4 py-8 text-center text-slate-500">No cash activity for this date.</td></tr>:dailyDepartmentRows.map(row=><tr key={row.id}><td className="px-4 py-3 font-semibold">{row.details}</td><td className="px-4 py-3 font-semibold">{row.department}</td><td className="px-4 py-3 capitalize">{row.method}</td><td className="px-4 py-3 text-right font-bold text-emerald-700">{row.cashIn ? money.format(row.cashIn) : "—"}</td><td className="px-4 py-3 text-right font-bold text-rose-700">{row.cashOut ? money.format(row.cashOut) : "—"}</td><td className="px-4 py-3 text-right font-bold">{money.format(row.cashIn-row.cashOut)}</td></tr>)}</tbody><tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-4 py-3" colSpan={3}>Daily totals</td><td className="px-4 py-3 text-right text-emerald-700">{money.format(dailyDepartmentTotals.cashIn)}</td><td className="px-4 py-3 text-right text-rose-700">{money.format(dailyDepartmentTotals.cashOut)}</td><td className="px-4 py-3 text-right">{money.format(dailyDepartmentTotals.cashIn-dailyDepartmentTotals.cashOut)}</td></tr></tfoot></table></div>
       </section>:null}
 
       {false ? null : null}
