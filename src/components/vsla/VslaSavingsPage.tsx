@@ -144,26 +144,28 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
       membersQ,
       txnsQ,
     ]);
-    if (sRes.error || mtRes.error || mbRes.error || txRes.error) {
-      setError(
-        sRes.error?.message ??
-          mtRes.error?.message ??
-          mbRes.error?.message ??
-          txRes.error?.message ??
-          "Failed to load savings data.",
-      );
-    } else {
-      if (sRes.data) setSettings(sRes.data as SettingsRow);
-      setMeetings((mtRes.data ?? []) as MeetingRow[]);
-      setMembers((mbRes.data ?? []) as MemberRow[]);
-      setTxns((txRes.data ?? []) as ShareTxnRow[]);
-    }
+    // Keep successfully loaded sections usable when one optional query fails.
+    // Previously an attachment-column error also discarded members and made the
+    // stamp grid look empty.
+    if (sRes.data) setSettings(sRes.data as SettingsRow);
+    if (!mtRes.error) setMeetings((mtRes.data ?? []) as MeetingRow[]);
+    if (!mbRes.error) setMembers((mbRes.data ?? []) as MemberRow[]);
+    if (!txRes.error) setTxns((txRes.data ?? []) as ShareTxnRow[]);
+    const failures = [sRes.error, mtRes.error, mbRes.error, txRes.error].filter(Boolean);
+    if (failures.length) setError(failures.map((item) => item?.message).join(" · "));
     setLoading(false);
   }, [orgId, superAdmin]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (meetingId || meetings.length === 0) return;
+    const defaultMeeting = meetings.find((meeting) => meeting.status === "open")
+      ?? meetings.find((meeting) => meeting.status === "scheduled");
+    if (defaultMeeting) setMeetingId(defaultMeeting.id);
+  }, [meetingId, meetings]);
 
   const selectedMeeting = useMemo(
     () => meetings.find((m) => m.id === meetingId),
@@ -776,6 +778,14 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
                     />
                   </label>
                 </div>
+              </div>
+            ) : members.length === 0 ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                No active members are available. Add or reactivate members under VSLA Members, then return here.
+              </div>
+            ) : selectedMeeting?.status === "closed" ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                This meeting is closed. Select an open or scheduled meeting to record stamps.
               </div>
             ) : (
               <p className="text-sm text-slate-500 mt-3">
