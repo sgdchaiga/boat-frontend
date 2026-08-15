@@ -17,8 +17,9 @@ test("cash room register shows all open stays and protects reservation check-ins
 });
 
 test("cash register posts occupancy, daily bill, discount and default cash payment", () => {
-  assert.match(page, /paid: true/);
-  assert.match(page, /save_cash_room_register_customer_entry/);
+  assert.match(page, /paid: stay \? paidStayIds\.has\(stay\.id\) : true/);
+  assert.match(page, /save_daily_cash_room_register_customer_entry/);
+  assert.match(page, /savedStayIds/);
   assert.match(page, /Select customer/);
   assert.match(page, /effectiveRoomRate/);
   assert.match(page, /Automatic rate/);

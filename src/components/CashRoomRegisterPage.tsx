@@ -56,15 +56,16 @@ export function CashRoomRegisterPage() {
       supabase.from("organizations").select("hotel_timezone").eq("id", orgId).maybeSingle(),
       supabase.from("hotel_customers").select("id,first_name,last_name").eq("organization_id", orgId).order("first_name").order("last_name"),
       supabase.from("payments").select("stay_id,paid_at").eq("organization_id", orgId).eq("payment_status", "completed").gte("paid_at", broadStartDate.toISOString()).lt("paid_at", broadEndDate.toISOString()),
-      supabase.from("billing").select("stay_id").eq("organization_id", orgId).eq("charge_type", "room").eq("stay_night_date", registerDate),
+      supabase.from("billing").select("stay_id,stay_night_date,charged_at").eq("organization_id", orgId).eq("charge_type", "room").gte("charged_at", broadStartDate.toISOString()).lt("charged_at", broadEndDate.toISOString()),
     ]);
-    if (roomsResult.error || staysResult.error) {
-      setMessage(roomsResult.error?.message || staysResult.error?.message || "Could not load the room register.");
+    if (roomsResult.error || staysResult.error || billingResult.error) {
+      setMessage(roomsResult.error?.message || staysResult.error?.message || billingResult.error?.message || "Could not load the room register.");
       setLoading(false); return;
     }
     const timeZone = organizationResult.data?.hotel_timezone || "Africa/Kampala";
     const paidStayIds = new Set(((paymentsResult.data || []) as Array<{ stay_id: string | null; paid_at: string }>).filter((payment) => dateInTimeZone(payment.paid_at, timeZone) === registerDate).map((payment) => payment.stay_id).filter(Boolean));
-    const billedStayIds = new Set(((billingResult.data || []) as Array<{ stay_id: string }>).map((billing) => billing.stay_id));
+    const billedStayIds = new Set(((billingResult.data || []) as Array<{ stay_id: string; stay_night_date: string | null; charged_at: string }>).filter((billing) => billing.stay_night_date === registerDate || dateInTimeZone(billing.charged_at, timeZone) === registerDate).map((billing) => billing.stay_id));
+    const savedStayIds = new Set([...billedStayIds, ...paidStayIds]);
     setCustomers(((customersResult.data || []) as Array<{ id: string; first_name: string; last_name: string }>).map((customer) => ({ id: customer.id, name: `${customer.first_name} ${customer.last_name}`.trim() })));
     const activeByRoom = new Map<string, any>();
     for (const stay of (staysResult.data || []) as any[]) {
@@ -76,7 +77,7 @@ export function CashRoomRegisterPage() {
       // Legacy imports can leave more than one cash-register stay overlapping a
       // date. Prefer the stay carrying that date's room bill so saved entries
       // remain editable instead of an orphan shell masking them.
-      if (!current || (billedStayIds.has(stay.id) && !billedStayIds.has(current.id))) activeByRoom.set(stay.room_id, stay);
+      if (!current || (savedStayIds.has(stay.id) && !savedStayIds.has(current.id))) activeByRoom.set(stay.room_id, stay);
     }
     const next = ((roomsResult.data || []) as any[]).map((room): RoomRow => {
       const stay = activeByRoom.get(room.id);
@@ -94,7 +95,7 @@ export function CashRoomRegisterPage() {
         guestName: customer ? `${customer.first_name || ""} ${customer.last_name || ""}`.trim() : "",
         discount: String(stay?.room_discount_amount || ""),
         paid: stay ? paidStayIds.has(stay.id) : true,
-        cashEntryOnDate: Boolean(stay && billedStayIds.has(stay.id)),
+        cashEntryOnDate: Boolean(stay && savedStayIds.has(stay.id)),
       };
     });
     setRows(next); setLoading(false);
