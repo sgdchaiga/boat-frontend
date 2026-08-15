@@ -8,8 +8,10 @@ const nav = await readFile(new URL("../src/lib/simpleOrgNavigation.ts", import.m
 
 test("cash room register shows all open stays and protects reservation check-ins", () => {
   assert.match(page, /actual_check_out/);
+  assert.match(page, /dateInTimeZone/);
+  assert.match(page, /registerDate/);
   assert.match(page, /reservationId/);
-  assert.match(page, /Already occupied/);
+  assert.match(page, /Reservation check-in/);
   assert.match(page, /occupied_by_other_workflow/);
   assert.match(nav, /Cash room register/);
 });

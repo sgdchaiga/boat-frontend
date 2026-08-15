@@ -11,6 +11,7 @@ type RoomRow = {
   stayId: string | null;
   reservationId: string | null;
   billingMode: string | null;
+  actualCheckout: string | null;
   occupied: boolean;
   guestName: string;
   discount: string;
@@ -18,6 +19,11 @@ type RoomRow = {
 };
 
 const money = new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 });
+function dateInTimeZone(value: string, timeZone: string) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(new Date(value));
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
+}
 
 export function CashRoomRegisterPage() {
   const { user } = useAuth();
@@ -31,15 +37,24 @@ export function CashRoomRegisterPage() {
   const load = useCallback(async () => {
     if (!orgId) { setRows([]); setLoading(false); return; }
     setLoading(true); setMessage(null);
-    const [roomsResult, staysResult] = await Promise.all([
+    const broadStartDate = new Date(`${registerDate}T00:00:00.000Z`); broadStartDate.setUTCDate(broadStartDate.getUTCDate() - 1);
+    const broadEndDate = new Date(`${registerDate}T00:00:00.000Z`); broadEndDate.setUTCDate(broadEndDate.getUTCDate() + 2);
+    const [roomsResult, staysResult, organizationResult] = await Promise.all([
       supabase.from("rooms").select("id,room_number,nightly_rate,status,room_types(base_price)").eq("organization_id", orgId).order("room_number"),
-      (supabase as any).from("stays").select("id,room_id,reservation_id,billing_mode,room_discount_amount,hotel_customers(first_name,last_name)").eq("organization_id", orgId).is("actual_check_out", null),
+      (supabase as any).from("stays").select("id,room_id,reservation_id,billing_mode,actual_check_in,actual_check_out,room_discount_amount,hotel_customers(first_name,last_name)").eq("organization_id", orgId).lt("actual_check_in", broadEndDate.toISOString()).or(`actual_check_out.is.null,actual_check_out.gte.${broadStartDate.toISOString()}`).order("actual_check_in", { ascending: false }),
+      supabase.from("organizations").select("hotel_timezone").eq("id", orgId).maybeSingle(),
     ]);
     if (roomsResult.error || staysResult.error) {
       setMessage(roomsResult.error?.message || staysResult.error?.message || "Could not load the room register.");
       setLoading(false); return;
     }
-    const activeByRoom = new Map<string, any>((staysResult.data || []).filter((stay: any) => stay.room_id).map((stay: any) => [stay.room_id, stay]));
+    const timeZone = organizationResult.data?.hotel_timezone || "Africa/Kampala";
+    const activeByRoom = new Map<string, any>();
+    for (const stay of (staysResult.data || []) as any[]) {
+      if (!stay.room_id || dateInTimeZone(stay.actual_check_in, timeZone) > registerDate) continue;
+      if (stay.actual_check_out && dateInTimeZone(stay.actual_check_out, timeZone) < registerDate) continue;
+      if (!activeByRoom.has(stay.room_id)) activeByRoom.set(stay.room_id, stay);
+    }
     const next = ((roomsResult.data || []) as any[]).map((room): RoomRow => {
       const stay = activeByRoom.get(room.id);
       const customer = Array.isArray(stay?.hotel_customers) ? stay.hotel_customers[0] : stay?.hotel_customers;
@@ -50,6 +65,7 @@ export function CashRoomRegisterPage() {
         stayId: stay?.id || null,
         reservationId: stay?.reservation_id || null,
         billingMode: stay?.billing_mode || null,
+        actualCheckout: stay?.actual_check_out || null,
         occupied: Boolean(stay),
         guestName: customer ? `${customer.first_name || ""} ${customer.last_name || ""}`.trim() : "",
         discount: String(stay?.room_discount_amount || ""),
@@ -57,7 +73,7 @@ export function CashRoomRegisterPage() {
       };
     });
     setRows(next); setLoading(false);
-  }, [orgId]);
+  }, [orgId, registerDate]);
 
   useEffect(() => { void load(); }, [load]);
   const update = (roomId: string, patch: Partial<RoomRow>) => setRows((current) => current.map((row) => row.id === roomId ? { ...row, ...patch } : row));
@@ -106,15 +122,16 @@ export function CashRoomRegisterPage() {
       <table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Room</th><th className="px-4 py-3 text-center">Occupied</th><th className="px-4 py-3">Guest name</th><th className="px-4 py-3 text-right">Rate</th><th className="px-4 py-3">Discount</th><th className="px-4 py-3 text-right">Net charge</th><th className="px-4 py-3 text-center">Paid cash</th><th className="px-4 py-3">Action</th></tr></thead>
         <tbody className="divide-y divide-slate-100">{rows.map((row) => {
           const locked = Boolean(row.reservationId || (row.stayId && row.billingMode !== "cash_register"));
+          const historicalCheckout = Boolean(row.actualCheckout);
           const net = Math.max(0, row.rate - Number(row.discount || 0));
           return <tr key={row.id} className={locked ? "bg-amber-50/50" : ""}><td className="px-4 py-3"><strong>{row.roomNumber}</strong>{locked ? <span className="mt-1 block text-[11px] font-semibold text-amber-700">Existing check-in</span> : row.stayId ? <span className="mt-1 block text-[11px] text-emerald-700">Cash-register stay</span> : null}</td>
-            <td className="px-4 py-3 text-center"><input aria-label={`Room ${row.roomNumber} occupied`} type="checkbox" checked={row.occupied} disabled={locked} onChange={(e)=>update(row.id,{occupied:e.target.checked})}/></td>
+            <td className="px-4 py-3 text-center"><input aria-label={`Room ${row.roomNumber} occupied`} type="checkbox" checked={row.occupied} disabled={locked || historicalCheckout} onChange={(e)=>update(row.id,{occupied:e.target.checked})}/></td>
             <td className="px-4 py-3"><input value={row.guestName} disabled={locked || Boolean(row.stayId)} onChange={(e)=>update(row.id,{guestName:e.target.value})} placeholder="Guest name" className="w-52 rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"/></td>
             <td className="px-4 py-3 text-right font-semibold">{money.format(row.rate)}</td>
             <td className="px-4 py-3"><input aria-label={`Room ${row.roomNumber} discount`} type="number" min="0" max={row.rate} value={row.discount} disabled={locked || !row.occupied} onChange={(e)=>update(row.id,{discount:e.target.value})} className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-right disabled:bg-slate-100"/></td>
             <td className="px-4 py-3 text-right font-bold text-emerald-700">{money.format(net)}</td>
             <td className="px-4 py-3 text-center"><input aria-label={`Room ${row.roomNumber} paid`} type="checkbox" checked={row.paid} disabled={locked || !row.occupied} onChange={(e)=>update(row.id,{paid:e.target.checked})}/></td>
-            <td className="px-4 py-3">{locked ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700"><CheckCircle2 className="h-4 w-4"/> Already occupied</span> : <button type="button" disabled={savingId===row.id || (!row.occupied&&!row.stayId)} onClick={()=>void saveRow(row)} className="app-btn-primary disabled:opacity-40">{savingId===row.id?"Saving...":row.occupied?"Save day":"Check out"}</button>}</td></tr>;
+            <td className="px-4 py-3">{locked ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-700"><CheckCircle2 className="h-4 w-4"/> Reservation check-in</span> : historicalCheckout ? <span className="inline-flex items-center gap-1 text-xs font-semibold text-slate-600"><CheckCircle2 className="h-4 w-4"/> Occupied on this date</span> : <button type="button" disabled={savingId===row.id || (!row.occupied&&!row.stayId)} onClick={()=>void saveRow(row)} className="app-btn-primary disabled:opacity-40">{savingId===row.id?"Saving...":row.occupied?"Save day":"Check out"}</button>}</td></tr>;
         })}</tbody></table>
     </div>
     <p className="mt-4 text-xs text-slate-500">Rooms checked in through reservations appear occupied and locked here. Cash-register stays are excluded from automatic night audit; save each occupied room once per day.</p>
