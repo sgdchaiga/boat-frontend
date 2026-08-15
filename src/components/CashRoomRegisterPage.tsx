@@ -116,9 +116,12 @@ export function CashRoomRegisterPage() {
     setSavingId(row.id); setMessage(null);
     try {
       if (!row.occupied && row.stayId) {
-        const { error } = await (supabase as any).rpc("hotel_check_out_stay", { p_stay_id: row.stayId, p_checkout_date: registerDate });
+        const correctingCashEntry = row.billingMode === "cash_register" && editingId === row.id;
+        const { error } = correctingCashEntry
+          ? await (supabase as any).rpc("unmark_cash_room_register_occupied", { p_stay_id: row.stayId, p_register_date: registerDate })
+          : await (supabase as any).rpc("hotel_check_out_stay", { p_stay_id: row.stayId, p_checkout_date: registerDate });
         if (error) throw error;
-        setMessage(`Room ${row.roomNumber} checked out and moved to cleaning.`);
+        setMessage(correctingCashEntry ? `Room ${row.roomNumber}: the incorrect occupied entry and its accounting were reversed.` : `Room ${row.roomNumber} checked out and moved to cleaning.`);
       } else if (row.occupied) {
         const rpcName = row.stayId && row.billingMode === "cash_register" ? "edit_cash_room_register_entry" : "save_cash_room_register_customer_entry";
         const args = row.stayId && row.billingMode === "cash_register" ? {
@@ -163,7 +166,7 @@ export function CashRoomRegisterPage() {
           const editing = editingId === row.id;
           const net = Math.max(0, row.rate - Number(row.discount || 0));
           return <tr key={row.id} className={locked ? "bg-amber-50/50" : ""}><td className="px-4 py-3"><strong>{row.roomNumber}</strong>{locked ? <span className="mt-1 block text-[11px] font-semibold text-amber-700">Existing check-in</span> : row.stayId ? <span className="mt-1 block text-[11px] text-emerald-700">Cash-register stay</span> : null}</td>
-            <td className="px-4 py-3 text-center"><input aria-label={`Room ${row.roomNumber} occupied`} type="checkbox" checked={row.occupied} disabled={locked || historicalCheckout} onChange={(e)=>update(row.id,{occupied:e.target.checked})}/></td>
+            <td className="px-4 py-3 text-center"><input aria-label={`Room ${row.roomNumber} occupied`} type="checkbox" checked={row.occupied} disabled={locked || (Boolean(row.stayId) && !editing)} onChange={(e)=>update(row.id,{occupied:e.target.checked})}/></td>
             <td className="px-4 py-3"><select value={row.guestId} disabled={locked || (Boolean(row.stayId) && !editing)} onChange={(e)=>{const customer=customers.find((item)=>item.id===e.target.value);update(row.id,{guestId:e.target.value,guestName:customer?.name||""});}} className="w-56 rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100"><option value="">Select customer</option>{customers.map((customer)=><option key={customer.id} value={customer.id}>{customer.name}</option>)}</select></td>
             <td className="px-4 py-3 text-right"><span className="font-semibold">{money.format(row.rate)}</span><span className="block text-[11px] text-slate-500">Room / room type setup</span></td>
             <td className="px-4 py-3"><input aria-label={`Room ${row.roomNumber} discount`} type="number" min="0" max={row.rate} value={row.discount} disabled={locked || !row.occupied || (Boolean(row.stayId) && !editing)} onChange={(e)=>update(row.id,{discount:e.target.value})} className="w-28 rounded-lg border border-slate-300 px-3 py-2 text-right disabled:bg-slate-100"/></td>
