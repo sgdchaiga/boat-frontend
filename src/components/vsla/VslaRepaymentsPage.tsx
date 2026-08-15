@@ -25,6 +25,7 @@ type Repayment = {
   interest_paid: number;
   penalty_paid: number;
   paid_on: string;
+  balance_after: number;
 };
 
 export function VslaRepaymentsPage({
@@ -38,12 +39,7 @@ export function VslaRepaymentsPage({
   const [loans, setLoans] = useState<Loan[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [rows, setRows] = useState<Repayment[]>([]);
-  const [loanId, setLoanId] = useState("");
-  const [principalPaid, setPrincipalPaid] = useState("0");
-  const [interestPaid, setInterestPaid] = useState("0");
-  const [penaltyPaid, setPenaltyPaid] = useState("0");
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -104,41 +100,6 @@ export function VslaRepaymentsPage({
       new Date(l.due_date) < new Date(),
   ).length;
 
-  const postRepayment = async () => {
-    if (readOnly) return;
-    const p = Number(principalPaid || 0);
-    const i = Number(interestPaid || 0);
-    const pen = Number(penaltyPaid || 0);
-    const total = p + i + pen;
-    if (!loanId || total <= 0) {
-      setError("Loan and payment amount are required.");
-      return;
-    }
-    const loan = loanMap.get(loanId);
-    if (!loan) return;
-    setSaving(true);
-    setError(null);
-    const today = new Date().toISOString().slice(0, 10);
-    const posting = await supabase.rpc("vsla_post_loan_repayment", {
-      p_loan_id: loanId,
-      p_principal: p,
-      p_interest: i,
-      p_penalty: pen,
-      p_meeting_id: null,
-      p_paid_on: today,
-    });
-    if (posting.error) {
-      setError(posting.error.message);
-      setSaving(false);
-      return;
-    }
-    setPrincipalPaid("0");
-    setInterestPaid("0");
-    setPenaltyPaid("0");
-    setSaving(false);
-    await load();
-  };
-
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {readOnly && <ReadOnlyNotice />}
@@ -147,97 +108,35 @@ export function VslaRepaymentsPage({
           VSLA Loan Repayments
         </h1>
         <p className="text-sm text-slate-600 mt-1">
-          Record principal/interest splits, support partial payments, and flag
-          overdue loans.
+          Consolidated repayment history. Record new payments during an open meeting.
         </p>
       </div>
       {error && <p className="text-sm text-red-600">{error}</p>}
       <p className="text-sm text-amber-700">Overdue loans: {overdueCount}</p>
-
-      <div className="bg-white rounded-xl border border-slate-200 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-3">
-          Record Repayment
-        </p>
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-          <label className="text-xs text-slate-600 md:col-span-2">
-            Loan
-            <select
-              value={loanId}
-              onChange={(e) => setLoanId(e.target.value)}
-              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            >
-              <option value="">Select loan</option>
-              {loans
-                .filter((l) => l.status === "disbursed")
-                .map((l) => (
-                  <option key={l.id} value={l.id}>
-                    {memberName.get(l.member_id) ?? "Unknown"} - Outstanding{" "}
-                    {Number(l.outstanding_balance || 0).toLocaleString()}
-                  </option>
-                ))}
-            </select>
-          </label>
-          <label className="text-xs text-slate-600">
-            Principal
-            <input
-              type="number"
-              value={principalPaid}
-              onChange={(e) => setPrincipalPaid(e.target.value)}
-              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="text-xs text-slate-600">
-            Interest
-            <input
-              type="number"
-              value={interestPaid}
-              onChange={(e) => setInterestPaid(e.target.value)}
-              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="text-xs text-slate-600">
-            Penalty
-            <input
-              type="number"
-              value={penaltyPaid}
-              onChange={(e) => setPenaltyPaid(e.target.value)}
-              className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </label>
-        </div>
-        <div className="mt-3">
-          <button
-            type="button"
-            onClick={() => void postRepayment()}
-            disabled={readOnly || saving}
-            className="px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50"
-          >
-            Post Repayment
-          </button>
-        </div>
-      </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="text-left p-3">Date</th>
-              <th className="text-left p-3">Loan</th>
+              <th className="text-left p-3">Member</th>
               <th className="text-left p-3">Principal</th>
               <th className="text-left p-3">Interest</th>
               <th className="text-left p-3">Penalty</th>
+              <th className="text-left p-3">Total paid</th>
+              <th className="text-left p-3">Balance</th>
             </tr>
           </thead>
           <tbody>
             {loading ? (
               <tr>
-                <td className="p-4 text-slate-500" colSpan={5}>
+                <td className="p-4 text-slate-500" colSpan={7}>
                   Loading repayments...
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td className="p-4 text-slate-500" colSpan={5}>
+                <td className="p-4 text-slate-500" colSpan={7}>
                   No repayments yet.
                 </td>
               </tr>
@@ -245,7 +144,7 @@ export function VslaRepaymentsPage({
               rows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100">
                   <td className="p-3">{r.paid_on}</td>
-                  <td className="p-3">{r.loan_id.slice(0, 8)}...</td>
+                  <td className="p-3">{memberName.get(loanMap.get(r.loan_id)?.member_id || "") ?? "Unknown"}</td>
                   <td className="p-3">
                     {Number(r.principal_paid || 0).toLocaleString()}
                   </td>
@@ -255,6 +154,8 @@ export function VslaRepaymentsPage({
                   <td className="p-3">
                     {Number(r.penalty_paid || 0).toLocaleString()}
                   </td>
+                  <td className="p-3 font-semibold">{(Number(r.principal_paid || 0)+Number(r.interest_paid || 0)+Number(r.penalty_paid || 0)).toLocaleString()}</td>
+                  <td className="p-3">{Number(r.balance_after || 0).toLocaleString()}</td>
                 </tr>
               ))
             )}

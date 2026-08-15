@@ -21,6 +21,7 @@ type Loan = {
   principal_amount: number | null;
   status: string;
   applied_at: string;
+  disbursed_on: string | null;
 };
 type Repayment = {
   id: string;
@@ -140,7 +141,7 @@ export function VslaMemberStatementPage({
       filterByOrganizationId(
         supabase
           .from("vsla_loans")
-          .select("id,member_id,principal_amount,status,applied_at"),
+          .select("id,member_id,principal_amount,status,applied_at,disbursed_on"),
         orgId,
         superAdmin,
       ),
@@ -228,10 +229,10 @@ export function VslaMemberStatementPage({
         if (l.member_id !== memberId) continue;
         out.push({
           id: `l-${l.id}`,
-          date: String(l.applied_at).slice(0, 10),
+          date: String(l.disbursed_on || l.applied_at).slice(0, 10),
           type: "loan",
           amount: Number(l.principal_amount || 0),
-          note: `Loan ${l.status}`,
+          note: `Loan disbursed (${l.status})`,
         });
       }
     }

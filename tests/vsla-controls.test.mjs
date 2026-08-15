@@ -26,19 +26,23 @@ test("VSLA financial postings use atomic database functions", async () => {
   assert.match(meetings, /rpc\("vsla_record_meeting_loan"/);
   assert.match(meetings, /"vsla_post_loan_repayment"/);
   assert.match(meetings, /"vsla_set_member_meeting_shares"/);
-  assert.match(repayments, /rpc\("vsla_post_loan_repayment"/);
+  assert.match(repayments, /Consolidated repayment history/);
+  assert.doesNotMatch(repayments, /p_meeting_id: null/);
   assert.match(loans, /VSLA Loan Register/);
   assert.doesNotMatch(loans, /Approve/);
   assert.match(savings, /"vsla_set_member_meeting_shares"/);
 });
 
 test("repayments are restricted to disbursed loans", async () => {
-  const [migration, page] = await Promise.all([
+  const [migration, integrityMigration, page] = await Promise.all([
     source("supabase/migrations/20260815123000_vsla_atomic_posting_controls.sql"),
+    source("supabase/migrations/20260815240000_vsla_loan_ledger_integrity.sql"),
     source("src/components/vsla/VslaRepaymentsPage.tsx"),
   ]);
   assert.match(migration, /v_loan\.status <> 'disbursed'/);
-  assert.match(page, /filter\(\(l\) => l\.status === "disbursed"\)/);
+  assert.match(integrityMigration, /Repayments must be recorded during an open VSLA meeting/);
+  assert.match(integrityMigration, /balance_after/);
+  assert.match(page, /Consolidated repayment history/);
   assert.doesNotMatch(page, /l\.status === "approved"/);
 });
 

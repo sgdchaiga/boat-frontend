@@ -1345,7 +1345,6 @@ function AppContent() {
             readOnly={access.readOnly}
             onNavigate={navigate}
             initialTab={pageState?.vslaMeetingTab as "attendance" | "savings" | "loans" | "repayments" | "cash" | undefined}
-            initialDisburseLoanId={pageState?.vslaDisburseLoanId as string | undefined}
           />
         );
       case VSLA_PAGE.meetingMinutes:

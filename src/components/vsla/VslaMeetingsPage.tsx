@@ -39,7 +39,7 @@ type LoanRow = {
   disbursed_on: string | null;
   disbursement_meeting_id: string | null;
 };
-type RepaymentRow = { id: string; meeting_id: string | null; loan_id: string; principal_paid: number; interest_paid: number; penalty_paid: number; paid_on: string };
+type RepaymentRow = { id: string; meeting_id: string | null; loan_id: string; principal_paid: number; interest_paid: number; penalty_paid: number; paid_on: string; balance_after: number };
 type VslaSettingsRow = { share_value: number; max_shares_per_meeting: number };
 type TxnKind =
   | "loan_issue"
@@ -68,12 +68,10 @@ type ShareTxnRow = {
 export function VslaMeetingsPage({
   readOnly = false,
   initialTab,
-  initialDisburseLoanId,
   onNavigate,
 }: {
   readOnly?: boolean;
   initialTab?: "attendance" | "savings" | "loans" | "repayments" | "cash";
-  initialDisburseLoanId?: string;
   onNavigate?: (page: string, state?: Record<string, unknown>) => void;
 }) {
   const { user, isSuperAdmin } = useAuth();
@@ -176,7 +174,7 @@ export function VslaMeetingsPage({
       superAdmin,
     );
     const repaymentQ = filterByOrganizationId(
-      supabase.from("vsla_loan_repayments").select("id,meeting_id,loan_id,principal_paid,interest_paid,penalty_paid,paid_on").order("created_at", { ascending: false }),
+      supabase.from("vsla_loan_repayments").select("id,meeting_id,loan_id,principal_paid,interest_paid,penalty_paid,paid_on,balance_after").order("created_at", { ascending: false }),
       orgId, superAdmin,
     );
     const [
@@ -188,35 +186,17 @@ export function VslaMeetingsPage({
       shareRes,
       settingsRes, repaymentsRes,
     ] = await Promise.all([mq, memQ, atQ, lnQ, txQ, shareQ, settingsQ, repaymentQ]);
-    if (
-      meetingsRes.error ||
-      membersRes.error ||
-      attendanceRes.error ||
-      loansRes.error ||
-      txRes.error ||
-      shareRes.error ||
-      settingsRes.error || repaymentsRes.error
-    ) {
-      setError(
-        meetingsRes.error?.message ??
-          membersRes.error?.message ??
-          attendanceRes.error?.message ??
-          loansRes.error?.message ??
-          txRes.error?.message ??
-          shareRes.error?.message ??
-          settingsRes.error?.message ??
-          repaymentsRes.error?.message ??
-          "Failed to load meetings.",
-      );
-    } else {
-      const mt = (meetingsRes.data ?? []) as MeetingRow[];
-      setMeetings(mt);
-      setMembers((membersRes.data ?? []) as MemberRow[]);
-      setAttendance((attendanceRes.data ?? []) as AttendanceRow[]);
-      setLoans((loansRes.data ?? []) as LoanRow[]);
-      setTxns((txRes.data ?? []) as MeetingTxnRow[]);
-      setShareTxns((shareRes.data ?? []) as ShareTxnRow[]);
-      setRepayments((repaymentsRes.data ?? []) as RepaymentRow[]);
+    const mt = (meetingsRes.data ?? []) as MeetingRow[];
+    if (!meetingsRes.error) setMeetings(mt);
+    if (!membersRes.error) setMembers((membersRes.data ?? []) as MemberRow[]);
+    if (!attendanceRes.error) setAttendance((attendanceRes.data ?? []) as AttendanceRow[]);
+    if (!loansRes.error) setLoans((loansRes.data ?? []) as LoanRow[]);
+    if (!txRes.error) setTxns((txRes.data ?? []) as MeetingTxnRow[]);
+    if (!shareRes.error) setShareTxns((shareRes.data ?? []) as ShareTxnRow[]);
+    if (!repaymentsRes.error) setRepayments((repaymentsRes.data ?? []) as RepaymentRow[]);
+    const failures = [meetingsRes.error,membersRes.error,attendanceRes.error,loansRes.error,txRes.error,shareRes.error,settingsRes.error,repaymentsRes.error].filter(Boolean);
+    if (failures.length) setError(failures.map((failure) => failure?.message).join(" · "));
+    if (!settingsRes.error) {
       const settings = settingsRes.data as VslaSettingsRow | null;
       if (settings?.share_value != null)
         setShareValue(String(settings.share_value));
@@ -226,10 +206,8 @@ export function VslaMeetingsPage({
       ) {
         setMaxStamps(settings.max_shares_per_meeting);
       }
-      if (!selectedMeetingId && mt[0]?.id) {
-        setSelectedMeetingId(mt[0].id);
-      }
     }
+    if (!meetingsRes.error && !selectedMeetingId && mt[0]?.id) setSelectedMeetingId(mt[0].id);
     setLoading(false);
   }, [orgId, selectedMeetingId, superAdmin]);
 
@@ -239,16 +217,7 @@ export function VslaMeetingsPage({
 
   useEffect(() => {
     if (initialTab) setActiveTab(initialTab);
-    if (initialDisburseLoanId) {
-      setActiveTab("loans");
-      const legacyLoan = loans.find((loan) => loan.id === initialDisburseLoanId);
-      if (legacyLoan) {
-        setLoanMemberId(legacyLoan.member_id);
-        setLoanAmount(String(legacyLoan.principal_amount));
-        setLoanInterest(String(legacyLoan.interest_rate_percent));
-      }
-    }
-  }, [initialDisburseLoanId, initialTab, loans]);
+  }, [initialTab]);
 
   const selectedMeeting =
     meetings.find((m) => m.id === selectedMeetingId) ?? null;
@@ -800,7 +769,7 @@ export function VslaMeetingsPage({
               Loans issued in this meeting:{" "}
               <strong>{loansIssued.toLocaleString()}</strong>
             </p>
-            <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[620px] text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Member</th><th className="p-3 text-right">Loan paid</th><th className="p-3 text-right">Interest paid</th><th className="p-3 text-right">Total paid</th><th className="p-3 text-right">Balance</th></tr></thead><tbody>{repaymentsForMeeting.map((repayment) => { const loan = loans.find((item) => item.id === repayment.loan_id); const total = Number(repayment.principal_paid)+Number(repayment.interest_paid)+Number(repayment.penalty_paid); return <tr key={repayment.id} className="border-t"><td className="p-3">{loan ? memberName.get(loan.member_id) ?? "Unknown" : "Unknown"}</td><td className="p-3 text-right">{Number(repayment.principal_paid).toLocaleString()}</td><td className="p-3 text-right">{Number(repayment.interest_paid).toLocaleString()}</td><td className="p-3 text-right font-semibold">{total.toLocaleString()}</td><td className="p-3 text-right">{Number(loan?.outstanding_balance || 0).toLocaleString()}</td></tr>; })}{!repaymentsForMeeting.length && <tr><td colSpan={5} className="p-5 text-center text-slate-500">No repayments recorded in this meeting.</td></tr>}</tbody></table></div>
+            <div className="overflow-x-auto rounded-lg border border-slate-200"><table className="w-full min-w-[620px] text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Member</th><th className="p-3 text-right">Loan paid</th><th className="p-3 text-right">Interest paid</th><th className="p-3 text-right">Total paid</th><th className="p-3 text-right">Balance</th></tr></thead><tbody>{repaymentsForMeeting.map((repayment) => { const loan = loans.find((item) => item.id === repayment.loan_id); const total = Number(repayment.principal_paid)+Number(repayment.interest_paid)+Number(repayment.penalty_paid); return <tr key={repayment.id} className="border-t"><td className="p-3">{loan ? memberName.get(loan.member_id) ?? "Unknown" : "Unknown"}</td><td className="p-3 text-right">{Number(repayment.principal_paid).toLocaleString()}</td><td className="p-3 text-right">{Number(repayment.interest_paid).toLocaleString()}</td><td className="p-3 text-right font-semibold">{total.toLocaleString()}</td><td className="p-3 text-right">{Number(repayment.balance_after || 0).toLocaleString()}</td></tr>; })}{!repaymentsForMeeting.length && <tr><td colSpan={5} className="p-5 text-center text-slate-500">No repayments recorded in this meeting.</td></tr>}</tbody></table></div>
           </div>
         ) : null}
 
