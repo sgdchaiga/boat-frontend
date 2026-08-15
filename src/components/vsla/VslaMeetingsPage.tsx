@@ -5,7 +5,7 @@ import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { VSLA_PAGE } from "@/lib/vslaPages";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
-import { computeVslaLoanOutstanding } from "@/lib/vslaLoanMath";
+import { Check, ChevronLeft, ChevronRight, Circle } from "lucide-react";
 
 type MeetingStatus = "scheduled" | "open" | "closed";
 type MeetingRow = {
@@ -13,6 +13,8 @@ type MeetingRow = {
   meeting_date: string;
   minutes: string | null;
   status: MeetingStatus;
+  completed_steps: string[];
+  minutes_status: "draft" | "final";
 };
 type MemberRow = {
   id: string;
@@ -90,10 +92,10 @@ export function VslaMeetingsPage({
   );
   const [selectedMeetingId, setSelectedMeetingId] = useState("");
   const [activeTab, setActiveTab] = useState<
-    "attendance" | "savings" | "loans" | "repayments" | "cash"
+    "attendance" | "savings" | "loans" | "repayments" | "cash" | "review"
   >("attendance");
   const [txnMemberId, setTxnMemberId] = useState("");
-  const [txnKind, setTxnKind] = useState<TxnKind>("loan_issue");
+  const [txnKind, setTxnKind] = useState<TxnKind>("fine");
   const [txnAmount, setTxnAmount] = useState("0");
   const [txnNote, setTxnNote] = useState("");
   const [shareValue, setShareValue] = useState("2000");
@@ -102,6 +104,8 @@ export function VslaMeetingsPage({
   const [loanId, setLoanId] = useState("");
   const [principalPaid, setPrincipalPaid] = useState("0");
   const [interestPaid, setInterestPaid] = useState("0");
+  const [openingCash, setOpeningCash] = useState("0");
+  const [physicalCash, setPhysicalCash] = useState("0");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -109,7 +113,7 @@ export function VslaMeetingsPage({
     const mq = filterByOrganizationId(
       supabase
         .from("vsla_meetings")
-        .select("id,meeting_date,minutes,status")
+        .select("id,meeting_date,minutes,status,completed_steps,minutes_status")
         .order("meeting_date", { ascending: false }),
       orgId,
       superAdmin,
@@ -231,6 +235,8 @@ export function VslaMeetingsPage({
   const selectedMeeting =
     meetings.find((m) => m.id === selectedMeetingId) ?? null;
   const meetingClosed = selectedMeeting?.status === "closed";
+  const meetingOpen = selectedMeeting?.status === "open";
+  const completedSteps = selectedMeeting?.completed_steps ?? [];
 
   const attendanceMap = useMemo(() => {
     const map = new Map<string, AttendanceRow>();
@@ -288,6 +294,19 @@ export function VslaMeetingsPage({
     await load();
   };
 
+  const markAllAttendance = async (present: boolean) => {
+    if (readOnly || !selectedMeetingId || !meetingOpen || members.length === 0) return;
+    setSaving(true);
+    setError(null);
+    const { error: attendanceError } = await supabase.from("vsla_meeting_attendance").upsert(
+      members.map((member) => ({ organization_id: orgId, meeting_id: selectedMeetingId, member_id: member.id, present })),
+      { onConflict: "meeting_id,member_id" },
+    );
+    if (attendanceError) setError(attendanceError.message);
+    setSaving(false);
+    await load();
+  };
+
   const addMeetingTxn = async () => {
     if (readOnly || !selectedMeetingId || meetingClosed) return;
     const amount = Number(txnAmount || 0);
@@ -324,30 +343,12 @@ export function VslaMeetingsPage({
     }
     setSaving(true);
     setError(null);
-    const upd = await supabase
-      .from("vsla_loans")
-      .update({
-        status: "disbursed",
-        disbursed_on:
-          selectedMeeting?.meeting_date ??
-          new Date().toISOString().slice(0, 10),
-      })
-      .eq("id", loan.id);
-    if (upd.error) {
-      setError(upd.error.message);
-      setSaving(false);
-      return;
-    }
-    const ins = await supabase.from("vsla_meeting_transactions").insert({
-      organization_id: orgId,
-      meeting_id: selectedMeetingId,
-      member_id: loan.member_id,
-      kind: "loan_issue",
-      amount: Number(loan.principal_amount || 0),
-      note: `Loan disbursed in meeting (${loan.id})`,
+    const { error: postingError } = await supabase.rpc("vsla_disburse_loan", {
+      p_loan_id: loan.id,
+      p_meeting_id: selectedMeetingId,
     });
-    if (ins.error) {
-      setError(ins.error.message);
+    if (postingError) {
+      setError(postingError.message);
       setSaving(false);
       return;
     }
@@ -363,30 +364,19 @@ export function VslaMeetingsPage({
     setSaving(true);
     setError(null);
     // Keep one effective total per member per meeting.
-    const del = await supabase
-      .from("vsla_share_transactions")
-      .delete()
-      .eq("meeting_id", selectedMeetingId)
-      .eq("member_id", memberId);
-    if (del.error) {
-      setError(del.error.message);
+    const { error: postingError } = await supabase.rpc(
+      "vsla_set_member_meeting_shares",
+      {
+        p_meeting_id: selectedMeetingId,
+        p_member_id: memberId,
+        p_shares: stamps,
+        p_share_value: value,
+      },
+    );
+    if (postingError) {
+      setError(postingError.message);
       setSaving(false);
       return;
-    }
-    if (stamps > 0) {
-      const ins = await supabase.from("vsla_share_transactions").insert({
-        organization_id: orgId,
-        meeting_id: selectedMeetingId,
-        member_id: memberId,
-        shares_bought: stamps,
-        share_value: value,
-        total_value: stamps * value,
-      });
-      if (ins.error) {
-        setError(ins.error.message);
-        setSaving(false);
-        return;
-      }
     }
     setSaving(false);
     await load();
@@ -399,55 +389,69 @@ export function VslaMeetingsPage({
     if (p + i <= 0) return;
     const loan = loans.find((l) => l.id === loanId);
     if (!loan) return;
-    const today = new Date().toISOString().slice(0, 10);
-    const ins = await supabase.from("vsla_loan_repayments").insert({
-      organization_id: orgId,
-      meeting_id: selectedMeetingId,
-      loan_id: loanId,
-      principal_paid: p,
-      interest_paid: i,
-      penalty_paid: 0,
-      paid_on: today,
-    });
-    if (ins.error) {
-      setError(ins.error.message);
+    setSaving(true);
+    setError(null);
+    const { error: postingError } = await supabase.rpc(
+      "vsla_post_loan_repayment",
+      {
+        p_loan_id: loanId,
+        p_principal: p,
+        p_interest: i,
+        p_penalty: 0,
+        p_meeting_id: selectedMeetingId,
+        p_paid_on: selectedMeeting?.meeting_date ?? new Date().toISOString().slice(0, 10),
+      },
+    );
+    if (postingError) {
+      setError(postingError.message);
+      setSaving(false);
       return;
     }
-    const repays = await filterByOrganizationId(
-      supabase
-        .from("vsla_loan_repayments")
-        .select("paid_on,principal_paid,interest_paid,penalty_paid")
-        .eq("loan_id", loanId),
-      orgId,
-      superAdmin,
-    );
-    const calc = computeVslaLoanOutstanding(
-      loan,
-      (repays.data ?? []) as Array<{
-        paid_on: string;
-        principal_paid: number;
-        interest_paid: number;
-        penalty_paid: number;
-      }>,
-    );
-    await supabase
-      .from("vsla_loans")
-      .update({
-        outstanding_balance: calc.outstanding,
-        total_due: calc.totalDue,
-        status: calc.outstanding <= 0 ? "closed" : loan.status,
-      })
-      .eq("id", loanId);
-    await supabase.from("vsla_meeting_transactions").insert({
-      organization_id: orgId,
-      meeting_id: selectedMeetingId,
-      member_id: loan.member_id,
-      kind: "loan_repayment",
-      amount: p + i,
-      note: "Repayment posted from meeting dashboard",
-    });
     setPrincipalPaid("0");
     setInterestPaid("0");
+    setSaving(false);
+    await load();
+  };
+
+  const markStepComplete = async (step: typeof activeTab) => {
+    if (readOnly || !selectedMeetingId || !meetingOpen || step === "review") return;
+    setSaving(true);
+    setError(null);
+    const { error: stepError } = await supabase.rpc("vsla_mark_meeting_step", {
+      p_meeting_id: selectedMeetingId,
+      p_step: step,
+    });
+    if (stepError) setError(stepError.message);
+    setSaving(false);
+    if (!stepError) await load();
+  };
+
+  const saveCashReconciliation = async () => {
+    if (readOnly || !selectedMeetingId || !meetingOpen) return;
+    const opening = Number(openingCash);
+    const physical = Number(physicalCash);
+    if (!Number.isFinite(opening) || !Number.isFinite(physical) || opening < 0 || physical < 0) {
+      setError("Opening and physical cash must be valid non-negative amounts.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    const { error: cashError } = await supabase.rpc("vsla_save_meeting_cash_reconciliation", {
+      p_meeting_id: selectedMeetingId,
+      p_opening_cash: opening,
+      p_inflow_savings: savingsTotal,
+      p_inflow_repayments: repaymentsTotal,
+      p_inflow_fines: finesTotal + chairmanBasket,
+      p_outflow_loans: loansIssued,
+      p_outflow_social_payouts: socialPayouts + refreshments,
+      p_physical_cash: physical,
+    });
+    if (cashError) {
+      setError(cashError.message);
+      setSaving(false);
+      return;
+    }
+    setSaving(false);
     await load();
   };
 
@@ -489,6 +493,31 @@ export function VslaMeetingsPage({
   const memberName = new Map(
     members.map((m) => [m.id, formatVslaMemberLabel(m)]),
   );
+  const expectedCash =
+    Number(openingCash || 0) +
+    savingsTotal +
+    repaymentsTotal +
+    finesTotal +
+    chairmanBasket -
+    loansIssued -
+    socialPayouts -
+    refreshments;
+  const cashVariance = Number(physicalCash || 0) - expectedCash;
+  const workflowSteps = [
+    { id: "attendance", label: "Attendance" },
+    { id: "savings", label: "Shares" },
+    { id: "loans", label: "Loans" },
+    { id: "repayments", label: "Repayments" },
+    { id: "cash", label: "Reconcile" },
+    { id: "review", label: "Review" },
+  ] as const;
+  const activeStepIndex = workflowSteps.findIndex((step) => step.id === activeTab);
+  const allWorkflowStepsComplete = workflowSteps
+    .filter((step) => step.id !== "review")
+    .every((step) => completedSteps.includes(step.id));
+  const minutesFinal = selectedMeeting?.minutes_status === "final";
+  const attendanceMarked = members.filter((member) => attendanceMap.has(member.id)).length;
+  const presentCount = members.filter((member) => attendanceMap.get(member.id)?.present).length;
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
@@ -544,6 +573,7 @@ export function VslaMeetingsPage({
                 onChange={(e) => {
                   const id = e.target.value;
                   setSelectedMeetingId(id);
+                  setActiveTab("attendance");
                 }}
                 className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
               >
@@ -559,7 +589,7 @@ export function VslaMeetingsPage({
               <button
                 type="button"
                 onClick={() => void setMeetingStatus("open")}
-                disabled={readOnly || saving || !selectedMeetingId}
+                disabled={readOnly || saving || !selectedMeetingId || meetingClosed || meetingOpen}
                 className="px-3 py-2 rounded-lg bg-emerald-700 text-white text-xs disabled:opacity-50"
               >
                 Open
@@ -567,10 +597,10 @@ export function VslaMeetingsPage({
               <button
                 type="button"
                 onClick={() => void setMeetingStatus("closed")}
-                disabled={readOnly || saving || !selectedMeetingId}
+                disabled={readOnly || saving || !selectedMeetingId || !meetingOpen || !allWorkflowStepsComplete || !minutesFinal || activeTab !== "review"}
                 className="px-3 py-2 rounded-lg bg-rose-700 text-white text-xs disabled:opacity-50"
               >
-                Close
+                Close Meeting
               </button>
             </div>
             <div className="flex items-end">
@@ -578,6 +608,8 @@ export function VslaMeetingsPage({
                 <span className="text-xs text-rose-700 font-medium">
                   Meeting is closed. Transactions are locked.
                 </span>
+              ) : selectedMeeting?.status === "scheduled" ? (
+                <span className="text-xs text-amber-700 font-medium">Open the meeting to begin recording.</span>
               ) : null}
             </div>
           </div>
@@ -597,28 +629,28 @@ export function VslaMeetingsPage({
         </div>
       </div>
 
-      <div className="bg-white rounded-xl border border-slate-200 p-3">
-        <div className="flex flex-wrap gap-2 mb-3">
-          {[
-            ["attendance", "Attendance"],
-            ["savings", "Savings"],
-            ["loans", "Loans"],
-            ["repayments", "Repayments"],
-            ["cash", "Cash Summary"],
-          ].map(([id, label]) => (
+      <div className="bg-white rounded-xl border border-slate-200 p-3 sm:p-4">
+        <div className="mb-4">
+          <div className="flex items-center justify-between gap-2 overflow-x-auto pb-2">
+          {workflowSteps.map((step, index) => {
+            const complete = step.id === "review" ? allWorkflowStepsComplete : completedSteps.includes(step.id);
+            return (
             <button
-              key={id}
+              key={step.id}
               type="button"
-              onClick={() => setActiveTab(id as typeof activeTab)}
-              className={`px-3 py-1.5 rounded-lg text-xs ${activeTab === id ? "bg-indigo-700 text-white" : "bg-slate-100 text-slate-700"}`}
+              onClick={() => setActiveTab(step.id)}
+              disabled={!selectedMeetingId}
+              className={`min-w-24 flex-1 rounded-lg border px-3 py-2 text-left text-xs ${activeTab === step.id ? "border-indigo-700 bg-indigo-700 text-white" : complete ? "border-emerald-300 bg-emerald-50 text-emerald-800" : "border-slate-200 bg-slate-50 text-slate-600"}`}
             >
-              {label}
+              <span className="flex items-center gap-1.5">{complete ? <Check className="w-3.5 h-3.5" /> : <Circle className="w-3.5 h-3.5" />}<span>{index + 1}. {step.label}</span></span>
             </button>
-          ))}
+          )})}
+          </div>
+          <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full bg-emerald-500 transition-all" style={{ width: `${(completedSteps.filter((step) => step !== "review").length / 5) * 100}%` }} /></div>
         </div>
 
         {activeTab === "attendance" ? (
-          <table className="w-full text-sm">
+          <div className="space-y-3"><div className="rounded-lg bg-slate-50 px-3 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-sm text-slate-700"><span>Marked: <strong>{attendanceMarked}/{members.length}</strong> · Present: <strong>{presentCount}</strong> · Absent: <strong>{attendanceMarked - presentCount}</strong></span><span className="flex gap-2"><button type="button" onClick={() => void markAllAttendance(true)} disabled={!meetingOpen || readOnly || saving} className="rounded-md border border-emerald-300 bg-white px-2 py-1 text-xs text-emerald-700 disabled:opacity-50">All Present</button><button type="button" onClick={() => void markAllAttendance(false)} disabled={!meetingOpen || readOnly || saving} className="rounded-md border border-rose-300 bg-white px-2 py-1 text-xs text-rose-700 disabled:opacity-50">All Absent</button></span></div><div className="overflow-x-auto"><table className="w-full min-w-[480px] text-sm">
             <thead className="bg-slate-50 border-b border-slate-200">
               <tr>
                 <th className="text-left p-3">Member</th>
@@ -634,28 +666,20 @@ export function VslaMeetingsPage({
                 </tr>
               ) : (
                 members.map((m) => {
-                  const present = !!attendanceMap.get(m.id)?.present;
+                  const attendanceEntry = attendanceMap.get(m.id);
+                  const present = attendanceEntry?.present;
                   return (
                     <tr key={m.id} className="border-b border-slate-100">
                       <td className="p-3">{formatVslaMemberLabel(m)}</td>
                       <td className="p-3">
-                        <input
-                          type="checkbox"
-                          checked={present}
-                          disabled={
-                            !selectedMeetingId || readOnly || meetingClosed
-                          }
-                          onChange={(e) =>
-                            void markAttendance(m.id, e.target.checked)
-                          }
-                        />
+                        <div className="inline-flex rounded-lg border border-slate-300 overflow-hidden"><button type="button" disabled={!selectedMeetingId || readOnly || !meetingOpen || saving} onClick={() => void markAttendance(m.id, true)} className={`px-3 py-1.5 text-xs ${present === true ? "bg-emerald-600 text-white" : "bg-white text-slate-600"}`}>Present</button><button type="button" disabled={!selectedMeetingId || readOnly || !meetingOpen || saving} onClick={() => void markAttendance(m.id, false)} className={`px-3 py-1.5 text-xs ${present === false ? "bg-rose-600 text-white" : "bg-white text-slate-600"}`}>Absent</button></div>
                       </td>
                     </tr>
                   );
                 })
               )}
             </tbody>
-          </table>
+          </table></div></div>
         ) : null}
 
         {activeTab === "savings" ? (
@@ -693,7 +717,7 @@ export function VslaMeetingsPage({
                             disabled={
                               !selectedMeetingId ||
                               readOnly ||
-                              meetingClosed ||
+                               !meetingOpen ||
                               saving
                             }
                             className={`h-8 w-8 rounded-md text-xs font-semibold border ${
@@ -713,7 +737,7 @@ export function VslaMeetingsPage({
                         disabled={
                           !selectedMeetingId ||
                           readOnly ||
-                          meetingClosed ||
+                           !meetingOpen ||
                           saving
                         }
                         className="h-8 px-2 rounded-md text-xs font-medium border border-slate-300 text-slate-600 disabled:opacity-50"
@@ -767,7 +791,7 @@ export function VslaMeetingsPage({
                   disabled={
                     !selectedMeetingId ||
                     readOnly ||
-                    meetingClosed ||
+                     !meetingOpen ||
                     saving ||
                     !disburseLoanId
                   }
@@ -833,7 +857,7 @@ export function VslaMeetingsPage({
                 <button
                   type="button"
                   onClick={() => void postRepayment()}
-                  disabled={!selectedMeetingId || readOnly || meetingClosed}
+                   disabled={!selectedMeetingId || readOnly || !meetingOpen || saving}
                   className="px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50"
                 >
                   Post Repayment
@@ -892,7 +916,7 @@ export function VslaMeetingsPage({
                   type="button"
                   onClick={() => void addMeetingTxn()}
                   disabled={
-                    !selectedMeetingId || readOnly || meetingClosed || saving
+                     !selectedMeetingId || readOnly || !meetingOpen || saving
                   }
                   className="px-4 py-2 rounded-lg bg-indigo-700 text-white text-sm disabled:opacity-50"
                 >
@@ -941,8 +965,40 @@ export function VslaMeetingsPage({
                 </strong>
               </div>
             </div>
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-4 space-y-3">
+              <div><p className="font-semibold text-indigo-950">Cash Reconciliation</p><p className="text-xs text-indigo-800">Count the physical cash before completing this step.</p></div>
+              <div className="grid sm:grid-cols-4 gap-3">
+                <label className="text-xs text-slate-600">Opening Cash<input type="number" min="0" value={openingCash} onChange={(event) => setOpeningCash(event.target.value)} disabled={!meetingOpen || readOnly || saving} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
+                <div className="rounded-lg bg-white p-3 text-sm"><span className="text-xs text-slate-500">Expected Cash</span><p className="font-bold mt-1">{expectedCash.toLocaleString()}</p></div>
+                <label className="text-xs text-slate-600">Physical Cash<input type="number" min="0" value={physicalCash} onChange={(event) => setPhysicalCash(event.target.value)} disabled={!meetingOpen || readOnly || saving} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" /></label>
+                <div className={`rounded-lg p-3 text-sm ${cashVariance === 0 ? "bg-emerald-100" : "bg-rose-100"}`}><span className="text-xs text-slate-600">Variance</span><p className="font-bold mt-1">{cashVariance.toLocaleString()}</p></div>
+              </div>
+              <button type="button" onClick={() => void saveCashReconciliation()} disabled={!meetingOpen || readOnly || saving} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? "Saving..." : "Save Reconciliation & Complete Step"}</button>
+            </div>
           </div>
         ) : null}
+
+        {activeTab === "review" ? (
+          <div className="space-y-4">
+            <div className={`rounded-lg border p-4 ${allWorkflowStepsComplete && minutesFinal ? "border-emerald-300 bg-emerald-50" : "border-amber-300 bg-amber-50"}`}><p className="font-semibold text-slate-900">{allWorkflowStepsComplete && minutesFinal ? "Meeting is ready to close" : !minutesFinal ? "Finalize the minutes before closing" : "Complete the remaining steps"}</p><p className="text-sm text-slate-700 mt-1">Closing locks meeting transactions and governance records.</p></div>
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Attendance<br /><strong>{presentCount}/{members.length} present</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Savings<br /><strong>{savingsTotal.toLocaleString()}</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Repayments<br /><strong>{repaymentsTotal.toLocaleString()}</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Fines<br /><strong>{finesTotal.toLocaleString()}</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Loans Issued<br /><strong>{loansIssued.toLocaleString()}</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Social Payouts<br /><strong>{socialPayouts.toLocaleString()}</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Chairman Basket<br /><strong>{chairmanBasket.toLocaleString()}</strong></div>
+              <div className="rounded-lg bg-slate-50 p-3 text-sm">Refreshments<br /><strong>{refreshments.toLocaleString()}</strong></div>
+            </div>
+            <div className="flex flex-wrap gap-2"><button type="button" onClick={() => onNavigate?.(VSLA_PAGE.meetingMinutes)} className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm">{minutesFinal ? "Review Final Minutes" : "Complete & Finalize Minutes"}</button><button type="button" onClick={() => void setMeetingStatus("closed")} disabled={readOnly || saving || !meetingOpen || !allWorkflowStepsComplete || !minutesFinal} className="rounded-lg bg-rose-700 px-4 py-2 text-sm text-white disabled:opacity-50">{saving ? "Closing..." : "Close and Lock Meeting"}</button></div>
+          </div>
+        ) : null}
+
+        {selectedMeetingId && activeTab !== "review" && <div className="mt-5 pt-4 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div>{activeTab !== "cash" && <button type="button" onClick={() => void markStepComplete(activeTab)} disabled={readOnly || saving || !meetingOpen || completedSteps.includes(activeTab)} className="rounded-lg bg-emerald-700 px-4 py-2 text-sm text-white disabled:opacity-50">{completedSteps.includes(activeTab) ? "Step Complete" : saving ? "Saving..." : "Mark Step Complete"}</button>}</div>
+          <div className="flex gap-2"><button type="button" onClick={() => setActiveTab(workflowSteps[Math.max(0, activeStepIndex - 1)].id)} disabled={activeStepIndex === 0} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:opacity-40"><ChevronLeft className="w-4 h-4" />Previous</button><button type="button" onClick={() => setActiveTab(workflowSteps[Math.min(workflowSteps.length - 1, activeStepIndex + 1)].id)} disabled={!completedSteps.includes(activeTab)} className="inline-flex items-center gap-1 rounded-lg bg-indigo-700 px-3 py-2 text-sm text-white disabled:opacity-40">Next<ChevronRight className="w-4 h-4" /></button></div>
+        </div>}
       </div>
     </div>
   );

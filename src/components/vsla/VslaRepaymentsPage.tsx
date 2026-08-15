@@ -3,7 +3,6 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
-import { computeVslaLoanOutstanding } from "@/lib/vslaLoanMath";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
 
 type Loan = {
@@ -120,44 +119,19 @@ export function VslaRepaymentsPage({
     setSaving(true);
     setError(null);
     const today = new Date().toISOString().slice(0, 10);
-    const ins = await supabase.from("vsla_loan_repayments").insert({
-      organization_id: orgId,
-      loan_id: loanId,
-      principal_paid: p,
-      interest_paid: i,
-      penalty_paid: pen,
-      paid_on: today,
+    const posting = await supabase.rpc("vsla_post_loan_repayment", {
+      p_loan_id: loanId,
+      p_principal: p,
+      p_interest: i,
+      p_penalty: pen,
+      p_meeting_id: null,
+      p_paid_on: today,
     });
-    if (ins.error) {
-      setError(ins.error.message);
+    if (posting.error) {
+      setError(posting.error.message);
       setSaving(false);
       return;
     }
-    const repays = await filterByOrganizationId(
-      supabase
-        .from("vsla_loan_repayments")
-        .select("paid_on,principal_paid,interest_paid,penalty_paid")
-        .eq("loan_id", loanId),
-      orgId,
-      superAdmin,
-    );
-    const calc = computeVslaLoanOutstanding(
-      loan,
-      (repays.data ?? []) as Array<{
-        paid_on: string;
-        principal_paid: number;
-        interest_paid: number;
-        penalty_paid: number;
-      }>,
-    );
-    await supabase
-      .from("vsla_loans")
-      .update({
-        outstanding_balance: calc.outstanding,
-        total_due: calc.totalDue,
-        status: calc.outstanding <= 0 ? "closed" : loan.status,
-      })
-      .eq("id", loanId);
     setPrincipalPaid("0");
     setInterestPaid("0");
     setPenaltyPaid("0");
@@ -194,9 +168,7 @@ export function VslaRepaymentsPage({
             >
               <option value="">Select loan</option>
               {loans
-                .filter(
-                  (l) => l.status === "disbursed" || l.status === "approved",
-                )
+                .filter((l) => l.status === "disbursed")
                 .map((l) => (
                   <option key={l.id} value={l.id}>
                     {memberName.get(l.member_id) ?? "Unknown"} - Outstanding{" "}

@@ -5,6 +5,7 @@ import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
 import { computeVslaLoanOutstanding } from "@/lib/vslaLoanMath";
+import { ConfirmActionDialog } from "@/components/common/ConfirmActionDialog";
 
 type FundTxn = {
   id: string;
@@ -78,6 +79,7 @@ export function VslaFundsPage({ readOnly = false }: { readOnly?: boolean }) {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<{ kind: "fine" | "fund"; id: string } | null>(null);
 
   const [editingFineId, setEditingFineId] = useState<string | null>(null);
   const [editFineAmount, setEditFineAmount] = useState("");
@@ -355,10 +357,9 @@ export function VslaFundsPage({ readOnly = false }: { readOnly?: boolean }) {
 
   const deleteFine = async (id: string) => {
     if (readOnly) return;
-    if (!confirm("Delete this fine?")) return;
     setSaving(true);
     const { error: e } = await supabase.from("vsla_fines").delete().eq("id", id);
-    if (e) setError(e.message);
+    if (e) setError(e.message); else setDeleteTarget(null);
     setSaving(false);
     await load();
   };
@@ -386,13 +387,12 @@ export function VslaFundsPage({ readOnly = false }: { readOnly?: boolean }) {
 
   const deleteFundTxn = async (id: string) => {
     if (readOnly) return;
-    if (!confirm("Delete this fund transaction?")) return;
     setSaving(true);
     const { error: e } = await supabase
       .from("vsla_fund_transactions")
       .delete()
       .eq("id", id);
-    if (e) setError(e.message);
+    if (e) setError(e.message); else setDeleteTarget(null);
     setSaving(false);
     await load();
   };
@@ -988,7 +988,7 @@ export function VslaFundsPage({ readOnly = false }: { readOnly?: boolean }) {
                           type="button"
                           className="text-xs text-rose-700 touch-manipulation"
                           disabled={readOnly || saving}
-                          onClick={() => void deleteFine(f.id)}
+                          onClick={() => setDeleteTarget({ kind: "fine", id: f.id })}
                         >
                           Delete
                         </button>
@@ -1142,7 +1142,7 @@ export function VslaFundsPage({ readOnly = false }: { readOnly?: boolean }) {
                           type="button"
                           className="text-xs text-rose-700 touch-manipulation"
                           disabled={readOnly || saving}
-                          onClick={() => void deleteFundTxn(t.id)}
+                          onClick={() => setDeleteTarget({ kind: "fund", id: t.id })}
                         >
                           Delete
                         </button>
@@ -1155,6 +1155,7 @@ export function VslaFundsPage({ readOnly = false }: { readOnly?: boolean }) {
           </tbody>
         </table>
       </div>
+      <ConfirmActionDialog open={!!deleteTarget} title={deleteTarget?.kind === "fine" ? "Delete fine?" : "Delete fund transaction?"} message="This action changes the meeting and fund totals and cannot be undone." confirmLabel="Delete Record" destructive busy={saving} onCancel={() => setDeleteTarget(null)} onConfirm={() => { if (!deleteTarget) return; if (deleteTarget.kind === "fine") void deleteFine(deleteTarget.id); else void deleteFundTxn(deleteTarget.id); }} />
     </div>
   );
 }

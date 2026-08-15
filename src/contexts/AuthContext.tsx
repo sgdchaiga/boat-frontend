@@ -94,6 +94,10 @@ interface AuthUser {
   sacco_member_id?: string | null;
   sacco_member_access_status?: "invited" | "active" | "suspended" | "revoked";
   sacco_member_must_change_password?: boolean;
+  isVslaMember?: boolean;
+  vsla_member_id?: string | null;
+  vsla_member_access_status?: "invited" | "active" | "suspended" | "revoked";
+  vsla_member_must_change_password?: boolean;
   organization_name?: string | null;
   /** When set, hospitality POS/orders/payments are limited to this branch (see hospitality_branches). */
   hospitality_branch_id?: string | null;
@@ -882,11 +886,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const meta = (sessionUser as { user_metadata?: Record<string, unknown> }).user_metadata;
       const flags = await loadUserFlags(sessionUser.id);
 
-      const { data: memberAccess } = await supabase
-        .from("sacco_member_app_users")
-        .select("organization_id,sacco_member_id,status,must_change_password,sacco_members(full_name,phone)")
-        .eq("auth_user_id", sessionUser.id)
-        .maybeSingle();
+      const [{ data: memberAccess }, { data: vslaMemberAccess }] = await Promise.all([
+        supabase.from("sacco_member_app_users")
+          .select("organization_id,sacco_member_id,status,must_change_password,sacco_members(full_name,phone)")
+          .eq("auth_user_id", sessionUser.id).maybeSingle(),
+        supabase.from("vsla_member_app_users")
+          .select("organization_id,vsla_member_id,status,must_change_password,vsla_members(full_name,phone)")
+          .eq("auth_user_id", sessionUser.id).maybeSingle(),
+      ]);
       const appAccess = memberAccess as {
         organization_id?: string;
         sacco_member_id?: string;
@@ -912,6 +919,30 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           isHotelStaff: false,
         });
         if (["invited", "active"].includes(appAccess.status || "")) void supabase.rpc("mark_sacco_member_app_login");
+        return;
+      }
+      const vslaAccess = vslaMemberAccess as {
+        organization_id?: string; vsla_member_id?: string; status?: string; must_change_password?: boolean;
+        vsla_members?: { full_name?: string | null; phone?: string | null } | null;
+      } | null;
+      if (vslaAccess?.vsla_member_id) {
+        const tenant = await loadTenantProfile(sessionUser.id, vslaAccess.organization_id);
+        setMemberships([]);
+        setNeedsOrganizationPicker(false);
+        setUser({
+          ...buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta),
+          organization_id: vslaAccess.organization_id,
+          business_type: "vsla",
+          role: undefined,
+          full_name: vslaAccess.vsla_members?.full_name ?? (meta?.full_name as string | undefined),
+          phone: vslaAccess.vsla_members?.phone ?? (meta?.phone as string | undefined),
+          isVslaMember: true,
+          vsla_member_id: vslaAccess.vsla_member_id,
+          vsla_member_access_status: vslaAccess.status as AuthUser["vsla_member_access_status"],
+          vsla_member_must_change_password: vslaAccess.must_change_password === true,
+          isHotelStaff: false,
+        });
+        if (["invited", "active"].includes(vslaAccess.status || "")) void supabase.rpc("mark_vsla_member_app_login");
         return;
       }
 
@@ -1543,7 +1574,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   };
 
   const signInMemberWithPin = async (phone: string, pin: string) => {
-    if (IS_LOCAL_AUTH_MODE) return { error: new Error("Member telephone login requires the online SACCO service.") };
+    if (IS_LOCAL_AUTH_MODE) return { error: new Error("Member telephone login requires the online member service.") };
     const normalizedPhone = phone.replace(/\D/g, "");
     const normalizedPin = pin.replace(/\D/g, "");
     if (normalizedPhone.length < 9) return { error: new Error("Enter a valid telephone number.") };
@@ -1574,7 +1605,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const completeMemberInitialPassword = async (newPassword: string) => {
     const result = await setNewPassword(newPassword);
     if (result.error) return result;
-    const { error } = await supabase.rpc("complete_sacco_member_password_change");
+    const rpcName = user?.isVslaMember ? "complete_vsla_member_password_change" : "complete_sacco_member_password_change";
+    const { error } = await supabase.rpc(rpcName);
     if (error) return { error: error as Error };
     const { data } = await supabase.auth.getSession();
     if (data.session?.user) await applySessionUser(data.session.user);

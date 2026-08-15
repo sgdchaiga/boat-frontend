@@ -16,15 +16,22 @@ Deno.serve(async (req) => {
     const key = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
     if (!url || !key) return json({ ok: false, error: "Missing function configuration" }, 500);
     const service = createClient(url, key, { auth: { persistSession: false, autoRefreshToken: false } });
-    const { data, error } = await service.rpc("consume_sacco_member_pin_login", { p_phone: String(phone || ""), p_pin: String(pin || "") });
-    if (error) return json({ ok: false, error: error.message || "Invalid telephone or PIN" });
-    const row = Array.isArray(data) ? data[0] : data;
+    const credentials = { p_phone: String(phone || ""), p_pin: String(pin || "") };
+    const saccoResult = await service.rpc("consume_sacco_member_pin_login", credentials);
+    let row = Array.isArray(saccoResult.data) ? saccoResult.data[0] : saccoResult.data;
+    let memberType = "sacco";
+    if (!row?.login_email) {
+      const vslaResult = await service.rpc("consume_vsla_member_pin_login", credentials);
+      row = Array.isArray(vslaResult.data) ? vslaResult.data[0] : vslaResult.data;
+      memberType = "vsla";
+      if (vslaResult.error && !saccoResult.error) return json({ ok: false, error: vslaResult.error.message });
+    }
     if (!row?.login_email) return json({ ok: false, error: "Invalid telephone or PIN" });
     const { data: link, error: linkError } = await service.auth.admin.generateLink({
       type: "magiclink", email: row.login_email, options: redirect_to ? { redirectTo: String(redirect_to) } : undefined,
     });
     if (linkError || !link?.properties?.hashed_token) return json({ ok: false, error: "Could not create member session" }, 500);
-    return json({ ok: true, token_hash: link.properties.hashed_token });
+    return json({ ok: true, token_hash: link.properties.hashed_token, member_type: memberType });
   } catch (error) {
     return json({ ok: false, error: error instanceof Error ? error.message : "Unexpected error" }, 500);
   }

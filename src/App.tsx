@@ -215,6 +215,7 @@ const SaccoMemberProfilePage = lazy(() => import('./components/sacco/SaccoMember
 const SaccoFinancialSummariesPage = lazy(() => import('./components/sacco/SaccoFinancialSummariesPage'));
 const SaccoSavingsInterest = lazy(() => import('./components/sacco/SaccoSavingsInterest'));
 const SaccoClientDashboard = lazy(() => import('./components/sacco/SaccoClientDashboard'));
+const VslaMemberDashboard = lazy(() => import('./components/vsla/VslaMemberDashboard'));
 const SaccoMemberLoanApplication = lazyNamed(() => import('./components/sacco/SaccoMemberLoanApplication'), 'SaccoMemberLoanApplication');
 const AdminRoomsPage = lazyNamed(() => import('./components/admin/AdminRoomsPage'), 'AdminRoomsPage');
 const PayrollHubPage = lazyNamed(() => import('./components/payroll/PayrollHubPage'), 'PayrollHubPage');
@@ -903,6 +904,10 @@ function AppContent() {
     return pageSuspense(<SaccoClientDashboard memberIdFromAuth={user.sacco_member_id} memberMode navigate={navigate} />);
   }
 
+  if (user.isVslaMember && user.vsla_member_id && !["active", "invited"].includes(user.vsla_member_access_status || "")) {
+    return <div className="flex min-h-screen items-center justify-center bg-slate-100 p-4"><div className="w-full max-w-md rounded-2xl border border-amber-200 bg-white p-6 text-center shadow-lg"><h1 className="text-xl font-bold text-slate-900">Member app access suspended</h1><p className="mt-2 text-sm text-slate-600">Contact your VSLA administrator to restore access. Your records remain protected.</p><button type="button" onClick={() => void signOut()} className="mt-5 min-h-11 rounded-xl bg-slate-900 px-5 font-semibold text-white">Sign out</button></div></div>;
+  }
+
   const renderPage = () => {
     // Special-case: retail users should never see the hotel dashboard/access-denied notice.
     if (user?.business_type === "retail" && currentPage === "dashboard") {
@@ -1356,7 +1361,7 @@ function AppContent() {
       case VSLA_PAGE.shareOut:
         return <VslaShareOutPage readOnly={access.readOnly} />;
       case VSLA_PAGE.reports:
-        return <VslaReportsPage readOnly={access.readOnly} />;
+        return <VslaReportsPage readOnly={access.readOnly} onNavigate={navigate} />;
       case VSLA_PAGE.controls:
         return <VslaControlsPage readOnly={access.readOnly} />;
       case VSLA_PAGE.memberStatement:
@@ -1762,7 +1767,7 @@ function AppContent() {
 
   return (
     <AppProvider navigate={(p, state) => navigate(normalizeLegacyPage(p), state)}>
-      {user.isSaccoMember ? pageSuspense(renderMemberPage()) : pageSuspense(<Layout
+      {user.isVslaMember && user.vsla_member_id ? pageSuspense(<VslaMemberDashboard />) : user.isSaccoMember ? pageSuspense(renderMemberPage()) : pageSuspense(<Layout
         currentPage={currentPage}
         pageState={pageState}
         onNavigate={(page, state) => navigate(page, state)}

@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
+import { createClient } from "@supabase/supabase-js";
 
 type MemberStatus = "active" | "exited" | "suspended";
 type MemberRole = "member" | "chairperson" | "treasurer" | "secretary";
@@ -27,6 +28,7 @@ type MemberRow = {
   member_number: string | null;
   guarantor_member_id: string | null;
 };
+type MemberAppAccess = { auth_user_id: string; vsla_member_id: string; login_phone: string | null; status: "invited" | "active" | "suspended" | "revoked" };
 
 export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
   const { user, isSuperAdmin } = useAuth();
@@ -38,6 +40,8 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [appAccess, setAppAccess] = useState<Record<string, MemberAppAccess>>({});
+  const [appSaving, setAppSaving] = useState<string | null>(null);
 
   const [groupName, setGroupName] = useState("");
   const [fullName, setFullName] = useState("");
@@ -89,6 +93,10 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
     } else {
       setGroups((groupsData ?? []) as GroupRow[]);
       setMembers((membersData ?? []) as MemberRow[]);
+      if (orgId) {
+        const { data: accessData } = await supabase.from("vsla_member_app_users").select("auth_user_id,vsla_member_id,login_phone,status").eq("organization_id", orgId);
+        setAppAccess(Object.fromEntries(((accessData || []) as MemberAppAccess[]).map((row) => [row.vsla_member_id, row])));
+      }
     }
     setLoading(false);
   }, [orgId, superAdmin]);
@@ -199,6 +207,47 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
     setSaving(false);
     setEditingMemberId(null);
     await load();
+  };
+
+  const enableMemberApp = async (member: MemberRow) => {
+    if (!orgId || readOnly) return;
+    const loginPhone = window.prompt("Member telephone number", member.phone || "")?.trim();
+    if (!loginPhone || loginPhone.replace(/\D/g, "").length < 9) return window.alert("Enter a valid telephone number.");
+    const pin = window.prompt("Create a 6-digit member PIN", "")?.trim();
+    if (!/^\d{6}$/.test(pin || "")) return window.alert("The member PIN must be exactly 6 digits.");
+    setAppSaving(member.id);
+    try {
+      const loginEmail = `vsla.${member.id}@member.boat.invalid`;
+      const signupClient = createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } });
+      const { data, error: signupError } = await signupClient.auth.signUp({ email: loginEmail, password: `${crypto.randomUUID()}Aa7!`, options: { data: { full_name: member.full_name, phone: member.phone || "", account_type: "vsla_member" } } });
+      if (signupError) throw signupError;
+      if (!data.user?.id) throw new Error("The authentication account was not created.");
+      const { error: linkError } = await supabase.from("vsla_member_app_users").insert({ auth_user_id: data.user.id, organization_id: orgId, vsla_member_id: member.id, login_email: loginEmail, login_phone: loginPhone.replace(/\D/g, ""), status: "invited", invited_by: user?.id || null, must_change_password: false });
+      if (linkError) throw linkError;
+      const { error: pinError } = await supabase.rpc("set_vsla_member_app_pin", { p_member_id: member.id, p_phone: loginPhone, p_pin: pin });
+      if (pinError) throw pinError;
+      window.alert(`Member app enabled. Share ${window.location.origin}${window.location.pathname}?memberApp=1 and give the PIN separately.`);
+      await load();
+    } catch (cause) { window.alert(cause instanceof Error ? cause.message : "Could not enable member app."); }
+    finally { setAppSaving(null); }
+  };
+
+  const manageMemberApp = async (member: MemberRow, action: "reset" | "toggle" | "share") => {
+    const access = appAccess[member.id]; if (!access || readOnly) return;
+    if (action === "share") {
+      const text = `Your BOAT VSLA member app is ready: ${window.location.origin}${window.location.pathname}?memberApp=1\nTelephone: ${access.login_phone || member.phone || ""}`;
+      if (navigator.share) await navigator.share({ title: "BOAT VSLA Member App", text }); else { await navigator.clipboard.writeText(text); window.alert("Member app link copied."); }
+      return;
+    }
+    if (action === "reset") {
+      const pin = window.prompt("Enter a new 6-digit member PIN", "")?.trim(); if (!/^\d{6}$/.test(pin || "")) return;
+      const { error: pinError } = await supabase.rpc("set_vsla_member_app_pin", { p_member_id: member.id, p_phone: access.login_phone || member.phone, p_pin: pin });
+      if (pinError) window.alert(pinError.message); else window.alert("PIN reset successfully."); return;
+    }
+    setAppSaving(member.id);
+    const status = access.status === "suspended" ? "active" : "suspended";
+    const { error: updateError } = await supabase.from("vsla_member_app_users").update({ status }).eq("auth_user_id", access.auth_user_id);
+    setAppSaving(null); if (updateError) window.alert(updateError.message); else await load();
   };
 
   return (
@@ -369,7 +418,7 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
               <th className="text-left p-3">Status</th>
               <th className="text-left p-3">Group</th>
               <th className="text-left p-3">Key Holder</th>
-              <th className="text-left p-3">Action</th>
+              <th className="text-left p-3">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -500,7 +549,7 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
                           Cancel
                         </button>
                       </div>
-                    ) : (
+                    ) : (<div className="flex flex-wrap gap-2">
                       <button
                         type="button"
                         onClick={() => startEdit(m)}
@@ -509,7 +558,8 @@ export function VslaMembersPage({ readOnly = false }: { readOnly?: boolean }) {
                       >
                         Edit
                       </button>
-                    )}
+                      {!appAccess[m.id] ? <button type="button" onClick={() => void enableMemberApp(m)} disabled={readOnly || appSaving === m.id} className="text-xs font-semibold text-emerald-700 disabled:opacity-50">Enable app</button> : <><button type="button" onClick={() => void manageMemberApp(m, "share")} className="text-xs text-sky-700">Share</button><button type="button" onClick={() => void manageMemberApp(m, "reset")} className="text-xs text-amber-700">Reset PIN</button><button type="button" onClick={() => void manageMemberApp(m, "toggle")} disabled={appSaving === m.id} className="text-xs text-rose-700">{appAccess[m.id].status === "suspended" ? "Restore" : "Suspend"}</button></>}
+                    </div>)}
                   </td>
                 </tr>
               ))

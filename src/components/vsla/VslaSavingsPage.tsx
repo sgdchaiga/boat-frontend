@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
+import { ConfirmActionDialog } from "@/components/common/ConfirmActionDialog";
 import {
   buildVslaMinutesStoragePath,
   getVslaMeetingMinutesSignedUrl,
@@ -94,6 +95,7 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
   const [editShares, setEditShares] = useState("1");
 
   const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [deleteTxnId, setDeleteTxnId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -376,26 +378,19 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
     }
     setSaving(true);
     setError(null);
-    const del = await supabase
-      .from("vsla_share_transactions")
-      .delete()
-      .eq("meeting_id", meetingId)
-      .eq("member_id", targetMemberId);
-    if (del.error) {
-      setError(del.error.message);
+    const { error: postingError } = await supabase.rpc(
+      "vsla_set_member_meeting_shares",
+      {
+        p_meeting_id: meetingId,
+        p_member_id: targetMemberId,
+        p_shares: stamps,
+        p_share_value: value,
+      },
+    );
+    if (postingError) {
+      setError(postingError.message);
       setSaving(false);
       return;
-    }
-    if (stamps > 0) {
-      const ins = await supabase.from("vsla_share_transactions").insert({
-        organization_id: orgId,
-        meeting_id: meetingId,
-        member_id: targetMemberId,
-        shares_bought: stamps,
-        share_value: value,
-        total_value: stamps * value,
-      });
-      if (ins.error) setError(ins.error.message);
     }
     setSaving(false);
     await load();
@@ -423,7 +418,6 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
 
   const deleteTxn = async (id: string) => {
     if (readOnly) return;
-    if (!confirm("Delete this share purchase record?")) return;
     setSaving(true);
     setError(null);
     const { error: e } = await supabase
@@ -431,6 +425,7 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
       .delete()
       .eq("id", id);
     if (e) setError(e.message);
+    else setDeleteTxnId(null);
     setSaving(false);
     await load();
   };
@@ -1050,7 +1045,7 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
                                 type="button"
                                 className="text-xs text-rose-700 touch-manipulation min-h-[40px] px-2"
                                 disabled={readOnly || saving}
-                                onClick={() => void deleteTxn(t.id)}
+                                onClick={() => setDeleteTxnId(t.id)}
                               >
                                 Delete
                               </button>
@@ -1116,6 +1111,7 @@ export function VslaSavingsPage({ readOnly = false }: { readOnly?: boolean }) {
           </table>
         </div>
       )}
+      <ConfirmActionDialog open={!!deleteTxnId} title="Delete share purchase?" message="This removes the member's share purchase from the meeting and changes savings totals." confirmLabel="Delete Purchase" destructive busy={saving} onCancel={() => setDeleteTxnId(null)} onConfirm={() => { if (deleteTxnId) void deleteTxn(deleteTxnId); }} />
     </div>
   );
 }

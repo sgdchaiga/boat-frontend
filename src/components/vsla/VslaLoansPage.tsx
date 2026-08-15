@@ -196,7 +196,11 @@ export function VslaLoansPage({
       : await supabase
           .from("vsla_loans")
           .insert({ organization_id: orgId, status: "applied", ...payload });
-    if (res.error) setError(res.error.message);
+    if (res.error) {
+      setError(res.error.message);
+      setSaving(false);
+      return;
+    }
     setEditingLoanId(null);
     setMemberId("");
     setPrincipal("0");
@@ -222,10 +226,14 @@ export function VslaLoansPage({
 
   const approveLoan = async (id: string) => {
     if (readOnly) return;
-    await supabase
+    setSaving(true);
+    setError(null);
+    const { error: approvalError } = await supabase
       .from("vsla_loans")
       .update({ status: "approved" })
       .eq("id", id);
+    if (approvalError) setError(approvalError.message);
+    setSaving(false);
     await load();
   };
 
@@ -234,38 +242,27 @@ export function VslaLoansPage({
     const loan = loans.find((l) => l.id === selectedLoanId);
     const amount = Number(repaymentAmount);
     if (!loan || amount <= 0) return;
-    await supabase.from("vsla_loan_repayments").insert({
-      organization_id: orgId,
-      loan_id: loan.id,
-      principal_paid: amount,
-      interest_paid: 0,
-      penalty_paid: 0,
-      paid_on: new Date().toISOString().slice(0, 10),
-    });
-    const latestRepayments = [
-      ...repayments,
+    setSaving(true);
+    setError(null);
+    const { error: postingError } = await supabase.rpc(
+      "vsla_post_loan_repayment",
       {
-        loan_id: loan.id,
-        principal_paid: amount,
-        interest_paid: 0,
-        penalty_paid: 0,
-        paid_on: new Date().toISOString().slice(0, 10),
+        p_loan_id: loan.id,
+        p_principal: amount,
+        p_interest: 0,
+        p_penalty: 0,
+        p_meeting_id: null,
+        p_paid_on: new Date().toISOString().slice(0, 10),
       },
-    ];
-    const calc = computeVslaLoanOutstanding(
-      loan,
-      latestRepayments.filter((r) => r.loan_id === loan.id),
     );
-    await supabase
-      .from("vsla_loans")
-      .update({
-        outstanding_balance: calc.outstanding,
-        total_due: calc.totalDue,
-        status: calc.outstanding <= 0 ? "closed" : loan.status,
-      })
-      .eq("id", loan.id);
+    if (postingError) {
+      setError(postingError.message);
+      setSaving(false);
+      return;
+    }
     setRepaymentAmount("");
     setSelectedLoanId("");
+    setSaving(false);
     await load();
   };
 
