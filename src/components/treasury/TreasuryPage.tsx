@@ -30,6 +30,7 @@ type TreasuryRequest = {
   payment_reference: string | null;
 };
 type Collection = { amount: number; payment_source: string | null; paid_at: string; payment_method: string | null; transaction_id: string | null };
+type HotelDepartmentShare = { orderId: string; department: string; share: number };
 type VendorRef = { name: string | null } | { name: string | null }[] | null;
 type Disbursement = {
   id: string;
@@ -90,6 +91,10 @@ function methodLabel(value: string | null | undefined): string {
   return (value || "unspecified").replace(/_/g, " ");
 }
 
+function baseTransactionId(value: string | null | undefined): string {
+  return String(value || "").split("[", 1)[0].trim();
+}
+
 function vendorName(value: VendorRef): string | null {
   const row = Array.isArray(value) ? value[0] : value;
   return row?.name || null;
@@ -110,6 +115,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const { user } = useAuth();
   const [requests, setRequests] = useState<TreasuryRequest[]>([]);
   const [collections, setCollections] = useState<Collection[]>([]);
+  const [hotelDepartmentShares, setHotelDepartmentShares] = useState<HotelDepartmentShare[]>([]);
   const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
   const [loading, setLoading] = useState(true);
   const [workingId, setWorkingId] = useState<string | null>(null);
@@ -193,6 +199,38 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     setCollections(loadedCollections.filter(
       (row) => row.payment_source !== "pos_retail" || (!!row.transaction_id && activeRetailSaleIds.has(row.transaction_id))
     ));
+    const hotelOrderIds = [...new Set(loadedCollections
+      .filter((row) => row.payment_source === "pos_hotel")
+      .map((row) => baseTransactionId(row.transaction_id))
+      .filter(Boolean))];
+    if (hotelOrderIds.length > 0) {
+      const [ordersRes, productsRes, departmentsRes] = await Promise.all([
+        supabase.from("kitchen_orders").select("id,kitchen_order_items(quantity,unit_price,product_id)").eq("organization_id", user.organization_id).in("id", hotelOrderIds),
+        supabase.from("products").select("id,department_id,sales_price").eq("organization_id", user.organization_id),
+        supabase.from("departments").select("id,name").eq("organization_id", user.organization_id),
+      ]);
+      if (ordersRes.error || productsRes.error || departmentsRes.error) {
+        console.error("Unable to load Treasury hotel department contributions:", ordersRes.error || productsRes.error || departmentsRes.error);
+        setHotelDepartmentShares([]);
+      } else {
+        const productById = new Map(((productsRes.data || []) as Array<{ id: string; department_id: string | null; sales_price: number | null }>).map((product) => [product.id, product]));
+        const departmentNameById = new Map(((departmentsRes.data || []) as Array<{ id: string; name: string }>).map((department) => [department.id, department.name]));
+        const shares: HotelDepartmentShare[] = [];
+        for (const order of (ordersRes.data || []) as Array<{ id: string; kitchen_order_items: Array<{ quantity: number | null; unit_price: number | null; product_id: string | null }> | null }>) {
+          const totals = new Map<string, number>();
+          for (const item of order.kitchen_order_items || []) {
+            const product = item.product_id ? productById.get(item.product_id) : null;
+            const department = product?.department_id ? departmentNameById.get(product.department_id) || "Unassigned" : "Unassigned";
+            const value = Number(item.quantity || 0) * Number(item.unit_price ?? product?.sales_price ?? 0);
+            totals.set(department, (totals.get(department) || 0) + value);
+          }
+          const orderTotal = [...totals.values()].reduce((sum, value) => sum + value, 0);
+          if (orderTotal > 0) for (const [department, value] of totals) shares.push({ orderId: order.id, department, share: value / orderTotal });
+          else shares.push({ orderId: order.id, department: "Unassigned", share: 1 });
+        }
+        setHotelDepartmentShares(shares);
+      }
+    } else setHotelDepartmentShares([]);
     setSpendMoneyApprovalEnabled(workflowRes.data?.allowed !== false);
     const allMoneyAccounts = filterGlAccountsForBusinessType(
       normalizeGlAccountRows((accountRes.data || []) as unknown[]),
@@ -458,6 +496,21 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     for (const disbursement of eodDisbursements) ensure(methodLabel(disbursement.payment_method)).disbursements += Number(disbursement.amount || 0);
     return Array.from(byMethod.values()).sort((a, b) => a.method.localeCompare(b.method));
   }, [eodCollections, eodDisbursements]);
+  const eodDepartmentRows = useMemo(() => {
+    const sharesByOrder = new Map<string, HotelDepartmentShare[]>();
+    for (const share of hotelDepartmentShares) sharesByOrder.set(share.orderId, [...(sharesByOrder.get(share.orderId) || []), share]);
+    const totals = new Map<string, number>();
+    let hotelCollections = 0;
+    for (const collection of eodCollections.filter((row) => row.payment_source === "pos_hotel")) {
+      const amount = Number(collection.amount || 0);
+      hotelCollections += amount;
+      const shares = sharesByOrder.get(baseTransactionId(collection.transaction_id)) || [{ orderId: "", department: "Unassigned", share: 1 }];
+      for (const share of shares) totals.set(share.department, (totals.get(share.department) || 0) + amount * share.share);
+    }
+    return [...totals.entries()]
+      .map(([department, amount]) => ({ department, amount, percentage: hotelCollections > 0 ? (amount / hotelCollections) * 100 : 0 }))
+      .sort((a, b) => b.amount - a.amount);
+  }, [eodCollections, hotelDepartmentShares]);
 
   const setStatus = async (request: TreasuryRequest, status: "approved" | "rejected") => {
     if (readOnly) return;
@@ -1049,7 +1102,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
             <div className="rounded-xl bg-slate-100 p-4"><p className="text-xs font-bold uppercase text-slate-700">Gross total</p><p className="mt-2 text-lg font-bold">{money.format(eodGrossOutflows)}</p></div>
           </div>
         </section>
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className={`grid gap-4 ${user?.business_type === "hotel" ? "xl:grid-cols-3" : "lg:grid-cols-2"}`}>
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">End-of-day by method</h2><p data-treasury-comment className="text-sm text-slate-500">Compare expected cash, bank transfer, mobile money, card, and wallet totals against actual till and statements.</p></div>
             <div className="overflow-x-auto">
@@ -1068,6 +1121,19 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
               </table>
             </div>
           </section>
+          {user?.business_type === "hotel" ? <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
+            <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Hotel cash contribution by department</h2><p data-treasury-comment className="text-sm text-slate-500">Shows how each department contributed to collected hotel POS cash for the selected day or date range.</p></div>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Department</th><th className="px-5 py-3 text-right">Contribution</th><th className="px-5 py-3 text-right">Share</th></tr></thead>
+                <tbody className="divide-y divide-slate-100">
+                  {eodDepartmentRows.length === 0 ? <tr><td colSpan={3} className="px-5 py-8 text-center text-slate-500">No hotel POS collections for the selected dates.</td></tr> : eodDepartmentRows.map((row) => (
+                    <tr key={row.department}><td className="px-5 py-4 font-semibold text-slate-800">{row.department}</td><td className="px-5 py-4 text-right font-bold text-emerald-700">{money.format(row.amount)}</td><td className="px-5 py-4 text-right font-semibold text-slate-600">{row.percentage.toFixed(1)}%</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section> : null}
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
             <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Account balances to count</h2><p data-treasury-comment className="text-sm text-slate-500">Current posted balances by money account. Count cash/float and compare statements for bank and mobile money.</p></div>
             <div className="divide-y divide-slate-100">
