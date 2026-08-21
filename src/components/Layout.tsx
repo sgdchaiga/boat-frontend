@@ -1147,16 +1147,23 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ...(user?.school_enable_fixed_deposit === true ? [{ name: 'Fixed deposits', page: SCHOOL_PAGE.fixedDeposit }] : []),
     ] },
     { name: 'Procurement & Stock', icon: ShoppingCart, children: [
-      { name: 'Purchase requests & orders', page: 'purchases_orders' },
-      { name: 'Goods received & bills', page: 'purchases_bills' },
-      { name: 'Suppliers', page: 'purchases_vendors' },
-      { name: 'Supplier returns', page: 'purchases_credits' },
-      ...(user?.school_enable_inventory === true ? [
-        { name: 'Stock & inventory', page: 'Products' },
-        { name: 'Stock issues to departments', page: 'inventory_store_requisitions' },
-        { name: 'Stock counts & adjustments', page: 'inventory_stock_adjustments' },
-        { name: 'Stock movement report', page: 'reports_stock_movement' },
-      ] : []),
+      { group: 'Procurement', items: [
+        { name: 'Purchase Requests', page: 'purchases_orders' },
+        { name: 'Purchase Orders', page: 'purchases_orders' },
+        { name: 'Goods Received', page: 'purchases_bills' },
+        { name: 'Supplier Bills', page: 'purchases_bills' },
+        { name: 'Supplier Payments', page: 'purchases_payments' },
+        { name: 'Suppliers', page: 'purchases_vendors' },
+        { name: 'Purchase Returns', page: 'purchases_credits' },
+      ] },
+      ...(user?.school_enable_inventory === true ? [{ group: 'Inventory', items: [
+        { name: 'Stock Overview', page: 'Products' },
+        { name: 'Stock Issues', page: 'inventory_store_requisitions' },
+        { name: 'Stock Counts', page: 'inventory_stock_adjustments' },
+        { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
+        { name: 'Stock Movement Report', page: 'reports_stock_movement' },
+        { name: 'Item Settings', page: 'Products' },
+      ] }] : []),
       ...(enableAssetVerification ? [{ name: 'Assets & verification', page: 'asset_verification' }] : []),
     ] },
     { name: 'Budget & Vote Book', icon: BookOpen, children: [

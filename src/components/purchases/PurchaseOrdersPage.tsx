@@ -1,5 +1,5 @@
 import { useEffect, useState, useMemo, useRef } from "react";
-import { Plus, X, CheckCircle, FileText, Trash2, Eye, Minus, Package } from "lucide-react";
+import { Plus, X, CheckCircle, FileText, Trash2, Eye, Minus, Package, Search } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { canApprove } from "../../lib/approvalRights";
@@ -257,6 +257,12 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const [saving, setSaving] = useState(false);
   const savePurchaseInFlightRef = useRef(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [supplierFilter, setSupplierFilter] = useState("");
+  const [departmentFilter, setDepartmentFilter] = useState("");
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
 
   useEffect(() => {
     void fetchData();
@@ -983,14 +989,34 @@ const approvedAt = new Date().toISOString();
     setViewOrder(o);
   };
 
+  const procurementStatus = (order: PurchaseOrder) => {
+    if (order.status === "rejected") return "cancelled";
+    if (billsByPoId[order.id]) return "completed";
+    if (order.status === "approved") return "approved";
+    if (order.status === "pending") return requirePoApproval ? "pending_approval" : "draft";
+    return order.status || "draft";
+  };
+  const filteredOrders = orders.filter((order) => {
+    const term = search.trim().toLowerCase();
+    const matchesSearch = !term || order.vendors?.name?.toLowerCase().includes(term) || order.departments?.name?.toLowerCase().includes(term) || order.id.toLowerCase().includes(term);
+    const matchesSupplier = !supplierFilter || order.vendor_id === supplierFilter;
+    const matchesDepartment = !departmentFilter || order.department_id === departmentFilter;
+    const matchesFrom = !dateFrom || String(order.order_date || "") >= dateFrom;
+    const matchesTo = !dateTo || String(order.order_date || "") <= dateTo;
+    return matchesSearch && matchesSupplier && matchesDepartment && matchesFrom && matchesTo && (statusFilter === "all" || procurementStatus(order) === statusFilter);
+  });
+  const committedAmount = orders.filter((order) => order.status === "approved" && !billsByPoId[order.id]).reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
+  const unpaidBills = orders.filter((order) => billsByPoId[order.id]).reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
+
   return (
-    <div className="p-6 md:p-8">
+    <div className="p-6 md:p-8 max-w-7xl mx-auto">
       {readOnly && <ReadOnlyNotice />}
 
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
+      <nav aria-label="Breadcrumb" className="mb-3 text-xs font-medium text-slate-500">School <span className="mx-1 text-slate-300">›</span> Procurement <span className="mx-1 text-slate-300">›</span> <span className="text-slate-700">Purchase Orders</span></nav>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5">
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <h1 className="text-3xl font-bold text-slate-900">Buy stock</h1>
+            <div><h1 className="text-3xl font-bold tracking-tight text-slate-900">Purchase Orders</h1><p className="mt-1 text-sm text-slate-600">Create, approve and monitor orders issued to suppliers.</p></div>
             <PageNotes ariaLabel="Record purchases help">
               <p>
                 Who you bought from, what you bought, how many, and how much. Use <strong>Receive stock</strong> when goods
@@ -1003,7 +1029,7 @@ const approvedAt = new Date().toISOString();
           <div
             className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-medium"
             role="group"
-            aria-label="Simple or advanced mode"
+            aria-label="Direct purchase or purchase order mode"
           >
             <button
               type="button"
@@ -1012,7 +1038,7 @@ const approvedAt = new Date().toISOString();
                 simpleMode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              Simple
+              Direct Purchase
             </button>
             <button
               type="button"
@@ -1021,7 +1047,7 @@ const approvedAt = new Date().toISOString();
                 !simpleMode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              Advanced
+              Purchase Order
             </button>
           </div>
           <button
@@ -1030,20 +1056,43 @@ const approvedAt = new Date().toISOString();
             disabled={readOnly}
             className="app-btn-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-base font-semibold disabled:cursor-not-allowed"
           >
-            <Plus className="w-5 h-5" /> Record purchase
+            <Plus className="w-5 h-5" /> New Purchase Order
           </button>
         </div>
       </div>
+
+      {!loading && <>
+        <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {[
+            { label: "Pending requests", value: orders.filter((o) => procurementStatus(o) === "draft").length.toLocaleString(), filter: "draft" },
+            { label: "Awaiting approval", value: orders.filter((o) => procurementStatus(o) === "pending_approval").length.toLocaleString(), filter: "pending_approval" },
+            { label: "Open orders", value: orders.filter((o) => ["approved","pending_approval"].includes(procurementStatus(o))).length.toLocaleString(), filter: "approved" },
+            { label: "Committed amount", value: formatMoney(committedAmount, currency), filter: "approved" },
+            { label: "Unpaid bills", value: formatMoney(unpaidBills, currency), filter: "completed" },
+          ].map((card) => <button type="button" onClick={() => setStatusFilter(card.filter)} key={card.label} className="rounded-xl border border-t-2 border-slate-200 border-t-teal-600 bg-white p-4 text-left transition hover:border-teal-300 hover:shadow-sm"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{card.label}</p><p className="mt-1 text-xl font-bold tabular-nums text-slate-900">{card.value}</p></button>)}
+        </div>
+        <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
+          <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-3">{[["all","All"],["draft","Draft"],["pending_approval","Pending Approval"],["approved","Approved"],["completed","Completed"],["cancelled","Cancelled"]].map(([value,label]) => <button key={value} type="button" onClick={() => setStatusFilter(value)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${statusFilter === value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{label}</button>)}</div>
+          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-6">
+            <label className="relative xl:col-span-2"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"/><input value={search} onChange={(e) => setSearch(e.target.value)} className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm" placeholder="Search PO, supplier or department"/></label>
+            <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All departments</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select>
+            <select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All suppliers</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select>
+            <input aria-label="Orders from date" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+            <div className="flex gap-2"><input aria-label="Orders to date" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"/><button type="button" onClick={() => { setSearch(""); setStatusFilter("all"); setDepartmentFilter(""); setSupplierFilter(""); setDateFrom(""); setDateTo(""); }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">Clear</button></div>
+          </div>
+        </div>
+      </>}
 
       {loading ? (
         <p className="text-slate-500 py-4">Loading…</p>
       ) : (
         <div className="space-y-3">
-          {orders.length === 0 && <p className="text-center text-slate-500 py-12 bg-white rounded-xl border border-slate-200">No purchases recorded yet.</p>}
-          {orders.map((o) => (
+          {filteredOrders.length === 0 && <p className="text-center text-slate-500 py-12 bg-white rounded-xl border border-slate-200">No purchase orders match the selected filters.</p>}
+          {filteredOrders.length > 0 && <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block"><table className="w-full text-sm"><thead className="bg-slate-50"><tr>{["PO No.","Date","Supplier","Department","Order Total","Approval","Delivery / Billing","Payment","Actions"].map((heading) => <th key={heading} className="p-3 text-left font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{filteredOrders.map((o) => <tr key={o.id} className="border-t border-slate-100 hover:bg-slate-50/70"><td className="p-3 font-mono text-xs">PO-{o.id.slice(0,8).toUpperCase()}</td><td className="p-3 whitespace-nowrap">{o.order_date ? new Date(o.order_date).toLocaleDateString() : "—"}</td><td className="p-3 font-medium text-slate-900">{o.vendors?.name || "—"}</td><td className="p-3">{o.departments?.name || "Central"}</td><td className="p-3 text-right font-semibold tabular-nums">{formatMoney(Number(o.total_amount || 0), currency)}</td><td className="p-3 capitalize">{o.status === "pending" ? "Pending approval" : o.status || "Draft"}</td><td className="p-3">{billsByPoId[o.id] ? "Bill recorded" : o.status === "approved" ? "Awaiting receipt" : "Not started"}</td><td className="p-3">{billsByPoId[o.id] ? "Unpaid" : "Not billed"}</td><td className="p-3"><button type="button" onClick={() => void openView(o)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-white"><Eye className="h-4 w-4"/>View Order</button></td></tr>)}</tbody></table></div>}
+          {filteredOrders.map((o) => (
             <div
               key={o.id}
-              className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between"
+              className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between lg:hidden"
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-slate-500">
@@ -1055,7 +1104,7 @@ const approvedAt = new Date().toISOString();
                 <p className="text-lg font-semibold text-slate-900 truncate">{o.vendors?.name || "—"}</p>
                 <p className="text-sm text-slate-600 mt-0.5">{friendlySubtitle(o)}</p>
                 <div className="mt-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Total cost</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Order Total</p>
                   <p className="text-2xl font-bold text-slate-900 tabular-nums">
                     {formatMoney(Number(o.total_amount || 0), currency)}
                   </p>
@@ -1118,7 +1167,7 @@ const approvedAt = new Date().toISOString();
                           onClick={() => onNavigate?.("purchases_bills", { highlightBillId: billsByPoId[o.id] })}
                           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 text-white font-semibold text-sm hover:bg-slate-900 col-span-2 sm:col-span-1"
                         >
-                          <FileText className="w-4 h-4" /> View GRN/Bill
+                          <FileText className="w-4 h-4" /> View Bill
                         </button>
                       ) : (
                         <button
@@ -1127,7 +1176,7 @@ const approvedAt = new Date().toISOString();
                           disabled={readOnly}
                           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 text-white font-semibold text-sm hover:bg-slate-900 col-span-2 sm:col-span-1"
                         >
-                          <Package className="w-4 h-4" /> Receive stock
+                          <Package className="w-4 h-4" /> Receive Goods
                         </button>
                       )}
                     </>
@@ -1161,6 +1210,7 @@ const approvedAt = new Date().toISOString();
               </button>
             </div>
             <div className="space-y-2 text-sm">
+              <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase order</p><p className="mt-1 font-mono font-semibold text-slate-900">PO-{viewOrder.id.slice(0,8).toUpperCase()}</p></div>
               <p>
                 <span className="text-slate-500">Supplier</span>
                 <br />
@@ -1171,6 +1221,8 @@ const approvedAt = new Date().toISOString();
                 <br />
                 {viewOrder.order_date ? new Date(viewOrder.order_date).toLocaleDateString() : "—"}
               </p>
+              <p><span className="text-slate-500">Department</span><br/><span className="font-medium text-slate-900">{viewOrder.departments?.name || "Central / shared"}</span></p>
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-4"><div><span className="text-xs text-slate-500">Approval</span><p className="mt-0.5 font-medium capitalize">{viewOrder.status === "pending" ? "Pending" : viewOrder.status || "Draft"}</p></div><div><span className="text-xs text-slate-500">Delivery</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Received" : "Not received"}</p></div><div><span className="text-xs text-slate-500">Billing</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Billed" : "Not billed"}</p></div><div><span className="text-xs text-slate-500">Payment</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Unpaid" : "Not due"}</p></div></div>
               <div className="border rounded-lg divide-y mt-3">
                 {(viewOrder.purchase_order_items || []).length > 0 ? (
                   (viewOrder.purchase_order_items || []).map((row, i) => (
