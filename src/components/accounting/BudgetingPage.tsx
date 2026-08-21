@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { BarChart3, ChevronRight, CircleDollarSign, Pencil, Plus, Save, Trash2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
@@ -141,6 +141,7 @@ export function BudgetingPage({ readOnly }: Props) {
   const [baselineLines, setBaselineLines] = useState<LineRow[]>([]);
   const [linesSaving, setLinesSaving] = useState(false);
   const [workflowHistory, setWorkflowHistory] = useState<WorkflowRow[]>([]);
+  const [showCreateBudget, setShowCreateBudget] = useState(false);
 
   const loadBudgets = useCallback(async () => {
     if (!orgId) {
@@ -224,6 +225,14 @@ export function BudgetingPage({ readOnly }: Props) {
   useEffect(() => {
     loadBudgets();
   }, [loadBudgets]);
+
+  useEffect(() => {
+    if (loading || selectedId || budgets.length === 0) return;
+    const activeBudget = budgets.find((budget) => budget.status === "active");
+    const approvedBudgets = budgets.filter((budget) => budget.status === "approved");
+    if (activeBudget) setSelectedId(activeBudget.id);
+    else if (approvedBudgets.length === 1) setSelectedId(approvedBudgets[0].id);
+  }, [budgets, loading, selectedId]);
 
   useEffect(() => {
     if (selectedId) { void loadLines(selectedId); void loadWorkflowHistory(selectedId); }
@@ -346,6 +355,10 @@ export function BudgetingPage({ readOnly }: Props) {
     }
     return m;
   }, [linesForCalcs, actualByGlId, budgetSumByGl]);
+
+  const amountSpent = useMemo(() => [...lineActualDisplay.values()].reduce((sum, amount) => sum + amount, 0), [lineActualDisplay]);
+  const availableBalance = lineTotal - amountSpent;
+  const utilisation = lineTotal > 0 ? (amountSpent / lineTotal) * 100 : 0;
 
   const lineVariance = useMemo(() => {
     const m = new Map<string, number>();
@@ -670,23 +683,41 @@ export function BudgetingPage({ readOnly }: Props) {
   }
 
   return (
-    <div className="p-6 md:p-8 max-w-6xl mx-auto space-y-6">
-      <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-bold text-slate-900">Budgeting</h1>
-        <PageNotes ariaLabel="Budgeting">
+    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-5">
+      <nav aria-label="Breadcrumb" className="flex items-center gap-1 text-xs font-medium text-slate-500">
+        <span>Finance</span><ChevronRight className="h-3.5 w-3.5" /><span>Budget &amp; Vote Book</span><ChevronRight className="h-3.5 w-3.5" /><span className="text-slate-700">Budget Performance</span>
+      </nav>
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex items-start gap-2">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Budget Performance</h1>
+            <p className="mt-1 text-sm text-slate-600">Compare approved budgets with actual income and expenditure.</p>
+          </div>
+          <PageNotes ariaLabel="Budget Performance">
           <p>
             Define budgets by period and optional GL lines. Click <strong>Edit lines</strong> to add or change lines, then <strong>Save budget</strong> to store
             them. Each line can include <strong>unit</strong>, <strong>frequency</strong>, <strong>quantity</strong>, and <strong>unit price</strong>; the budget
             amount is quantity × unit price × periods for that frequency, or enter a budget amount directly. <strong>Actual</strong> is net journal activity for
             the budget dates. If several lines share one account, actual is split in proportion to each line&apos;s budget.
           </p>
-        </PageNotes>
+          </PageNotes>
+        </div>
+        {!readOnly && canPrepareBudget && (
+          <button type="button" onClick={() => setShowCreateBudget((open) => !open)} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-slate-800">
+            {showCreateBudget ? <X className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
+            {showCreateBudget ? "Close setup" : "New budget"}
+          </button>
+        )}
       </div>
       {readOnly && <ReadOnlyNotice />}
       {err && <p className="text-red-600 text-sm">{err}</p>}
 
-      {!readOnly && canPrepareBudget && (
+      {!readOnly && canPrepareBudget && showCreateBudget && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="md:col-span-2 lg:col-span-3">
+            <h2 className="text-sm font-semibold text-slate-900">Create a budget</h2>
+            <p className="mt-0.5 text-xs text-slate-500">Set the planning period now; add departments, votes and assumptions after creation.</p>
+          </div>
           <input
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm lg:col-span-2"
             placeholder="Budget name *"
@@ -716,16 +747,40 @@ export function BudgetingPage({ readOnly }: Props) {
         </div>
       )}
 
+      <div className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <label className="min-w-[240px] flex-1">
+            <span className="mb-1 block text-xs font-medium text-slate-600">Budget</span>
+            <select value={selectedId ?? ""} onChange={(event) => setSelectedId(event.target.value || null)} className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800">
+              <option value="">Select a budget</option>
+              {budgets.map((budget) => <option key={budget.id} value={budget.id}>{budget.name} · FY {budget.financial_year ?? "—"} · {budget.status}</option>)}
+            </select>
+          </label>
+          {selectedBudget && <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600"><span className="font-medium text-slate-800">Reporting period:</span> {periodHint || selectedBudget.period_label || "Not set"}</div>}
+        </div>
+      </div>
+
       {selectedBudget && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-6">
-          {[{label:"Income",value:budgetSummary.income,tone:"text-emerald-700"},{label:"Expenditure",value:budgetSummary.expenditure,tone:"text-slate-900"},{label:"Surplus / deficit",value:budgetSummary.net,tone:budgetSummary.net>=0?"text-emerald-700":"text-red-700"}].map((card) => <div key={card.label} className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{card.label}</p><p className={`mt-1 text-lg font-bold tabular-nums ${card.tone}`}>{card.value.toLocaleString()}</p></div>)}
-          {budgetSummary.terms.slice(0,3).map((value,index) => <div key={index} className="rounded-xl border border-slate-200 bg-white p-3"><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Term {index+1}</p><p className="mt-1 text-lg font-bold tabular-nums text-indigo-700">{value.toLocaleString()}</p></div>)}
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-5">
+          {[
+            {label:"Total budget",value:lineTotal,tone:"text-slate-900",accent:"border-t-slate-800"},
+            {label:"Amount spent",value:amountSpent,tone:"text-teal-700",accent:"border-t-teal-600"},
+            {label:"Available balance",value:availableBalance,tone:availableBalance>=0?"text-emerald-700":"text-red-700",accent:availableBalance>=0?"border-t-emerald-600":"border-t-red-600"},
+            {label:"Budget utilised",value:utilisation,tone:utilisation>100?"text-red-700":utilisation>=85?"text-amber-700":"text-emerald-700",accent:utilisation>100?"border-t-red-600":utilisation>=85?"border-t-amber-500":"border-t-emerald-600",percent:true},
+            {label:"Surplus / deficit",value:budgetSummary.net,tone:budgetSummary.net>=0?"text-emerald-700":"text-red-700",accent:budgetSummary.net>=0?"border-t-emerald-600":"border-t-red-600"},
+          ].map((card) => <div key={card.label} className={`rounded-xl border border-t-2 border-slate-200 bg-white p-4 ${card.accent}`}><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{card.label}</p><p className={`mt-1 text-lg font-bold tabular-nums ${card.tone}`}>{card.percent?`${card.value.toFixed(1)}%`:card.value.toLocaleString(undefined,{maximumFractionDigits:2})}</p></div>)}
         </div>
       )}
       {selectedBudget && lines.length>0 && ["draft","submitted","reviewed"].includes(selectedBudget.status) && <SchoolBudgetDriversPanel budgetId={selectedBudget.id} lines={lines.map(l=>({id:l.id,line_label:l.line_label,budget_type:l.budget_type}))} disabled={readOnly||!canPrepareBudget||editingLines} onSaved={()=>void loadLines(selectedBudget.id)}/>}
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-        <div className="lg:col-span-2 rounded-xl border border-slate-200 bg-white overflow-hidden">
+      {!selectedBudget ? (
+        <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
+          <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-600"><CircleDollarSign className="h-6 w-6" /></span>
+          <h2 className="mt-4 text-base font-semibold text-slate-900">No budget selected</h2>
+          <p className="mx-auto mt-1 max-w-md text-sm text-slate-500">Select an approved budget above to compare planned and actual performance.</p>
+        </div>
+      ) : <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+        <div className="lg:col-span-1 rounded-xl border border-slate-200 bg-white overflow-hidden">
           <div className="bg-slate-50 border-b border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700">Budgets</div>
           {loading ? (
             <p className="p-4 text-slate-500 text-sm">Loading…</p>
@@ -756,10 +811,10 @@ export function BudgetingPage({ readOnly }: Props) {
           )}
         </div>
 
-        <div className="lg:col-span-3 rounded-xl border border-slate-200 bg-white overflow-hidden">
+        <div className="lg:col-span-4 rounded-xl border border-slate-200 bg-white overflow-hidden">
           <div className="bg-slate-50 border-b border-slate-200 px-3 py-2 flex flex-wrap justify-between gap-3 items-start">
             <div>
-              <span className="text-sm font-semibold text-slate-700">Budget vs actual</span>
+              <span className="inline-flex items-center gap-1.5 text-sm font-semibold text-slate-700"><BarChart3 className="h-4 w-4" />Detailed performance</span>
               {selectedBudget && periodHint && (
                 <p className="text-[11px] text-slate-500 mt-0.5">GL period: {periodHint}</p>
               )}
@@ -823,9 +878,7 @@ export function BudgetingPage({ readOnly }: Props) {
               )}
             </div>
           </div>
-          {!selectedId ? (
-            <p className="p-6 text-slate-500 text-sm">Select a budget to view or add lines.</p>
-          ) : linesLoading ? (
+          {linesLoading ? (
             <p className="p-6 text-slate-500 text-sm">Loading lines…</p>
           ) : (
             <>
@@ -1138,7 +1191,7 @@ export function BudgetingPage({ readOnly }: Props) {
             </>
           )}
         </div>
-      </div>
+      </div>}
       {selectedBudget && (
         <div className="grid gap-6 lg:grid-cols-2">
           <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">

@@ -32,6 +32,8 @@ type ProfileRow = {
   base_salary: number;
   housing_allowance: number;
   transport_allowance: number;
+  responsibility_allowance: number;
+  recurring_deductions: unknown;
   other_allowances: unknown;
   is_on_payroll: boolean;
 };
@@ -316,7 +318,8 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       const taxable = Math.max(0, gross - nssfE);
       const paye = computePayeFromBands(gross, (settings as SettingsRow).paye_tax_bands);
       const loan = computeLoanDeductionForStaff(p.staff_id, loanList);
-      const net = roundMoney(gross - paye - nssfE - loan);
+      const recurring = Array.isArray(p.recurring_deductions) ? p.recurring_deductions.reduce((sum, item) => sum + Number(item && typeof item === "object" && "amount" in item ? (item as { amount?: number }).amount ?? 0 : 0), 0) : 0;
+      const net = roundMoney(gross - paye - nssfE - loan - recurring);
       linePayload.push({
         payroll_run_id: run.id,
         staff_id: p.staff_id,
@@ -340,7 +343,8 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
           paye_basis: "gross_configurable_bands",
           nssfE,
           nssfEr,
-          loan,
+           loan,
+          recurring_deductions: recurring,
         },
       });
     }
@@ -473,8 +477,8 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       setErr("Your role cannot post payroll to the ledger.");
       return;
     }
-    if (run.status !== "approved") {
-      setErr("Approve payroll for payment before posting to the ledger.");
+    if (!["approved", "paid"].includes(run.status)) {
+      setErr("Approve payroll and complete payment processing before posting to the ledger.");
       return;
     }
     setBusy(true);
@@ -657,7 +661,7 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
                   disabled={
                     !run ||
                     busy ||
-                    run.status !== "approved" ||
+                    !["approved", "paid"].includes(run.status) ||
                     lines.length === 0 ||
                     !payrollAccess.canPostToLedger
                   }

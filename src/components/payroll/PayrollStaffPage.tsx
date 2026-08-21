@@ -22,13 +22,24 @@ type ProfileRow = {
   base_salary: number;
   housing_allowance: number;
   transport_allowance: number;
+  responsibility_allowance: number;
+  salary_grade: string | null;
+  recurring_deductions: unknown;
+  staff_type: string | null;
+  date_joined: string | null;
+  bank_name: string | null;
+  bank_account_number: string | null;
+  mobile_money_number: string | null;
+  payment_method: string;
+  tin: string | null;
+  nssf_number: string | null;
   other_allowances?: unknown;
   is_on_payroll: boolean;
 };
 
-type Props = { readOnly?: boolean };
+type Props = { readOnly?: boolean; mode?: "employees" | "salary" };
 
-export function PayrollStaffPage({ readOnly }: Props) {
+export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
   const payrollAccess = useMemo(() => getPayrollAccess(user?.role, readOnly ?? false), [user?.role, readOnly]);
@@ -76,6 +87,17 @@ export function PayrollStaffPage({ readOnly }: Props) {
       base_salary: parsePayrollMoney(draft.base_salary ?? existing?.base_salary ?? 0),
       housing_allowance: parsePayrollMoney(draft.housing_allowance ?? existing?.housing_allowance ?? 0),
       transport_allowance: parsePayrollMoney(draft.transport_allowance ?? existing?.transport_allowance ?? 0),
+      responsibility_allowance: parsePayrollMoney(draft.responsibility_allowance ?? existing?.responsibility_allowance ?? 0),
+      salary_grade: draft.salary_grade ?? existing?.salary_grade ?? null,
+      recurring_deductions: draft.recurring_deductions ?? existing?.recurring_deductions ?? [],
+      staff_type: draft.staff_type ?? existing?.staff_type ?? null,
+      date_joined: draft.date_joined ?? existing?.date_joined ?? null,
+      bank_name: draft.bank_name ?? existing?.bank_name ?? null,
+      bank_account_number: draft.bank_account_number ?? existing?.bank_account_number ?? null,
+      mobile_money_number: draft.mobile_money_number ?? existing?.mobile_money_number ?? null,
+      payment_method: draft.payment_method ?? existing?.payment_method ?? "bank",
+      tin: draft.tin ?? existing?.tin ?? null,
+      nssf_number: draft.nssf_number ?? existing?.nssf_number ?? null,
       is_on_payroll: draft.is_on_payroll ?? existing?.is_on_payroll ?? true,
     };
     if (existing?.id) {
@@ -98,7 +120,7 @@ export function PayrollStaffPage({ readOnly }: Props) {
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-bold text-slate-900">Payroll staff</h1>
+        <div><p className="text-xs font-medium text-slate-500">School › Payroll › {mode === "employees" ? "Employees" : "Salary Structure"}</p><h1 className="text-2xl font-bold text-slate-900">{mode === "employees" ? "Employees" : "Salary Structure"}</h1><p className="mt-1 text-sm text-slate-600">{mode === "employees" ? "Maintain payroll eligibility and employment information." : "Maintain salary, allowances and recurring payroll values."}</p></div>
         <PayrollGuide guideId="staff" />
       </div>
       {readOnly && <ReadOnlyNotice />}
@@ -119,6 +141,7 @@ export function PayrollStaffPage({ readOnly }: Props) {
                 key={s.id}
                 staff={s}
                 profile={p}
+                mode={mode}
                 disabled={readOnly || !payrollAccess.canPrepare}
                 saving={savingId === s.id}
                 onSave={(d) => void saveProfile(s.id, d)}
@@ -144,12 +167,14 @@ function salaryFieldToInputValue(
 function StaffSalaryCard({
   staff,
   profile,
+  mode,
   disabled,
   saving,
   onSave,
 }: {
   staff: StaffRow;
   profile?: ProfileRow;
+  mode: "employees" | "salary";
   disabled?: boolean;
   saving: boolean;
   onSave: (d: Partial<ProfileRow>) => void;
@@ -160,6 +185,17 @@ function StaffSalaryCard({
   const [base, setBase] = useState(() => salaryFieldToInputValue(profile, "base_salary"));
   const [housing, setHousing] = useState(() => salaryFieldToInputValue(profile, "housing_allowance"));
   const [transport, setTransport] = useState(() => salaryFieldToInputValue(profile, "transport_allowance"));
+  const [responsibility, setResponsibility] = useState(() => profile ? String(parsePayrollMoney(profile.responsibility_allowance)) : "");
+  const [grade, setGrade] = useState(() => profile?.salary_grade ?? "");
+  const [recurring, setRecurring] = useState(() => Array.isArray(profile?.recurring_deductions) ? String((profile!.recurring_deductions as { amount?: number }[]).reduce((s, d) => s + Number(d.amount ?? 0), 0)) : "");
+  const [staffType, setStaffType] = useState(() => profile?.staff_type ?? "");
+  const [dateJoined, setDateJoined] = useState(() => profile?.date_joined ?? "");
+  const [bankName, setBankName] = useState(() => profile?.bank_name ?? "");
+  const [bankAccount, setBankAccount] = useState(() => profile?.bank_account_number ?? "");
+  const [mobileMoney, setMobileMoney] = useState(() => profile?.mobile_money_number ?? "");
+  const [paymentMethod, setPaymentMethod] = useState(() => profile?.payment_method ?? "bank");
+  const [tin, setTin] = useState(() => profile?.tin ?? "");
+  const [nssfNumber, setNssfNumber] = useState(() => profile?.nssf_number ?? "");
   const [onPayroll, setOnPayroll] = useState(profile?.is_on_payroll ?? true);
 
   useEffect(() => {
@@ -169,6 +205,9 @@ function StaffSalaryCard({
     setBase(salaryFieldToInputValue(profile, "base_salary"));
     setHousing(salaryFieldToInputValue(profile, "housing_allowance"));
     setTransport(salaryFieldToInputValue(profile, "transport_allowance"));
+    setResponsibility(profile ? String(parsePayrollMoney(profile.responsibility_allowance)) : ""); setGrade(profile?.salary_grade ?? "");
+    setRecurring(Array.isArray(profile?.recurring_deductions) ? String((profile!.recurring_deductions as { amount?: number }[]).reduce((s, d) => s + Number(d.amount ?? 0), 0)) : "");
+    setStaffType(profile?.staff_type ?? ""); setDateJoined(profile?.date_joined ?? ""); setBankName(profile?.bank_name ?? ""); setBankAccount(profile?.bank_account_number ?? ""); setMobileMoney(profile?.mobile_money_number ?? ""); setPaymentMethod(profile?.payment_method ?? "bank"); setTin(profile?.tin ?? ""); setNssfNumber(profile?.nssf_number ?? "");
     setOnPayroll(profile?.is_on_payroll ?? true);
   }, [profile]);
 
@@ -177,9 +216,10 @@ function StaffSalaryCard({
       base_salary: parsePayrollMoney(base === "" ? 0 : base),
       housing_allowance: parsePayrollMoney(housing === "" ? 0 : housing),
       transport_allowance: parsePayrollMoney(transport === "" ? 0 : transport),
+      responsibility_allowance: parsePayrollMoney(responsibility === "" ? 0 : responsibility),
       other_allowances: profile?.other_allowances,
     });
-  }, [base, housing, transport, profile?.other_allowances]);
+  }, [base, housing, transport, responsibility, profile?.other_allowances]);
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
@@ -200,7 +240,7 @@ function StaffSalaryCard({
           On payroll
         </label>
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+      {mode === "employees" && <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
         <input
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
           placeholder="Employee code"
@@ -208,6 +248,14 @@ function StaffSalaryCard({
           disabled={disabled}
           onChange={(e) => setCode(e.target.value)}
         />
+        <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={staffType} disabled={disabled} onChange={(e) => setStaffType(e.target.value)}><option value="">Staff type</option><option value="Teaching">Teaching</option><option value="Non-Teaching">Non-teaching</option></select>
+        <input type="date" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={dateJoined} disabled={disabled} onChange={(e) => setDateJoined(e.target.value)} />
+        <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={paymentMethod} disabled={disabled} onChange={(e) => setPaymentMethod(e.target.value)}><option value="bank">Bank</option><option value="mobile_money">Mobile money</option><option value="cash">Cash</option></select>
+        <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Bank name" value={bankName} disabled={disabled} onChange={(e) => setBankName(e.target.value)} />
+        <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Bank account number" value={bankAccount} disabled={disabled} onChange={(e) => setBankAccount(e.target.value)} />
+        <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Mobile-money number" value={mobileMoney} disabled={disabled} onChange={(e) => setMobileMoney(e.target.value)} />
+        <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="TIN" value={tin} disabled={disabled} onChange={(e) => setTin(e.target.value)} />
+        <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="NSSF number" value={nssfNumber} disabled={disabled} onChange={(e) => setNssfNumber(e.target.value)} />
         <input
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
           placeholder="Department"
@@ -222,11 +270,12 @@ function StaffSalaryCard({
           disabled={disabled}
           onChange={(e) => setJob(e.target.value)}
         />
-      </div>
+      </div>}
       {!profile && (
         <p className="text-xs text-slate-500">No payroll profile yet—enter amounts and Save. Fields are blank, not zero.</p>
       )}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+      {mode === "salary" && <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <label className="block text-sm"><span className="text-slate-600">Salary grade / scale</span><input className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={grade} disabled={disabled} onChange={(e) => setGrade(e.target.value)} /></label>
         <label className="block text-sm">
           <span className="text-slate-600">Base salary</span>
           <input
@@ -240,6 +289,8 @@ function StaffSalaryCard({
             onChange={(e) => setBase(e.target.value)}
           />
         </label>
+        <label className="block text-sm"><span className="text-slate-600">Responsibility allowance</span><input type="number" min={0} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={responsibility} disabled={disabled} onChange={(e) => setResponsibility(e.target.value)} /></label>
+        <label className="block text-sm"><span className="text-slate-600">Recurring deductions</span><input type="number" min={0} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" value={recurring} disabled={disabled} onChange={(e) => setRecurring(e.target.value)} /></label>
         <label className="block text-sm">
           <span className="text-slate-600">Housing allowance</span>
           <input
@@ -266,11 +317,11 @@ function StaffSalaryCard({
             onChange={(e) => setTransport(e.target.value)}
           />
         </label>
-      </div>
-      <p className="text-sm text-slate-600">
+      </div>}
+      {mode === "salary" && <p className="text-sm text-slate-600">
         Gross pay (for payroll):{" "}
         <span className="font-medium tabular-nums text-slate-900">{grossPreview.toLocaleString()}</span>
-      </p>
+      </p>}
       <button
         type="button"
         disabled={disabled || saving}
@@ -282,6 +333,9 @@ function StaffSalaryCard({
             base_salary: parsePayrollMoney(base === "" ? 0 : base),
             housing_allowance: parsePayrollMoney(housing === "" ? 0 : housing),
             transport_allowance: parsePayrollMoney(transport === "" ? 0 : transport),
+            responsibility_allowance: parsePayrollMoney(responsibility === "" ? 0 : responsibility), salary_grade: grade || null,
+            recurring_deductions: recurring ? [{ label: "Recurring deduction", amount: parsePayrollMoney(recurring) }] : [],
+            staff_type: staffType || null, date_joined: dateJoined || null, bank_name: bankName || null, bank_account_number: bankAccount || null, mobile_money_number: mobileMoney || null, payment_method: paymentMethod, tin: tin || null, nssf_number: nssfNumber || null,
             is_on_payroll: onPayroll,
           })
         }

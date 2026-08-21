@@ -226,6 +226,10 @@ const PayrollPeriodsPage = lazyNamed(() => import('./components/payroll/PayrollP
 const PayrollRunPage = lazyNamed(() => import('./components/payroll/PayrollRunPage'), 'PayrollRunPage');
 const PayrollPayslipPage = lazyNamed(() => import('./components/payroll/PayrollPayslipPage'), 'PayrollPayslipPage');
 const PayrollAuditPage = lazyNamed(() => import('./components/payroll/PayrollAuditPage'), 'PayrollAuditPage');
+const PayrollReviewPage = lazyNamed(() => import('./components/payroll/PayrollOperationsPages'), 'PayrollReviewPage');
+const PayrollPaymentsPage = lazyNamed(() => import('./components/payroll/PayrollOperationsPages'), 'PayrollPaymentsPage');
+const PayrollStatutoryPage = lazyNamed(() => import('./components/payroll/PayrollOperationsPages'), 'PayrollStatutoryPage');
+const PayrollReportsPage = lazyNamed(() => import('./components/payroll/PayrollOperationsPages'), 'PayrollReportsPage');
 const WalletPage = lazyNamed(() => import('./components/wallet/WalletPage'), 'WalletPage');
 const TreasuryPage = lazyNamed(() => import('./components/treasury/TreasuryPage'), 'TreasuryPage');
 const SchoolDashboard = lazyNamed(() => import('./components/school/SchoolDashboard'), 'SchoolDashboard');
@@ -1638,7 +1642,9 @@ function AppContent() {
       case PAYROLL_PAGE.hub:
         return <PayrollHubPage onNavigate={navigate} />;
       case PAYROLL_PAGE.staff:
-        return <PayrollStaffPage readOnly={access.readOnly} />;
+        return <PayrollStaffPage readOnly={access.readOnly} mode="employees" />;
+      case PAYROLL_PAGE.salary:
+        return <PayrollStaffPage readOnly={access.readOnly} mode="salary" />;
       case PAYROLL_PAGE.settings:
         return <PayrollSettingsPage readOnly={access.readOnly} />;
       case PAYROLL_PAGE.loans:
@@ -1647,6 +1653,14 @@ function AppContent() {
         return <PayrollPeriodsPage readOnly={access.readOnly} />;
       case PAYROLL_PAGE.run:
         return <PayrollRunPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case PAYROLL_PAGE.review:
+        return <PayrollReviewPage readOnly={access.readOnly} />;
+      case PAYROLL_PAGE.payments:
+        return <PayrollPaymentsPage readOnly={access.readOnly} />;
+      case PAYROLL_PAGE.statutory:
+        return <PayrollStatutoryPage readOnly={access.readOnly} />;
+      case PAYROLL_PAGE.reports:
+        return <PayrollReportsPage />;
       case PAYROLL_PAGE.audit:
         return <PayrollAuditPage readOnly={access.readOnly} />;
       case PAYROLL_PAGE.payslip:

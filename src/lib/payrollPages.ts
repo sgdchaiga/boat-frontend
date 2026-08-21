@@ -2,10 +2,15 @@
 export const PAYROLL_PAGE = {
   hub: "payroll_hub",
   staff: "payroll_staff",
+  salary: "payroll_salary",
   settings: "payroll_settings",
   loans: "payroll_loans",
   periods: "payroll_periods",
   run: "payroll_run",
+  review: "payroll_review",
+  payments: "payroll_payments",
+  statutory: "payroll_statutory",
+  reports: "payroll_reports",
   audit: "payroll_audit",
   /** Deep link: use with payrollRunId + payrollStaffId in URL state */
   payslip: "payroll_payslip",

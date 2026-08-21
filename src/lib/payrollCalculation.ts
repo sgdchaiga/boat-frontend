@@ -158,6 +158,7 @@ export function grossFromProfile(row: {
   base_salary: number;
   housing_allowance: number;
   transport_allowance: number;
+  responsibility_allowance?: number;
   other_allowances?: unknown;
 }): number {
   let extra = 0;
@@ -173,6 +174,7 @@ export function grossFromProfile(row: {
     parsePayrollMoney(row.base_salary) +
       parsePayrollMoney(row.housing_allowance) +
       parsePayrollMoney(row.transport_allowance) +
+      parsePayrollMoney(row.responsibility_allowance ?? 0) +
       extra
   );
 }
