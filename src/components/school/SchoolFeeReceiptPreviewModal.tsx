@@ -1,10 +1,11 @@
-import { FileDown, Printer, Table2 } from "lucide-react";
+import { Table2 } from "lucide-react";
 import { APP_SHORT_NAME } from "@/constants/branding";
 import {
+  createSchoolFeeReceiptPdfBlob,
   downloadSchoolFeeReceiptExcel,
-  downloadSchoolFeeReceiptPdf,
   type SchoolFeeReceiptDetail,
 } from "@/lib/schoolFeeReceipt";
+import { DocumentViewSwitcher } from "@/components/common/DocumentViewSwitcher";
 
 type Props = {
   detail: SchoolFeeReceiptDetail | null;
@@ -13,10 +14,6 @@ type Props = {
 };
 
 export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props) {
-  const handlePrint = () => {
-    window.print();
-  };
-
   return (
     <div
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 print:p-0 print:bg-white"
@@ -25,7 +22,7 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
       aria-labelledby="school-fee-receipt-title"
       aria-busy={loading ? true : undefined}
     >
-      <div className="mt-8 w-full max-w-md rounded-xl bg-white p-6 shadow-xl print:mt-0 print:max-w-none print:rounded-none print:shadow-none flex flex-col gap-4">
+      <div className="mt-8 w-full max-w-4xl rounded-xl bg-white p-6 shadow-xl print:mt-0 print:max-w-none print:rounded-none print:shadow-none flex flex-col gap-4">
         <style>{`
           @page {
             size: A4;
@@ -54,12 +51,8 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
           }
         `}</style>
 
-        <div
-          className="flex flex-col gap-2 print:hidden"
-          role="toolbar"
-          aria-label="Receipt actions"
-        >
-          <div className="flex flex-wrap items-stretch sm:items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 print:hidden">
+          <div className="flex flex-wrap items-stretch gap-2">
             <button
               type="button"
               onClick={onClose}
@@ -67,26 +60,8 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
             >
               Close
             </button>
-            <button
-              type="button"
-              onClick={handlePrint}
-              disabled={!detail || loading}
-              className="inline-flex items-center justify-center gap-2 px-4 py-3 sm:py-2 bg-slate-900 text-white rounded-lg text-sm font-semibold hover:bg-slate-800 disabled:opacity-50 flex-1 sm:flex-initial min-w-[5rem]"
-            >
-              <Printer className="w-4 h-4 shrink-0" aria-hidden />
-              Print
-            </button>
           </div>
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => detail && downloadSchoolFeeReceiptPdf(detail)}
-              disabled={!detail || loading}
-              className="inline-flex items-center justify-center gap-2 px-4 py-2 border border-slate-300 rounded-lg text-sm font-medium hover:bg-slate-50 disabled:opacity-50 flex-1 sm:flex-initial"
-            >
-              <FileDown className="w-4 h-4 shrink-0" aria-hidden />
-              PDF
-            </button>
+          <div>
             <button
               type="button"
               onClick={() => detail && downloadSchoolFeeReceiptExcel(detail)}
@@ -97,9 +72,6 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
               Excel
             </button>
           </div>
-          <p className="text-xs text-slate-500">
-            Excel downloads as a CSV file you can open in Microsoft Excel or Google Sheets.
-          </p>
         </div>
 
         {loading && (
@@ -108,8 +80,8 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
           </p>
         )}
 
-        {!loading && detail && (
-          <div
+        {!loading && detail && (() => {
+          const normalView = <div
             id="school-fee-receipt-print"
             className="flex flex-col border-2 border-slate-800 rounded-sm bg-white p-4 sm:p-5 w-full max-w-md mx-auto max-h-[min(520px,48svh)] min-h-0 overflow-y-auto shadow-sm print:overflow-hidden print:rounded-none print:shadow-none print:border-slate-900"
           >
@@ -163,8 +135,10 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
             <p className="text-[10px] text-slate-400 mt-auto pt-3 border-t border-slate-200 print:mt-2 print:pt-2 print:border-slate-300">
               Powered by {APP_SHORT_NAME}
             </p>
-          </div>
-        )}
+          </div>;
+          const safeName = detail.receipt_number.replace(/[^\w.-]+/g, "_");
+          return <DocumentViewSwitcher normalView={normalView} createPdfBlob={() => createSchoolFeeReceiptPdfBlob(detail)} fileName={`receipt-${safeName}.pdf`} documentLabel="Receipt" />;
+        })()}
       </div>
     </div>
   );

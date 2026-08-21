@@ -233,8 +233,8 @@ const PayrollReportsPage = lazyNamed(() => import('./components/payroll/PayrollO
 const WalletPage = lazyNamed(() => import('./components/wallet/WalletPage'), 'WalletPage');
 const TreasuryPage = lazyNamed(() => import('./components/treasury/TreasuryPage'), 'TreasuryPage');
 const SchoolDashboard = lazyNamed(() => import('./components/school/SchoolDashboard'), 'SchoolDashboard');
-const SchoolClassesPage = lazyNamed(() => import('./components/school/SchoolClassesPage'), 'SchoolClassesPage');
-const SchoolStreamsPage = lazyNamed(() => import('./components/school/SchoolStreamsPage'), 'SchoolStreamsPage');
+const SchoolOperationsOverviewPage = lazyNamed(() => import('./components/school/SchoolOperationsOverviewPage'), 'SchoolOperationsOverviewPage');
+const SchoolClassesStreamsPage = lazyNamed(() => import('./components/school/SchoolClassesStreamsPage'), 'SchoolClassesStreamsPage');
 const SchoolSubjectsPage = lazyNamed(() => import('./components/school/SchoolSubjectsPage'), 'SchoolSubjectsPage');
 const SchoolTeachersPage = lazyNamed(() => import('./components/school/SchoolTeachersPage'), 'SchoolTeachersPage');
 const SchoolStudentsBioPage = lazyNamed(() => import('./components/school/SchoolStudentsBioPage'), 'SchoolStudentsBioPage');
@@ -1297,10 +1297,12 @@ function AppContent() {
         );
       case SCHOOL_PAGE.dashboard:
         return <SchoolDashboard onNavigate={navigate} />;
+      case SCHOOL_PAGE.operations:
+        return <SchoolOperationsOverviewPage onNavigate={navigate} />;
       case SCHOOL_PAGE.classes:
-        return <SchoolClassesPage readOnly={access.readOnly} />;
+        return <SchoolClassesStreamsPage readOnly={access.readOnly} />;
       case SCHOOL_PAGE.streams:
-        return <SchoolStreamsPage readOnly={access.readOnly} />;
+        return <SchoolClassesStreamsPage readOnly={access.readOnly} initialTab="streams" />;
       case SCHOOL_PAGE.subjects:
         return <SchoolSubjectsPage readOnly={access.readOnly} />;
       case SCHOOL_PAGE.teachers:

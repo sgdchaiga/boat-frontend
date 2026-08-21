@@ -1126,13 +1126,20 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Discounts, bursaries & waivers', page: SCHOOL_PAGE.bursary },
     ] },
     { name: 'School Operations', icon: Building2, children: [
-      { name: 'Classes & streams', page: SCHOOL_PAGE.classes },
-      { name: 'Streams', page: SCHOOL_PAGE.streams },
-      { name: 'Staff directory', page: 'staff' },
-      { name: 'Teachers', page: SCHOOL_PAGE.teachers },
-      ...(allowCommunications ? [{ name: 'Messages & announcements', page: 'communications' }] : []),
-      { name: 'Subjects', page: SCHOOL_PAGE.subjects },
-      { name: 'Term performance', page: 'reports_school_term_performance' },
+      { name: 'Overview', page: SCHOOL_PAGE.operations },
+      { group: 'Students & Guardians', items: [
+        { name: 'Students', page: SCHOOL_PAGE.studentsList },
+        { name: 'Admissions', page: SCHOOL_PAGE.students },
+        { name: 'Parents & Guardians', page: SCHOOL_PAGE.parents },
+        { name: 'Health Information', page: SCHOOL_PAGE.healthIssues },
+      ] },
+      { group: 'Academic Setup', items: [
+        { name: 'Classes & Streams', page: SCHOOL_PAGE.classes },
+        { name: 'Subjects', page: SCHOOL_PAGE.subjects },
+        { name: 'Teaching Assignments', page: SCHOOL_PAGE.teachers },
+      ] },
+      { name: 'Staff Directory', page: SCHOOL_PAGE.teachers },
+      ...(allowCommunications ? [{ name: 'Messages & Announcements', page: 'communications' }] : []),
     ] },
     { name: 'Finance', icon: Landmark, children: [
       { name: 'Overview', page: 'finance_overview' },

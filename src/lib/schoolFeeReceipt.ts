@@ -52,7 +52,7 @@ function methodLabel(method: string): string {
   return method.replace(/_/g, " ");
 }
 
-export function downloadSchoolFeeReceiptPdf(d: SchoolFeeReceiptDetail): void {
+export function createSchoolFeeReceiptPdfBlob(d: SchoolFeeReceiptDetail): Blob {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   /** Frame sized so two receipts fit on one A4 sheet (matches print preview). */
   const frameX = 14;
@@ -113,8 +113,17 @@ export function downloadSchoolFeeReceiptPdf(d: SchoolFeeReceiptDetail): void {
   doc.setTextColor(140, 140, 140);
   doc.setFont("helvetica", "normal");
   doc.text(`Powered by ${APP_SHORT_NAME}`, innerLeft, footerY);
+  return doc.output("blob");
+}
+
+export function downloadSchoolFeeReceiptPdf(d: SchoolFeeReceiptDetail): void {
   const safeName = d.receipt_number.replace(/[^\w.-]+/g, "_");
-  doc.save(`receipt-${safeName}.pdf`);
+  const url = URL.createObjectURL(createSchoolFeeReceiptPdfBlob(d));
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `receipt-${safeName}.pdf`;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
 export function downloadSchoolFeeReceiptExcel(d: SchoolFeeReceiptDetail): void {

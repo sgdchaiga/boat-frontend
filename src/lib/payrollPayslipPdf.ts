@@ -68,10 +68,17 @@ function drawPayslip(doc: jsPDF, d: PayslipDetail, logo: string | null): void {
 }
 
 export async function downloadPayslipPdf(d: PayslipDetail): Promise<void> {
+  const blob = await createPayslipPdfBlob(d);
+  const safe = `${d.staffName}-${d.periodLabel}`.replace(/[^\w.-]+/g, "_").slice(0, 80);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a"); anchor.href = url; anchor.download = `payslip-${safe}.pdf`; anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1_000);
+}
+
+export async function createPayslipPdfBlob(d: PayslipDetail): Promise<Blob> {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   drawPayslip(doc, d, await loadLogo(d.organizationLogoUrl));
-  const safe = `${d.staffName}-${d.periodLabel}`.replace(/[^\w.-]+/g, "_").slice(0, 80);
-  doc.save(`payslip-${safe}.pdf`);
+  return doc.output("blob");
 }
 
 export async function downloadAllPayslipsPdf(payslips: PayslipDetail[]): Promise<void> {

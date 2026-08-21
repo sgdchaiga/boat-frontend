@@ -1,6 +1,7 @@
 /** School workspace route ids — use with `?page=` and `onNavigate`. */
 export const SCHOOL_PAGE = {
   dashboard: "school_dashboard",
+  operations: "school_operations",
   classes: "school_classes",
   streams: "school_streams",
   subjects: "school_subjects",
