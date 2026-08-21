@@ -156,6 +156,8 @@ type SimpleExpenseLine = {
   payment_method: PaymentMethodSimple;
   /** Simple group only — GL is resolved at save from category + item text */
   category: SimpleCategory;
+  /** Optional explicit account chosen in Simple mode; blank keeps automatic mapping. */
+  expense_gl_account_id: string;
   /** After user picks a type, stop auto-overwriting from “What” text */
   typeLocked: boolean;
 };
@@ -379,6 +381,7 @@ function emptySimpleLine(): SimpleExpenseLine {
     amount: "",
     payment_method: "cash",
     category: readLastSimpleCategory(),
+    expense_gl_account_id: "",
     typeLocked: false,
   };
 }
@@ -1114,7 +1117,9 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         const rowTotal = round2(net + vat);
         if (rowTotal <= 0) continue;
 
-        const expGl = String(user?.business_type || "").toLowerCase() === "school" && schoolBudgetGlId ? schoolBudgetGlId : mapCategoryToExpenseGlId(r.category, expenseGlOptions, r.item.trim());
+        const expGl = String(user?.business_type || "").toLowerCase() === "school" && schoolBudgetGlId
+          ? schoolBudgetGlId
+          : r.expense_gl_account_id || mapCategoryToExpenseGlId(r.category, expenseGlOptions, r.item.trim());
         const srcGl = mapPaymentMethodToGlId(r.payment_method, cashSourceOptions);
         if (!expGl || !srcGl) {
           alert(
@@ -1561,6 +1566,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                 amount: net > 0 ? String(net) : "",
                 payment_method: inferPaymentMethodFromGlId(l.source_cash_gl_account_id, cashSourceOptions),
                 category: inferCategoryFromExpenseGl(l.expense_gl_account_id, expenseGlOptions),
+                expense_gl_account_id: l.expense_gl_account_id,
                 typeLocked: true,
               };
             })
@@ -2030,7 +2036,9 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                   const patch: Partial<SimpleExpenseLine> = { item: v };
                                   if (!row.typeLocked) {
                                     const g = guessCategoryFromItem(v);
-                                    if (g) patch.category = g;
+                                   if (g) patch.category = g;
+                                    const suggestedAccount = findExpenseGlFromItem(expenseGlOptions, v);
+                                    if (suggestedAccount) patch.expense_gl_account_id = suggestedAccount.id;
                                   }
                                   updateSimpleLine(row.key, patch);
                                 }}
@@ -2069,24 +2077,19 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                               </div>
                             </div>
                             <div>
-                              <label className="block text-xs font-medium text-slate-600 mb-1">Type of expense</label>
-                              <select
-                                value={row.category}
-                                onChange={(e) =>
-                                  updateSimpleLine(row.key, {
-                                    category: e.target.value as SimpleCategory,
-                                    typeLocked: true,
-                                  })
-                                }
-                                onMouseDown={(e) => e.stopPropagation()}
-                                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white min-h-[42px]"
-                              >
-                                {SIMPLE_EXPENSE_CATEGORIES.map((cat) => (
-                                  <option key={cat} value={cat}>
-                                    {SIMPLE_EXPENSE_TYPE_LABELS[cat]}
-                                  </option>
-                                ))}
-                              </select>
+                              <label className="block text-xs font-medium text-slate-600 mb-1">Expense account</label>
+                              <GlAccountPicker
+                                value={row.expense_gl_account_id}
+                                onChange={(id) => updateSimpleLine(row.key, {
+                                  expense_gl_account_id: id,
+                                  category: id ? inferCategoryFromExpenseGl(id, expenseGlOptions) : row.category,
+                                  typeLocked: Boolean(id),
+                                })}
+                                options={expenseGlOptions}
+                                placeholder="Search regular expense accounts…"
+                                emptyOption={{ label: `Automatic — ${SIMPLE_EXPENSE_TYPE_LABELS[row.category]}` }}
+                              />
+                              <p className="mt-1 text-[11px] text-slate-500">Search by account name or code. Leave automatic selected and BOAT will use the description.</p>
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Paid using</label>
