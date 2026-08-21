@@ -1157,18 +1157,18 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ] },
       { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { group: 'Cash & Bank', items: [
-        { name: 'Accounts & Balances', page: 'treasury' },
-        ...(generalBusinessCashbookEnabled ? [{ name: 'Daily Money Summary', page: 'school_cashbook_daily' }] : []),
-        ...(generalBusinessCashbookEnabled ? [{ name: 'Cashier Closing', page: 'school_cashbook_daily' }] : []),
-        { name: 'Cash Transfers', page: 'treasury' },
+        { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
+        { name: 'Daily Money Summary', page: 'treasury', state: { treasuryTab: 'daily-method' } },
+        { name: 'Cashier Closing', page: 'treasury', state: { treasuryTab: 'end-of-day' } },
+        { name: 'Transfers', page: 'treasury', state: { treasuryTab: 'movements' } },
         ...(user?.school_enable_fixed_deposit === true ? [{ name: 'Fixed Deposits', page: SCHOOL_PAGE.fixedDeposit }] : []),
       ] },
-      { group: 'Reconciliation', items: [
-        { name: 'Bank', page: 'accounting_bank_reconciliation' },
-        { name: 'Mobile Money', page: 'accounting_bank_reconciliation' },
-        { name: 'SchoolPay', page: 'accounting_bank_reconciliation' },
-        ...(generalBusinessCashbookEnabled ? [{ name: 'Petty Cash', page: 'school_cashbook_daily' }] : []),
-      ] },
+      ...(canUseAdvancedAccounting ? [{ group: 'Accounting', items: [
+        { name: 'Chart of Accounts', page: 'gl_accounts' },
+        { name: 'Manual Journal Entries', page: 'accounting_manual' },
+        { name: 'Reconciliation', page: 'accounting_bank_reconciliation' },
+        { name: 'Journal Register', page: 'accounting_journal' },
+      ] }] : []),
       { name: 'Reports', page: 'reports' },
     ] },
     { name: 'Procurement & Stock', icon: ShoppingCart, children: [
