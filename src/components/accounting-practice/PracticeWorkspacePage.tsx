@@ -13,6 +13,7 @@ type RecordRow = { id: string; client_id?: string | null; title?: string; file_n
 type ReconLine = { id: string; side: "cashbook" | "statement"; line_date: string; description: string; reference: string | null; amount: number; source_file: string | null; match_group_id: string | null };
 type ReconControl = { id: string; balance_date: string; label: string; amount: number };
 type ReconRun = { id: string; period_start: string; period_end: string; method: "auto" | "manual"; side_mode: "cashbook" | "statement" | "both"; notes: string | null; reconciled_at: string };
+type ReconDraft = { cashbook_source: string; statement_source: string; period_start: string; period_end: string; selected_cashbook_ids: string[]; selected_statement_ids: string[]; notes: string | null; updated_at: string };
 type ReconColumn = "date" | "details" | "reference" | "amount";
 type SortDirection = "asc" | "desc";
 
@@ -51,6 +52,10 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
   const [periodEnd, setPeriodEnd] = useState(new Date().toISOString().slice(0, 10));
   const [selectedCashbook, setSelectedCashbook] = useState<string[]>([]);
   const [selectedStatements, setSelectedStatements] = useState<string[]>([]);
+  const [cashbookSource, setCashbookSource] = useState("");
+  const [statementSource, setStatementSource] = useState("");
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const [savingProgress, setSavingProgress] = useState(false);
   const [reconcileNotes, setReconcileNotes] = useState("");
   const meta = SECTION_META[section];
   const Icon = meta.icon;
@@ -73,20 +78,34 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
 
   const loadLines = useCallback(async () => {
     if (!clientId) { setLines([]); return; }
-    const [lineResult, controlResult, runResult] = await Promise.all([
+    const [lineResult, controlResult, runResult, draftResult] = await Promise.all([
       db.from("practice_reconciliation_lines").select("*").eq("client_id", clientId).order("line_date", { ascending: false }),
       db.from("practice_reconciliation_controls").select("*").eq("client_id", clientId).order("balance_date", { ascending: false }).order("created_at", { ascending: false }),
       db.from("practice_reconciliation_runs").select("*").eq("client_id", clientId).order("period_end", { ascending: false }).order("reconciled_at", { ascending: false }),
+      user?.id ? db.from("practice_reconciliation_drafts").select("cashbook_source,statement_source,period_start,period_end,selected_cashbook_ids,selected_statement_ids,notes,updated_at").eq("client_id", clientId).eq("saved_by", user.id).maybeSingle() : Promise.resolve({ data: null, error: null }),
     ]);
-    if (lineResult.error || controlResult.error || runResult.error) setMessage(lineResult.error?.message || controlResult.error?.message || runResult.error?.message);
+    if (lineResult.error || controlResult.error || runResult.error || draftResult.error) setMessage(lineResult.error?.message || controlResult.error?.message || runResult.error?.message || draftResult.error?.message);
     else {
-      setLines((lineResult.data || []).map((line: ReconLine & { amount: string | number }) => ({ ...line, amount: Number(line.amount) })));
+      const loadedLines = (lineResult.data || []).map((line: ReconLine & { amount: string | number }) => ({ ...line, amount: Number(line.amount) }));
+      setLines(loadedLines);
+      const cashbookFiles = Array.from(new Set(loadedLines.filter((line: ReconLine) => line.side === "cashbook").map((line: ReconLine) => line.source_file).filter(Boolean))) as string[];
+      const statementFiles = Array.from(new Set(loadedLines.filter((line: ReconLine) => line.side === "statement").map((line: ReconLine) => line.source_file).filter(Boolean))) as string[];
+      const draft = draftResult.data as ReconDraft | null;
+      setCashbookSource(draft?.cashbook_source && cashbookFiles.includes(draft.cashbook_source) ? draft.cashbook_source : cashbookFiles[0] || "");
+      setStatementSource(draft?.statement_source && statementFiles.includes(draft.statement_source) ? draft.statement_source : statementFiles[0] || "");
       setControls((controlResult.data || []).map((control: ReconControl & { amount: string | number }) => ({ ...control, amount: Number(control.amount) })));
       setRuns(runResult.data || []);
-      setSelectedCashbook([]);
-      setSelectedStatements([]);
+      const lineIds = new Set(loadedLines.map((line: ReconLine) => line.id));
+      setSelectedCashbook((draft?.selected_cashbook_ids || []).filter((id) => lineIds.has(id)));
+      setSelectedStatements((draft?.selected_statement_ids || []).filter((id) => lineIds.has(id)));
+      if (draft) {
+        setPeriodStart(draft.period_start);
+        setPeriodEnd(draft.period_end);
+        setReconcileNotes(draft.notes || "");
+        setDraftSavedAt(draft.updated_at);
+      } else setDraftSavedAt(null);
     }
-  }, [clientId]);
+  }, [clientId, user?.id]);
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (section === "reconciliation") void loadLines(); }, [section, loadLines]);
@@ -94,9 +113,13 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
   const mapped = useMemo(() => mapStatementFileRows(importRows, mapping), [importRows, mapping]);
   const clientName = (id?: string | null) => clients.find((client) => client.id === id)?.name || "Unassigned";
   const money = (value: number) => new Intl.NumberFormat("en-UG", { minimumFractionDigits: 2 }).format(value);
-  const matched = lines.filter((line) => line.match_group_id);
-  const unmatchedCashbook = lines.filter((line) => line.side === "cashbook" && !line.match_group_id);
-  const unmatchedStatement = lines.filter((line) => line.side === "statement" && !line.match_group_id);
+  const cashbookSources = Array.from(new Set(lines.filter((line) => line.side === "cashbook").map((line) => line.source_file).filter(Boolean))) as string[];
+  const statementSources = Array.from(new Set(lines.filter((line) => line.side === "statement").map((line) => line.source_file).filter(Boolean))) as string[];
+  const sourceMatches = (line: ReconLine) => line.side === "cashbook" ? line.source_file === cashbookSource : line.source_file === statementSource;
+  const scopedLines = lines.filter(sourceMatches);
+  const matched = scopedLines.filter((line) => line.match_group_id);
+  const unmatchedCashbook = scopedLines.filter((line) => line.side === "cashbook" && !line.match_group_id);
+  const unmatchedStatement = scopedLines.filter((line) => line.side === "statement" && !line.match_group_id);
 
   const addClient = async () => {
     if (!orgId || !form.name?.trim()) return;
@@ -147,18 +170,21 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
     if (!orgId || !clientId || mapped.valid.length === 0) return;
     const result = await db.from("practice_reconciliation_lines").insert(mapped.valid.map((row) => ({ organization_id: orgId, client_id: clientId, side: importSide, line_date: row.statement_date, description: row.description, reference: row.reference, amount: row.amount, source_file: importFileName, imported_by: user?.id || null })));
     if (result.error) setMessage(result.error.message); else {
+      const importedSource = importFileName;
       const dates = mapped.valid.map((row) => row.statement_date).sort();
       if (dates[0]) setPeriodStart(dates[0]);
       if (dates[dates.length - 1]) setPeriodEnd(dates[dates.length - 1]);
       setMessage(`${mapped.valid.length} ${importSide} line(s) imported. Reconciliation period set to the full imported date range.`);
+      if (importSide === "cashbook") setCashbookSource(importedSource); else setStatementSource(importedSource);
       setImportRows([]); setImportHeaders([]); setImportSheetNames([]); setImportPageStats([]); setImportFileName(""); await loadLines();
     }
   };
 
   const autoReconcile = async () => {
+    if (!cashbookSource || !statementSource) { setMessage("Select one cashbook source and one statement source first."); return; }
     const available = unmatchedStatement.filter((statement) => statement.line_date >= periodStart && statement.line_date <= periodEnd);
     let count = 0;
-    const runResult = await db.from("practice_reconciliation_runs").insert({ organization_id: orgId, client_id: clientId, period_start: periodStart, period_end: periodEnd, method: "auto", side_mode: "both", notes: "Automatic reconciliation", reconciled_by: user?.id || null }).select("id").single();
+    const runResult = await db.from("practice_reconciliation_runs").insert({ organization_id: orgId, client_id: clientId, period_start: periodStart, period_end: periodEnd, method: "auto", side_mode: "both", notes: `Automatic reconciliation · ${cashbookSource} vs ${statementSource}`, reconciled_by: user?.id || null }).select("id").single();
     if (runResult.error) { setMessage(runResult.error.message); return; }
     const runId = runResult.data.id;
     for (const cashbook of unmatchedCashbook) {
@@ -174,6 +200,7 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
       if (!cashResult.error && !statementResult.error) count += 1;
     }
     if (count === 0) await db.from("practice_reconciliation_runs").delete().eq("id", runId);
+    else if (user?.id) await db.from("practice_reconciliation_drafts").delete().eq("client_id", clientId).eq("saved_by", user.id);
     setMessage(`${count} client transaction pair(s) reconciled.`); await loadLines();
   };
   const addControlBalance = async () => {
@@ -188,21 +215,51 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
   const selectedCashbookTotal = selectedCashbookRows.reduce((sum, line) => sum + line.amount, 0);
   const selectedStatementTotal = selectedStatementRows.reduce((sum, line) => sum + line.amount, 0);
   const selectedDifference = selectedCashbookTotal - selectedStatementTotal;
+  const saveReconciliationProgress = async () => {
+    if (!orgId || !clientId || !user?.id || !cashbookSource || !statementSource || savingProgress) return;
+    setSavingProgress(true);
+    const result = await db.from("practice_reconciliation_drafts").upsert({
+      organization_id: orgId,
+      client_id: clientId,
+      saved_by: user.id,
+      cashbook_source: cashbookSource,
+      statement_source: statementSource,
+      period_start: periodStart,
+      period_end: periodEnd,
+      selected_cashbook_ids: selectedCashbook,
+      selected_statement_ids: selectedStatements,
+      notes: reconcileNotes || null,
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "client_id,saved_by" }).select("updated_at").single();
+    if (result.error) setMessage(result.error.message);
+    else {
+      setDraftSavedAt(result.data.updated_at);
+      setMessage("Reconciliation progress saved. You can safely return to it later.");
+    }
+    setSavingProgress(false);
+  };
   const manualReconcile = async () => {
-    if (!orgId || !clientId || (selectedCashbook.length === 0 && selectedStatements.length === 0)) return;
+    if (!orgId || !clientId || !cashbookSource || !statementSource || (selectedCashbook.length === 0 && selectedStatements.length === 0)) return;
     if (selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005) {
       setMessage(`Selected cashbook and statement totals must agree. Difference: ${money(selectedDifference)}.`);
       return;
     }
     const sideMode = selectedCashbook.length > 0 && selectedStatements.length > 0 ? "both" : selectedCashbook.length > 0 ? "cashbook" : "statement";
-    const runResult = await db.from("practice_reconciliation_runs").insert({ organization_id: orgId, client_id: clientId, period_start: periodStart, period_end: periodEnd, method: "manual", side_mode: sideMode, notes: reconcileNotes || null, reconciled_by: user?.id || null }).select("id").single();
+    const sourceNote = `${cashbookSource} vs ${statementSource}`;
+    const runResult = await db.from("practice_reconciliation_runs").insert({ organization_id: orgId, client_id: clientId, period_start: periodStart, period_end: periodEnd, method: "manual", side_mode: sideMode, notes: reconcileNotes ? `${sourceNote} · ${reconcileNotes}` : sourceNote, reconciled_by: user?.id || null }).select("id").single();
     if (runResult.error) { setMessage(runResult.error.message); return; }
     const runId = runResult.data.id;
     const group = crypto.randomUUID();
     const ids = [...selectedCashbook, ...selectedStatements];
     const result = await db.from("practice_reconciliation_lines").update({ match_group_id: group, reconciliation_run_id: runId }).in("id", ids);
     if (result.error) { await db.from("practice_reconciliation_runs").delete().eq("id", runId); setMessage(result.error.message); }
-    else { setReconcileNotes(""); setMessage(`${sideMode === "both" ? "Two-sided" : "Single-sided"} reconciliation saved for ${periodStart} to ${periodEnd}.`); await loadLines(); }
+    else {
+      await db.from("practice_reconciliation_drafts").delete().eq("client_id", clientId).eq("saved_by", user.id);
+      setReconcileNotes("");
+      setDraftSavedAt(null);
+      setMessage(`${sideMode === "both" ? "Two-sided" : "Single-sided"} reconciliation saved for ${periodStart} to ${periodEnd}.`);
+      await loadLines();
+    }
   };
   const cancelRun = async (runId: string) => {
     if (!confirm("Cancel this reconciliation and return its transactions to unmatched?")) return;
@@ -223,7 +280,7 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
       <div className="flex items-start justify-between gap-4"><div><div className="flex items-center gap-2"><Icon className="h-7 w-7 text-brand-700" /><h1 className="text-3xl font-bold text-slate-900">{meta.title}</h1></div><p className="mt-1 text-sm text-slate-500">{meta.description}</p></div><button type="button" className="app-btn-secondary" onClick={() => void (section === "reconciliation" ? loadLines() : load())}><RefreshCw className="h-4 w-4" /> Refresh</button></div>
       {message && <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">{message}</div>}
       {section === "clients" ? <Clients clients={clients} form={form} setForm={setForm} add={addClient} disabled={readOnly} /> :
-       section === "reconciliation" ? <Reconciliation clients={clients} clientId={clientId} setClientId={setClientId} importSide={importSide} setImportSide={setImportSide} importFileName={importFileName} importSheetNames={importSheetNames} importPageStats={importPageStats} importRowCount={importRows.length} invalidCount={mapped.invalidCount} invalidReasons={mapped.invalidReasons} readImport={readImport} headers={importHeaders} mapping={mapping} setMapping={setMapping} mappedCount={mapped.valid.length} importLines={importLines} autoReconcile={autoReconcile} cashbook={unmatchedCashbook} statements={unmatchedStatement} matched={matched} allLines={lines} controls={controls} controlDate={controlDate} setControlDate={setControlDate} controlLabel={controlLabel} setControlLabel={setControlLabel} controlAmount={controlAmount} setControlAmount={setControlAmount} addControlBalance={addControlBalance} periodStart={periodStart} setPeriodStart={setPeriodStart} periodEnd={periodEnd} setPeriodEnd={setPeriodEnd} selectedCashbook={selectedCashbook} setSelectedCashbook={setSelectedCashbook} selectedStatements={selectedStatements} setSelectedStatements={setSelectedStatements} selectedCashbookTotal={selectedCashbookTotal} selectedStatementTotal={selectedStatementTotal} selectedDifference={selectedDifference} reconcileNotes={reconcileNotes} setReconcileNotes={setReconcileNotes} manualReconcile={manualReconcile} runs={runs} cancelRun={cancelRun} removeImportedFile={removeImportedFile} money={money} disabled={readOnly} /> :
+       section === "reconciliation" ? <Reconciliation clients={clients} clientId={clientId} setClientId={setClientId} importSide={importSide} setImportSide={setImportSide} importFileName={importFileName} importSheetNames={importSheetNames} importPageStats={importPageStats} importRowCount={importRows.length} invalidCount={mapped.invalidCount} invalidReasons={mapped.invalidReasons} readImport={readImport} headers={importHeaders} mapping={mapping} setMapping={setMapping} mappedCount={mapped.valid.length} importLines={importLines} autoReconcile={autoReconcile} cashbook={unmatchedCashbook} statements={unmatchedStatement} matched={matched} allLines={lines} scopedLines={scopedLines} cashbookSources={cashbookSources} statementSources={statementSources} cashbookSource={cashbookSource} setCashbookSource={setCashbookSource} statementSource={statementSource} setStatementSource={setStatementSource} controls={controls} controlDate={controlDate} setControlDate={setControlDate} controlLabel={controlLabel} setControlLabel={setControlLabel} controlAmount={controlAmount} setControlAmount={setControlAmount} addControlBalance={addControlBalance} periodStart={periodStart} setPeriodStart={setPeriodStart} periodEnd={periodEnd} setPeriodEnd={setPeriodEnd} selectedCashbook={selectedCashbook} setSelectedCashbook={setSelectedCashbook} selectedStatements={selectedStatements} setSelectedStatements={setSelectedStatements} selectedCashbookTotal={selectedCashbookTotal} selectedStatementTotal={selectedStatementTotal} selectedDifference={selectedDifference} saveReconciliationProgress={saveReconciliationProgress} savingProgress={savingProgress} draftSavedAt={draftSavedAt} reconcileNotes={reconcileNotes} setReconcileNotes={setReconcileNotes} manualReconcile={manualReconcile} runs={runs} cancelRun={cancelRun} removeImportedFile={removeImportedFile} money={money} disabled={readOnly} /> :
        section === "documents" ? <Documents clients={clients} clientId={clientId} setClientId={setClientId} form={form} setForm={setForm} register={registerDocument} openDocument={openDocument} records={records} clientName={clientName} disabled={readOnly} /> :
        <WorkRecords section={section} clients={clients} clientId={clientId} setClientId={setClientId} form={form} setForm={setForm} add={addRecord} records={records} clientName={clientName} money={money} disabled={readOnly} />}
       {loading && <p className="text-sm text-slate-500">Loading practice workspace...</p>}
@@ -237,27 +294,32 @@ function Clients({ clients, form, setForm, add, disabled }: any) { return <><div
 function WorkRecords({ section, clients, clientId, setClientId, form, setForm, add, records, clientName, money, disabled }: any) { return <><div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-4"><ClientSelect clients={clients} value={clientId} setValue={setClientId}/><input className={input} placeholder={section === "billing" ? "Invoice description" : section === "tasks" ? "Task title" : "Engagement title"} value={form.title || ""} onChange={(e) => setForm({ ...form, title: e.target.value })}/>{section === "billing" ? <input className={input} type="number" placeholder="Amount" value={form.amount || ""} onChange={(e) => setForm({ ...form, amount: e.target.value })}/> : section === "tasks" ? <input className={input} type="date" value={form.due_date || ""} onChange={(e) => setForm({ ...form, due_date: e.target.value })}/> : <input className={input} placeholder="Service type" value={form.service_type || ""} onChange={(e) => setForm({ ...form, service_type: e.target.value })}/>}<button className="app-btn-primary" disabled={disabled || !clientId} onClick={() => void add()}>Add {section === "billing" ? "invoice" : section === "tasks" ? "task" : "engagement"}</button></div><SimpleTable heads={["Client", "Description", "Due / period", "Amount / type", "Status"]} rows={records.map((r: RecordRow) => [clientName(r.client_id), r.title || r.description || "-", r.due_date || r.period_end || "-", r.amount != null ? money(Number(r.amount)) : r.service_type || r.priority || "-", r.status])}/></>; }
 function Documents({ clients, clientId, setClientId, form, setForm, register, openDocument, records, clientName, disabled }: any) { return <><div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-4"><ClientSelect clients={clients} value={clientId} setValue={setClientId}/><input className={input} placeholder="Category" value={form.category || ""} onChange={(e) => setForm({ ...form, category: e.target.value })}/><input className={input} placeholder="Notes" value={form.notes || ""} onChange={(e) => setForm({ ...form, notes: e.target.value })}/><label className="app-btn-primary cursor-pointer"><Upload className="h-4 w-4"/> Add to vault<input type="file" className="hidden" disabled={disabled || !clientId} onChange={(e) => void register(e.target.files?.[0] || null)}/></label></div><SimpleTable heads={["Client", "File", "Category", "Open"]} rows={records.map((r: RecordRow) => [clientName(r.client_id), r.file_name || "-", r.category || "-", <button type="button" className="text-brand-700 hover:underline" onClick={() => void openDocument(r.storage_path)}>Open</button>])}/></>; }
 function Reconciliation(props: any) {
-  const { clients, clientId, setClientId, importSide, setImportSide, importFileName, importSheetNames, importPageStats, importRowCount, invalidCount, invalidReasons, readImport, headers, mapping, setMapping, mappedCount, importLines, autoReconcile, cashbook, statements, matched, allLines, controls, controlDate, setControlDate, controlLabel, setControlLabel, controlAmount, setControlAmount, addControlBalance, periodStart, setPeriodStart, periodEnd, setPeriodEnd, selectedCashbook, setSelectedCashbook, selectedStatements, setSelectedStatements, selectedCashbookTotal, selectedStatementTotal, selectedDifference, reconcileNotes, setReconcileNotes, manualReconcile, runs, cancelRun, removeImportedFile, money, disabled } = props;
+  const { clients, clientId, setClientId, importSide, setImportSide, importFileName, importSheetNames, importPageStats, importRowCount, invalidCount, invalidReasons, readImport, headers, mapping, setMapping, mappedCount, importLines, autoReconcile, cashbook, statements, matched, allLines, scopedLines, cashbookSources, statementSources, cashbookSource, setCashbookSource, statementSource, setStatementSource, controls, controlDate, setControlDate, controlLabel, setControlLabel, controlAmount, setControlAmount, addControlBalance, periodStart, setPeriodStart, periodEnd, setPeriodEnd, selectedCashbook, setSelectedCashbook, selectedStatements, setSelectedStatements, selectedCashbookTotal, selectedStatementTotal, selectedDifference, saveReconciliationProgress, savingProgress, draftSavedAt, reconcileNotes, setReconcileNotes, manualReconcile, runs, cancelRun, removeImportedFile, money, disabled } = props;
   const [cashbookFirst, setCashbookFirst] = useState(true);
   const [showImportedDocuments, setShowImportedDocuments] = useState(false);
   const [expandedImportFiles, setExpandedImportFiles] = useState<string[]>([]);
   const mapField = (key: keyof StatementColumnMapping, label: string) => <label className="text-xs text-slate-600">{label}<select className={`${input} mt-1 w-full`} value={mapping[key]} onChange={(e) => setMapping({ ...mapping, [key]: e.target.value })}><option value="">Not mapped</option>{headers.map((h: string) => <option key={h}>{h}</option>)}</select></label>;
-  const cashbookTotal = (allLines as ReconLine[]).filter((line) => line.side === "cashbook").reduce((sum, line) => sum + line.amount, 0);
-  const statementTotal = (allLines as ReconLine[]).filter((line) => line.side === "statement").reduce((sum, line) => sum + line.amount, 0);
-  const unmatchedCashbookTotal = (cashbook as ReconLine[]).reduce((sum, line) => sum + line.amount, 0);
-  const unmatchedStatementTotal = (statements as ReconLine[]).reduce((sum, line) => sum + line.amount, 0);
   const latestControl = (controls as ReconControl[])[0];
   const periodCashbook = (cashbook as ReconLine[]).filter((line) => line.line_date >= periodStart && line.line_date <= periodEnd);
   const periodStatements = (statements as ReconLine[]).filter((line) => line.line_date >= periodStart && line.line_date <= periodEnd);
+  const periodScopedLines = (scopedLines as ReconLine[]).filter((line) => line.line_date >= periodStart && line.line_date <= periodEnd);
+  const periodMatched = (matched as ReconLine[]).filter((line) => line.line_date >= periodStart && line.line_date <= periodEnd);
+  const cashbookTotal = periodScopedLines.filter((line) => line.side === "cashbook").reduce((sum, line) => sum + line.amount, 0);
+  const statementTotal = periodScopedLines.filter((line) => line.side === "statement").reduce((sum, line) => sum + line.amount, 0);
+  const unmatchedCashbookTotal = periodCashbook.reduce((sum, line) => sum + line.amount, 0);
+  const unmatchedStatementTotal = periodStatements.reduce((sum, line) => sum + line.amount, 0);
   const importedFiles = Array.from(new Set((allLines as ReconLine[]).map((line) => line.source_file).filter(Boolean))) as string[];
   const toggleImportFile = (file: string) => setExpandedImportFiles((current) => current.includes(file) ? current.filter((value) => value !== file) : [...current, file]);
   const reconciledBalance = cashbookTotal - unmatchedCashbookTotal + unmatchedStatementTotal;
+  const reconcilingBalance = cashbookTotal - (unmatchedCashbookTotal - selectedCashbookTotal) + (unmatchedStatementTotal - selectedStatementTotal);
   const controlDifference = latestControl ? reconciledBalance - latestControl.amount : null;
   const selectedClientName = (clients as Client[]).find((client) => client.id === clientId)?.name || "Client";
   const reportRows = (): Array<Array<string | number>> => [
       ["Bank Reconciliation Statement"],
       ["Client", selectedClientName],
       ["Period", `${periodStart} to ${periodEnd}`],
+      ["Cashbook source", cashbookSource || "Not selected"],
+      ["Statement source", statementSource || "Not selected"],
       [],
       ["Summary", "Amount"],
       ["Cashbook total", cashbookTotal],
@@ -320,18 +382,18 @@ function Reconciliation(props: any) {
     <div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-3"><ClientSelect clients={clients} value={clientId} setValue={setClientId}/><select className={input} value={importSide} onChange={(e) => setImportSide(e.target.value)}><option value="cashbook">Client cashbook</option><option value="statement">Bank / channel statement</option></select><label className="app-btn-secondary cursor-pointer"><FileSpreadsheet className="h-4 w-4"/> Choose CSV, Excel, or PDF<input type="file" accept=".csv,.xls,.xlsx,.pdf,application/pdf" className="hidden" disabled={disabled || !clientId} onChange={(e) => void readImport(e.target.files?.[0] || null)}/></label></div>
     {headers.length > 0 && <div className="rounded-xl border bg-white p-4"><p className="text-sm font-semibold">{importFileName}</p><p className="mb-3 text-xs text-slate-500">{importSheetNames.length} page/worksheet(s) · {importRowCount} rows found · {mappedCount} valid · {invalidCount} skipped</p><details className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs"><summary className="cursor-pointer font-semibold text-slate-700">Page extraction audit</summary><div className="mt-2 grid gap-1 sm:grid-cols-2 lg:grid-cols-4">{(importPageStats as StatementFilePageStat[]).map((stat) => <p key={stat.name} className={stat.rowCount === 0 ? "font-semibold text-rose-700" : "text-slate-600"}>{stat.name}: {stat.rowCount} row(s)</p>)}</div></details><div className="grid gap-3 md:grid-cols-3">{mapField("date", "Date *")}{mapField("description", "Description")}{mapField("reference", "Reference")}{mapField("amount", "Signed amount")}{mapField("debit", "Debit")}{mapField("credit", "Credit")}</div>{invalidCount > 0 && <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><p className="font-semibold">Skipped row reasons</p>{Object.entries(invalidReasons as Record<string, number>).map(([reason, count]) => <p key={reason}>{reason}: {count}</p>)}</div>}<button className="app-btn-primary mt-4" disabled={disabled || !mappedCount} onClick={() => void importLines()}><Upload className="h-4 w-4"/> Import {importSide}</button></div>}
     <div className="rounded-xl border bg-white p-4"><h2 className="font-semibold text-slate-900">Record client control balance</h2><p className="text-xs text-slate-500">Capture the closing bank, cash, mobile-money, or other independent control balance.</p><div className="mt-3 grid gap-3 md:grid-cols-4"><input className={input} type="date" value={controlDate} onChange={(e) => setControlDate(e.target.value)}/><input className={input} value={controlLabel} onChange={(e) => setControlLabel(e.target.value)} placeholder="Control balance label"/><input className={input} type="number" value={controlAmount} onChange={(e) => setControlAmount(e.target.value)} placeholder="Control amount"/><button className="app-btn-primary" disabled={disabled || !clientId || controlAmount === ""} onClick={() => void addControlBalance()}>Record balance</button></div></div>
-    <div className="rounded-xl border bg-white p-4"><div><h2 className="font-semibold text-slate-900">Reconcile selected period</h2><p className="text-xs text-slate-500">Choose the period, then manually match selected transactions or automatically match the whole period.</p></div><div className="mt-3 grid gap-3 md:grid-cols-4"><label className="text-xs text-slate-600">Period start<input className={`${input} mt-1 w-full`} type="date" value={periodStart} onChange={(e) => setPeriodStart(e.target.value)}/></label><label className="text-xs text-slate-600">Period end<input className={`${input} mt-1 w-full`} type="date" value={periodEnd} onChange={(e) => setPeriodEnd(e.target.value)}/></label><input className={`${input} self-end`} value={reconcileNotes} onChange={(e) => setReconcileNotes(e.target.value)} placeholder="Reconciliation notes"/><div className="flex items-end gap-2"><button className="app-btn-primary" disabled={disabled || (!selectedCashbook.length && !selectedStatements.length) || (selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005)} onClick={() => void manualReconcile()}>Manually reconcile selected</button><button className="app-btn-secondary" disabled={disabled || !clientId} onClick={() => void autoReconcile()}>Auto reconcile period</button></div></div><div className="mt-3 grid gap-3 sm:grid-cols-3"><StatementMetric label="Selected cashbook" value={money(selectedCashbookTotal)}/><StatementMetric label="Selected statement" value={money(selectedStatementTotal)}/><StatementMetric label="Difference" value={money(selectedDifference)} alert={selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005}/></div></div>
+    <div className="rounded-xl border bg-white p-4"><div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-slate-900">Reconcile selected sources and period</h2><p className="text-xs text-slate-500">Choose one cashbook document and one statement document. Only transactions from those sources are compared.</p></div><div className="text-right"><button type="button" className="app-btn-secondary" disabled={disabled || savingProgress || !cashbookSource || !statementSource} onClick={() => void saveReconciliationProgress()}>{savingProgress ? "Saving…" : "Save progress"}</button>{draftSavedAt && <p className="mt-1 text-[11px] text-slate-500">Last saved {new Date(draftSavedAt).toLocaleString()}</p>}</div></div><div className="mt-3 grid gap-3 md:grid-cols-2"><label className="text-xs text-slate-600">Cashbook source<select className={`${input} mt-1 w-full`} value={cashbookSource} onChange={(e) => { setCashbookSource(e.target.value); setSelectedCashbook([]); }}><option value="">Select cashbook document</option>{cashbookSources.map((source: string) => <option key={source} value={source}>{source}</option>)}</select></label><label className="text-xs text-slate-600">Bank / statement source<select className={`${input} mt-1 w-full`} value={statementSource} onChange={(e) => { setStatementSource(e.target.value); setSelectedStatements([]); }}><option value="">Select statement document</option>{statementSources.map((source: string) => <option key={source} value={source}>{source}</option>)}</select></label></div><div className="mt-3 grid gap-3 md:grid-cols-4"><label className="text-xs text-slate-600">Period start<input className={`${input} mt-1 w-full`} type="date" value={periodStart} onChange={(e) => { setPeriodStart(e.target.value); setSelectedCashbook([]); setSelectedStatements([]); }}/></label><label className="text-xs text-slate-600">Period end<input className={`${input} mt-1 w-full`} type="date" value={periodEnd} onChange={(e) => { setPeriodEnd(e.target.value); setSelectedCashbook([]); setSelectedStatements([]); }}/></label><input className={`${input} self-end`} value={reconcileNotes} onChange={(e) => setReconcileNotes(e.target.value)} placeholder="Reconciliation notes"/><div className="flex items-end gap-2"><button className="app-btn-primary" disabled={disabled || !cashbookSource || !statementSource || (!selectedCashbook.length && !selectedStatements.length) || (selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005)} onClick={() => void manualReconcile()}>Manually reconcile selected</button><button className="app-btn-secondary" disabled={disabled || !clientId || !cashbookSource || !statementSource} onClick={() => void autoReconcile()}>Auto reconcile period</button></div></div><div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><StatementMetric label="Selected cashbook" value={money(selectedCashbookTotal)}/><StatementMetric label="Selected statement" value={money(selectedStatementTotal)}/><StatementMetric label="Selected difference" value={money(selectedDifference)} alert={selectedCashbook.length > 0 && selectedStatements.length > 0 && Math.abs(selectedDifference) >= 0.005}/><StatementMetric label="Reconciling balance" value={money(reconcilingBalance)} alert={Math.abs(selectedDifference) >= 0.005}/></div></div>
     <div className="grid gap-3 md:grid-cols-3"><Metric label="Cashbook unmatched" value={cashbook.length}/><Metric label="Statement unmatched" value={statements.length}/><Metric label="Matched lines" value={matched.length}/></div>
     <section className="rounded-xl border bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div><p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Reconciliation report</p><h2 className="font-semibold text-slate-900">Bank reconciliation statement</h2><p className="text-xs text-slate-500">{selectedClientName} · {periodStart} to {periodEnd}</p></div>
         <div className="flex flex-wrap gap-2 print:hidden"><button type="button" className="app-btn-secondary" disabled={!clientId} onClick={downloadBankReconciliationExcel}><Download className="h-4 w-4"/> Excel</button><button type="button" className="app-btn-secondary" disabled={!clientId} onClick={downloadBankReconciliationPdf}><Download className="h-4 w-4"/> PDF</button><button type="button" className="app-btn-secondary" disabled={!clientId} onClick={() => window.print()}><Printer className="h-4 w-4"/> Print statement</button></div>
       </div>
-      <p className="mt-3 text-xs text-slate-500">Reconciliation position based on imported cashbook and bank/channel statement lines, with the latest recorded control balance.</p>
+      <p className="mt-3 text-xs text-slate-500">Comparing <strong>{cashbookSource || "no cashbook selected"}</strong> with <strong>{statementSource || "no statement selected"}</strong>, plus the latest recorded control balance.</p>
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><StatementMetric label="Cashbook total" value={money(cashbookTotal)}/><StatementMetric label="Bank / channel statement total" value={money(statementTotal)}/><StatementMetric label="Outstanding cashbook items" value={money(unmatchedCashbookTotal)}/><StatementMetric label="Outstanding statement items" value={money(unmatchedStatementTotal)}/><StatementMetric label="Reconciled balance" value={money(reconciledBalance)}/><StatementMetric label={latestControl ? `${latestControl.label} (${latestControl.balance_date})` : "Latest control balance"} value={latestControl ? money(latestControl.amount) : "Not recorded"}/><StatementMetric label="Control difference" value={controlDifference == null ? "Not available" : money(controlDifference)} alert={controlDifference != null && Math.abs(controlDifference) >= 0.005}/><StatementMetric label="Status" value={controlDifference != null && Math.abs(controlDifference) < 0.005 ? "Reconciled" : "Review required"} alert={controlDifference == null || Math.abs(controlDifference) >= 0.005}/></div>
     </section>
     <div className="grid items-start gap-4 xl:grid-cols-2">{cashbookFirst ? <><ReconTable title="Unmatched client cashbook" rows={periodCashbook} money={money} selected={selectedCashbook} setSelected={setSelectedCashbook} moveDirection="right" onMove={() => setCashbookFirst(false)} independentlyScrollable/><ReconTable title="Unmatched statements" rows={periodStatements} money={money} selected={selectedStatements} setSelected={setSelectedStatements} moveDirection="left" onMove={() => setCashbookFirst(false)} independentlyScrollable/></> : <><ReconTable title="Unmatched statements" rows={periodStatements} money={money} selected={selectedStatements} setSelected={setSelectedStatements} moveDirection="right" onMove={() => setCashbookFirst(true)} independentlyScrollable/><ReconTable title="Unmatched client cashbook" rows={periodCashbook} money={money} selected={selectedCashbook} setSelected={setSelectedCashbook} moveDirection="left" onMove={() => setCashbookFirst(true)} independentlyScrollable/></>}</div>
-    <ReconTable title="Matched reconciliation lines" rows={matched} money={money}/>
+    <ReconTable title="Matched reconciliation lines" rows={periodMatched} money={money}/>
     <div className="grid gap-4 xl:grid-cols-2"><div className="overflow-hidden rounded-xl border bg-white"><div className="flex items-center justify-between gap-3 border-b p-3"><div><h3 className="font-semibold">Imported documents</h3><p className="text-xs text-slate-500">{showImportedDocuments ? "Document transaction details are visible." : "Document transaction details are hidden."}</p></div><button type="button" className="app-btn-secondary" onClick={() => setShowImportedDocuments((value) => !value)}>{showImportedDocuments ? "Hide details" : "Show details"}</button></div>{importedFiles.map((file) => { const fileLines = (allLines as ReconLine[]).filter((line) => line.source_file === file); const expanded = expandedImportFiles.includes(file); return <div key={file} className="border-b"><div className="flex items-center justify-between gap-3 px-3 py-2 text-sm"><button type="button" className="flex items-center gap-2 text-left font-medium" disabled={!showImportedDocuments} onClick={() => toggleImportFile(file)}>{showImportedDocuments ? expanded ? <ChevronDown className="h-4 w-4"/> : <ChevronRight className="h-4 w-4"/> : null}{file}<span className="text-xs font-normal text-slate-500">{fileLines.length} line(s)</span></button><button type="button" className="text-rose-700 hover:underline" disabled={disabled} onClick={() => void removeImportedFile(file)}>Remove unreconciled lines</button></div>{showImportedDocuments && expanded && <ReconTable title={`${file} details`} rows={fileLines} money={money}/>}</div>; })}{!importedFiles.length && <p className="p-5 text-center text-sm text-slate-500">No imported documents.</p>}</div><div className="overflow-hidden rounded-xl border bg-white"><h3 className="border-b p-3 font-semibold">Reconciliation history</h3>{(runs as ReconRun[]).map((run) => <div key={run.id} className="flex items-center justify-between gap-3 border-b px-3 py-2 text-sm"><div><p className="font-medium">{run.period_start} to {run.period_end}</p><p className="text-xs text-slate-500 capitalize">{run.method} · {run.side_mode} side{run.notes ? ` · ${run.notes}` : ""}</p></div><button type="button" className="text-rose-700 hover:underline" disabled={disabled} onClick={() => void cancelRun(run.id)}>Cancel reconciliation</button></div>)}{!runs.length && <p className="p-5 text-center text-sm text-slate-500">No reconciliations saved.</p>}</div></div>
   </>;
 }
