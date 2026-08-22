@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Printer } from "lucide-react";
+import { Download, Printer, Upload } from "lucide-react";
+import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -12,11 +13,12 @@ import { boatApi } from "@/lib/boatApi";
 import { canUseSchoolApi, listSchoolRows } from "@/lib/schoolApiData";
 import { DEFAULT_SCHOOL_PAYMENT_METHODS, SCHOOL_PAYMENT_METHODS, normalizeSchoolPaymentMethods, type SchoolPaymentMethod } from "@/lib/schoolPaymentMethods";
 
-type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string };
+type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null };
 type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; created_at?: string; student_id?: string; status?: string };
 type FeeLine = { code?: string; label?: string; amount?: number; priority?: number };
 type FeeStructure = { id: string; line_items: FeeLine[] | null };
 type PaymentSlice = { invoice_id: string; amount: number; category_code?: string; category_label?: string; priority?: number };
+type SchoolPayImportRow = { row: number; schoolPayCode: string; amount: number; reference: string; paidAt: string; student?: StudentOpt; error?: string };
 
 type PayRow = {
   id: string;
@@ -66,6 +68,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [orgLogoUrl, setOrgLogoUrl] = useState<string | null>(null);
   const [enabledMethods, setEnabledMethods] = useState<SchoolPaymentMethod[]>(DEFAULT_SCHOOL_PAYMENT_METHODS);
   const [receiptPreview, setReceiptPreview] = useState<SchoolFeeReceiptDetail | null>(null);
+  const [importRows, setImportRows] = useState<SchoolPayImportRow[]>([]);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
@@ -84,6 +89,100 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const refNote =
     "Reference is auto-generated: 01-YYYYMMDD-NNN (page 01 · UTC date · Nth school-fee payment that day).";
+
+  const downloadSchoolPayTemplate = () => {
+    const sheet = XLSX.utils.json_to_sheet([{ "SchoolPay Code": "1000123456", Amount: 150000, "Transaction Reference": "TXN-123456789", "Payment Date": new Date().toISOString().slice(0, 10) }]);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, "SchoolPay payments");
+    XLSX.writeFile(book, "boat-schoolpay-upload-template.xlsx");
+  };
+
+  const parseSchoolPayFile = async (file?: File) => {
+    if (!file) return;
+    setImportMessage(null);
+    try {
+      const book = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: true });
+      const sheetName = book.SheetNames[0];
+      if (!sheetName) throw new Error("The file has no worksheet.");
+      const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(book.Sheets[sheetName], { defval: "", raw: true });
+      const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const valueFor = (row: Record<string, unknown>, names: string[]) => {
+        const wanted = names.map(normalized);
+        const key = Object.keys(row).find((candidate) => wanted.includes(normalized(candidate)));
+        return key ? row[key] : "";
+      };
+      const studentBySchoolPayCode = new Map(students.filter((student) => student.school_pay_number?.trim()).map((student) => [normalized(student.school_pay_number!), student]));
+      const parsed = raw.map((row, index): SchoolPayImportRow => {
+        const schoolPayCode = String(valueFor(row, ["SchoolPay Code", "SchoolPay Number", "School Pay Code", "School Pay Number", "Payment Code", "PRN"])).trim();
+        const amount = Number(String(valueFor(row, ["Amount", "Amount Paid", "Payment Amount"])).replace(/[^0-9.-]/g, ""));
+        const reference = String(valueFor(row, ["Transaction Reference", "Transaction ID", "Payment Reference", "Reference", "Receipt Number"])).trim();
+        const dateValue = valueFor(row, ["Payment Date", "Paid At", "Transaction Date", "Date"]);
+        const date = dateValue instanceof Date ? dateValue : new Date(String(dateValue));
+        const student = studentBySchoolPayCode.get(normalized(schoolPayCode));
+        let error = "";
+        if (!schoolPayCode) error = "SchoolPay code is missing";
+        else if (!student) error = "SchoolPay code is not assigned to a student in BOAT";
+        else if (!(amount > 0)) error = "Amount must be greater than zero";
+        else if (!reference) error = "SchoolPay reference is missing";
+        else if (Number.isNaN(date.getTime())) error = "Payment date is invalid";
+        return { row: index + 2, schoolPayCode, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), student, error: error || undefined };
+      });
+      setImportRows(parsed);
+      setImportMessage(parsed.length ? `Checked ${parsed.length} row${parsed.length === 1 ? "" : "s"}. Review the results before importing.` : "No payment rows were found.");
+    } catch (error) {
+      setImportRows([]);
+      setImportMessage(error instanceof Error ? error.message : "The SchoolPay file could not be read.");
+    }
+  };
+
+  const importSchoolPayRows = async () => {
+    const orgId = user?.organization_id;
+    const validRows = importRows.filter((row) => !row.error && row.student);
+    if (!orgId || !validRows.length || importing) return;
+    if (canUseSchoolApi()) {
+      setImportMessage("Bulk SchoolPay upload requires the database-backed school connection.");
+      return;
+    }
+    setImporting(true);
+    let imported = 0;
+    let skipped = 0;
+    for (const row of validRows) {
+      const duplicate = await supabase.from("school_payments").select("id").eq("organization_id", orgId).eq("method", "school_pay").eq("reference", row.reference).maybeSingle();
+      if (duplicate.data) { skipped += 1; continue; }
+      const invoiceResult = await supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId).eq("student_id", row.student!.id).neq("status", "cancelled").order("created_at", { ascending: true });
+      if (invoiceResult.error) { setImportMessage(`Row ${row.row}: ${invoiceResult.error.message}`); setImporting(false); return; }
+      let remaining = row.amount;
+      const allocations: PaymentSlice[] = [];
+      const invoiceUpdates: Array<{ id: string; total: number; paid: number }> = [];
+      for (const invoice of invoiceResult.data || []) {
+        if (remaining <= 0) break;
+        const outstanding = Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid));
+        const applied = round2(Math.min(remaining, outstanding));
+        if (applied > 0) {
+          allocations.push({ invoice_id: invoice.id, amount: applied, category_code: "GENERAL", category_label: "General", priority: 999 });
+          invoiceUpdates.push({ id: invoice.id, total: Number(invoice.total_due), paid: round2(Number(invoice.amount_paid) + applied) });
+          remaining = round2(remaining - applied);
+        }
+      }
+      if (!allocations.length) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); continue; }
+      if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
+      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "school_pay", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: "Bulk imported from SchoolPay" }).select("id").single();
+      if (paymentResult.error) { setImportMessage(`Row ${row.row}: ${paymentResult.error.message}`); setImporting(false); return; }
+      const updateResults = await Promise.all(invoiceUpdates.map((invoice) => supabase.from("student_invoices").update({ amount_paid: invoice.paid, status: invoice.paid >= invoice.total ? "paid" : "partial" }).eq("id", invoice.id)));
+      const updateError = updateResults.find((result) => result.error)?.error;
+      if (updateError) { setImportMessage(`Row ${row.row}: ${updateError.message}`); setImporting(false); return; }
+      await Promise.all([
+        postSchoolFeePaymentAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, paymentId: paymentResult.data.id, amount: row.amount, method: "school_pay", paidAt: row.paidAt, studentId: row.student!.id }),
+        supabase.from("school_receipts").insert({ school_payment_id: paymentResult.data.id, receipt_number: `SP-${row.reference}`, delivery_channels: ["school_pay"] }),
+      ]);
+      imported += 1;
+    }
+    sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
+    setImporting(false);
+    setImportRows([]);
+    setImportMessage(`Imported ${imported} SchoolPay payment${imported === 1 ? "" : "s"}${skipped ? `; skipped ${skipped} duplicate reference${skipped === 1 ? "" : "s"}` : ""}.`);
+    await load();
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -110,7 +209,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     const [pRes, sRes] = await Promise.all([
       supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(100),
-      supabase.from("students").select("id,first_name,last_name,admission_number").eq("organization_id", orgId).order("last_name"),
+      supabase.from("students").select("id,first_name,last_name,admission_number,school_pay_number").eq("organization_id", orgId).order("last_name"),
     ]);
     setErr(pRes.error?.message || sRes.error?.message || null);
     setRows((pRes.data as PayRow[]) || []);
@@ -535,6 +634,18 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
       {!readOnly && (
+        <>
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="font-semibold text-slate-900">Bulk upload from SchoolPay</h2><p className="mt-1 text-sm text-slate-600">Upload the updated Excel or CSV list. BOAT matches each payment using the student&apos;s unique SchoolPay code, checks duplicate transaction references, and allocates payments to their oldest open invoices.</p></div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={downloadSchoolPayTemplate} className="inline-flex items-center gap-2 rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800"><Download className="h-4 w-4"/> Template</button>
+              <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"><Upload className="h-4 w-4"/> Choose SchoolPay file<input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={(event) => { void parseSchoolPayFile(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label>
+            </div>
+          </div>
+          {importMessage && <p className="text-sm text-slate-700" role="status">{importMessage}</p>}
+          {importRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">SchoolPay code</th><th className="p-2 text-left">Student</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Transaction reference</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{importRows.map((row) => <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="p-2">{row.schoolPayCode || "—"}</td><td className="p-2">{row.student ? `${row.student.first_name} ${row.student.last_name}` : "—"}</td><td className="p-2 text-right">{row.amount > 0 ? row.amount.toLocaleString() : "—"}</td><td className="p-2">{row.reference || "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready"}</td></tr>)}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{importRows.filter((row) => !row.error).length} ready · {importRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void importSchoolPayRows()} disabled={importing || !importRows.some((row) => !row.error)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{importing ? "Importing…" : "Import ready payments"}</button></div></div>}
+        </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <select
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
@@ -581,6 +692,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             {saving ? "Saving payment..." : "Record school-fee payment"}
           </button>
         </div>
+        </>
       )}
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">

@@ -10,6 +10,7 @@ import { budgetPeriodRange, budgetVariance, frequencyPeriodMultiplier, netJourna
 import { randomUuid } from "@/lib/randomUuid";
 import { canApprove } from "@/lib/permissions";
 import { SchoolBudgetDriversPanel } from "@/components/accounting/SchoolBudgetDriversPanel";
+import { STANDARD_SCHOOL_BUDGET_LINES, standardSchoolBudgetLineRows } from "@/lib/schoolBudgetLines";
 
 type BudgetRow = {
   id: string;
@@ -142,6 +143,7 @@ export function BudgetingPage({ readOnly }: Props) {
   const [linesSaving, setLinesSaving] = useState(false);
   const [workflowHistory, setWorkflowHistory] = useState<WorkflowRow[]>([]);
   const [showCreateBudget, setShowCreateBudget] = useState(false);
+  const [addingStandardLines, setAddingStandardLines] = useState(false);
 
   const loadBudgets = useCallback(async () => {
     if (!orgId) {
@@ -622,6 +624,15 @@ export function BudgetingPage({ readOnly }: Props) {
       setErr(error.message);
       return;
     }
+    if (user?.business_type === "school" && data && "id" in data) {
+      const budgetId = (data as { id: string }).id;
+      const standardResult = await supabase.from("budget_lines").insert(standardSchoolBudgetLineRows(budgetId));
+      if (standardResult.error) {
+        await supabase.from("budgets").delete().eq("id", budgetId);
+        setErr(`The budget could not be prepared with the standard school lines: ${standardResult.error.message}`);
+        return;
+      }
+    }
     setNewBudget({ name: "", financial_year: String(new Date().getFullYear()), start_date: "", end_date: "", notes: "" });
     await loadBudgets();
     if (data && "id" in data) {
@@ -630,6 +641,25 @@ export function BudgetingPage({ readOnly }: Props) {
       setEditedLines([]);
       setBaselineLines([]);
     }
+  };
+
+  const addMissingStandardSchoolLines = async () => {
+    if (!selectedBudget || readOnly || user?.business_type !== "school" || addingStandardLines) return;
+    const existingLabels = new Set(lines.map((line) => line.line_label.trim().toLowerCase()));
+    const missing = STANDARD_SCHOOL_BUDGET_LINES.filter((line) => !existingLabels.has(line.line_label.toLowerCase()));
+    if (!missing.length) {
+      setErr("All standard school budget lines are already present.");
+      return;
+    }
+    setAddingStandardLines(true);
+    setErr(null);
+    const rows = standardSchoolBudgetLineRows(selectedBudget.id)
+      .filter((row) => missing.some((line) => line.line_label === row.line_label))
+      .map((row, index) => ({ ...row, sort_order: lines.length + index }));
+    const { error } = await supabase.from("budget_lines").insert(rows);
+    if (error) setErr(error.message);
+    else await loadLines(selectedBudget.id);
+    setAddingStandardLines(false);
   };
 
   const deleteBudget = async (id: string) => {
@@ -716,7 +746,7 @@ export function BudgetingPage({ readOnly }: Props) {
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           <div className="md:col-span-2 lg:col-span-3">
             <h2 className="text-sm font-semibold text-slate-900">Create a budget</h2>
-            <p className="mt-0.5 text-xs text-slate-500">Set the planning period now; add departments, votes and assumptions after creation.</p>
+            <p className="mt-0.5 text-xs text-slate-500">Set the planning period now. School budgets start with standard income, staff, operating and capital lines; you can edit them or add more after creation.</p>
           </div>
           <input
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm lg:col-span-2"
@@ -824,6 +854,11 @@ export function BudgetingPage({ readOnly }: Props) {
                 <>
                   {!editingLines && nextStatus(selectedBudget.status) && canMoveTo(nextStatus(selectedBudget.status)) && <button type="button" onClick={() => void changeBudgetStatus(selectedBudget, nextStatus(selectedBudget.status)!)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white">{nextStatus(selectedBudget.status) === "submitted" ? "Submit" : nextStatus(selectedBudget.status) === "reviewed" ? "Mark reviewed" : nextStatus(selectedBudget.status) === "approved" ? "Approve" : nextStatus(selectedBudget.status) === "active" ? "Activate" : "Close"}</button>}
                   {!editingLines && canApproveBudget && ["approved", "active"].includes(selectedBudget.status) && <button type="button" onClick={() => void createRevision(selectedBudget)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium">Create revision</button>}
+                  {!editingLines && user?.business_type === "school" && canPrepareBudget && ["draft", "submitted", "reviewed"].includes(selectedBudget.status) && (
+                    <button type="button" onClick={() => void addMissingStandardSchoolLines()} disabled={addingStandardLines || linesLoading} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 disabled:opacity-50">
+                      <Plus className="h-3.5 w-3.5" />{addingStandardLines ? "Adding…" : "Add standard school lines"}
+                    </button>
+                  )}
                   {!editingLines ? (
                     <button
                       type="button"
