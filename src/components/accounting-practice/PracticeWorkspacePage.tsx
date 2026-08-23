@@ -216,8 +216,7 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
       .eq("id", line.id)
       .eq("organization_id", orgId)
       .eq("client_id", clientId)
-      .is("match_group_id", null)
-      .is("reconciliation_run_id", null);
+      .is("match_group_id", null);
     if (result.error) setMessage(result.error.message);
     else {
       setSelectedCashbook((ids) => ids.filter((id) => id !== line.id));
@@ -316,8 +315,7 @@ function Reconciliation(props: any) {
     const result = await db.from("practice_reconciliation_lines").delete()
       .eq("id", line.id)
       .eq("client_id", clientId)
-      .is("match_group_id", null)
-      .is("reconciliation_run_id", null);
+      .is("match_group_id", null);
     if (result.error) window.alert(result.error.message);
     else window.location.reload();
   };
