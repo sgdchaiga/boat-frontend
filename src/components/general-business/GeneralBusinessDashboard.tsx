@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { ArrowRight, Banknote, BookOpen, FileText, Receipt, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
+import { ArrowRight, Banknote, BookOpen, FileText, PackagePlus, Receipt, ShoppingCart, TrendingUp, Wallet } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { useGeneralBusinessMode } from "@/lib/generalBusinessMode";
@@ -76,7 +76,7 @@ export function GeneralBusinessDashboard({ onNavigate }: Props) {
         <Attention label="Overdue customer invoices" count={summary.overdueCustomers} action="Review customers owing" onClick={() => onNavigate("retail_credit_invoices", { invoiceTab: "credit" })} />
         <Attention label="Overdue supplier bills" count={summary.overdueSuppliers} action="Review suppliers to pay" onClick={() => onNavigate("purchases_bills")} />
       </section>
-      <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-bold text-slate-900">Common tasks</h2><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Action label="Money In" icon={Banknote} onClick={() => onNavigate("cash_receipts")} /><Action label="Money Out" icon={Receipt} onClick={() => onNavigate("purchases_expenses")} /><Action label="Reconcile accounts" icon={Wallet} onClick={() => onNavigate("accounting_bank_reconciliation")} /><Action label="Financial reports" icon={TrendingUp} onClick={() => onNavigate("accounting_income")} /></div></section>
+      <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-bold text-slate-900">Common tasks</h2><div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Action label="Money In" icon={Banknote} onClick={() => onNavigate("cash_receipts")} /><Action label="Money Out" icon={Receipt} onClick={() => onNavigate("purchases_expenses")} />{user?.enable_inventory !== false ? <Action label="Cash stock purchase" icon={PackagePlus} onClick={() => onNavigate("purchases_bills", { cashPurchaseOpen: true })} /> : null}<Action label="Reconcile accounts" icon={Wallet} onClick={() => onNavigate("accounting_bank_reconciliation")} /><Action label="Financial reports" icon={TrendingUp} onClick={() => onNavigate("accounting_income")} /></div></section>
     </div>
   );
 }

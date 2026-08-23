@@ -162,6 +162,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
         children: [
           { name: "Suppliers", page: "purchases_vendors" },
           { name: "Purchase orders", page: "purchases_orders" },
+          { name: "Cash stock purchase", page: "purchases_bills", state: { cashPurchaseOpen: true } },
           { name: "Supplier bills", page: "purchases_bills" },
           { name: "Supplier payments", page: "purchases_payments" },
           { name: "Debit notes", page: "purchases_credits" },

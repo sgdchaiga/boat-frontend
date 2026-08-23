@@ -2024,6 +2024,8 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                     <div className="space-y-3 mb-3">
                       {simpleLines.map((row, idx) => {
                         const t = simpleLineTotals[idx] ?? { net: 0, vat: 0, rowTotal: 0 };
+                        const automaticCategory = guessCategoryFromItem(row.item) || row.category;
+                        const displayedExpenseGlId = schoolBudgetGlId || row.expense_gl_account_id || mapCategoryToExpenseGlId(automaticCategory, expenseGlOptions, row.item.trim()) || "";
                         return (
                           <div key={row.key} className="border border-slate-200 rounded-lg p-4 space-y-3 bg-slate-50/40">
                             <div>
@@ -2034,12 +2036,14 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                 onChange={(e) => {
                                   const v = e.target.value;
                                   const patch: Partial<SimpleExpenseLine> = { item: v };
-                                  if (!row.typeLocked) {
-                                    const g = guessCategoryFromItem(v);
-                                   if (g) patch.category = g;
-                                    const suggestedAccount = findExpenseGlFromItem(expenseGlOptions, v);
-                                    if (suggestedAccount) patch.expense_gl_account_id = suggestedAccount.id;
-                                  }
+                                   if (!row.typeLocked) {
+                                     const g = guessCategoryFromItem(v);
+                                     const nextCategory = g || row.category;
+                                     if (g) patch.category = g;
+                                     patch.expense_gl_account_id = v.trim()
+                                       ? mapCategoryToExpenseGlId(nextCategory, expenseGlOptions, v.trim()) || ""
+                                       : "";
+                                   }
                                   updateSimpleLine(row.key, patch);
                                 }}
                                 onMouseDown={(e) => e.stopPropagation()}
@@ -2079,7 +2083,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Expense account</label>
                               <GlAccountPicker
-                                value={row.expense_gl_account_id}
+                                value={displayedExpenseGlId}
                                 onChange={(id) => updateSimpleLine(row.key, {
                                   expense_gl_account_id: id,
                                   category: id ? inferCategoryFromExpenseGl(id, expenseGlOptions) : row.category,
@@ -2089,7 +2093,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                 placeholder="Search regular expense accounts…"
                                 emptyOption={{ label: `Automatic — ${SIMPLE_EXPENSE_TYPE_LABELS[row.category]}` }}
                               />
-                              <p className="mt-1 text-[11px] text-slate-500">Search by account name or code. Leave automatic selected and BOAT will use the description.</p>
+                              <p className="mt-1 text-[11px] text-slate-500">BOAT selects this account from the description. Search by name or code to override it.</p>
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Paid using</label>
