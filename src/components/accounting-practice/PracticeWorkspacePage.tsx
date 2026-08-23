@@ -270,7 +270,7 @@ export function PracticeWorkspacePage({ section, readOnly = false }: { section: 
     const result = await db.from("practice_reconciliation_lines").update({ match_group_id: group, reconciliation_run_id: runId }).in("id", ids);
     if (result.error) { await db.from("practice_reconciliation_runs").delete().eq("id", runId); setMessage(result.error.message); }
     else {
-      await db.from("practice_reconciliation_drafts").delete().eq("client_id", clientId).eq("saved_by", user.id);
+      if (user?.id) await db.from("practice_reconciliation_drafts").delete().eq("client_id", clientId).eq("saved_by", user.id);
       setReconcileNotes("");
       setDraftSavedAt(null);
       setMessage(`${sideMode === "both" ? "Two-sided" : "Single-sided"} reconciliation saved for ${periodStart} to ${periodEnd}.`);
@@ -311,6 +311,16 @@ function WorkRecords({ section, clients, clientId, setClientId, form, setForm, a
 function Documents({ clients, clientId, setClientId, form, setForm, register, openDocument, records, clientName, disabled }: any) { return <><div className="grid gap-3 rounded-xl border bg-white p-4 md:grid-cols-4"><ClientSelect clients={clients} value={clientId} setValue={setClientId}/><input className={input} placeholder="Category" value={form.category || ""} onChange={(e) => setForm({ ...form, category: e.target.value })}/><input className={input} placeholder="Notes" value={form.notes || ""} onChange={(e) => setForm({ ...form, notes: e.target.value })}/><label className="app-btn-primary cursor-pointer"><Upload className="h-4 w-4"/> Add to vault<input type="file" className="hidden" disabled={disabled || !clientId} onChange={(e) => void register(e.target.files?.[0] || null)}/></label></div><SimpleTable heads={["Client", "File", "Category", "Open"]} rows={records.map((r: RecordRow) => [clientName(r.client_id), r.file_name || "-", r.category || "-", <button type="button" className="text-brand-700 hover:underline" onClick={() => void openDocument(r.storage_path)}>Open</button>])}/></>; }
 function Reconciliation(props: any) {
   const { clients, clientId, setClientId, importSide, setImportSide, importFileName, importSheetNames, importPageStats, importRowCount, invalidCount, invalidReasons, readImport, headers, mapping, setMapping, mappedCount, importLines, autoReconcile, cashbook, statements, matched, allLines, scopedLines, cashbookSources, statementSources, cashbookSource, setCashbookSource, statementSource, setStatementSource, controls, controlDate, setControlDate, controlLabel, setControlLabel, controlAmount, setControlAmount, addControlBalance, periodStart, setPeriodStart, periodEnd, setPeriodEnd, selectedCashbook, setSelectedCashbook, selectedStatements, setSelectedStatements, selectedCashbookTotal, selectedStatementTotal, selectedDifference, saveReconciliationProgress, savingProgress, draftSavedAt, reconcileNotes, setReconcileNotes, manualReconcile, runs, cancelRun, removeImportedFile, money, disabled } = props;
+  const removeUnmatchedLine = async (line: ReconLine) => {
+    if (line.match_group_id) return;
+    const result = await db.from("practice_reconciliation_lines").delete()
+      .eq("id", line.id)
+      .eq("client_id", clientId)
+      .is("match_group_id", null)
+      .is("reconciliation_run_id", null);
+    if (result.error) window.alert(result.error.message);
+    else window.location.reload();
+  };
   const [cashbookFirst, setCashbookFirst] = useState(true);
   const [showImportedDocuments, setShowImportedDocuments] = useState(false);
   const [expandedImportFiles, setExpandedImportFiles] = useState<string[]>([]);
