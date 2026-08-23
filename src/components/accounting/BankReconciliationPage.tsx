@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Eye, FileSpreadsheet, Landmark, Printer, RefreshCw, Settings2, Sparkles, Trash2, Unlink, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, CheckCircle2, Eye, FileSpreadsheet, Landmark, MessageSquarePlus, Printer, RefreshCw, Settings2, Sparkles, Trash2, Unlink, Upload, Users, X } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import {
@@ -15,6 +15,7 @@ import {
 } from "../../lib/bankReconciliation";
 import { normalizeGlAccountRows } from "../../lib/glAccountNormalize";
 import { filterGlAccountsForBusinessType } from "../../lib/glAccountBusinessScope";
+import { nextReconciliationStatus, reconciliationProgress, RECONCILIATION_STATUS_LABELS, type CollaboratorRole, type ReconciliationStatus, type ReconciliationWorkMode } from "../../lib/collaborativeReconciliation";
 import { PageNotes } from "../common/PageNotes";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 
@@ -35,6 +36,11 @@ type LineColumn = "date" | "details" | "amount";
 type SortDirection = "asc" | "desc";
 type HistorySortKey = "reconciliation" | HistoryColumn;
 type LineSortKey = LineColumn;
+type SessionRow = { id: string; work_mode: ReconciliationWorkMode; status: ReconciliationStatus; period_start: string; period_end: string; cashbook_ready: boolean; statement_verified: boolean; version: number };
+type MemberRow = { user_id: string; full_name: string; role: string };
+type CollaboratorRow = { id: string; user_id: string; role: CollaboratorRole };
+type ExceptionRow = { id: string; statement_line_id: string | null; journal_entry_line_id: string | null; title: string; status: "open" | "resolved" | "kept"; resolution: string | null };
+type ActivityRow = { id: number; action: string; actor_id: string | null; created_at: string };
 
 const money = new Intl.NumberFormat("en-UG", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed = (amount: number) => `${amount >= 0 ? "+" : ""}${money.format(amount)}`;
@@ -91,6 +97,18 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const today = new Date().toISOString().slice(0, 10);
+  const [periodStart, setPeriodStart] = useState(`${today.slice(0, 8)}01`);
+  const [periodEnd, setPeriodEnd] = useState(today);
+  const [workMode, setWorkMode] = useState<ReconciliationWorkMode>("individual");
+  const [session, setSession] = useState<SessionRow | null>(null);
+  const [members, setMembers] = useState<MemberRow[]>([]);
+  const [collaborators, setCollaborators] = useState<CollaboratorRow[]>([]);
+  const [exceptions, setExceptions] = useState<ExceptionRow[]>([]);
+  const [activity, setActivity] = useState<ActivityRow[]>([]);
+  const [roleDrafts, setRoleDrafts] = useState<Record<CollaboratorRole, string>>({ cashbook_owner: "", statement_owner: "", reviewer: "" });
+  const [commentTarget, setCommentTarget] = useState<{ side: "statement" | "ledger"; id: string } | null>(null);
+  const [commentBody, setCommentBody] = useState("");
 
   const loadAccounts = useCallback(async () => {
     if (!orgId) {
@@ -210,6 +228,30 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
     }
   }, [accountId, orgId]);
 
+  const loadCollaboration = useCallback(async () => {
+    if (!orgId || !accountId) return;
+    const [memberRes, sessionRes] = await Promise.all([
+      reconciliationDb.from("organization_members").select("user_id,full_name,role").eq("organization_id", orgId).eq("is_active", true).order("full_name"),
+      reconciliationDb.from("reconciliation_sessions").select("id,work_mode,status,period_start,period_end,cashbook_ready,statement_verified,version").eq("organization_id", orgId).eq("control_gl_account_id", accountId).eq("period_start", periodStart).eq("period_end", periodEnd).maybeSingle(),
+    ]);
+    if (memberRes.error) throw memberRes.error;
+    setMembers((memberRes.data || []) as MemberRow[]);
+    const active = (sessionRes.data || null) as SessionRow | null;
+    setSession(active);
+    if (!active) { setCollaborators([]); setExceptions([]); setActivity([]); return; }
+    setWorkMode(active.work_mode);
+    const [collabRes, exceptionRes, activityRes] = await Promise.all([
+      reconciliationDb.from("reconciliation_collaborators").select("id,user_id,role").eq("session_id", active.id),
+      reconciliationDb.from("reconciliation_exceptions").select("id,statement_line_id,journal_entry_line_id,title,status,resolution").eq("session_id", active.id).order("created_at", { ascending: false }),
+      reconciliationDb.from("reconciliation_activity").select("id,action,actor_id,created_at").eq("session_id", active.id).order("created_at", { ascending: false }).limit(20),
+    ]);
+    if (collabRes.error) throw collabRes.error;
+    if (exceptionRes.error) throw exceptionRes.error;
+    setCollaborators((collabRes.data || []) as CollaboratorRow[]);
+    setExceptions((exceptionRes.data || []) as ExceptionRow[]);
+    setActivity((activityRes.data || []) as ActivityRow[]);
+  }, [accountId, orgId, periodEnd, periodStart]);
+
   useEffect(() => {
     void loadAccounts().catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
   }, [loadAccounts]);
@@ -217,6 +259,18 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
   useEffect(() => {
     void loadWorkspace();
   }, [loadWorkspace]);
+
+  useEffect(() => { void loadCollaboration().catch((error) => setMessage(schemaHelp(error.message))); }, [loadCollaboration]);
+
+  useEffect(() => {
+    if (!session) return;
+    const channel = reconciliationDb.channel(`reconciliation:${session.id}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "reconciliation_sessions", filter: `id=eq.${session.id}` }, () => void loadCollaboration())
+      .on("postgres_changes", { event: "*", schema: "public", table: "reconciliation_exceptions", filter: `session_id=eq.${session.id}` }, () => void loadCollaboration())
+      .on("postgres_changes", { event: "*", schema: "public", table: "reconciliation_comments", filter: `session_id=eq.${session.id}` }, () => void loadCollaboration())
+      .subscribe();
+    return () => { void reconciliationDb.removeChannel(channel); };
+  }, [loadCollaboration, session?.id]);
 
   const matchedStatementIds = useMemo(
     () => new Set(items.flatMap((item) => (item.statement_line_id ? [item.statement_line_id] : []))),
@@ -256,6 +310,7 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
       .insert({
         organization_id: orgId,
         bank_gl_account_id: accountId,
+        session_id: session?.id || null,
         match_method: method,
         notes: matchNotes || null,
         matched_by: user?.id || null,
@@ -329,6 +384,7 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
         source_type: sourceType,
         source_label: sourceLabel.trim() || null,
         imported_by: user?.id || null,
+        reconciliation_session_id: session?.id || null,
       }))
     );
     setSaving(false);
@@ -358,6 +414,7 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
       source_type: sourceType,
       source_label: sourceLabel.trim() || null,
       imported_by: user?.id || null,
+      reconciliation_session_id: session?.id || null,
     });
     setSaving(false);
     if (error) setMessage(schemaHelp(error.message));
@@ -427,6 +484,58 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
   };
 
   const matchedTotal = items.filter((item) => item.side === "statement").reduce((sum, item) => sum + item.amount, 0);
+  const openExceptions = exceptions.filter((row) => row.status === "open");
+  const progress = reconciliationProgress({ totalLines: statements.length + ledgerLines.length, matchedLines: items.length, openExceptions: openExceptions.length });
+  const myRoles = new Set(collaborators.filter((row) => row.user_id === user?.id).map((row) => row.role));
+  const canCashbook = workMode === "individual" || myRoles.has("cashbook_owner") || user?.role === "admin" || user?.role === "super_admin";
+  const canStatement = workMode === "individual" || myRoles.has("statement_owner") || user?.role === "admin" || user?.role === "super_admin";
+  const canReview = workMode === "individual" || myRoles.has("reviewer") || user?.role === "admin" || user?.role === "super_admin";
+
+  const createSession = async () => {
+    if (!orgId || !accountId || readOnly) return;
+    setSaving(true);
+    const { data, error } = await reconciliationDb.from("reconciliation_sessions").insert({ organization_id: orgId, control_gl_account_id: accountId, source_type: sourceType, source_label: sourceLabel.trim() || null, period_start: periodStart, period_end: periodEnd, work_mode: workMode, created_by: user?.id || null }).select("id,work_mode,status,period_start,period_end,cashbook_ready,statement_verified,version").single();
+    setSaving(false);
+    if (error) setMessage(schemaHelp(error.message));
+    else { setSession(data as SessionRow); setMessage(`${workMode === "collaborative" ? "Collaborative" : "Individual"} reconciliation started.`); await loadCollaboration(); }
+  };
+
+  const saveCollaborators = async () => {
+    if (!session || !orgId || readOnly) return;
+    const rows = (Object.entries(roleDrafts) as Array<[CollaboratorRole, string]>).filter(([, id]) => id).map(([role, userId]) => ({ session_id: session.id, organization_id: orgId, user_id: userId, role, created_by: user?.id || null }));
+    setSaving(true);
+    const removed = await reconciliationDb.from("reconciliation_collaborators").delete().eq("session_id", session.id);
+    const inserted = !removed.error && rows.length ? await reconciliationDb.from("reconciliation_collaborators").insert(rows) : { error: null };
+    setSaving(false);
+    const error = removed.error || inserted.error;
+    if (error) setMessage(error.message); else { setMessage("Collaborators updated."); await loadCollaboration(); }
+  };
+
+  const saveSessionState = async (patch: { cashbookReady?: boolean; statementVerified?: boolean; approve?: boolean }) => {
+    if (!session || readOnly) return;
+    const cashbookReady = patch.cashbookReady ?? session.cashbook_ready;
+    const statementVerified = patch.statementVerified ?? session.statement_verified;
+    const status = patch.approve ? "approved" : nextReconciliationStatus(cashbookReady, statementVerified, openExceptions.length);
+    if (patch.approve && (!cashbookReady || !statementVerified || openExceptions.length)) { setMessage("Both owners must confirm their sections and resolve every exception before approval."); return; }
+    setSaving(true);
+    const { error } = await reconciliationDb.rpc("save_reconciliation_session_state", { p_session_id: session.id, p_expected_version: session.version, p_cashbook_ready: cashbookReady, p_statement_verified: statementVerified, p_status: status });
+    setSaving(false);
+    if (error) setMessage(error.message); else { setMessage(patch.approve ? "Reconciliation approved and closed." : "Section confirmation saved."); await loadCollaboration(); }
+  };
+
+  const askTeammate = async () => {
+    if (!session || !orgId || !commentTarget || !commentBody.trim() || readOnly) return;
+    const line = commentTarget.side === "statement" ? statements.find((row) => row.id === commentTarget.id) : ledgerLines.find((row) => row.id === commentTarget.id);
+    const exceptionInsert = await reconciliationDb.from("reconciliation_exceptions").insert({ session_id: session.id, organization_id: orgId, statement_line_id: commentTarget.side === "statement" ? commentTarget.id : null, journal_entry_line_id: commentTarget.side === "ledger" ? commentTarget.id : null, title: commentBody.trim(), created_by: user?.id || null }).select("id").single();
+    if (exceptionInsert.error) { setMessage(exceptionInsert.error.message); return; }
+    const { error } = await reconciliationDb.from("reconciliation_comments").insert({ session_id: session.id, organization_id: orgId, exception_id: exceptionInsert.data.id, statement_line_id: commentTarget.side === "statement" ? commentTarget.id : null, journal_entry_line_id: commentTarget.side === "ledger" ? commentTarget.id : null, body: commentBody.trim(), created_by: user?.id || null });
+    if (error) setMessage(error.message); else { setMessage(`Exception raised against ${line?.description || "transaction"}.`); setCommentTarget(null); setCommentBody(""); await loadCollaboration(); }
+  };
+
+  const resolveException = async (id: string, status: "resolved" | "kept") => {
+    const { error } = await reconciliationDb.from("reconciliation_exceptions").update({ status, resolution: status === "kept" ? "Kept as an explained outstanding item" : "Resolved", resolved_by: user?.id || null, resolved_at: new Date().toISOString() }).eq("id", id).eq("status", "open");
+    if (error) setMessage(error.message); else await loadCollaboration();
+  };
   const reconciliationRuns = useMemo(() => {
     const grouped = new Map<string, MatchRow[]>();
     matches.forEach((match) => {
@@ -518,6 +627,45 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
         <Metric label="Unmatched control side" value={signed(unmatchedStatements.reduce((sum, row) => sum + row.amount, 0))} />
         <Metric label="Reconciled control total" value={signed(matchedTotal)} />
       </div>
+
+      <section className="rounded-xl border border-indigo-200 bg-gradient-to-br from-indigo-50 to-white p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div><div className="flex items-center gap-2"><Users className="h-5 w-5 text-indigo-700" /><h2 className="font-semibold text-slate-900">Shared reconciliation workspace</h2></div><p className="mt-1 text-xs text-slate-600">One account and period, shared live. Individual mode keeps the usual simple workflow.</p></div>
+          {session && <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-indigo-800 shadow-sm">{RECONCILIATION_STATUS_LABELS[session.status]}</span>}
+        </div>
+        {!session ? (
+          <div className="mt-4 grid gap-3 md:grid-cols-5">
+            <label className="text-xs font-medium text-slate-600">Period start<input type="date" value={periodStart} onChange={(event) => setPeriodStart(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+            <label className="text-xs font-medium text-slate-600">Period end<input type="date" value={periodEnd} onChange={(event) => setPeriodEnd(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
+            <label className="text-xs font-medium text-slate-600 md:col-span-2">Work mode<select value={workMode} onChange={(event) => setWorkMode(event.target.value as ReconciliationWorkMode)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="individual">Individual mode</option><option value="collaborative">Collaborative mode</option></select></label>
+            <button type="button" onClick={() => void createSession()} disabled={readOnly || saving || !periodStart || !periodEnd} className="app-btn-primary self-end">Start workspace</button>
+          </div>
+        ) : (
+          <>
+            <div className="mt-4 grid gap-3 sm:grid-cols-5">
+              <WorkspaceStatus label="Cashbook" done={session.cashbook_ready} />
+              <WorkspaceStatus label="Statement" done={session.statement_verified} />
+              <WorkspaceStatus label="Matched" value={`${progress.percentage}%`} />
+              <WorkspaceStatus label="Exceptions" value={String(progress.exceptionCount)} alert={progress.exceptionCount > 0} />
+              <WorkspaceStatus label="Approval" value={session.status === "approved" ? "Closed" : "Pending"} />
+            </div>
+            {session.work_mode === "collaborative" && (
+              <div className="mt-4 rounded-lg border border-indigo-100 bg-white p-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-indigo-800">Responsibilities</p>
+                <div className="mt-2 grid gap-2 md:grid-cols-3">
+                  {([['cashbook_owner','Cashbook owner'],['statement_owner','Statement owner'],['reviewer','Reviewer / approver']] as Array<[CollaboratorRole,string]>).map(([role,label]) => <label key={role} className="text-xs font-medium text-slate-600">{label}<select value={roleDrafts[role] || collaborators.find((row) => row.role === role)?.user_id || ""} onChange={(event) => setRoleDrafts((current) => ({ ...current, [role]: event.target.value }))} className="mt-1 w-full rounded-lg border border-slate-300 px-2 py-2 text-sm"><option value="">Unassigned</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.full_name} ({member.role})</option>)}</select></label>)}
+                </div>
+                <button type="button" onClick={() => void saveCollaborators()} disabled={readOnly || saving} className="app-btn-secondary mt-3">Save responsibilities</button>
+              </div>
+            )}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" disabled={!canCashbook || session.cashbook_ready || saving} onClick={() => void saveSessionState({ cashbookReady: true })} className="app-btn-secondary"><CheckCircle2 className="h-4 w-4" /> Mark cashbook ready</button>
+              <button type="button" disabled={!canStatement || session.statement_verified || saving} onClick={() => void saveSessionState({ statementVerified: true })} className="app-btn-secondary"><CheckCircle2 className="h-4 w-4" /> Mark statement verified</button>
+              <button type="button" disabled={!canReview || session.status === "approved" || saving} onClick={() => void saveSessionState({ approve: true })} className="app-btn-primary">Approve and close</button>
+            </div>
+          </>
+        )}
+      </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5 print:border-0 print:shadow-none">
         <div className="flex flex-wrap items-start justify-between gap-3">
@@ -646,6 +794,7 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
           selected={selectedStatements}
           setSelected={setSelectedStatements}
           onDelete={deleteStatement}
+          onAsk={session ? (id) => setCommentTarget({ side: "statement", id }) : undefined}
           readOnly={readOnly}
         />
         <SideTable
@@ -660,9 +809,17 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
           }))}
           selected={selectedLedger}
           setSelected={setSelectedLedger}
+          onAsk={session ? (id) => setCommentTarget({ side: "ledger", id }) : undefined}
           readOnly={readOnly}
         />
       </div>
+
+      {session && (
+        <div className="grid gap-4 lg:grid-cols-3">
+          <section className="rounded-xl border border-slate-200 bg-white p-4 lg:col-span-2"><div className="flex items-center justify-between"><div><h2 className="font-semibold text-slate-900">Exceptions and questions</h2><p className="text-xs text-slate-500">Collaborators investigate these without changing accounting records silently.</p></div><span className="text-sm font-semibold text-amber-700">{openExceptions.length} open</span></div><div className="mt-3 space-y-2">{exceptions.map((row) => <div key={row.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 p-3"><div><p className="text-sm font-medium text-slate-900">{row.title}</p><p className="text-xs capitalize text-slate-500">{row.status}{row.resolution ? ` · ${row.resolution}` : ""}</p></div>{row.status === "open" && <div className="flex gap-2"><button type="button" onClick={() => void resolveException(row.id, "kept")} className="app-btn-secondary text-xs">Keep as exception</button><button type="button" onClick={() => void resolveException(row.id, "resolved")} className="app-btn-primary text-xs">Resolve</button></div>}</div>)}{exceptions.length === 0 && <p className="rounded-lg bg-slate-50 p-4 text-center text-sm text-slate-500">No exceptions raised.</p>}</div></section>
+          <section className="rounded-xl border border-slate-200 bg-white p-4"><h2 className="font-semibold text-slate-900">Recent activity</h2><div className="mt-3 space-y-3">{activity.map((row) => <div key={row.id} className="border-l-2 border-indigo-200 pl-3"><p className="text-sm text-slate-700">{row.action.replaceAll("_", " ")}</p><p className="text-xs text-slate-400">{new Date(row.created_at).toLocaleString()}</p></div>)}{activity.length === 0 && <p className="text-sm text-slate-500">Activity appears here as the team works.</p>}</div></section>
+        </div>
+      )}
 
       <div className="sticky bottom-3 rounded-xl border border-brand-200 bg-white p-4 shadow-lg">
         <div className="flex flex-wrap items-end justify-between gap-4">
@@ -761,12 +918,19 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
           </div>
         </div>
       )}
+      {commentTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/50 p-4" onClick={() => setCommentTarget(null)}><div className="w-full max-w-lg rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}><h2 className="font-semibold text-slate-900">Ask teammate</h2><p className="mt-1 text-sm text-slate-500">Raise a transaction-level exception and leave the first comment.</p><textarea value={commentBody} onChange={(event) => setCommentBody(event.target.value)} rows={4} placeholder="What needs investigation?" className="mt-4 w-full rounded-lg border border-slate-300 p-3 text-sm" /><div className="mt-4 flex justify-end gap-2"><button type="button" onClick={() => setCommentTarget(null)} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void askTeammate()} disabled={!commentBody.trim()} className="app-btn-primary">Ask teammate</button></div></div></div>
+      )}
     </div>
   );
 }
 
 function Metric({ label, value, compact = false, alert = false }: { label: string; value: string; compact?: boolean; alert?: boolean }) {
   return <div className={compact ? "" : "rounded-xl border border-slate-200 bg-white p-4"}><p className="text-xs text-slate-500">{label}</p><p className={`${compact ? "text-base" : "text-xl"} font-bold tabular-nums ${alert ? "text-rose-700" : "text-slate-900"}`}>{value}</p></div>;
+}
+
+function WorkspaceStatus({ label, done, value, alert = false }: { label: string; done?: boolean; value?: string; alert?: boolean }) {
+  return <div className="rounded-lg border border-indigo-100 bg-white p-3"><p className="text-xs text-slate-500">{label}</p><p className={`mt-1 font-semibold ${alert ? "text-amber-700" : done ? "text-emerald-700" : "text-slate-900"}`}>{value || (done ? "Ready ✓" : "Pending")}</p></div>;
 }
 
 function StatementRow({ label, amount, strong = false, alert = false }: { label: string; amount: number; strong?: boolean; alert?: boolean }) {
@@ -802,6 +966,7 @@ function SideTable({
   selected,
   setSelected,
   onDelete,
+  onAsk,
   readOnly,
 }: {
   title: string;
@@ -810,6 +975,7 @@ function SideTable({
   selected: string[];
   setSelected: (ids: string[]) => void;
   onDelete?: (id: string) => void;
+  onAsk?: (id: string) => void;
   readOnly: boolean;
 }) {
   const toggle = (id: string) => setSelected(selected.includes(id) ? selected.filter((value) => value !== id) : [...selected, id]);
@@ -833,7 +999,7 @@ function SideTable({
                 {visibleColumns.includes("date") && <td className="whitespace-nowrap p-3">{row.date}</td>}
                 {visibleColumns.includes("details") && <td className="p-3"><p>{row.primary}</p><p className="text-xs text-slate-500">{row.secondary}</p></td>}
                 {visibleColumns.includes("amount") && <td className={`p-3 text-right font-semibold tabular-nums ${row.amount < 0 ? "text-rose-700" : "text-emerald-700"}`}>{signed(row.amount)}</td>}
-                <td className="p-3">{onDelete && <button type="button" onClick={() => onDelete(row.id)} disabled={readOnly} className="text-slate-400 hover:text-rose-700 disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>}</td>
+                <td className="p-3"><div className="flex gap-2">{onAsk && <button type="button" title="Ask teammate" onClick={() => onAsk(row.id)} disabled={readOnly} className="text-slate-400 hover:text-indigo-700 disabled:opacity-30"><MessageSquarePlus className="h-4 w-4" /></button>}{onDelete && <button type="button" title="Delete imported line" onClick={() => onDelete(row.id)} disabled={readOnly} className="text-slate-400 hover:text-rose-700 disabled:opacity-30"><Trash2 className="h-4 w-4" /></button>}</div></td>
               </tr>
             ))}
           </tbody>
