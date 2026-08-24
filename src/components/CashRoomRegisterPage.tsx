@@ -30,6 +30,16 @@ function effectiveRoomRate(room: any): number {
   const roomType = Array.isArray(room.room_types) ? room.room_types[0] : room.room_types;
   return Math.max(0, Number(room.nightly_rate ?? roomType?.base_price ?? 0));
 }
+function describeSaveError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const value = error as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
+    const parts = [value.message, value.code ? `Code: ${value.code}` : null, value.details, value.hint ? `Hint: ${value.hint}` : null]
+      .filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+    if (parts.length) return Array.from(new Set(parts)).join(" · ");
+  }
+  return String(error || "Unknown error");
+}
 
 export function CashRoomRegisterPage() {
   const { user } = useAuth();
@@ -41,13 +51,14 @@ export function CashRoomRegisterPage() {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageTone, setMessageTone] = useState<"info" | "success" | "error">("info");
   const [occupiedFilter, setOccupiedFilter] = useState<"all" | "occupied" | "vacant">("all");
   const [guestFilter, setGuestFilter] = useState("");
   const [discountFilter, setDiscountFilter] = useState<"all" | "with" | "without">("all");
 
   const load = useCallback(async () => {
     if (!orgId) { setRows([]); setLoading(false); return; }
-    setLoading(true); setMessage(null);
+    setLoading(true);
     const broadStartDate = new Date(`${registerDate}T00:00:00.000Z`); broadStartDate.setUTCDate(broadStartDate.getUTCDate() - 1);
     const broadEndDate = new Date(`${registerDate}T00:00:00.000Z`); broadEndDate.setUTCDate(broadEndDate.getUTCDate() + 2);
     const [roomsResult, staysResult, organizationResult, customersResult, paymentsResult, billingResult] = await Promise.all([
@@ -59,6 +70,7 @@ export function CashRoomRegisterPage() {
       supabase.from("billing").select("stay_id,stay_night_date,charged_at").eq("organization_id", orgId).eq("charge_type", "room").gte("charged_at", broadStartDate.toISOString()).lt("charged_at", broadEndDate.toISOString()),
     ]);
     if (roomsResult.error || staysResult.error || billingResult.error) {
+      setMessageTone("error");
       setMessage(roomsResult.error?.message || staysResult.error?.message || billingResult.error?.message || "Could not load the room register.");
       setLoading(false); return;
     }
@@ -120,15 +132,16 @@ export function CashRoomRegisterPage() {
   }, [discountFilter, guestFilter, occupiedFilter, rows]);
 
   const saveRow = async (row: RoomRow) => {
-    if (!orgId || !user?.id) { setMessage("Your organization session is not ready. Refresh the page and try again."); return; }
+    if (!orgId || !user?.id) { setMessageTone("error"); setMessage("Your organization session is not ready. Refresh the page and try again."); return; }
     if (row.reservationId || (row.stayId && row.billingMode !== "cash_register")) {
+      setMessageTone("error");
       setMessage(`Room ${row.roomNumber} is already occupied through the reservation/check-in workflow. No duplicate was created.`); return;
     }
-    if (!row.occupied && !row.stayId) { setMessage(`Mark room ${row.roomNumber} as occupied before saving the room sale.`); return; }
-    if (row.occupied && !row.guestId) { setMessage(`Select the guest for room ${row.roomNumber}.`); return; }
+    if (!row.occupied && !row.stayId) { setMessageTone("error"); setMessage(`Mark room ${row.roomNumber} as occupied before saving the room sale.`); return; }
+    if (row.occupied && !row.guestId) { setMessageTone("error"); setMessage(`Select the guest for room ${row.roomNumber}.`); return; }
     const discount = Math.max(0, Number(row.discount || 0));
-    if (row.occupied && (row.rate <= 0 || discount >= row.rate)) { setMessage(`Room ${row.roomNumber} needs a valid rate and a discount lower than the rate.`); return; }
-    setSavingId(row.id); setMessage(null);
+    if (row.occupied && (row.rate <= 0 || discount >= row.rate)) { setMessageTone("error"); setMessage(`Room ${row.roomNumber} needs a valid rate and a discount lower than the rate.`); return; }
+    setSavingId(row.id); setMessageTone("info"); setMessage(`Saving room ${row.roomNumber} for ${registerDate}...`);
     try {
       if (!row.occupied && row.stayId) {
         const correctingCashEntry = row.billingMode === "cash_register" && row.cashEntryOnDate && editingId === row.id;
@@ -136,7 +149,7 @@ export function CashRoomRegisterPage() {
           ? await (supabase as any).rpc("unmark_cash_room_register_occupied", { p_stay_id: row.stayId, p_register_date: registerDate })
           : await (supabase as any).rpc("hotel_check_out_stay", { p_stay_id: row.stayId, p_checkout_date: registerDate });
         if (error) throw error;
-        setMessage(correctingCashEntry ? `Room ${row.roomNumber}: the incorrect occupied entry and its accounting were reversed.` : `Room ${row.roomNumber} checked out and moved to cleaning.`);
+        setMessageTone("success"); setMessage(correctingCashEntry ? `Room ${row.roomNumber}: the incorrect occupied entry and its accounting were reversed.` : `Room ${row.roomNumber} checked out and moved to cleaning.`);
       } else if (row.occupied) {
         const editingSavedDay = row.stayId && row.billingMode === "cash_register" && row.cashEntryOnDate;
         const rpcName = editingSavedDay ? "edit_cash_room_register_entry" : "save_daily_cash_room_register_customer_entry";
@@ -158,12 +171,15 @@ export function CashRoomRegisterPage() {
         const { data, error } = await (supabase as any).rpc(rpcName, args);
         if (error) throw error;
         const result = data as { occupied_by_other_workflow?: boolean } | null;
-        if (result?.occupied_by_other_workflow) setMessage(`Room ${row.roomNumber} is already checked in elsewhere. It was not duplicated.`);
-        else setMessage(`Room ${row.roomNumber}: ${editingSavedDay ? "entry corrected" : `occupancy, room bill${row.paid ? ", and cash payment" : ""} recorded`}.`);
+        if (result?.occupied_by_other_workflow) { setMessageTone("error"); setMessage(`Room ${row.roomNumber} is already checked in elsewhere. It was not duplicated.`); }
+        else { setMessageTone("success"); setMessage(`Room ${row.roomNumber}: ${editingSavedDay ? "entry corrected" : `occupancy, room bill${row.paid ? ", and cash payment" : ""} recorded`}.`); }
       }
       setEditingId(null);
       await load();
-    } catch (error) { setMessage(error instanceof Error ? error.message : String(error)); }
+    } catch (error) {
+      setMessageTone("error");
+      setMessage(`Room ${row.roomNumber} was not saved for ${registerDate}: ${describeSaveError(error)}`);
+    }
     finally { setSavingId(null); }
   };
 
@@ -173,7 +189,7 @@ export function CashRoomRegisterPage() {
       <div><div className="flex items-center gap-2"><BedDouble className="h-7 w-7 text-emerald-700"/><h1 className="text-3xl font-bold">Cash Room Register</h1></div><p className="mt-2 text-sm text-slate-600">One entry records one room-day. Record every occupied date separately for multi-day guests.</p></div>
       <div className="flex items-end gap-2"><label className="text-sm font-semibold text-slate-700">Register date<input type="date" value={registerDate} onChange={(e)=>setRegisterDate(e.target.value)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 font-normal"/></label><button type="button" onClick={()=>void load()} className="app-btn-secondary"><RefreshCw className="h-4 w-4"/> Refresh</button></div>
     </div>
-    {message ? <p className="mb-4 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm text-blue-900">{message}</p> : null}
+    {message ? <p role={messageTone === "error" ? "alert" : "status"} aria-live="polite" className={`mb-4 rounded-xl border p-3 text-sm ${messageTone === "error" ? "border-red-300 bg-red-50 font-semibold text-red-900" : messageTone === "success" ? "border-emerald-300 bg-emerald-50 text-emerald-900" : "border-blue-200 bg-blue-50 text-blue-900"}`}>{message}</p> : null}
     <div className="overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
       <table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Room</th><th className="px-4 py-3 text-center">Occupied</th><th className="px-4 py-3">Guest name</th><th className="px-4 py-3 text-right">Automatic rate</th><th className="px-4 py-3">Discount</th><th className="px-4 py-3 text-right">Net charge</th><th className="px-4 py-3 text-center">Paid cash</th><th className="px-4 py-3">Action</th></tr><tr className="border-t border-slate-200 bg-white normal-case tracking-normal"><th className="px-4 py-2 text-[11px] text-slate-400">{visibleRows.length} of {rows.length} rooms</th><th className="px-4 py-2"><select aria-label="Filter occupied rooms" value={occupiedFilter} onChange={(e)=>setOccupiedFilter(e.target.value as typeof occupiedFilter)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs font-normal text-slate-700"><option value="all">All rooms</option><option value="occupied">Occupied only</option><option value="vacant">Vacant only</option></select></th><th className="px-4 py-2"><input aria-label="Filter by guest name" value={guestFilter} onChange={(e)=>setGuestFilter(e.target.value)} placeholder="Search guest" className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs font-normal text-slate-700"/></th><th/><th className="px-4 py-2"><select aria-label="Filter by discount" value={discountFilter} onChange={(e)=>setDiscountFilter(e.target.value as typeof discountFilter)} className="w-full rounded-md border border-slate-300 px-2 py-1.5 text-xs font-normal text-slate-700"><option value="all">All discounts</option><option value="with">With discount</option><option value="without">Without discount</option></select></th><th/><th/><th className="px-4 py-2"><button type="button" onClick={()=>{setOccupiedFilter("all");setGuestFilter("");setDiscountFilter("all");}} className="text-xs font-semibold text-brand-700 hover:underline">Clear filters</button></th></tr></thead>
         <tbody className="divide-y divide-slate-100">{visibleRows.map((row) => {

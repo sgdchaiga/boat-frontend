@@ -39,6 +39,9 @@ test("cash register posts occupancy, daily bill, discount and default cash payme
   assert.match(page, /visibleRows/);
   assert.match(page, /Mark room \$\{row\.roomNumber\} as occupied before saving the room sale/);
   assert.doesNotMatch(page, /row\.occupied\?"Save day":"Check out"/);
+  assert.match(page, /describeSaveError/);
+  assert.match(page, /was not saved for \$\{registerDate\}/);
+  assert.match(page, /role=\{messageTone === "error" \? "alert" : "status"\}/);
   assert.match(migration, /billing_mode IN \('automatic','cash_register'\)/);
   assert.match(migration, /COALESCE\(s\.billing_mode,'automatic'\)<>'cash_register'/);
   assert.match(migration, /create_journal_entry_atomic/);
