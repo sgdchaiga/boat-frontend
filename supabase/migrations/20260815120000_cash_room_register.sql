@@ -30,6 +30,10 @@ BEGIN
   IF NOT public.is_platform_admin() AND NOT EXISTS(
     SELECT 1 FROM public.staff s WHERE s.id=v_actor AND s.organization_id=v_org AND COALESCE(s.is_active,true)
       AND s.role IN ('super_admin','admin','manager','receptionist','housekeeping','accountant','supervisor')
+  ) AND NOT EXISTS(
+    SELECT 1 FROM public.organization_members om
+    WHERE om.user_id=v_actor AND om.organization_id=v_org AND om.is_active=true
+      AND om.role IN ('super_admin','admin','manager','receptionist','housekeeping','accountant','supervisor')
   ) THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='Not authorized to use the cash room register.'; END IF;
   IF COALESCE(v_rate,0)<=0 THEN RAISE EXCEPTION 'Configure a nightly rate for this room.'; END IF;
   IF COALESCE(p_discount,0)<0 OR COALESCE(p_discount,0)>=v_rate THEN RAISE EXCEPTION 'Discount must be lower than the room rate.'; END IF;

@@ -4,6 +4,7 @@ import test from "node:test";
 
 const page = await readFile(new URL("../src/components/CashRoomRegisterPage.tsx", import.meta.url), "utf8");
 const migration = await readFile(new URL("../supabase/migrations/20260815120000_cash_room_register.sql", import.meta.url), "utf8");
+const multiOrgAuthorization = await readFile(new URL("../supabase/migrations/20260824120000_cash_room_register_multi_org_authorization.sql", import.meta.url), "utf8");
 const nav = await readFile(new URL("../src/lib/simpleOrgNavigation.ts", import.meta.url), "utf8");
 
 test("cash room register shows all open stays and protects reservation check-ins", () => {
@@ -14,6 +15,13 @@ test("cash room register shows all open stays and protects reservation check-ins
   assert.match(page, /Reservation check-in/);
   assert.match(page, /occupied_by_other_workflow/);
   assert.match(nav, /Cash room register/);
+});
+
+test("cash room register permits an authorized member of the selected organization", () => {
+  assert.match(migration, /organization_members om/);
+  assert.match(migration, /om\.user_id=v_actor AND om\.organization_id=v_org AND om\.is_active=true/);
+  assert.match(multiOrgAuthorization, /save_cash_room_register_entry\(uuid,text,date,numeric,boolean,text\)/);
+  assert.match(multiOrgAuthorization, /organization_members om/);
 });
 
 test("cash register posts occupancy, daily bill, discount and default cash payment", () => {
@@ -29,6 +37,8 @@ test("cash register posts occupancy, daily bill, discount and default cash payme
   assert.match(page, /Filter by guest name/);
   assert.match(page, /Filter by discount/);
   assert.match(page, /visibleRows/);
+  assert.match(page, /Mark room \$\{row\.roomNumber\} as occupied before saving the room sale/);
+  assert.doesNotMatch(page, /row\.occupied\?"Save day":"Check out"/);
   assert.match(migration, /billing_mode IN \('automatic','cash_register'\)/);
   assert.match(migration, /COALESCE\(s\.billing_mode,'automatic'\)<>'cash_register'/);
   assert.match(migration, /create_journal_entry_atomic/);
