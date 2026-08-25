@@ -509,7 +509,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
       }
 
       if (bill.purchase_order_id) {
-        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(bill.id, bill.purchase_order_id);
+        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(bill.id, bill.purchase_order_id, bill.bill_date);
         if (unmatchedDescriptions.length > 0) {
           const list = unmatchedDescriptions.join("\n- ");
           alert(
@@ -710,7 +710,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
         .eq("source_id", bill.id);
       await supabase.from("product_stock_movements").delete().eq("source_type", "bill").eq("source_id", bill.id);
       try {
-        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(bill.id, bill.purchase_order_id);
+        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(bill.id, bill.purchase_order_id, next.billDate);
         if (unmatchedDescriptions.length > 0) {
           alert(
             `Bill saved, but some item descriptions were not matched to products for stock-in posting:\n- ${unmatchedDescriptions.join("\n- ")}`

@@ -630,7 +630,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       const billJournal = await createJournalForBill(billId, amount, draft.description.trim(), draft.date, user.id, purchaseOrderId);
       if (!billJournal.ok) throw new Error(billJournal.error || "The purchase journal could not be posted.");
       billJournalPosted = true;
-      const stockResult = await postStockInFromPurchaseOrderForBill(billId, purchaseOrderId);
+      const stockResult = await postStockInFromPurchaseOrderForBill(billId, purchaseOrderId, draft.date);
       if (stockResult.unmatchedDescriptions.length) throw new Error(`Stock item was not matched: ${stockResult.unmatchedDescriptions.join(", ")}`);
       const { error: paymentError } = await supabase.from("vendor_payments").insert({ id: paymentId, organization_id: orgId, vendor_id: vendor.id, bill_id: billId, amount, payment_date: draft.date, payment_method: draft.method, reference: draft.reference.trim() || `Cashbook purchase ${billId.slice(0, 8)}`, bill_allocations: [] });
       if (paymentError) throw paymentError;

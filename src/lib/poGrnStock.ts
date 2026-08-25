@@ -1,4 +1,5 @@
 import { supabase } from "./supabase";
+import { businessDayRangeForDateString } from "./timezone";
 
 /**
  * Post stock-in movements from a purchase order's line items when a GRN/bill is finalized.
@@ -6,7 +7,8 @@ import { supabase } from "./supabase";
  */
 export async function postStockInFromPurchaseOrderForBill(
   billId: string,
-  purchaseOrderId: string
+  purchaseOrderId: string,
+  receiptDate?: string | null
 ): Promise<{ unmatchedDescriptions: string[] }> {
   const { data: purchaseOrder } = await supabase
     .from("purchase_orders")
@@ -68,7 +70,8 @@ export async function postStockInFromPurchaseOrderForBill(
     });
   }
 
-  const movementDate = new Date().toISOString();
+  const datedRange = receiptDate ? businessDayRangeForDateString(receiptDate) : null;
+  const movementDate = datedRange?.from.toISOString() || (receiptDate ? new Date(receiptDate).toISOString() : new Date().toISOString());
   const unmatchedDescriptions = new Set<string>();
   const stockInMoves = (poItems || [])
     .map((it) => {

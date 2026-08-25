@@ -82,7 +82,7 @@ export function HotelCashPurchaseModal({ open, onClose, onComplete }: { open: bo
       const postedBill=await createJournalForBill(billId,total,description.trim()||"Cash stock purchase",date,user.id,purchaseOrderId);
       if (!postedBill.ok) throw new Error(postedBill.error||"Purchase journal could not be posted.");
       billJournal=true;
-      const stock=await postStockInFromPurchaseOrderForBill(billId,purchaseOrderId);
+      const stock=await postStockInFromPurchaseOrderForBill(billId,purchaseOrderId,date);
       if (stock.unmatchedDescriptions.length) throw new Error(`Stock items were not matched: ${stock.unmatchedDescriptions.join(", ")}`);
       const vendor=vendors.find((item)=>item.id===vendorId);
       if (payNow) {

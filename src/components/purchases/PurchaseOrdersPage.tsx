@@ -947,7 +947,7 @@ const approvedAt = new Date().toISOString();
 
       if (newBill?.id && autoFinalizeBill) {
         await syncBillStatusInDb(newBill.id);
-        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(newBill.id, order.id);
+        const { unmatchedDescriptions } = await postStockInFromPurchaseOrderForBill(newBill.id, order.id, newBill.bill_date || billDate);
         if (unmatchedDescriptions.length > 0) {
           const list = unmatchedDescriptions.join("\n- ");
           alert(
