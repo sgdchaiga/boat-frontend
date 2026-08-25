@@ -100,10 +100,23 @@ export function StockMovementReportPage() {
     setLoading(true);
     const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
 
-    const { data: products } = await filterByOrganizationId(
-      supabase.from("products").select("id, name, department_id, cost_price, sales_price"),
-      orgId,
-      superAdmin
+    const [productsResult, billsResult] = await Promise.all([
+      filterByOrganizationId(
+        supabase.from("products").select("id, name, department_id, cost_price, sales_price"),
+        orgId,
+        superAdmin
+      ),
+      filterByOrganizationId(
+        supabase.from("bills").select("id,bill_date"),
+        orgId,
+        superAdmin
+      ),
+    ]);
+    const products = productsResult.data || [];
+    const billDateById = new Map(
+      ((billsResult.data || []) as Array<{ id: string; bill_date: string | null }>)
+        .filter((bill) => !!bill.bill_date)
+        .map((bill) => [bill.id, String(bill.bill_date)])
     );
     const moves = await fetchStockLedgerMovementsForProducts(
       orgId,
@@ -193,8 +206,14 @@ export function StockMovementReportPage() {
       }
     });
 
-    const movementDate = (raw: unknown): Date => {
-      const s = String(raw || "");
+    const movementDate = (movement: { movement_date?: unknown; source_type?: unknown; source_id?: unknown }): Date => {
+      const sourceType = String(movement.source_type || "").toLowerCase();
+      const sourceId = String(movement.source_id || "");
+      // Legacy GRN receipts were timestamped on approval/reposting. Reports
+      // should consistently show them on the supplier bill's transaction date.
+      const s = sourceType === "bill" && sourceId
+        ? billDateById.get(sourceId) || String(movement.movement_date || "")
+        : String(movement.movement_date || "");
       const dayRange = businessDayRangeForDateString(s);
       if (dayRange) return dayRange.from;
       return new Date(s);
@@ -230,7 +249,7 @@ export function StockMovementReportPage() {
         });
       }
       const row = byKey.get(key)!;
-      const mvDate = movementDate(m.movement_date);
+      const mvDate = movementDate(m);
       if (mvDate >= to) {
         // Exclude future/out-of-range rows from current report slice entirely.
         return;
@@ -334,7 +353,7 @@ export function StockMovementReportPage() {
       if (!pid) return;
       const loc = String(m.location || "default");
       const productLocationKey = `${pid}::${loc}`;
-      const mvDate = movementDate(m.movement_date);
+      const mvDate = movementDate(m);
       if (Number.isNaN(mvDate.getTime()) || mvDate >= to) return;
       const { inQty, outQty } = effectiveStockMovementInOut(m);
       const netQty = inQty - outQty;
