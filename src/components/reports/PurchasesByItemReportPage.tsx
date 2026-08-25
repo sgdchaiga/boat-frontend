@@ -109,7 +109,9 @@ export function PurchasesByItemReportPage() {
             superAdmin
           ),
           filterByOrganizationId(
-            supabase.from("expenses").select("id,vendor_id,expense_date,created_at"),
+            // `expense_date` is the canonical expense timestamp. Some deployed
+            // schemas do not expose the legacy `created_at` column.
+            supabase.from("expenses").select("id,vendor_id,expense_date"),
             orgId,
             superAdmin
           ),
@@ -163,7 +165,7 @@ export function PurchasesByItemReportPage() {
           payment_date: string | null;
           created_at: string | null;
         }>;
-        const expenses = (expensesRes.data || []) as Array<{ id: string; vendor_id: string | null; expense_date: string | null; created_at: string | null }>;
+        const expenses = (expensesRes.data || []) as Array<{ id: string; vendor_id: string | null; expense_date: string | null }>;
         const expenseLines = (expenseLinesRes.data || []) as Array<{
           expense_id: string;
           vendor_id: string | null;
@@ -311,7 +313,7 @@ export function PurchasesByItemReportPage() {
         }
         for (const expenseLine of expenseLines) {
           const expense = expenseById.get(expenseLine.expense_id);
-          const expenseDate = expense?.expense_date || expense?.created_at;
+          const expenseDate = expense?.expense_date;
           if (!expense || !inRange(expenseDate)) continue;
           const gl = glById.get(expenseLine.expense_gl_account_id);
           const narration = String(expenseLine.comment || "").trim();

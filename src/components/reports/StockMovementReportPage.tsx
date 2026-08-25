@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../lib/supabase";
-import { computeRangeInTimezone, businessDayRangeForDateString, type DateRangeKey } from "../../lib/timezone";
+import { computeRangeInTimezone, businessDayRangeForDateString, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { fetchStockLedgerMovementsForProducts } from "../../lib/stockLedger";
@@ -34,6 +34,20 @@ interface Row {
   rejectsHasMixedSources?: boolean;
 }
 
+interface DailyRow {
+  date: string;
+  product_id: string;
+  location: string;
+  openingQty: number;
+  purchasesQty: number;
+  salesQty: number;
+  /** Adjustment outs minus ins; positive means stock was reduced. */
+  adjustmentsQty: number;
+  /** Net transfers and other movements not classified above. */
+  otherNetQty: number;
+  closingQty: number;
+}
+
 function initialProductIdFromUrl(): string {
   if (typeof window === "undefined") return "";
   const qp = new URLSearchParams(window.location.search);
@@ -49,6 +63,7 @@ export function StockMovementReportPage() {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [rows, setRows] = useState<Row[]>([]);
+  const [dailyRows, setDailyRows] = useState<DailyRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [selectedProductId, setSelectedProductId] = useState<string>(() => initialProductIdFromUrl());
@@ -305,7 +320,62 @@ export function StockMovementReportPage() {
       })
       .sort((a, b) => a.location.localeCompare(b.location) || a.product_name.localeCompare(b.product_name));
 
+    const dateKeys: string[] = [];
+    for (let cursor = new Date(from); cursor < to; cursor = new Date(cursor.getTime() + 24 * 60 * 60 * 1000)) {
+      dateKeys.push(toBusinessDateString(cursor));
+    }
+    const openingByKey = new Map<string, number>();
+    const dailyMovementByKey = new Map<
+      string,
+      { purchasesQty: number; salesQty: number; adjustmentsQty: number; otherNetQty: number }
+    >();
+    allMoves.forEach((m: any) => {
+      const pid = String(m.product_id || "");
+      if (!pid) return;
+      const loc = String(m.location || "default");
+      const productLocationKey = `${pid}::${loc}`;
+      const mvDate = movementDate(m.movement_date);
+      if (Number.isNaN(mvDate.getTime()) || mvDate >= to) return;
+      const { inQty, outQty } = effectiveStockMovementInOut(m);
+      const netQty = inQty - outQty;
+      if (mvDate < from) {
+        openingByKey.set(productLocationKey, (openingByKey.get(productLocationKey) || 0) + netQty);
+        return;
+      }
+      const dayKey = `${productLocationKey}::${toBusinessDateString(mvDate)}`;
+      const bucket = dailyMovementByKey.get(dayKey) || {
+        purchasesQty: 0,
+        salesQty: 0,
+        adjustmentsQty: 0,
+        otherNetQty: 0,
+      };
+      const sourceType = String(m.source_type || "").toLowerCase();
+      if (isPurchaseMovement(m) && inQty > 0) bucket.purchasesQty += inQty;
+      else if (sourceType === "sale" && outQty > 0) bucket.salesQty += outQty;
+      else if (sourceType === "adjustment") bucket.adjustmentsQty += outQty - inQty;
+      else bucket.otherNetQty += netQty;
+      dailyMovementByKey.set(dayKey, bucket);
+    });
+
+    const dailyResult: DailyRow[] = [];
+    Array.from(byKey.values()).forEach(({ product_id, location }) => {
+      const productLocationKey = `${product_id}::${location}`;
+      let balance = openingByKey.get(productLocationKey) || 0;
+      dateKeys.forEach((date) => {
+        const movement = dailyMovementByKey.get(`${productLocationKey}::${date}`) || {
+          purchasesQty: 0,
+          salesQty: 0,
+          adjustmentsQty: 0,
+          otherNetQty: 0,
+        };
+        const openingQty = balance;
+        balance = openingQty + movement.purchasesQty - movement.salesQty - movement.adjustmentsQty + movement.otherNetQty;
+        dailyResult.push({ date, product_id, location, openingQty, ...movement, closingQty: balance });
+      });
+    });
+
     setRows(result);
+    setDailyRows(dailyResult);
     setLoading(false);
   };
 
@@ -314,6 +384,35 @@ export function StockMovementReportPage() {
     if (selectedProductId && r.product_id !== selectedProductId) return false;
     return true;
   });
+
+  const selectedProductName = productsList.find((product) => product.id === selectedProductId)?.name || "Selected item";
+  const selectedDailyRows = useMemo(() => {
+    if (!selectedProductId) return [];
+    const totals = new Map<string, DailyRow>();
+    dailyRows
+      .filter((row) => row.product_id === selectedProductId && (!selectedLocation || row.location === selectedLocation))
+      .forEach((row) => {
+        const current = totals.get(row.date) || {
+          date: row.date,
+          product_id: row.product_id,
+          location: selectedLocation || "All locations",
+          openingQty: 0,
+          purchasesQty: 0,
+          salesQty: 0,
+          adjustmentsQty: 0,
+          otherNetQty: 0,
+          closingQty: 0,
+        };
+        current.openingQty += row.openingQty;
+        current.purchasesQty += row.purchasesQty;
+        current.salesQty += row.salesQty;
+        current.adjustmentsQty += row.adjustmentsQty;
+        current.otherNetQty += row.otherNetQty;
+        current.closingQty += row.closingQty;
+        totals.set(row.date, current);
+      });
+    return Array.from(totals.values()).sort((a, b) => a.date.localeCompare(b.date));
+  }, [dailyRows, selectedLocation, selectedProductId]);
 
   return (
     <div className="p-6 md:p-8">
@@ -391,6 +490,44 @@ export function StockMovementReportPage() {
       {loading ? (
         <div className="text-slate-500">Loading…</div>
       ) : (
+        <div className="space-y-6">
+        {selectedProductId && (
+          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+            <div className="px-4 py-3 border-b border-slate-200">
+              <h2 className="font-semibold text-slate-900">Daily movement: {selectedProductName}</h2>
+              <p className="text-xs text-slate-500">Each closing balance carries forward as the next day's opening balance.</p>
+            </div>
+            <table className="w-full text-sm min-w-[760px]">
+              <thead className="bg-slate-50">
+                <tr>
+                  <th className="p-3 text-left">Date</th>
+                  <th className="p-3 text-right">Opening</th>
+                  <th className="p-3 text-right">Purchases</th>
+                  <th className="p-3 text-right">Sales</th>
+                  <th className="p-3 text-right">Adjustments</th>
+                  <th className="p-3 text-right">Other net movements</th>
+                  <th className="p-3 text-right">Closing balance</th>
+                </tr>
+              </thead>
+              <tbody>
+                {selectedDailyRows.map((row) => (
+                  <tr key={row.date} className="border-t">
+                    <td className="p-3 whitespace-nowrap">{new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Africa/Kampala" }).format(new Date(`${row.date}T12:00:00Z`))}</td>
+                    <td className="p-3 text-right tabular-nums">{row.openingQty.toFixed(2)}</td>
+                    <td className="p-3 text-right tabular-nums">{row.purchasesQty.toFixed(2)}</td>
+                    <td className="p-3 text-right tabular-nums">{row.salesQty.toFixed(2)}</td>
+                    <td className="p-3 text-right tabular-nums">{row.adjustmentsQty.toFixed(2)}</td>
+                    <td className="p-3 text-right tabular-nums">{row.otherNetQty.toFixed(2)}</td>
+                    <td className="p-3 text-right font-semibold tabular-nums">{row.closingQty.toFixed(2)}</td>
+                  </tr>
+                ))}
+                {selectedDailyRows.length === 0 && (
+                  <tr><td colSpan={7} className="p-6 text-center text-slate-500">No stock ledger exists for this item.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm min-w-[960px]">
             <thead className="bg-slate-50">
@@ -510,6 +647,7 @@ export function StockMovementReportPage() {
               )}
             </tbody>
           </table>
+        </div>
         </div>
       )}
     </div>
