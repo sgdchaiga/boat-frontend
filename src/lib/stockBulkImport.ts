@@ -48,6 +48,7 @@ type MovementMini = {
   quantity_out: number;
   movement_date: string;
   source_type: string | null;
+  source_id: string | null;
   note: string | null;
 };
 
@@ -58,7 +59,7 @@ async function fetchAllStockMovements(organizationId?: string | null): Promise<M
     const { data, error } = await filterStockMovementsByOrganizationId(
       supabase
         .from("product_stock_movements")
-        .select("product_id, quantity_in, quantity_out, movement_date, source_type, note")
+        .select("product_id, quantity_in, quantity_out, movement_date, source_type, source_id, note")
         .order("movement_date", { ascending: true })
         .range(from, from + pageSize - 1),
       organizationId
@@ -70,6 +71,7 @@ async function fetchAllStockMovements(organizationId?: string | null): Promise<M
       quantity_out: unknown;
       movement_date: unknown;
       source_type: unknown;
+      source_id: unknown;
       note: unknown;
     }>;
     rows.push(
@@ -79,12 +81,51 @@ async function fetchAllStockMovements(organizationId?: string | null): Promise<M
         quantity_out: Number(movement.quantity_out ?? 0),
         movement_date: String(movement.movement_date ?? ""),
         source_type: movement.source_type ? String(movement.source_type) : null,
+        source_id: movement.source_id ? String(movement.source_id) : null,
         note: movement.note ? String(movement.note) : null,
       }))
     );
     if (page.length < pageSize) break;
   }
   return rows;
+}
+
+async function applySupplierBillDates(
+  movements: MovementMini[],
+  organizationId?: string | null,
+  isSuperAdmin?: boolean
+): Promise<void> {
+  const billIds = Array.from(
+    new Set(
+      movements
+        .filter((movement) => String(movement.source_type || "").toLowerCase() === "bill")
+        .map((movement) => movement.source_id)
+        .filter((id): id is string => Boolean(id))
+    )
+  );
+  if (billIds.length === 0) return;
+
+  const billDateById = new Map<string, string>();
+  const pageSize = 200;
+  for (let from = 0; from < billIds.length; from += pageSize) {
+    const ids = billIds.slice(from, from + pageSize);
+    const { data, error } = await filterByOrganizationId(
+      supabase.from("bills").select("id,bill_date").in("id", ids),
+      organizationId,
+      isSuperAdmin
+    );
+    if (error) throw new Error(error.message);
+    for (const bill of (data || []) as Array<{ id: string; bill_date: string | null }>) {
+      const billDate = bill.bill_date ? normalizeDateOnly(String(bill.bill_date)) : null;
+      if (billDate) billDateById.set(String(bill.id), billDate);
+    }
+  }
+
+  for (const movement of movements) {
+    if (String(movement.source_type || "").toLowerCase() !== "bill" || !movement.source_id) continue;
+    const billDate = billDateById.get(movement.source_id);
+    if (billDate) movement.movement_date = `${billDate}T12:00:00.000Z`;
+  }
 }
 
 export type StockBulkImportContext = {
@@ -275,6 +316,7 @@ export async function loadStockBulkImportContext(
     fetchAllStockMovements(organizationId),
     supabase.from("gl_accounts").select("*").order("account_code"),
   ]);
+  await applySupplierBillDates(movementRows, organizationId, isSuperAdmin);
 
   const productsById = new Map<string, ProductMini>();
   const productsBySku = new Map<string, ProductMini>();
