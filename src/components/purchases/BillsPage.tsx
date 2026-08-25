@@ -56,6 +56,12 @@ type BillItemDraft = {
   cost_price: string;
 };
 
+type ProductOption = {
+  id: string;
+  name: string;
+  cost_price: number | null;
+};
+
 type PaymentStatusFilter =
   | "all"
   | "fully_paid"
@@ -228,6 +234,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
   const [bills, setBills] = useState<Bill[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [staff, setStaff] = useState<{ id: string; full_name: string }[]>([]);
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingBill, setEditingBill] = useState<Bill | null>(null);
@@ -312,12 +319,15 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
       if (orgId) {
         await syncBillStatusesForOrganization(orgId);
       }
-      const [billRes, venRes, staffRes] = await Promise.all([
+      const [billRes, venRes, staffRes, productsRes] = await Promise.all([
         orgId
           ? supabase.from("bills").select("*, vendors(name)").eq("organization_id", orgId).order("bill_date", { ascending: false })
           : supabase.from("bills").select("*, vendors(name)").order("bill_date", { ascending: false }),
         supabase.from("vendors").select("id, name").order("name"),
         supabase.from("staff").select("id, full_name").order("full_name"),
+        orgId
+          ? supabase.from("products").select("id,name,cost_price").eq("organization_id", orgId).order("name")
+          : supabase.from("products").select("id,name,cost_price").order("name"),
       ]);
       if (billRes.error) throw billRes.error;
       const billRows = (billRes.data || []) as Bill[];
@@ -329,6 +339,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
       }
       setVendors(venRes.data || []);
       setStaff((staffRes.data || []) as { id: string; full_name: string }[]);
+      setProductOptions((productsRes.data || []) as ProductOption[]);
     } catch (e) {
       console.error("Error fetching bills:", e);
       setBills([]);
@@ -799,10 +810,20 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
 
   const updateItemDraft = (
     id: string,
-    field: "description" | "quantity" | "cost_price",
+    field: "product_id" | "description" | "quantity" | "cost_price",
     value: string
   ) => {
     setItemDrafts((prev) => prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)));
+  };
+
+  const selectItemDraftProduct = (id: string, productId: string) => {
+    const product = productOptions.find((option) => option.id === productId);
+    setItemDrafts((previous) => previous.map((item) => item.id === id ? {
+      ...item,
+      product_id: product?.id || null,
+      description: product?.name || item.description,
+      cost_price: product?.cost_price != null ? String(product.cost_price) : item.cost_price,
+    } : item));
   };
 
   const removeItemDraft = (id: string) => {
@@ -817,11 +838,13 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
       const nextItems = itemDrafts.map((item) => {
         const quantity = Number(item.quantity);
         const costPrice = parseNumericInput(item.cost_price);
+        if (!item.product_id) throw new Error("Select an inventory item for every bill line.");
         if (!item.description.trim()) throw new Error("Every item needs a description.");
         if (!Number.isFinite(quantity) || quantity <= 0) throw new Error("Every item quantity must be greater than zero.");
         if (!Number.isFinite(costPrice) || costPrice < 0) throw new Error("Item unit prices cannot be negative.");
         return {
           id: item.id,
+          product_id: item.product_id ?? null,
           description: item.description.trim(),
           quantity,
           cost_price: costPrice,
@@ -845,6 +868,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
         const { error } = await supabase
           .from("purchase_order_items")
           .update({
+            product_id: item.product_id,
             description: item.description,
             quantity: item.quantity,
             cost_price: item.cost_price,
@@ -2022,7 +2046,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-slate-700">
                   <tr>
-                    <th className="p-2 text-left font-medium">Description</th>
+                    <th className="p-2 text-left font-medium">Item</th>
                     <th className="w-28 p-2 text-right font-medium">Qty</th>
                     <th className="w-36 p-2 text-right font-medium">Unit price</th>
                     <th className="w-36 p-2 text-right font-medium">Amount</th>
@@ -2036,11 +2060,19 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                     return (
                       <tr key={item.id} className="border-t border-slate-100">
                         <td className="p-2">
-                          <input
-                            value={item.description}
-                            onChange={(e) => updateItemDraft(item.id, "description", e.target.value)}
+                          <select
+                            value={item.product_id || ""}
+                            onChange={(e) => selectItemDraftProduct(item.id, e.target.value)}
                             className="w-full rounded-lg border border-slate-300 px-2 py-1.5"
-                          />
+                          >
+                            <option value="">Select item</option>
+                            {item.product_id && !productOptions.some((product) => product.id === item.product_id) ? (
+                              <option value={item.product_id}>{item.description} (current)</option>
+                            ) : null}
+                            {productOptions.map((product) => (
+                              <option key={product.id} value={product.id}>{product.name}</option>
+                            ))}
+                          </select>
                         </td>
                         <td className="p-2">
                           <input

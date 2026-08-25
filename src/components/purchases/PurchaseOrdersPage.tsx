@@ -216,6 +216,7 @@ function normalizeNumericInput(value: string | number): string | number {
 
 export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrdersPageProps = {}) {
   const { user } = useAuth();
+  const isSchool = String(user?.business_type || "").toLowerCase() === "school";
   const canApprovePO = canApprove("purchase_orders", user?.role);
   const requirePoApproval = user?.purchases_require_po_approval !== false;
   const requireBillApproval = user?.purchases_require_bill_approval !== false;
@@ -1005,18 +1006,19 @@ const approvedAt = new Date().toISOString();
     const matchesTo = !dateTo || String(order.order_date || "") <= dateTo;
     return matchesSearch && matchesSupplier && matchesDepartment && matchesFrom && matchesTo && (statusFilter === "all" || procurementStatus(order) === statusFilter);
   });
+  const displayedOrders = isSchool ? filteredOrders : orders;
   const committedAmount = orders.filter((order) => order.status === "approved" && !billsByPoId[order.id]).reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
   const unpaidBills = orders.filter((order) => billsByPoId[order.id]).reduce((sum, order) => sum + Number(order.total_amount || 0), 0);
 
   return (
-    <div className="p-6 md:p-8 max-w-7xl mx-auto">
+    <div className={isSchool ? "p-6 md:p-8 max-w-7xl mx-auto" : "p-6 md:p-8"}>
       {readOnly && <ReadOnlyNotice />}
 
-      <nav aria-label="Breadcrumb" className="mb-3 text-xs font-medium text-slate-500">School <span className="mx-1 text-slate-300">›</span> Procurement <span className="mx-1 text-slate-300">›</span> <span className="text-slate-700">Purchase Orders</span></nav>
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-5">
+      {isSchool && <nav aria-label="Breadcrumb" className="mb-3 text-xs font-medium text-slate-500">School <span className="mx-1 text-slate-300">›</span> Procurement <span className="mx-1 text-slate-300">›</span> <span className="text-slate-700">Purchase Orders</span></nav>}
+      <div className={`flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 ${isSchool ? "mb-5" : "mb-6"}`}>
         <div>
           <div className="flex flex-wrap items-center gap-2">
-            <div><h1 className="text-3xl font-bold tracking-tight text-slate-900">Purchase Orders</h1><p className="mt-1 text-sm text-slate-600">Create, approve and monitor orders issued to suppliers.</p></div>
+            {isSchool ? <div><h1 className="text-3xl font-bold tracking-tight text-slate-900">Purchase Orders</h1><p className="mt-1 text-sm text-slate-600">Create, approve and monitor orders issued to suppliers.</p></div> : <h1 className="text-3xl font-bold text-slate-900">Buy stock</h1>}
             <PageNotes ariaLabel="Record purchases help">
               <p>
                 Who you bought from, what you bought, how many, and how much. Use <strong>Receive stock</strong> when goods
@@ -1029,7 +1031,7 @@ const approvedAt = new Date().toISOString();
           <div
             className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-0.5 text-xs font-medium"
             role="group"
-            aria-label="Direct purchase or purchase order mode"
+            aria-label={isSchool ? "Direct purchase or purchase order mode" : "Simple or advanced mode"}
           >
             <button
               type="button"
@@ -1038,7 +1040,7 @@ const approvedAt = new Date().toISOString();
                 simpleMode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              Direct Purchase
+              {isSchool ? "Direct Purchase" : "Simple"}
             </button>
             <button
               type="button"
@@ -1047,7 +1049,7 @@ const approvedAt = new Date().toISOString();
                 !simpleMode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
               }`}
             >
-              Purchase Order
+              {isSchool ? "Purchase Order" : "Advanced"}
             </button>
           </div>
           <button
@@ -1056,12 +1058,12 @@ const approvedAt = new Date().toISOString();
             disabled={readOnly}
             className="app-btn-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-base font-semibold disabled:cursor-not-allowed"
           >
-            <Plus className="w-5 h-5" /> New Purchase Order
+            <Plus className="w-5 h-5" /> {isSchool ? "New Purchase Order" : "Record purchase"}
           </button>
         </div>
       </div>
 
-      {!loading && <>
+      {isSchool && !loading && <>
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
           {[
             { label: "Pending requests", value: orders.filter((o) => procurementStatus(o) === "draft").length.toLocaleString(), filter: "draft" },
@@ -1087,12 +1089,12 @@ const approvedAt = new Date().toISOString();
         <p className="text-slate-500 py-4">Loading…</p>
       ) : (
         <div className="space-y-3">
-          {filteredOrders.length === 0 && <p className="text-center text-slate-500 py-12 bg-white rounded-xl border border-slate-200">No purchase orders match the selected filters.</p>}
-          {filteredOrders.length > 0 && <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block"><table className="w-full text-sm"><thead className="bg-slate-50"><tr>{["PO No.","Date","Supplier","Department","Order Total","Approval","Delivery / Billing","Payment","Actions"].map((heading) => <th key={heading} className="p-3 text-left font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{filteredOrders.map((o) => <tr key={o.id} className="border-t border-slate-100 hover:bg-slate-50/70"><td className="p-3 font-mono text-xs">PO-{o.id.slice(0,8).toUpperCase()}</td><td className="p-3 whitespace-nowrap">{o.order_date ? new Date(o.order_date).toLocaleDateString() : "—"}</td><td className="p-3 font-medium text-slate-900">{o.vendors?.name || "—"}</td><td className="p-3">{o.departments?.name || "Central"}</td><td className="p-3 text-right font-semibold tabular-nums">{formatMoney(Number(o.total_amount || 0), currency)}</td><td className="p-3 capitalize">{o.status === "pending" ? "Pending approval" : o.status || "Draft"}</td><td className="p-3">{billsByPoId[o.id] ? "Bill recorded" : o.status === "approved" ? "Awaiting receipt" : "Not started"}</td><td className="p-3">{billsByPoId[o.id] ? "Unpaid" : "Not billed"}</td><td className="p-3"><button type="button" onClick={() => void openView(o)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-white"><Eye className="h-4 w-4"/>View Order</button></td></tr>)}</tbody></table></div>}
-          {filteredOrders.map((o) => (
+          {displayedOrders.length === 0 && <p className="text-center text-slate-500 py-12 bg-white rounded-xl border border-slate-200">{isSchool ? "No purchase orders match the selected filters." : "No purchases recorded yet."}</p>}
+          {isSchool && filteredOrders.length > 0 && <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block"><table className="w-full text-sm"><thead className="bg-slate-50"><tr>{["PO No.","Date","Supplier","Department","Order Total","Approval","Delivery / Billing","Payment","Actions"].map((heading) => <th key={heading} className="p-3 text-left font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{filteredOrders.map((o) => <tr key={o.id} className="border-t border-slate-100 hover:bg-slate-50/70"><td className="p-3 font-mono text-xs">PO-{o.id.slice(0,8).toUpperCase()}</td><td className="p-3 whitespace-nowrap">{o.order_date ? new Date(o.order_date).toLocaleDateString() : "—"}</td><td className="p-3 font-medium text-slate-900">{o.vendors?.name || "—"}</td><td className="p-3">{o.departments?.name || "Central"}</td><td className="p-3 text-right font-semibold tabular-nums">{formatMoney(Number(o.total_amount || 0), currency)}</td><td className="p-3 capitalize">{o.status === "pending" ? "Pending approval" : o.status || "Draft"}</td><td className="p-3">{billsByPoId[o.id] ? "Bill recorded" : o.status === "approved" ? "Awaiting receipt" : "Not started"}</td><td className="p-3">{billsByPoId[o.id] ? "Unpaid" : "Not billed"}</td><td className="p-3"><button type="button" onClick={() => void openView(o)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-white"><Eye className="h-4 w-4"/>View Order</button></td></tr>)}</tbody></table></div>}
+          {displayedOrders.map((o) => (
             <div
               key={o.id}
-              className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between lg:hidden"
+              className={`bg-white rounded-xl border border-slate-200 shadow-sm p-4 sm:p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between ${isSchool ? "lg:hidden" : ""}`}
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm text-slate-500">
@@ -1104,7 +1106,7 @@ const approvedAt = new Date().toISOString();
                 <p className="text-lg font-semibold text-slate-900 truncate">{o.vendors?.name || "—"}</p>
                 <p className="text-sm text-slate-600 mt-0.5">{friendlySubtitle(o)}</p>
                 <div className="mt-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Order Total</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{isSchool ? "Order Total" : "Total cost"}</p>
                   <p className="text-2xl font-bold text-slate-900 tabular-nums">
                     {formatMoney(Number(o.total_amount || 0), currency)}
                   </p>
@@ -1167,7 +1169,7 @@ const approvedAt = new Date().toISOString();
                           onClick={() => onNavigate?.("purchases_bills", { highlightBillId: billsByPoId[o.id] })}
                           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 text-white font-semibold text-sm hover:bg-slate-900 col-span-2 sm:col-span-1"
                         >
-                          <FileText className="w-4 h-4" /> View Bill
+                          <FileText className="w-4 h-4" /> {isSchool ? "View Bill" : "View GRN/Bill"}
                         </button>
                       ) : (
                         <button
@@ -1176,7 +1178,7 @@ const approvedAt = new Date().toISOString();
                           disabled={readOnly}
                           className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-slate-800 text-white font-semibold text-sm hover:bg-slate-900 col-span-2 sm:col-span-1"
                         >
-                          <Package className="w-4 h-4" /> Receive Goods
+                          <Package className="w-4 h-4" /> {isSchool ? "Receive Goods" : "Receive stock"}
                         </button>
                       )}
                     </>
@@ -1210,7 +1212,7 @@ const approvedAt = new Date().toISOString();
               </button>
             </div>
             <div className="space-y-2 text-sm">
-              <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase order</p><p className="mt-1 font-mono font-semibold text-slate-900">PO-{viewOrder.id.slice(0,8).toUpperCase()}</p></div>
+              {isSchool && <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase order</p><p className="mt-1 font-mono font-semibold text-slate-900">PO-{viewOrder.id.slice(0,8).toUpperCase()}</p></div>}
               <p>
                 <span className="text-slate-500">Supplier</span>
                 <br />
@@ -1221,8 +1223,8 @@ const approvedAt = new Date().toISOString();
                 <br />
                 {viewOrder.order_date ? new Date(viewOrder.order_date).toLocaleDateString() : "—"}
               </p>
-              <p><span className="text-slate-500">Department</span><br/><span className="font-medium text-slate-900">{viewOrder.departments?.name || "Central / shared"}</span></p>
-              <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-4"><div><span className="text-xs text-slate-500">Approval</span><p className="mt-0.5 font-medium capitalize">{viewOrder.status === "pending" ? "Pending" : viewOrder.status || "Draft"}</p></div><div><span className="text-xs text-slate-500">Delivery</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Received" : "Not received"}</p></div><div><span className="text-xs text-slate-500">Billing</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Billed" : "Not billed"}</p></div><div><span className="text-xs text-slate-500">Payment</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Unpaid" : "Not due"}</p></div></div>
+              {isSchool && <><p><span className="text-slate-500">Department</span><br/><span className="font-medium text-slate-900">{viewOrder.departments?.name || "Central / shared"}</span></p>
+              <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-200 p-3 sm:grid-cols-4"><div><span className="text-xs text-slate-500">Approval</span><p className="mt-0.5 font-medium capitalize">{viewOrder.status === "pending" ? "Pending" : viewOrder.status || "Draft"}</p></div><div><span className="text-xs text-slate-500">Delivery</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Received" : "Not received"}</p></div><div><span className="text-xs text-slate-500">Billing</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Billed" : "Not billed"}</p></div><div><span className="text-xs text-slate-500">Payment</span><p className="mt-0.5 font-medium">{billsByPoId[viewOrder.id] ? "Unpaid" : "Not due"}</p></div></div></>}
               <div className="border rounded-lg divide-y mt-3">
                 {(viewOrder.purchase_order_items || []).length > 0 ? (
                   (viewOrder.purchase_order_items || []).map((row, i) => (
