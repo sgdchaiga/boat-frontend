@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { BarChart3, ChevronRight, CircleDollarSign, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { BarChart3, ChevronRight, CircleDollarSign, Pencil, Plus, Save, Search, Trash2, X } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
 import { filterGlAccountsForBusinessType } from "@/lib/glAccountBusinessScope";
@@ -144,6 +144,7 @@ export function BudgetingPage({ readOnly }: Props) {
   const [workflowHistory, setWorkflowHistory] = useState<WorkflowRow[]>([]);
   const [showCreateBudget, setShowCreateBudget] = useState(false);
   const [addingStandardLines, setAddingStandardLines] = useState(false);
+  const [lineSearch, setLineSearch] = useState("");
 
   const loadBudgets = useCallback(async () => {
     if (!orgId) {
@@ -245,6 +246,7 @@ export function BudgetingPage({ readOnly }: Props) {
     setEditingLines(false);
     setEditedLines([]);
     setBaselineLines([]);
+    setLineSearch("");
   }, [selectedId]);
 
   const selectedBudget = useMemo(() => budgets.find((b) => b.id === selectedId), [budgets, selectedId]);
@@ -369,10 +371,9 @@ export function BudgetingPage({ readOnly }: Props) {
         m.set(l.id, 0);
         continue;
       }
-      const at = accountTypeById.get(l.gl_account_id) || "expense";
       const bud = Number(l.amount ?? 0);
       const act = lineActualDisplay.get(l.id) ?? 0;
-      m.set(l.id, budgetVariance(bud, act, at));
+      m.set(l.id, budgetVariance(bud, act));
     }
     return m;
   }, [linesForCalcs, lineActualDisplay, accountTypeById]);
@@ -702,6 +703,22 @@ export function BudgetingPage({ readOnly }: Props) {
   };
 
   const displayLines = editingLines ? editedLines : lines;
+  const filteredDisplayLines = useMemo(() => {
+    const query = lineSearch.trim().toLocaleLowerCase();
+    if (!query) return displayLines;
+    return displayLines.filter((line) => {
+      const department = departments.find((item) => item.id === line.department_id)?.name ?? "central shared unassigned";
+      return [
+        line.line_label,
+        line.gl_accounts?.account_code,
+        line.gl_accounts?.account_name,
+        department,
+        line.budget_type.replaceAll("_", " "),
+        line.unit,
+        line.assumptions,
+      ].some((value) => value?.toLocaleLowerCase().includes(query));
+    });
+  }, [departments, displayLines, lineSearch]);
   const showReadOnlyLines = readOnly || !editingLines;
 
   if (!orgId) {
@@ -850,6 +867,19 @@ export function BudgetingPage({ readOnly }: Props) {
               )}
             </div>
             <div className="flex flex-wrap items-center gap-2 justify-end">
+              {displayLines.length > 0 && (
+                <label className="relative block">
+                  <span className="sr-only">Search budget items</span>
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="search"
+                    value={lineSearch}
+                    onChange={(event) => setLineSearch(event.target.value)}
+                    placeholder="Search budget items"
+                    className="w-52 rounded-lg border border-slate-300 bg-white py-1.5 pl-8 pr-3 text-xs text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-100"
+                  />
+                </label>
+              )}
               {selectedBudget && !readOnly && (
                 <>
                   {!editingLines && nextStatus(selectedBudget.status) && canMoveTo(nextStatus(selectedBudget.status)) && <button type="button" onClick={() => void changeBudgetStatus(selectedBudget, nextStatus(selectedBudget.status)!)} className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-medium text-white">{nextStatus(selectedBudget.status) === "submitted" ? "Submit" : nextStatus(selectedBudget.status) === "reviewed" ? "Mark reviewed" : nextStatus(selectedBudget.status) === "approved" ? "Approve" : nextStatus(selectedBudget.status) === "active" ? "Activate" : "Close"}</button>}
@@ -917,9 +947,11 @@ export function BudgetingPage({ readOnly }: Props) {
             <p className="p-6 text-slate-500 text-sm">Loading lines…</p>
           ) : (
             <>
-              {displayLines.length === 0 ? (
+              {filteredDisplayLines.length === 0 ? (
                 <p className="p-6 text-slate-500 text-sm">
-                  {readOnly
+                  {lineSearch.trim()
+                    ? `No budget items match “${lineSearch.trim()}”.`
+                    : readOnly
                     ? "No budget lines."
                     : editingLines
                       ? "No lines yet. Use the form below to add one."
@@ -942,7 +974,7 @@ export function BudgetingPage({ readOnly }: Props) {
                       </tr>
                     </thead>
                     <tbody>
-                      {displayLines.map((l) => {
+                      {filteredDisplayLines.map((l) => {
                         const hasGl = Boolean(l.gl_account_id);
                         const act = lineActualDisplay.get(l.id);
                         const vari = lineVariance.get(l.id);

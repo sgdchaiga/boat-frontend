@@ -179,10 +179,9 @@ export function BudgetVarianceReportPage() {
         m.set(l.id, 0);
         continue;
       }
-      const at = accountTypeById.get(l.gl_account_id) || "expense";
       const bud = currentBudgetFor(l);
       const act = lineActualDisplay.get(l.id) ?? 0;
-      m.set(l.id, budgetVariance(bud, act, at));
+      m.set(l.id, budgetVariance(bud, act));
     }
     return m;
   }, [visibleLines, lineActualDisplay, accountTypeById,transferNetByLine]);

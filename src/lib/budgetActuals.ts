@@ -25,10 +25,8 @@ export function netJournalActivity(debit: number, credit: number, accountType: s
   return d - c;
 }
 
-/** Positive = favorable (under budget for expense, over for income). */
-export function budgetVariance(budget: number, actual: number, accountType: string): number {
-  const t = (accountType || "expense").toLowerCase();
-  if (t === "income") return actual - budget;
+/** Remaining budget variance, consistently calculated as budget minus actual. */
+export function budgetVariance(budget: number, actual: number): number {
   return budget - actual;
 }
 
