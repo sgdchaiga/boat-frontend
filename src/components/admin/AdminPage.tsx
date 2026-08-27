@@ -40,7 +40,7 @@ const TABS: { id: AdminTab; label: string; icon: typeof Users }[] = [
   { id: "gender_types", label: "Gender Types", icon: Users },
   { id: "hotel_pos", label: "Hotel POS Controls", icon: ShieldCheck },
   { id: "sync_queue", label: "Local backup & sync", icon: BookOpen },
-  { id: "local_import", label: "Local Bulk Import", icon: BookOpen },
+  { id: "local_import", label: "Bulk Import", icon: BookOpen },
   { id: "subscription_renewal", label: "Subscription renewal", icon: BookOpen },
 ];
 
