@@ -193,9 +193,13 @@ export function SchoolStudentsBioPage() {
         return;
       }
 
+      // The hosted schema stores parent relationships in student_parents,
+      // not as a parent_id column on students.
+      const { parent_id: parentId, ...studentPayload } = payload;
+
       const { data: student, error: studentErr } = await supabase
         .from("students")
-        .insert({ organization_id: orgId, ...payload })
+        .insert({ organization_id: orgId, ...studentPayload })
         .select("id")
         .single();
 
@@ -203,10 +207,10 @@ export function SchoolStudentsBioPage() {
         throw studentErr || new Error("Failed to create student.");
       }
 
-      if (form.parent_id) {
+      if (parentId) {
         const { error: parentLinkErr } = await supabase.from("student_parents").insert({
           student_id: student.id,
-          parent_id: form.parent_id,
+          parent_id: parentId,
           is_primary: true,
         });
         if (parentLinkErr) throw parentLinkErr;
