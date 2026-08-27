@@ -30,6 +30,7 @@ type BudgetRow = {
 type LineRow = {
   id: string;
   budget_id: string;
+  parent_line_id: string | null;
   gl_account_id: string | null;
   line_label: string;
   amount: number;
@@ -80,6 +81,18 @@ function cloneLine(l: LineRow): LineRow {
   return { ...l, gl_accounts: l.gl_accounts ? { ...l.gl_accounts } : null };
 }
 
+function rollUpParentAmounts(rows: LineRow[], parentId: string | null): LineRow[] {
+  if (!parentId) return rows;
+  const children = rows.filter((line) => line.parent_line_id === parentId);
+  const totals = (['term_1_amount','term_2_amount','term_3_amount','annual_other_amount'] as const)
+    .map((key) => children.reduce((sum, child) => sum + Number(child[key] || 0), 0));
+  return rows.map((line) => line.id === parentId ? {
+    ...line,
+    term_1_amount: totals[0], term_2_amount: totals[1], term_3_amount: totals[2], annual_other_amount: totals[3],
+    amount: totals.reduce((sum, value) => sum + value, 0),
+  } : line);
+}
+
 function lineRowChanged(a: LineRow, b: LineRow) {
   return (
     a.line_label !== b.line_label ||
@@ -96,6 +109,7 @@ function lineRowChanged(a: LineRow, b: LineRow) {
     || Number(a.term_3_amount) !== Number(b.term_3_amount)
     || Number(a.annual_other_amount) !== Number(b.annual_other_amount)
     || (a.assumptions ?? null) !== (b.assumptions ?? null)
+    || a.parent_line_id !== b.parent_line_id
   );
 }
 
@@ -133,6 +147,7 @@ export function BudgetingPage({ readOnly }: Props) {
     term_3_amount: "",
     annual_other_amount: "",
     assumptions: "",
+    parent_line_id: "",
   });
   const [actualByGlId, setActualByGlId] = useState<Map<string, number>>(new Map());
   const [actualsLoading, setActualsLoading] = useState(false);
@@ -185,7 +200,7 @@ export function BudgetingPage({ readOnly }: Props) {
       const { data, error } = await supabase
         .from("budget_lines")
         .select(
-          "id,budget_id,gl_account_id,line_label,amount,sort_order,unit,frequency,quantity,unit_price,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,assumptions,gl_accounts(account_code,account_name)"
+          "id,budget_id,parent_line_id,gl_account_id,line_label,amount,sort_order,unit,frequency,quantity,unit_price,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,assumptions,gl_accounts(account_code,account_name)"
         )
         .eq("budget_id", budgetId)
         .order("sort_order", { ascending: true })
@@ -195,6 +210,7 @@ export function BudgetingPage({ readOnly }: Props) {
       setLines(
         rows.map((l) => ({
           ...l,
+          parent_line_id: l.parent_line_id ?? null,
           unit: l.unit ?? null,
           frequency: l.frequency ?? "one_time",
           quantity: l.quantity ?? null,
@@ -253,22 +269,24 @@ export function BudgetingPage({ readOnly }: Props) {
 
   const linesForCalcs = useMemo(() => (editingLines ? editedLines : lines), [editingLines, editedLines, lines]);
 
-  const lineTotal = useMemo(() => linesForCalcs.reduce((s, l) => s + Number(l.amount ?? 0), 0), [linesForCalcs]);
+  const topLevelLines = useMemo(() => linesForCalcs.filter((line) => !line.parent_line_id), [linesForCalcs]);
+  const calculationLines = useMemo(() => linesForCalcs.filter((line) => !linesForCalcs.some((child) => child.parent_line_id === line.id)), [linesForCalcs]);
+  const lineTotal = useMemo(() => topLevelLines.reduce((s, l) => s + Number(l.amount ?? 0), 0), [topLevelLines]);
   const budgetSummary = useMemo(() => {
-    const income = linesForCalcs.filter((l) => l.budget_type === "income").reduce((s,l) => s + Number(l.amount || 0), 0);
-    const expenditure = linesForCalcs.filter((l) => l.budget_type !== "income").reduce((s,l) => s + Number(l.amount || 0), 0);
-    const terms = ["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"].map((key) => linesForCalcs.reduce((s,l) => s + Number(l[key as keyof LineRow] || 0), 0));
+    const income = topLevelLines.filter((l) => l.budget_type === "income").reduce((s,l) => s + Number(l.amount || 0), 0);
+    const expenditure = topLevelLines.filter((l) => l.budget_type !== "income").reduce((s,l) => s + Number(l.amount || 0), 0);
+    const terms = ["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"].map((key) => topLevelLines.reduce((s,l) => s + Number(l[key as keyof LineRow] || 0), 0));
     const departmentTotals = new Map<string,number>();
-    for (const line of linesForCalcs) { const key=line.department_id || "central"; departmentTotals.set(key,(departmentTotals.get(key)||0)+Number(line.amount||0)); }
+    for (const line of topLevelLines) { const key=line.department_id || "central"; departmentTotals.set(key,(departmentTotals.get(key)||0)+Number(line.amount||0)); }
     return { income, expenditure, net: income-expenditure, terms, departmentTotals };
-  }, [linesForCalcs]);
+  }, [topLevelLines]);
 
   const loadActuals = useCallback(async () => {
     if (!orgId || !selectedBudget || linesForCalcs.length === 0) {
       setActualByGlId(new Map());
       return;
     }
-    const glIds = [...new Set(linesForCalcs.map((l) => l.gl_account_id).filter(Boolean))] as string[];
+    const glIds = [...new Set(calculationLines.map((l) => l.gl_account_id).filter(Boolean))] as string[];
     if (glIds.length === 0) {
       setActualByGlId(new Map());
       return;
@@ -322,7 +340,7 @@ export function BudgetingPage({ readOnly }: Props) {
     } finally {
       setActualsLoading(false);
     }
-  }, [orgId, selectedBudget, linesForCalcs, accountTypeById]);
+  }, [orgId, selectedBudget, calculationLines, accountTypeById]);
 
   useEffect(() => {
     if (linesLoading || !selectedBudget) return;
@@ -332,18 +350,18 @@ export function BudgetingPage({ readOnly }: Props) {
   /** Sum of budget amounts per GL (for splitting account-level actual across lines). */
   const budgetSumByGl = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of linesForCalcs) {
+    for (const l of calculationLines) {
       if (!l.gl_account_id) continue;
       const g = l.gl_account_id;
       m.set(g, (m.get(g) || 0) + Number(l.amount ?? 0));
     }
     return m;
-  }, [linesForCalcs]);
+  }, [calculationLines]);
 
   /** Per budget line: proportional share of GL net activity when multiple lines use the same account. */
   const lineActualDisplay = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of linesForCalcs) {
+    for (const l of calculationLines) {
       if (!l.gl_account_id) {
         m.set(l.id, 0);
         continue;
@@ -356,6 +374,10 @@ export function BudgetingPage({ readOnly }: Props) {
         continue;
       }
       m.set(l.id, (amt / share) * total);
+    }
+    for (const parent of linesForCalcs.filter((line) => !line.parent_line_id)) {
+      const children = linesForCalcs.filter((line) => line.parent_line_id === parent.id);
+      if (children.length) m.set(parent.id, children.reduce((sum, child) => sum + (m.get(child.id) ?? 0), 0));
     }
     return m;
   }, [linesForCalcs, actualByGlId, budgetSumByGl]);
@@ -378,10 +400,7 @@ export function BudgetingPage({ readOnly }: Props) {
     return m;
   }, [linesForCalcs, lineActualDisplay, accountTypeById]);
 
-  const sumActualDisplay = useMemo(
-    () => [...lineActualDisplay.values()].reduce((a, b) => a + b, 0),
-    [lineActualDisplay]
-  );
+  const sumActualDisplay = useMemo(() => topLevelLines.reduce((sum, line) => sum + (lineActualDisplay.get(line.id) ?? 0), 0), [lineActualDisplay, topLevelLines]);
   const sumVariance = useMemo(() => [...lineVariance.values()].reduce((a, b) => a + b, 0), [lineVariance]);
 
   const periodHint = useMemo(() => {
@@ -429,8 +448,8 @@ export function BudgetingPage({ readOnly }: Props) {
 
   const updateEditedLine = (lineId: string, patch: Partial<LineRow>) => {
     if (!selectedBudget) return;
-    setEditedLines((prev) =>
-      prev.map((l) => {
+    setEditedLines((prev) => {
+      const changed = prev.map((l) => {
         if (l.id !== lineId) return l;
         let next: LineRow = { ...l, ...patch };
         if (
@@ -441,8 +460,9 @@ export function BudgetingPage({ readOnly }: Props) {
           if (c != null) next = { ...next, amount: c };
         }
         return next;
-      })
-    );
+      });
+      return rollUpParentAmounts(changed, changed.find((line) => line.id === lineId)?.parent_line_id ?? null);
+    });
   };
 
   const addLineToDraft = () => {
@@ -480,6 +500,7 @@ export function BudgetingPage({ readOnly }: Props) {
     const newRow: LineRow = {
       id: `temp-${randomUuid()}`,
       budget_id: selectedId,
+      parent_line_id: draftLine.parent_line_id || null,
       gl_account_id: glId,
       line_label: label,
       amount: amt,
@@ -497,7 +518,7 @@ export function BudgetingPage({ readOnly }: Props) {
       assumptions: draftLine.assumptions.trim() || null,
       gl_accounts: g ? { account_code: g.account_code, account_name: g.account_name } : null,
     };
-    setEditedLines((prev) => [...prev, newRow]);
+    setEditedLines((prev) => rollUpParentAmounts([...prev, newRow], newRow.parent_line_id));
     setDraftLine({
       gl_account_id: "",
       line_label: "",
@@ -513,11 +534,15 @@ export function BudgetingPage({ readOnly }: Props) {
       term_3_amount: "",
       annual_other_amount: "",
       assumptions: "",
+      parent_line_id: "",
     });
   };
 
   const removeLineFromDraft = (lineId: string) => {
-    setEditedLines((prev) => prev.filter((l) => l.id !== lineId));
+    setEditedLines((prev) => {
+      const parentId = prev.find((line) => line.id === lineId)?.parent_line_id ?? null;
+      return rollUpParentAmounts(prev.filter((line) => line.id !== lineId && line.parent_line_id !== lineId), parentId);
+    });
   };
 
   const saveBudgetLines = async () => {
@@ -545,6 +570,7 @@ export function BudgetingPage({ readOnly }: Props) {
         const { error } = await supabase
           .from("budget_lines")
           .update({
+            parent_line_id: el.parent_line_id,
             gl_account_id: el.gl_account_id,
             line_label: el.line_label.trim(),
             amount: el.amount,
@@ -564,10 +590,14 @@ export function BudgetingPage({ readOnly }: Props) {
           .eq("id", el.id);
         if (error) throw error;
       }
-      for (const el of editedLines) {
-        if (!isTempLineId(el.id)) continue;
-        const { error } = await supabase.from("budget_lines").insert({
+      const insertedIds = new Map<string,string>();
+      const insertLine = async (el: LineRow) => {
+        const resolvedParentId = el.parent_line_id && isTempLineId(el.parent_line_id)
+          ? insertedIds.get(el.parent_line_id) ?? null
+          : el.parent_line_id;
+        const { data, error } = await supabase.from("budget_lines").insert({
           budget_id: selectedId,
+          parent_line_id: resolvedParentId,
           gl_account_id: el.gl_account_id,
           line_label: el.line_label.trim(),
           amount: el.amount,
@@ -583,8 +613,15 @@ export function BudgetingPage({ readOnly }: Props) {
           annual_other_amount: el.annual_other_amount,
           assumptions: el.assumptions,
           sort_order: el.sort_order,
-        });
+        }).select("id").single();
         if (error) throw error;
+        insertedIds.set(el.id, (data as {id:string}).id);
+      };
+      for (const el of editedLines.filter((line) => isTempLineId(line.id) && !line.parent_line_id)) {
+        await insertLine(el);
+      }
+      for (const el of editedLines.filter((line) => isTempLineId(line.id) && line.parent_line_id)) {
+        await insertLine(el);
       }
       await loadLines(selectedId);
       loadBudgets();
@@ -703,10 +740,17 @@ export function BudgetingPage({ readOnly }: Props) {
   };
 
   const displayLines = editingLines ? editedLines : lines;
+  const orderedDisplayLines = useMemo(() => {
+    const result: LineRow[] = [];
+    for (const parent of displayLines.filter((line) => !line.parent_line_id)) {
+      result.push(parent, ...displayLines.filter((line) => line.parent_line_id === parent.id));
+    }
+    return result;
+  }, [displayLines]);
   const filteredDisplayLines = useMemo(() => {
     const query = lineSearch.trim().toLocaleLowerCase();
-    if (!query) return displayLines;
-    return displayLines.filter((line) => {
+    if (!query) return orderedDisplayLines;
+    return orderedDisplayLines.filter((line) => {
       const department = departments.find((item) => item.id === line.department_id)?.name ?? "central shared unassigned";
       return [
         line.line_label,
@@ -718,7 +762,7 @@ export function BudgetingPage({ readOnly }: Props) {
         line.assumptions,
       ].some((value) => value?.toLocaleLowerCase().includes(query));
     });
-  }, [departments, displayLines, lineSearch]);
+  }, [departments, orderedDisplayLines, lineSearch]);
   const showReadOnlyLines = readOnly || !editingLines;
 
   if (!orgId) {
@@ -818,7 +862,7 @@ export function BudgetingPage({ readOnly }: Props) {
           ].map((card) => <div key={card.label} className={`rounded-xl border border-t-2 border-slate-200 bg-white p-4 ${card.accent}`}><p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{card.label}</p><p className={`mt-1 text-lg font-bold tabular-nums ${card.tone}`}>{card.percent?`${card.value.toFixed(1)}%`:card.value.toLocaleString(undefined,{maximumFractionDigits:2})}</p></div>)}
         </div>
       )}
-      {selectedBudget && lines.length>0 && ["draft","submitted","reviewed"].includes(selectedBudget.status) && <SchoolBudgetDriversPanel budgetId={selectedBudget.id} lines={lines.map(l=>({id:l.id,line_label:l.line_label,budget_type:l.budget_type}))} disabled={readOnly||!canPrepareBudget||editingLines} onSaved={()=>void loadLines(selectedBudget.id)}/>}
+      {selectedBudget && lines.length>0 && ["draft","submitted","reviewed"].includes(selectedBudget.status) && <SchoolBudgetDriversPanel budgetId={selectedBudget.id} lines={lines.filter(line=>!lines.some(child=>child.parent_line_id===line.id)).map(l=>({id:l.id,line_label:l.parent_line_id?`${lines.find(parent=>parent.id===l.parent_line_id)?.line_label || "Main line"} — ${l.line_label}`:l.line_label,budget_type:l.budget_type}))} disabled={readOnly||!canPrepareBudget||editingLines} onSaved={()=>void loadLines(selectedBudget.id)}/>}
 
       {!selectedBudget ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
@@ -975,6 +1019,7 @@ export function BudgetingPage({ readOnly }: Props) {
                     </thead>
                     <tbody>
                       {filteredDisplayLines.map((l) => {
+                        const hasSubLines = displayLines.some((line) => line.parent_line_id === l.id);
                         const hasGl = Boolean(l.gl_account_id);
                         const act = lineActualDisplay.get(l.id);
                         const vari = lineVariance.get(l.id);
@@ -987,10 +1032,10 @@ export function BudgetingPage({ readOnly }: Props) {
                         const freqLabel = BUDGET_FREQUENCIES.find((x) => x.value === (l.frequency || "one_time"))?.label ?? l.frequency;
                         return (
                           <tr key={l.id} className="border-b border-slate-100">
-                            <td className="p-2 text-slate-800 align-top space-y-1.5">
+                            <td className={`p-2 text-slate-800 align-top space-y-1.5 ${l.parent_line_id ? "pl-7 border-l-2 border-l-indigo-100" : ""}`}>
                               {showReadOnlyLines ? (
                                 <>
-                                  <div className="font-medium">{l.line_label}</div>
+                                  <div className="font-medium">{l.parent_line_id ? "↳ " : ""}{l.line_label}{hasSubLines && <span className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">Sub-line total</span>}</div>
                                   <div className="text-xs text-indigo-700">{departments.find((d) => d.id === l.department_id)?.name || "Central / unassigned"} · {l.budget_type.replaceAll("_", " ")}</div>
                                   {l.gl_accounts && (
                                     <div className="text-xs text-slate-500 font-mono">
@@ -1006,6 +1051,7 @@ export function BudgetingPage({ readOnly }: Props) {
                                     value={l.line_label}
                                     onChange={(e) => updateEditedLine(l.id, { line_label: e.target.value })}
                                   />
+                                  {hasSubLines && <p className="text-[10px] font-medium text-indigo-700">Amounts are calculated from sub-lines.</p>}
                                   <select
                                     className="w-full text-xs border border-slate-200 rounded px-2 py-1"
                                     value={l.gl_account_id ?? ""}
@@ -1035,7 +1081,7 @@ export function BudgetingPage({ readOnly }: Props) {
                                     </select>
                                   </div>
                                   <div className="grid grid-cols-4 gap-1">
-                                    {(["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"] as const).map((key, index) => <input key={key} type="number" min={0} step="0.01" title={["Term 1","Term 2","Term 3","Annual/holiday"][index]} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-right" value={l[key]} onChange={(e) => { const value=Math.max(0,Number(e.target.value)||0); const next={...l,[key]:value}; updateEditedLine(l.id,{[key]:value,amount:next.term_1_amount+next.term_2_amount+next.term_3_amount+next.annual_other_amount}); }} />)}
+                                    {(["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"] as const).map((key, index) => <input key={key} type="number" min={0} step="0.01" disabled={hasSubLines} title={["Term 1","Term 2","Term 3","Annual/holiday"][index]} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-right disabled:bg-slate-100" value={l[key]} onChange={(e) => { const value=Math.max(0,Number(e.target.value)||0); const next={...l,[key]:value}; updateEditedLine(l.id,{[key]:value,amount:next.term_1_amount+next.term_2_amount+next.term_3_amount+next.annual_other_amount}); }} />)}
                                   </div>
                                 </>
                               )}
@@ -1081,6 +1127,7 @@ export function BudgetingPage({ readOnly }: Props) {
                                   step="any"
                                   className="w-24 border border-slate-200 rounded px-2 py-1 text-right text-sm"
                                   value={l.quantity ?? ""}
+                                  disabled={hasSubLines}
                                   onChange={(e) => {
                                     const raw = e.target.value;
                                     if (raw === "") {
@@ -1107,6 +1154,7 @@ export function BudgetingPage({ readOnly }: Props) {
                                   step="0.01"
                                   className="w-28 border border-slate-200 rounded px-2 py-1 text-right text-sm"
                                   value={l.unit_price ?? ""}
+                                  disabled={hasSubLines}
                                   onChange={(e) => {
                                     const raw = e.target.value;
                                     if (raw === "") {
@@ -1129,6 +1177,7 @@ export function BudgetingPage({ readOnly }: Props) {
                                   step="0.01"
                                   className="w-28 border border-slate-200 rounded px-2 py-1 text-right text-sm"
                                   value={l.amount}
+                                  disabled={hasSubLines}
                                   onChange={(e) => {
                                     const n = Number(e.target.value);
                                     if (Number.isFinite(n) && n >= 0) updateEditedLine(l.id, { amount: n });
@@ -1166,6 +1215,10 @@ export function BudgetingPage({ readOnly }: Props) {
                 <div className="p-3 border-t border-slate-200 bg-slate-50/50 space-y-3">
                   <p className="text-xs font-medium text-slate-600">Add line</p>
                   <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-2">
+                    <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm sm:col-span-2" value={draftLine.parent_line_id} onChange={(e) => setDraftLine((d) => ({ ...d, parent_line_id: e.target.value }))}>
+                      <option value="">Main budget line</option>
+                      {displayLines.filter((line) => !line.parent_line_id).map((line) => <option key={line.id} value={line.id}>Sub-line of: {line.line_label}</option>)}
+                    </select>
                     <select
                       className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm sm:col-span-2 lg:col-span-3 xl:col-span-2"
                       value={draftLine.gl_account_id}

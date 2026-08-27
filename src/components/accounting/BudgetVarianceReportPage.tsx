@@ -21,6 +21,7 @@ type BudgetRow = {
 
 type LineRow = {
   id: string;
+  parent_line_id: string | null;
   gl_account_id: string | null;
   line_label: string;
   amount: number;
@@ -108,7 +109,7 @@ export function BudgetVarianceReportPage() {
   const loadLines = useCallback(async (budgetId: string) => {
     setLinesLoading(true);
     const [lineResult,transferResult] = await Promise.all([
-      supabase.from("budget_lines").select("id,gl_account_id,line_label,amount,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,departments(name),gl_accounts(account_code,account_name)").eq("budget_id",budgetId).order("sort_order",{ascending:true}).order("id",{ascending:true}),
+      supabase.from("budget_lines").select("id,parent_line_id,gl_account_id,line_label,amount,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,departments(name),gl_accounts(account_code,account_name)").eq("budget_id",budgetId).order("sort_order",{ascending:true}).order("id",{ascending:true}),
       supabase.from("budget_transfers").select("source_line_id,destination_line_id,amount,status").eq("budget_id",budgetId),
     ]);
     const rows=(lineResult.data as LineRow[])||[];
@@ -137,25 +138,28 @@ export function BudgetVarianceReportPage() {
   const selectedBudget = useMemo(() => budgets.find((b) => b.id === selectedId), [budgets, selectedId]);
   const departmentOptions = useMemo(() => [...new Map(lines.filter((l) => l.department_id).map((l) => [l.department_id!, l.departments?.name || "Department"])).entries()], [lines]);
   const visibleLines = useMemo(() => departmentFilter === "all" ? lines : departmentFilter === "central" ? lines.filter((l) => !l.department_id) : lines.filter((l) => l.department_id === departmentFilter), [lines, departmentFilter]);
+  const topLevelLines=useMemo(()=>visibleLines.filter(line=>!line.parent_line_id),[visibleLines]);
+  const calculationLines=useMemo(()=>visibleLines.filter(line=>!visibleLines.some(child=>child.parent_line_id===line.id)),[visibleLines]);
+  const orderedVisibleLines=useMemo(()=>topLevelLines.flatMap(parent=>[parent,...visibleLines.filter(line=>line.parent_line_id===parent.id)]),[topLevelLines,visibleLines]);
   const transferNetByLine=useMemo(()=>{const m=new Map<string,number>();for(const t of transfers.filter(row=>row.status==="approved")){m.set(t.source_line_id,(m.get(t.source_line_id)||0)-Number(t.amount));m.set(t.destination_line_id,(m.get(t.destination_line_id)||0)+Number(t.amount));}return m},[transfers]);
   const commitmentByLine=useMemo(()=>{const m=new Map<string,number>();for(const c of commitments.filter(row=>row.status==="approved"))m.set(c.budget_line_id,(m.get(c.budget_line_id)||0)+Number(c.amount));return m},[commitments]);
   const currentBudgetFor=(line:LineRow)=>Number(line.amount||0)+(transferNetByLine.get(line.id)||0);
 
-  const lineTotal = useMemo(() => visibleLines.reduce((s, l) => s + currentBudgetFor(l), 0), [visibleLines,transferNetByLine]);
+  const lineTotal = useMemo(() => topLevelLines.reduce((s, l) => s + currentBudgetFor(l), 0), [topLevelLines,transferNetByLine]);
 
   const budgetSumByGl = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of visibleLines) {
+    for (const l of calculationLines) {
       if (!l.gl_account_id) continue;
       const g = l.gl_account_id;
       m.set(g, (m.get(g) || 0) + currentBudgetFor(l));
     }
     return m;
-  }, [visibleLines,transferNetByLine]);
+  }, [calculationLines,transferNetByLine]);
 
   const lineActualDisplay = useMemo(() => {
     const m = new Map<string, number>();
-    for (const l of visibleLines) {
+    for (const l of calculationLines) {
       if (!l.gl_account_id) {
         m.set(l.id, 0);
         continue;
@@ -169,13 +173,14 @@ export function BudgetVarianceReportPage() {
       }
       m.set(l.id, (amt / share) * total);
     }
+    for(const parent of topLevelLines){const children=visibleLines.filter(line=>line.parent_line_id===parent.id);if(children.length)m.set(parent.id,children.reduce((sum,child)=>sum+(m.get(child.id)||0),0));}
     return m;
-  }, [visibleLines, actualByGlId, budgetSumByGl,transferNetByLine]);
+  }, [calculationLines, topLevelLines, visibleLines, actualByGlId, budgetSumByGl,transferNetByLine]);
 
   const lineVariance = useMemo(() => {
     const m = new Map<string, number>();
     for (const l of visibleLines) {
-      if (!l.gl_account_id) {
+      if (!l.gl_account_id && !visibleLines.some(child=>child.parent_line_id===l.id)) {
         m.set(l.id, 0);
         continue;
       }
@@ -214,13 +219,10 @@ export function BudgetVarianceReportPage() {
     loadActuals();
   }, [lines, linesLoading, selectedBudget, loadActuals]);
 
-  const sumActualDisplay = useMemo(
-    () => [...lineActualDisplay.values()].reduce((a, b) => a + b, 0),
-    [lineActualDisplay]
-  );
+  const sumActualDisplay = useMemo(() => topLevelLines.reduce((sum,line)=>sum+(lineActualDisplay.get(line.id)||0),0), [lineActualDisplay,topLevelLines]);
   const totalCommitments=useMemo(()=>visibleLines.reduce((s,l)=>s+(commitmentByLine.get(l.id)||0),0),[visibleLines,commitmentByLine]);
   const totalAvailable=lineTotal-sumActualDisplay-totalCommitments;
-  const sumVariance = useMemo(() => [...lineVariance.values()].reduce((a, b) => a + b, 0), [lineVariance]);
+  const sumVariance = useMemo(() => topLevelLines.reduce((sum,line)=>sum+(lineVariance.get(line.id)||0),0), [lineVariance,topLevelLines]);
   const managementAlerts = useMemo(() => visibleLines.map((line) => {
     const budget = currentBudgetFor(line);
     const actual = lineActualDisplay.get(line.id) ?? 0;
@@ -379,8 +381,9 @@ export function BudgetVarianceReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleLines.map((l) => {
-                    const hasGl = Boolean(l.gl_account_id);
+                  {orderedVisibleLines.map((l) => {
+                    const hasSubLines=visibleLines.some(line=>line.parent_line_id===l.id);
+                    const hasGl = Boolean(l.gl_account_id)||hasSubLines;
                     const bud = currentBudgetFor(l);
                     const act = lineActualDisplay.get(l.id) ?? 0;
                     const committed=commitmentByLine.get(l.id)||0;
@@ -396,8 +399,8 @@ export function BudgetVarianceReportPage() {
                     }
                     return (
                       <tr key={l.id} className="border-b border-slate-100">
-                        <td className="p-2">
-                          <div className="font-medium text-slate-800">{l.line_label}</div>
+                        <td className={`p-2 ${l.parent_line_id?"pl-7 border-l-2 border-l-indigo-100":""}`}>
+                          <div className="font-medium text-slate-800">{l.parent_line_id?"↳ ":""}{l.line_label}{hasSubLines&&<span className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700">Sub-line total</span>}</div>
                           <div className="text-xs text-indigo-700">{l.departments?.name || "Central / shared"} · {l.budget_type.replaceAll("_", " ")}</div>
                           <div className="text-[10px] text-slate-500">T1 {Number(l.term_1_amount).toLocaleString()} · T2 {Number(l.term_2_amount).toLocaleString()} · T3 {Number(l.term_3_amount).toLocaleString()} · Annual {Number(l.annual_other_amount).toLocaleString()}</div>
                           {l.gl_accounts && (
