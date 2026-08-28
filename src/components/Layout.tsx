@@ -53,6 +53,7 @@ import { PAYROLL_PAGE } from '@/lib/payrollPages';
 import { useAuth } from '../contexts/AuthContext';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from '../lib/moduleAccess';
 import { isPageAllowedForNavRole } from '@/lib/navRoleExperience';
+import { practicePageAllowList } from '@/lib/practiceRoleAccess';
 import { buildRoleNavigation, getRoleBasedNavMenuTitle, hasRoleScopedNavigation } from '@/lib/roleNavigation';
 import { normalizeNavRoleKey } from '@/lib/navRoleExperience';
 import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
@@ -1070,7 +1071,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const useRoleScopedNav = hasRoleScopedNavigation(user?.role, businessType) && roleScopedNav != null;
   const isHousekeepingWorkspace = normalizeNavRoleKey(user?.role) === 'housekeeping' &&
     (businessType === 'hotel' || businessType === 'mixed');
-  const practiceNavigation: NavItem[] = [
+  const allPracticeNavigation: NavItem[] = [
     { name: 'Operations Dashboard', icon: LayoutDashboard, page: 'practice_dashboard' },
     { name: 'Clients', icon: UsersRound, page: 'practice_clients' },
     { name: 'Engagements', icon: Briefcase, page: 'practice_engagements' },
@@ -1101,6 +1102,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Staff', icon: UsersRound, page: 'staff' },
     { name: 'Permissions & settings', icon: Settings, page: 'admin' },
   ];
+  const practiceAllowedPages = practicePageAllowList(user?.role);
+  const practiceNavigation: NavItem[] = practiceAllowedPages === null
+    ? allPracticeNavigation
+    : allPracticeNavigation.filter((item) => !('page' in item) || !item.page || practiceAllowedPages.has(item.page));
   const financialModellingNavigation: NavItem[] = [
     { name: 'Modelling Studio', icon: Calculator, page: 'financial_modelling_studio' },
     { name: 'Team', icon: UsersRound, page: 'staff' },

@@ -10,6 +10,7 @@ import {
 
 } from "@/lib/roleNavigation";
 import { pageAccessDecision } from "@/lib/permissions";
+import { isPracticePageAllowed, practiceLandingPage } from "@/lib/practiceRoleAccess";
 
 
 
@@ -134,6 +135,10 @@ export function isPageAllowedForNavRole(
 
 ): boolean {
 
+  if (_businessType === "accounting_practice") {
+    return isPracticePageAllowed(page, _roleKey);
+  }
+
   const xp = getNavRoleExperience(_roleKey);
 
   if (xp === "hotel_operations_assistant" && shouldApplyNavRoleScope(_businessType)) {
@@ -168,6 +173,8 @@ export function defaultLandingPageForNavRole(
   businessType: BusinessType | null | undefined
 
 ): string | null {
+
+  if (businessType === "accounting_practice") return practiceLandingPage(roleKey);
 
   const xp = getNavRoleExperience(roleKey);
 
