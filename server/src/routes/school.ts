@@ -79,6 +79,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
       "organization_id",
       "admission_number",
       "first_name",
+      "other_names",
       "last_name",
       "class_name",
       "stream",
@@ -94,6 +95,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
     patchable: [
       "admission_number",
       "first_name",
+      "other_names",
       "last_name",
       "class_name",
       "stream",

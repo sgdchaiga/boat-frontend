@@ -88,7 +88,7 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "chart-of-accounts": [
     { id: "", code: "1000", name: "Cash on Hand", type: "Asset", parent_code: "", is_active: "1" },
   ],
-  "school-students": [{ id: "", admission_number: "S0001", first_name: "Amina", last_name: "Nabirye", class_name: "Senior 1", stream: "East", status: "active", date_of_birth: "2012-03-15", school_pay_number: "SP-10001", learner_id: "LRN-10001", parent_name: "Sarah Nabirye", parent_phone: "+256700000001", relationship: "Mother", notes: "" }],
+  "school-students": [{ id: "", admission_number: "S0001", first_name: "Amina", other_names: "Zawedde", last_name: "Nabirye", class_name: "Senior 1", stream: "East", status: "active", date_of_birth: "2012-03-15", school_pay_number: "SP-10001", learner_id: "LRN-10001", parent_name: "Sarah Nabirye", parent_phone: "+256700000001", relationship: "Mother", notes: "" }],
   "school-parents": [{ id: "", full_name: "Sarah Nabirye", phone: "+256700000001", phone_alt: "", email: "", address: "Kampala", student_admission_number: "S0001", relationship: "Mother", is_primary: "1", notes: "Primary guardian" }],
   "school-classes": [{ id: "", name: "Senior 1", code: "S1", sort_order: "1", is_active: "1" }],
   "school-streams": [{ id: "", name: "East", code: "E", sort_order: "1", is_active: "1" }],
@@ -299,7 +299,7 @@ export function AdminLocalImportPage() {
       const base = { id: asText(row.id) || generateId(type.replace("school-", "sch")), organization_id: organizationId };
       if (type === "school-students") {
         if (!asText(row.admission_number) || !asText(row.first_name) || !asText(row.last_name) || !asText(row.class_name)) return [];
-        return [{ ...base, admission_number: asText(row.admission_number), first_name: asText(row.first_name), last_name: asText(row.last_name), class_name: asText(row.class_name), stream: asText(row.stream) || null, status: asText(row.status) || "active", date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
+        return [{ ...base, admission_number: asText(row.admission_number), first_name: asText(row.first_name), other_names: asText(row.other_names) || null, last_name: asText(row.last_name), class_name: asText(row.class_name), stream: asText(row.stream) || null, status: asText(row.status) || "active", date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
       }
       if (type === "school-parents") {
         if (!asText(row.full_name)) return [];
@@ -353,7 +353,8 @@ export function AdminLocalImportPage() {
       const className = asText(row.class_name);
       if (!admissionNumber || !firstName || !lastName || !className) continue;
       const student = await supabase.from("students").upsert({
-        organization_id: organizationId, admission_number: admissionNumber, first_name: firstName, last_name: lastName,
+        organization_id: organizationId, admission_number: admissionNumber, first_name: firstName,
+        other_names: asText(row.other_names) || null, last_name: lastName,
         class_name: className, stream: asText(row.stream) || null, status: asText(row.status) || "active",
         date_of_birth: asText(row.date_of_birth) || null, school_pay_number: asText(row.school_pay_number) || null,
         learner_id: asText(row.learner_id) || null, notes: asText(row.notes) || null,
