@@ -89,7 +89,7 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "chart-of-accounts": [
     { id: "", code: "1000", name: "Cash on Hand", type: "Asset", parent_code: "", is_active: "1" },
   ],
-  "school-students": [{ id: "", admission_number: "", first_name: "Amina", other_names: "Zawedde", last_name: "Nabirye", class_name: "Senior 1", stream: "East", day_boarding: "Day", status: "active", date_of_birth: "2012-03-15", school_pay_number: "SP-10001", learner_id: "LRN-10001", parent_name: "Sarah Nabirye", parent_phone: "+256700000001", relationship: "Mother", notes: "Leave admission_number blank to generate it automatically" }],
+  "school-students": [{ id: "", admission_number: "", first_name: "Amina", other_names: "Zawedde", last_name: "Nabirye", class_name: "Senior 1", stream: "East", day_boarding: "Day", status: "active", date_of_birth: "2012-03-15", school_pay_number: "", learner_id: "", parent_name: "Sarah Nabirye", parent_phone: "+256700000001", relationship: "Mother", notes: "Admission number is generated automatically. SchoolPay and learner IDs must be unique when provided." }],
   "school-parents": [{ id: "", full_name: "Sarah Nabirye", phone: "+256700000001", phone_alt: "", email: "", address: "Kampala", student_admission_number: "S0001", relationship: "Mother", is_primary: "1", notes: "Primary guardian" }],
   "school-classes": [{ id: "", name: "Senior 1", code: "S1", sort_order: "1", is_active: "1" }],
   "school-streams": [{ id: "", name: "East", code: "E", sort_order: "1", is_active: "1" }],
@@ -371,26 +371,62 @@ export function AdminLocalImportPage() {
   const importCloudStudents = async (rows: ParsedRow[]) => {
     const organizationId = requireOrganizationId();
     let imported = 0;
-    for (const row of rows) {
+    const seenSchoolPayNumbers = new Set<string>();
+    const seenLearnerIds = new Set<string>();
+    for (const [rowIndex, row] of rows.entries()) {
       const admissionNumber = asText(row.admission_number);
       const firstName = asText(row.first_name);
       const lastName = asText(row.last_name);
       const className = asText(row.class_name);
       if (!firstName || !lastName || !className) continue;
+      const schoolPayNumber = asText(row.school_pay_number);
+      const learnerId = asText(row.learner_id);
+      if (schoolPayNumber && seenSchoolPayNumbers.has(schoolPayNumber.toLowerCase())) {
+        throw new Error(`Row ${rowIndex + 2}: SchoolPay number ${schoolPayNumber} is repeated in this file.`);
+      }
+      if (learnerId && seenLearnerIds.has(learnerId.toLowerCase())) {
+        throw new Error(`Row ${rowIndex + 2}: learner ID ${learnerId} is repeated in this file.`);
+      }
+      if (schoolPayNumber) seenSchoolPayNumbers.add(schoolPayNumber.toLowerCase());
+      if (learnerId) seenLearnerIds.add(learnerId.toLowerCase());
       const studentPayload = {
         organization_id: organizationId, first_name: firstName,
         other_names: asText(row.other_names) || null, last_name: lastName,
         class_name: className, stream: asText(row.stream) || null, is_boarding: asBoarding(row),
         status: asStudentStatus(row.status),
-        date_of_birth: asText(row.date_of_birth) || null, school_pay_number: asText(row.school_pay_number) || null,
-        learner_id: asText(row.learner_id) || null, notes: asText(row.notes) || null,
+        date_of_birth: asText(row.date_of_birth) || null, school_pay_number: schoolPayNumber || null,
+        learner_id: learnerId || null, notes: asText(row.notes) || null,
       };
-      const student = admissionNumber
-        ? await supabase.from("students").upsert(
+      const identityMatches: Array<{ id: string; admission_number: string }> = [];
+      if (schoolPayNumber) {
+        const match = await supabase.from("students").select("id,admission_number")
+          .eq("organization_id", organizationId).eq("school_pay_number", schoolPayNumber).maybeSingle();
+        if (match.error) throw match.error;
+        if (match.data) identityMatches.push(match.data);
+      }
+      if (learnerId) {
+        const match = await supabase.from("students").select("id,admission_number")
+          .eq("organization_id", organizationId).eq("learner_id", learnerId).maybeSingle();
+        if (match.error) throw match.error;
+        if (match.data && !identityMatches.some((candidate) => candidate.id === match.data.id)) identityMatches.push(match.data);
+      }
+      if (identityMatches.length > 1) {
+        throw new Error(`Row ${rowIndex + 2}: SchoolPay number and learner ID belong to different students.`);
+      }
+      const identityMatch = identityMatches[0];
+      if (identityMatch && admissionNumber && identityMatch.admission_number !== admissionNumber) {
+        throw new Error(`Row ${rowIndex + 2}: ${schoolPayNumber || learnerId} already belongs to admission ${identityMatch.admission_number}.`);
+      }
+      const student = identityMatch && !admissionNumber
+        ? await supabase.from("students").update(studentPayload)
+            .eq("organization_id", organizationId).eq("id", identityMatch.id)
+            .select("id,admission_number").single()
+        : admissionNumber
+          ? await supabase.from("students").upsert(
             { ...studentPayload, admission_number: admissionNumber },
             { onConflict: "organization_id,admission_number" }
           ).select("id,admission_number").single()
-        : await supabase.from("students").insert(studentPayload).select("id,admission_number").single();
+          : await supabase.from("students").insert(studentPayload).select("id,admission_number").single();
       if (student.error) throw new Error(`${admissionNumber || "Automatic admission number"}: ${student.error.message}`);
       const parentName = asText(row.parent_name);
       if (parentName) {
