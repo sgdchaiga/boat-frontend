@@ -137,6 +137,15 @@ function asBoarding(row: ParsedRow): boolean {
   return asBool(row.is_boarding, false);
 }
 
+function asStudentStatus(value: unknown): "active" | "left" | "graduated" | "suspended" {
+  const status = asText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (!status || ["active", "current", "enrolled", "continuing"].includes(status)) return "active";
+  if (["left", "left_school", "withdrawn", "transferred"].includes(status)) return "left";
+  if (["graduated", "graduate", "completed"].includes(status)) return "graduated";
+  if (["suspended", "suspend"].includes(status)) return "suspended";
+  return "active";
+}
+
 function generateId(prefix: string): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return `${prefix}_${crypto.randomUUID()}`;
@@ -315,7 +324,7 @@ export function AdminLocalImportPage() {
         if (!asText(row.first_name) || !asText(row.last_name) || !asText(row.class_name)) return [];
         const admissionNumber = asText(row.admission_number) || nextSchoolAdmissionNumber(existingAdmissionNumbers);
         existingAdmissionNumbers.push(admissionNumber);
-        return [{ ...base, admission_number: admissionNumber, first_name: asText(row.first_name), other_names: asText(row.other_names) || null, last_name: asText(row.last_name), class_name: asText(row.class_name), stream: asText(row.stream) || null, is_boarding: asBoarding(row), status: asText(row.status) || "active", date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
+        return [{ ...base, admission_number: admissionNumber, first_name: asText(row.first_name), other_names: asText(row.other_names) || null, last_name: asText(row.last_name), class_name: asText(row.class_name), stream: asText(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
       }
       if (type === "school-parents") {
         if (!asText(row.full_name)) return [];
@@ -372,7 +381,7 @@ export function AdminLocalImportPage() {
         organization_id: organizationId, first_name: firstName,
         other_names: asText(row.other_names) || null, last_name: lastName,
         class_name: className, stream: asText(row.stream) || null, is_boarding: asBoarding(row),
-        status: asText(row.status) || "active",
+        status: asStudentStatus(row.status),
         date_of_birth: asText(row.date_of_birth) || null, school_pay_number: asText(row.school_pay_number) || null,
         learner_id: asText(row.learner_id) || null, notes: asText(row.notes) || null,
       };
