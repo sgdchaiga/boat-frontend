@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import * as XLSX from "xlsx";
 import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
+import { toSchoolTitleCase } from "@/lib/schoolTextCase";
 
 type StudentRow = {
   id: string;
@@ -21,6 +22,15 @@ type EditDraft = {
   class_name: string;
   is_boarding: boolean;
 };
+
+function normalizeStudentCase(row: StudentRow): StudentRow {
+  return {
+    ...row,
+    first_name: toSchoolTitleCase(row.first_name),
+    last_name: toSchoolTitleCase(row.last_name),
+    class_name: toSchoolTitleCase(row.class_name),
+  };
+}
 
 export function StudentsListPage() {
   const { user, isSuperAdmin } = useAuth();
@@ -45,7 +55,7 @@ export function StudentsListPage() {
     if (canUseSchoolApi() && orgId) {
       try {
         const data = await listSchoolRows<StudentRow>("students", orgId);
-        setRows(data);
+        setRows(data.map(normalizeStudentCase));
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load students.");
         setRows([]);
@@ -59,7 +69,7 @@ export function StudentsListPage() {
       setError(loadErr.message);
       setRows([]);
     } else {
-      setRows((data || []) as StudentRow[]);
+      setRows(((data || []) as StudentRow[]).map(normalizeStudentCase));
     }
     setLoading(false);
   };
@@ -104,9 +114,9 @@ export function StudentsListPage() {
     setError(null);
     const payload = {
       admission_number: editDraft.admission_number.trim(),
-      first_name: editDraft.first_name.trim(),
-      last_name: editDraft.last_name.trim(),
-      class_name: editDraft.class_name.trim(),
+      first_name: toSchoolTitleCase(editDraft.first_name),
+      last_name: toSchoolTitleCase(editDraft.last_name),
+      class_name: toSchoolTitleCase(editDraft.class_name),
       is_boarding: editDraft.is_boarding,
     };
     if (canUseSchoolApi() && user?.organization_id) {

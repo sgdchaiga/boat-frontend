@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
 import { nextSchoolAdmissionNumber } from "@/lib/schoolAdmissionNumber";
+import { toSchoolTitleCase } from "@/lib/schoolTextCase";
 
 type CatRow = { id: string; name: string };
 type ParentRow = { id: string; full_name: string; email?: string | null; phone?: string | null; phone_alt?: string | null };
@@ -106,7 +107,7 @@ export function SchoolStudentsBioPage() {
     }
     setSavingParent(true); setErrorMsg(null);
     try {
-      const payload = { full_name: parentForm.full_name.trim(), phone: parentForm.phone.trim() || null, email: parentForm.email.trim() || null, phone_alt: null };
+      const payload = { full_name: toSchoolTitleCase(parentForm.full_name), phone: parentForm.phone.trim() || null, email: parentForm.email.trim() || null, phone_alt: null };
       let created: ParentRow;
       if (canUseSchoolApi()) {
         created = await createSchoolRow<ParentRow>("parents", orgId, payload);
@@ -156,9 +157,9 @@ export function SchoolStudentsBioPage() {
     setSaving(true);
     try {
       const payload = {
-        first_name: form.first_name.trim(),
-        last_name: form.last_name.trim(),
-        other_names: form.other_names.trim() || null,
+        first_name: toSchoolTitleCase(form.first_name),
+        last_name: toSchoolTitleCase(form.last_name),
+        other_names: toSchoolTitleCase(form.other_names) || null,
         school_pay_number: form.school_pay_number.trim() || null,
         learner_id: form.learner_id.trim() || null,
         class_id: form.class_id || null,

@@ -7,6 +7,7 @@ import { createJournalForExpenseWithLines, createJournalForVendorPayment } from 
 import { isSpendMoneyApprovalEnabled, queueExpenseForTreasury } from "@/lib/treasuryWorkflow";
 import { getTotalPaidForBill, syncBillStatusInDb } from "@/lib/billStatus";
 import { nextSchoolAdmissionNumber } from "@/lib/schoolAdmissionNumber";
+import { toSchoolTitleCase } from "@/lib/schoolTextCase";
 
 type ImportEntity =
   | "products"
@@ -324,7 +325,7 @@ export function AdminLocalImportPage() {
         if (!asText(row.first_name) || !asText(row.last_name) || !asText(row.class_name)) return [];
         const admissionNumber = asText(row.admission_number) || nextSchoolAdmissionNumber(existingAdmissionNumbers);
         existingAdmissionNumbers.push(admissionNumber);
-        return [{ ...base, admission_number: admissionNumber, first_name: asText(row.first_name), other_names: asText(row.other_names) || null, last_name: asText(row.last_name), class_name: asText(row.class_name), stream: asText(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
+        return [{ ...base, admission_number: admissionNumber, first_name: toSchoolTitleCase(row.first_name), other_names: toSchoolTitleCase(row.other_names) || null, last_name: toSchoolTitleCase(row.last_name), class_name: toSchoolTitleCase(row.class_name), stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
       }
       if (type === "school-parents") {
         if (!asText(row.full_name)) return [];
@@ -375,9 +376,9 @@ export function AdminLocalImportPage() {
     const seenLearnerIds = new Set<string>();
     for (const [rowIndex, row] of rows.entries()) {
       const admissionNumber = asText(row.admission_number);
-      const firstName = asText(row.first_name);
-      const lastName = asText(row.last_name);
-      const className = asText(row.class_name);
+      const firstName = toSchoolTitleCase(row.first_name);
+      const lastName = toSchoolTitleCase(row.last_name);
+      const className = toSchoolTitleCase(row.class_name);
       if (!firstName || !lastName || !className) continue;
       const schoolPayNumber = asText(row.school_pay_number);
       const learnerId = asText(row.learner_id);
@@ -391,8 +392,8 @@ export function AdminLocalImportPage() {
       if (learnerId) seenLearnerIds.add(learnerId.toLowerCase());
       const studentPayload = {
         organization_id: organizationId, first_name: firstName,
-        other_names: asText(row.other_names) || null, last_name: lastName,
-        class_name: className, stream: asText(row.stream) || null, is_boarding: asBoarding(row),
+        other_names: toSchoolTitleCase(row.other_names) || null, last_name: lastName,
+        class_name: className, stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row),
         status: asStudentStatus(row.status),
         date_of_birth: asText(row.date_of_birth) || null, school_pay_number: schoolPayNumber || null,
         learner_id: learnerId || null, notes: asText(row.notes) || null,
@@ -428,7 +429,7 @@ export function AdminLocalImportPage() {
           ).select("id,admission_number").single()
           : await supabase.from("students").insert(studentPayload).select("id,admission_number").single();
       if (student.error) throw new Error(`${admissionNumber || "Automatic admission number"}: ${student.error.message}`);
-      const parentName = asText(row.parent_name);
+      const parentName = toSchoolTitleCase(row.parent_name);
       if (parentName) {
         const phone = asText(row.parent_phone);
         let parentQuery = supabase.from("parents").select("id").eq("organization_id", organizationId);
