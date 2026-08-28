@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
+import { nextSchoolAdmissionNumber } from "@/lib/schoolAdmissionNumber";
 
 type CatRow = { id: string; name: string };
 type ParentRow = { id: string; full_name: string; email?: string | null; phone?: string | null; phone_alt?: string | null };
@@ -39,6 +40,7 @@ export function SchoolStudentsBioPage() {
   const [showNewParent, setShowNewParent] = useState(false);
   const [savingParent, setSavingParent] = useState(false);
   const [parentForm, setParentForm] = useState({ full_name: "", phone: "", email: "" });
+  const nextAdmissionNumber = nextSchoolAdmissionNumber(rows.map((row) => row.admission_number));
 
   const [form, setForm] = useState({
     admission_number: "",
@@ -135,8 +137,8 @@ export function SchoolStudentsBioPage() {
       setErrorMsg("No organization is attached to your account.");
       return;
     }
-    if (!form.admission_number.trim() || !form.first_name.trim() || !form.last_name.trim()) {
-      setErrorMsg("Admission number, first name, and last name are required.");
+    if (!form.first_name.trim() || !form.last_name.trim()) {
+      setErrorMsg("First name and last name are required.");
       return;
     }
     if (!form.class_id) {
@@ -154,7 +156,6 @@ export function SchoolStudentsBioPage() {
     setSaving(true);
     try {
       const payload = {
-        admission_number: form.admission_number.trim(),
         first_name: form.first_name.trim(),
         last_name: form.last_name.trim(),
         other_names: form.other_names.trim() || null,
@@ -249,10 +250,16 @@ export function SchoolStudentsBioPage() {
       {/* FORM */}
       <div className="grid md:grid-cols-3 gap-3 border p-4 rounded-xl bg-white">
 
-        <input placeholder="Admission Number"
-          value={form.admission_number}
-          onChange={e => setForm({ ...form, admission_number: e.target.value })}
-          className="border p-2 rounded" />
+        <div>
+          <label className="text-xs font-medium text-slate-600">Admission number</label>
+          <input
+            value={nextAdmissionNumber}
+            readOnly
+            aria-describedby="admission-number-help"
+            className="w-full cursor-not-allowed rounded border bg-slate-50 p-2 font-mono text-slate-700"
+          />
+          <p id="admission-number-help" className="mt-1 text-xs text-slate-500">Assigned automatically when the student is saved.</p>
+        </div>
 
         <input placeholder="First Name"
           value={form.first_name}
