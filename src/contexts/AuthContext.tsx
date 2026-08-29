@@ -338,16 +338,20 @@ type CachedTenantProfile = {
   tenant: TenantProfile;
 };
 
-function subscriptionCacheKey(userId: string): string {
-  return `${SUBSCRIPTION_CACHE_KEY_PREFIX}:${userId}`;
+function subscriptionCacheKey(userId: string, organizationId?: string | null): string {
+  return organizationId
+    ? `${SUBSCRIPTION_CACHE_KEY_PREFIX}:${userId}:${organizationId}`
+    : `${SUBSCRIPTION_CACHE_KEY_PREFIX}:${userId}`;
 }
 
-function readTenantCache(userId: string): CachedTenantProfile | null {
+function readTenantCache(userId: string, organizationId?: string | null): CachedTenantProfile | null {
   try {
-    const raw = window.localStorage.getItem(subscriptionCacheKey(userId));
+    const raw = window.localStorage.getItem(subscriptionCacheKey(userId, organizationId));
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<CachedTenantProfile>;
     if (!parsed || typeof parsed.lastValidatedAt !== "number" || !parsed.tenant) return null;
+    // Never apply one organization's cached subscription state to another organization.
+    if (organizationId && parsed.tenant.organization_id !== organizationId) return null;
     return parsed as CachedTenantProfile;
   } catch {
     return null;
@@ -360,7 +364,7 @@ function writeTenantCache(userId: string, tenant: TenantProfile): void {
       lastValidatedAt: Date.now(),
       tenant,
     };
-    window.localStorage.setItem(subscriptionCacheKey(userId), JSON.stringify(payload));
+    window.localStorage.setItem(subscriptionCacheKey(userId, tenant.organization_id), JSON.stringify(payload));
   } catch {
     // Ignore cache write errors; auth flow should not fail for storage quota/privacy mode.
   }
@@ -731,7 +735,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     return resolved;
   } catch {
     // Offline or API failure: allow temporary cached access only within grace period.
-    const cached = readTenantCache(userId);
+    const cached = readTenantCache(userId, explicitOrganizationId);
     if (!cached) return forceReadOnlyTenant(empty);
     if (isCacheExpired(cached.lastValidatedAt)) {
       return forceReadOnlyTenant(cached.tenant);
@@ -740,8 +744,8 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
   }
 }
 
-function subscriptionMetaForUserId(userId: string) {
-  const cached = readTenantCache(userId);
+function subscriptionMetaForUserId(userId: string, organizationId?: string | null) {
+  const cached = readTenantCache(userId, organizationId);
   if (!cached) {
     return {
       subscription_last_validated_at: null as number | null,
@@ -761,7 +765,7 @@ function subscriptionMetaForUserId(userId: string) {
 async function buildLocalAuthUserWithTenant(account: LocalAuthAccount): Promise<AuthUser> {
   const base = toLocalAuthUser(account);
   if (!desktopApi.isAvailable()) {
-    return { ...base, ...subscriptionMetaForUserId(account.id) };
+    return base;
   }
   try {
     const tenant = await loadTenantProfile(account.id);
@@ -770,13 +774,13 @@ async function buildLocalAuthUserWithTenant(account: LocalAuthAccount): Promise<
         ...base,
         ...tenant,
         business_type: (tenant.business_type ?? base.business_type) as TenantProfile["business_type"],
-        ...subscriptionMetaForUserId(account.id),
+        ...subscriptionMetaForUserId(account.id, tenant.organization_id),
       };
     }
   } catch {
     /* keep base */
   }
-  return { ...base, ...subscriptionMetaForUserId(account.id) };
+  return base;
 }
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
@@ -790,8 +794,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [memberships, setMemberships] = useState<OrganizationMembership[]>([]);
   const [needsOrganizationPicker, setNeedsOrganizationPicker] = useState(false);
 
-  const getSubscriptionCacheMeta = useCallback((userId: string) => {
-    const cached = readTenantCache(userId);
+  const getSubscriptionCacheMeta = useCallback((userId: string, organizationId?: string | null) => {
+    const cached = readTenantCache(userId, organizationId);
     if (!cached) {
       return {
         subscription_last_validated_at: null,
@@ -815,7 +819,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       membership?: OrganizationMembership | null,
       meta?: Record<string, unknown>
     ): AuthUser => {
-      const subscriptionCacheMeta = getSubscriptionCacheMeta(sessionUser.id);
+      const subscriptionCacheMeta = getSubscriptionCacheMeta(sessionUser.id, tenant.organization_id);
       const roleFromMember = membership?.role as UserRole | undefined;
       return {
         id: sessionUser.id,
@@ -1027,7 +1031,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           purchases_require_bill_approval: true,
           license_device_allowed: true,
           license_device_reason: null,
-          ...getSubscriptionCacheMeta(sessionUser.id),
+          ...getSubscriptionCacheMeta(sessionUser.id, null),
         });
         return;
       }
@@ -1133,7 +1137,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       loadTenantProfile(user.id, activeOrgId),
       supabase.from("staff").select("hospitality_branch_id").eq("id", user.id).maybeSingle(),
     ]);
-    const subscriptionCacheMeta = getSubscriptionCacheMeta(user.id);
+    const subscriptionCacheMeta = getSubscriptionCacheMeta(user.id, activeOrgId);
     const membership = memberships.find((m) => m.organization_id === activeOrgId) ?? null;
     const hospitality_branch_id =
       (staffBranchRes.data as { hospitality_branch_id?: string | null } | null)?.hospitality_branch_id ?? null;
