@@ -321,19 +321,41 @@ export function AdminLocalImportPage() {
     };
     const table = tableByType[type];
     if (!table) return 0;
-    const existingAdmissionNumbers = type === "school-students"
+    const existingStudentRows = type === "school-students"
       ? (await desktopApi.localSelect({
           table: "students",
           filters: [{ column: "organization_id", operator: "eq", value: organizationId }],
-        })).rows.map((row) => asText(row.admission_number))
+        })).rows
       : [];
+    const existingAdmissionNumbers = existingStudentRows.map((row) => asText(row.admission_number));
+    const existingStudentIds = new Set(existingStudentRows.map((row) => asText(row.id)).filter(Boolean));
+    const existingSchoolPayNumbers = new Set(existingStudentRows.map((row) => asText(row.school_pay_number).toLowerCase()).filter(Boolean));
+    const existingLearnerIds = new Set(existingStudentRows.map((row) => asText(row.learner_id).toLowerCase()).filter(Boolean));
     const mapped = rows.flatMap<Record<string, unknown>>((row, index) => {
       const base = { id: asText(row.id) || generateId(type.replace("school-", "sch")), organization_id: organizationId };
       if (type === "school-students") {
         if (!asText(row.first_name) || !asText(row.last_name) || !asText(row.class_name)) return [];
-        const admissionNumber = asText(row.admission_number) || nextSchoolAdmissionNumber(existingAdmissionNumbers);
+        const requestedAdmissionNumber = asText(row.admission_number);
+        if (requestedAdmissionNumber && existingAdmissionNumbers.some((value) => value.toLowerCase() === requestedAdmissionNumber.toLowerCase())) {
+          throw new Error(`Admission number ${requestedAdmissionNumber} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+        }
+        if (asText(row.id) && existingStudentIds.has(asText(row.id))) {
+          throw new Error(`Student ID ${asText(row.id)} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+        }
+        const schoolPayNumber = asText(row.school_pay_number);
+        const learnerId = asText(row.learner_id);
+        if (schoolPayNumber && existingSchoolPayNumbers.has(schoolPayNumber.toLowerCase())) {
+          throw new Error(`SchoolPay number ${schoolPayNumber} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+        }
+        if (learnerId && existingLearnerIds.has(learnerId.toLowerCase())) {
+          throw new Error(`Learner ID ${learnerId} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+        }
+        const admissionNumber = requestedAdmissionNumber || nextSchoolAdmissionNumber(existingAdmissionNumbers);
         existingAdmissionNumbers.push(admissionNumber);
-        return [{ ...base, admission_number: admissionNumber, first_name: toSchoolTitleCase(row.first_name), other_names: toSchoolTitleCase(row.other_names) || null, last_name: toSchoolTitleCase(row.last_name), gender: asGender(row.gender), class_name: toSchoolTitleCase(row.class_name), stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
+        existingStudentIds.add(String(base.id));
+        if (schoolPayNumber) existingSchoolPayNumbers.add(schoolPayNumber.toLowerCase());
+        if (learnerId) existingLearnerIds.add(learnerId.toLowerCase());
+        return [{ ...base, admission_number: admissionNumber, first_name: toSchoolTitleCase(row.first_name), other_names: toSchoolTitleCase(row.other_names) || null, last_name: toSchoolTitleCase(row.last_name), gender: asGender(row.gender), class_name: toSchoolTitleCase(row.class_name), stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, school_pay_number: schoolPayNumber || null, learner_id: learnerId || null, notes: asText(row.notes) || null }];
       }
       if (type === "school-parents") {
         if (!asText(row.full_name)) return [];
@@ -380,8 +402,38 @@ export function AdminLocalImportPage() {
   const importCloudStudents = async (rows: ParsedRow[]) => {
     const organizationId = requireOrganizationId();
     let imported = 0;
+    const seenAdmissions = new Set<string>();
     const seenSchoolPayNumbers = new Set<string>();
     const seenLearnerIds = new Set<string>();
+    const seenIds = new Set<string>();
+    const existingResult = await supabase.from("students")
+      .select("id,admission_number,school_pay_number,learner_id")
+      .eq("organization_id", organizationId);
+    if (existingResult.error) throw existingResult.error;
+    const existingStudents = (existingResult.data || []) as Array<{ id: string; admission_number: string; school_pay_number: string | null; learner_id: string | null }>;
+    const existingAdmissions = new Set(existingStudents.map((student) => student.admission_number.toLowerCase()));
+    const existingSchoolPay = new Set(existingStudents.map((student) => student.school_pay_number?.toLowerCase()).filter((value): value is string => !!value));
+    const existingLearners = new Set(existingStudents.map((student) => student.learner_id?.toLowerCase()).filter((value): value is string => !!value));
+    const existingIds = new Set(existingStudents.map((student) => student.id));
+
+    for (const [rowIndex, row] of rows.entries()) {
+      const admission = asText(row.admission_number);
+      const schoolPay = asText(row.school_pay_number);
+      const learner = asText(row.learner_id);
+      const id = asText(row.id);
+      if (admission && existingAdmissions.has(admission.toLowerCase())) throw new Error(`Row ${rowIndex + 2}: admission number ${admission} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+      if (schoolPay && existingSchoolPay.has(schoolPay.toLowerCase())) throw new Error(`Row ${rowIndex + 2}: SchoolPay number ${schoolPay} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+      if (learner && existingLearners.has(learner.toLowerCase())) throw new Error(`Row ${rowIndex + 2}: learner ID ${learner} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+      if (id && existingIds.has(id)) throw new Error(`Row ${rowIndex + 2}: student ID ${id} already exists. Student imports are insert-only and cannot overwrite existing records.`);
+      if (admission && seenAdmissions.has(admission.toLowerCase())) throw new Error(`Row ${rowIndex + 2}: admission number ${admission} is repeated in this file.`);
+      if (schoolPay && seenSchoolPayNumbers.has(schoolPay.toLowerCase())) throw new Error(`Row ${rowIndex + 2}: SchoolPay number ${schoolPay} is repeated in this file.`);
+      if (learner && seenLearnerIds.has(learner.toLowerCase())) throw new Error(`Row ${rowIndex + 2}: learner ID ${learner} is repeated in this file.`);
+      if (id && seenIds.has(id)) throw new Error(`Row ${rowIndex + 2}: student ID ${id} is repeated in this file.`);
+      if (admission) seenAdmissions.add(admission.toLowerCase());
+      if (schoolPay) seenSchoolPayNumbers.add(schoolPay.toLowerCase());
+      if (learner) seenLearnerIds.add(learner.toLowerCase());
+      if (id) seenIds.add(id);
+    }
     for (const [rowIndex, row] of rows.entries()) {
       const admissionNumber = asText(row.admission_number);
       const firstName = toSchoolTitleCase(row.first_name);
@@ -390,14 +442,6 @@ export function AdminLocalImportPage() {
       if (!firstName || !lastName || !className) continue;
       const schoolPayNumber = asText(row.school_pay_number);
       const learnerId = asText(row.learner_id);
-      if (schoolPayNumber && seenSchoolPayNumbers.has(schoolPayNumber.toLowerCase())) {
-        throw new Error(`Row ${rowIndex + 2}: SchoolPay number ${schoolPayNumber} is repeated in this file.`);
-      }
-      if (learnerId && seenLearnerIds.has(learnerId.toLowerCase())) {
-        throw new Error(`Row ${rowIndex + 2}: learner ID ${learnerId} is repeated in this file.`);
-      }
-      if (schoolPayNumber) seenSchoolPayNumbers.add(schoolPayNumber.toLowerCase());
-      if (learnerId) seenLearnerIds.add(learnerId.toLowerCase());
       const studentPayload = {
         organization_id: organizationId, first_name: firstName,
         other_names: toSchoolTitleCase(row.other_names) || null, last_name: lastName,
@@ -406,36 +450,9 @@ export function AdminLocalImportPage() {
         date_of_birth: asText(row.date_of_birth) || null, school_pay_number: schoolPayNumber || null,
         learner_id: learnerId || null, notes: asText(row.notes) || null,
       };
-      const identityMatches: Array<{ id: string; admission_number: string }> = [];
-      if (schoolPayNumber) {
-        const match = await supabase.from("students").select("id,admission_number")
-          .eq("organization_id", organizationId).eq("school_pay_number", schoolPayNumber).maybeSingle();
-        if (match.error) throw match.error;
-        if (match.data) identityMatches.push(match.data);
-      }
-      if (learnerId) {
-        const match = await supabase.from("students").select("id,admission_number")
-          .eq("organization_id", organizationId).eq("learner_id", learnerId).maybeSingle();
-        if (match.error) throw match.error;
-        if (match.data && !identityMatches.some((candidate) => candidate.id === match.data.id)) identityMatches.push(match.data);
-      }
-      if (identityMatches.length > 1) {
-        throw new Error(`Row ${rowIndex + 2}: SchoolPay number and learner ID belong to different students.`);
-      }
-      const identityMatch = identityMatches[0];
-      if (identityMatch && admissionNumber && identityMatch.admission_number !== admissionNumber) {
-        throw new Error(`Row ${rowIndex + 2}: ${schoolPayNumber || learnerId} already belongs to admission ${identityMatch.admission_number}.`);
-      }
-      const student = identityMatch && !admissionNumber
-        ? await supabase.from("students").update(studentPayload)
-            .eq("organization_id", organizationId).eq("id", identityMatch.id)
-            .select("id,admission_number").single()
-        : admissionNumber
-          ? await supabase.from("students").upsert(
-            { ...studentPayload, admission_number: admissionNumber },
-            { onConflict: "organization_id,admission_number" }
-          ).select("id,admission_number").single()
-          : await supabase.from("students").insert(studentPayload).select("id,admission_number").single();
+      const student = await supabase.from("students")
+        .insert(admissionNumber ? { ...studentPayload, admission_number: admissionNumber } : studentPayload)
+        .select("id,admission_number").single();
       if (student.error) throw new Error(`${admissionNumber || "Automatic admission number"}: ${student.error.message}`);
       const parentName = toSchoolTitleCase(row.parent_name);
       if (parentName) {
