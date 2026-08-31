@@ -8,6 +8,7 @@ import { isSpendMoneyApprovalEnabled, queueExpenseForTreasury } from "@/lib/trea
 import { getTotalPaidForBill, syncBillStatusInDb } from "@/lib/billStatus";
 import { nextSchoolAdmissionNumber } from "@/lib/schoolAdmissionNumber";
 import { toSchoolTitleCase } from "@/lib/schoolTextCase";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type ImportEntity =
   | "products"
@@ -28,6 +29,19 @@ type ImportEntity =
   | "school-payments";
 
 type ParsedRow = Record<string, unknown>;
+type BulkMode = "import" | "update";
+type UpdateEntity = "school-students" | "vendors";
+type UpdatePreviewRow = {
+  rowNumber: number;
+  recordId: string;
+  matchLabel: string;
+  changes: Record<string, unknown>;
+  changeLabels: string[];
+};
+
+const STUDENT_UPDATE_FIELDS = ["first_name", "other_names", "last_name", "gender", "class_name", "stream", "day_boarding", "status", "date_of_birth", "school_pay_number", "learner_id", "notes"] as const;
+const VENDOR_UPDATE_FIELDS = ["name", "contact_name", "email", "phone", "address", "tax_number", "notes", "is_active"] as const;
+const CLEAR_VALUE = "[CLEAR]";
 
 const ENTITY_OPTIONS: Array<{ id: ImportEntity; label: string; required: string[] }> = [
   { id: "products", label: "Products", required: ["name"] },
@@ -165,9 +179,11 @@ function generateId(prefix: string): string {
 export function AdminLocalImportPage() {
   const { user } = useAuth();
   const [entity, setEntity] = useState<ImportEntity>("products");
+  const [mode, setMode] = useState<BulkMode>("import");
   const [file, setFile] = useState<File | null>(null);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [updatePreview, setUpdatePreview] = useState<UpdatePreviewRow[]>([]);
 
   const selected = useMemo(
     () => ENTITY_OPTIONS.find((opt) => opt.id === entity) ?? ENTITY_OPTIONS[0],
@@ -272,19 +288,31 @@ export function AdminLocalImportPage() {
   };
 
   const importVendors = async (rows: ParsedRow[]) => {
+    const organizationId = user?.organization_id || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || "00000000-0000-0000-0000-000000000001";
+    const existing = await desktopApi.localSelect({ table: "vendors", filters: [{ column: "organization_id", operator: "eq", value: organizationId }] });
+    const existingIds = new Set(existing.rows.map((row) => asText(row.id)).filter(Boolean));
+    const seenIds = new Set<string>();
     const mapped = rows
       .filter((row) => asText(row.name))
-      .map((row) => ({
-        id: asText(row.id) || generateId("vnd"),
-        name: asText(row.name),
-        contact_name: asText(row.contact_name),
-        email: asText(row.email),
-        phone: asText(row.phone),
-        address: asText(row.address),
-        tax_number: asText(row.tax_number),
-        notes: asText(row.notes),
-        is_active: asBool(row.is_active, true),
-      }));
+      .map((row) => {
+        const requestedId = asText(row.id);
+        if (requestedId && existingIds.has(requestedId)) throw new Error(`Vendor ID ${requestedId} already exists. Vendor imports are insert-only; use Update Existing Records instead.`);
+        if (requestedId && seenIds.has(requestedId)) throw new Error(`Vendor ID ${requestedId} is repeated in this import file.`);
+        const id = requestedId || generateId("vnd");
+        seenIds.add(id);
+        return {
+          id,
+          organization_id: organizationId,
+          name: asText(row.name),
+          contact_name: asText(row.contact_name),
+          email: asText(row.email),
+          phone: asText(row.phone),
+          address: asText(row.address),
+          tax_number: asText(row.tax_number),
+          notes: asText(row.notes),
+          is_active: asBool(row.is_active, true),
+        };
+      });
     if (mapped.length === 0) return 0;
     await desktopApi.localUpsert({ table: "vendors", rows: mapped });
     return mapped.length;
@@ -406,11 +434,9 @@ export function AdminLocalImportPage() {
     const seenSchoolPayNumbers = new Set<string>();
     const seenLearnerIds = new Set<string>();
     const seenIds = new Set<string>();
-    const existingResult = await supabase.from("students")
+    const existingStudents = await fetchAllPages<{ id: string; admission_number: string; school_pay_number: string | null; learner_id: string | null }>((from, to) => supabase.from("students")
       .select("id,admission_number,school_pay_number,learner_id")
-      .eq("organization_id", organizationId);
-    if (existingResult.error) throw existingResult.error;
-    const existingStudents = (existingResult.data || []) as Array<{ id: string; admission_number: string; school_pay_number: string | null; learner_id: string | null }>;
+      .eq("organization_id", organizationId).order("id").range(from, to));
     const existingAdmissions = new Set(existingStudents.map((student) => student.admission_number.toLowerCase()));
     const existingSchoolPay = new Set(existingStudents.map((student) => student.school_pay_number?.toLowerCase()).filter((value): value is string => !!value));
     const existingLearners = new Set(existingStudents.map((student) => student.learner_id?.toLowerCase()).filter((value): value is string => !!value));
@@ -641,6 +667,170 @@ export function AdminLocalImportPage() {
     return imported;
   };
 
+  const buildUpdatePreview = async (rows: ParsedRow[]): Promise<UpdatePreviewRow[]> => {
+    if (desktopApi.isAvailable()) throw new Error("Bulk update is currently available in the cloud application only.");
+    if (entity !== "school-students" && entity !== "vendors") throw new Error("Choose Students or Vendors for bulk update.");
+    const organizationId = requireOrganizationId();
+    const previews: UpdatePreviewRow[] = [];
+    const seenRecordIds = new Set<string>();
+
+    if (entity === "school-students") {
+      const students = await fetchAllPages<Record<string, unknown>>((from, to) => supabase.from("students")
+        .select("id,admission_number,first_name,other_names,last_name,gender,class_name,stream,is_boarding,status,date_of_birth,school_pay_number,learner_id,notes")
+        .eq("organization_id", organizationId).order("id").range(from, to));
+      const byAdmission = new Map(students.map((student) => [asText(student.admission_number).toLowerCase(), student]));
+      const schoolPayOwners = new Map(students.filter((student) => asText(student.school_pay_number)).map((student) => [asText(student.school_pay_number).toLowerCase(), asText(student.id)]));
+      const learnerOwners = new Map(students.filter((student) => asText(student.learner_id)).map((student) => [asText(student.learner_id).toLowerCase(), asText(student.id)]));
+      const pendingSchoolPay = new Map<string, string>();
+      const pendingLearners = new Map<string, string>();
+
+      for (const [index, row] of rows.entries()) {
+        const admission = asText(row.admission_number);
+        if (!admission) throw new Error(`Row ${index + 2}: admission_number is required for student updates.`);
+        const current = byAdmission.get(admission.toLowerCase());
+        if (!current) throw new Error(`Row ${index + 2}: admission number ${admission} was not found in this organization.`);
+        const recordId = asText(current.id);
+        if (seenRecordIds.has(recordId)) throw new Error(`Row ${index + 2}: admission number ${admission} is repeated in this file.`);
+        seenRecordIds.add(recordId);
+        const changes: Record<string, unknown> = {};
+        const labels: string[] = [];
+
+        for (const field of STUDENT_UPDATE_FIELDS) {
+          const raw = asText(row[field]);
+          if (!raw) continue;
+          let column: string = field;
+          let value: unknown = raw === CLEAR_VALUE ? null : raw;
+          if (field === "day_boarding") {
+            column = "is_boarding";
+            if (raw !== CLEAR_VALUE && !["day", "day scholar", "day_student", "day student", "boarding", "boarder"].includes(raw.toLowerCase())) {
+              throw new Error(`Row ${index + 2}: day_boarding must be Day or Boarding.`);
+            }
+            value = raw === CLEAR_VALUE ? null : asBoarding(row);
+          } else if (field === "gender") {
+            value = raw === CLEAR_VALUE ? null : asGender(raw);
+            if (raw !== CLEAR_VALUE && !value) throw new Error(`Row ${index + 2}: gender must be Female, Male, or Other.`);
+          } else if (field === "status") {
+            const normalized = raw.toLowerCase().replace(/[\s-]+/g, "_");
+            if (!["active", "current", "enrolled", "continuing", "left", "left_school", "withdrawn", "transferred", "graduated", "graduate", "completed", "suspended", "suspend"].includes(normalized)) {
+              throw new Error(`Row ${index + 2}: invalid student status ${raw}.`);
+            }
+            value = asStudentStatus(raw);
+          } else if (["first_name", "other_names", "last_name", "class_name", "stream"].includes(field) && raw !== CLEAR_VALUE) {
+            value = toSchoolTitleCase(raw);
+          }
+          const currentValue = current[column];
+          if ((currentValue ?? null) !== (value ?? null)) {
+            changes[column] = value;
+            labels.push(`${field}: ${asText(currentValue) || "(blank)"} → ${value === null ? "(clear)" : String(value)}`);
+          }
+        }
+
+        for (const [field, owners, pending] of [["school_pay_number", schoolPayOwners, pendingSchoolPay], ["learner_id", learnerOwners, pendingLearners]] as const) {
+          const value = changes[field];
+          if (typeof value !== "string" || !value) continue;
+          const key = value.toLowerCase();
+          const owner = owners.get(key);
+          if (owner && owner !== recordId) throw new Error(`Row ${index + 2}: ${field} ${value} belongs to another student.`);
+          const pendingOwner = pending.get(key);
+          if (pendingOwner && pendingOwner !== recordId) throw new Error(`Row ${index + 2}: ${field} ${value} is repeated for different students in this file.`);
+          pending.set(key, recordId);
+        }
+        if (labels.length) previews.push({ rowNumber: index + 2, recordId, matchLabel: admission, changes, changeLabels: labels });
+      }
+      return previews;
+    }
+
+    const result = await supabase.from("vendors")
+      .select("id,name,contact_name,email,phone,address,tax_number,notes,is_active")
+      .eq("organization_id", organizationId);
+    if (result.error) throw result.error;
+    const vendors = (result.data || []) as Array<Record<string, unknown>>;
+    const byId = new Map(vendors.map((vendor) => [asText(vendor.id), vendor]));
+    for (const [index, row] of rows.entries()) {
+      const recordId = asText(row.id);
+      if (!recordId) throw new Error(`Row ${index + 2}: id is required for vendor updates. Download current records first.`);
+      const current = byId.get(recordId);
+      if (!current) throw new Error(`Row ${index + 2}: vendor ID ${recordId} was not found in this organization.`);
+      if (seenRecordIds.has(recordId)) throw new Error(`Row ${index + 2}: vendor ID ${recordId} is repeated in this file.`);
+      seenRecordIds.add(recordId);
+      const changes: Record<string, unknown> = {};
+      const labels: string[] = [];
+      for (const field of VENDOR_UPDATE_FIELDS) {
+        const raw = asText(row[field]);
+        if (!raw) continue;
+        const value: unknown = field === "is_active" ? asBool(raw, true) : raw === CLEAR_VALUE ? null : raw;
+        if ((current[field] ?? null) !== (value ?? null)) {
+          changes[field] = value;
+          labels.push(`${field}: ${asText(current[field]) || "(blank)"} → ${value === null ? "(clear)" : String(value)}`);
+        }
+      }
+      if (labels.length) previews.push({ rowNumber: index + 2, recordId, matchLabel: asText(current.name), changes, changeLabels: labels });
+    }
+    return previews;
+  };
+
+  const previewUpdates = async () => {
+    setMessage(null);
+    setUpdatePreview([]);
+    if (!file) return setMessage("Choose a CSV or XLSX file first.");
+    setRunning(true);
+    try {
+      const rows = await parseSelectedFile();
+      if (!rows.length) return setMessage("No rows found in the selected file.");
+      const preview = await buildUpdatePreview(rows);
+      setUpdatePreview(preview);
+      setMessage(preview.length ? `Preview ready: ${preview.length} record(s) will change. Review before applying.` : "No changes found. Blank cells were ignored.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to preview updates.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  const applyUpdates = async () => {
+    if (!updatePreview.length || (entity !== "school-students" && entity !== "vendors")) return;
+    setRunning(true);
+    setMessage(null);
+    const organizationId = requireOrganizationId();
+    let changed = 0;
+    const failures: string[] = [];
+    const table = entity === "school-students" ? "students" : "vendors";
+    for (const item of updatePreview) {
+      const result = await supabase.from(table).update(item.changes).eq("organization_id", organizationId).eq("id", item.recordId).select("id").maybeSingle();
+      if (result.error || !result.data) failures.push(`${item.matchLabel}: ${result.error?.message || "record was not updated"}`);
+      else changed += 1;
+    }
+    setUpdatePreview([]);
+    setRunning(false);
+    setMessage(`Updated ${changed} record(s).${failures.length ? ` Failed ${failures.length}: ${failures.slice(0, 3).join("; ")}` : ""}`);
+  };
+
+  const downloadCurrentRecords = async () => {
+    if (entity !== "school-students" && entity !== "vendors") return;
+    setRunning(true);
+    setMessage(null);
+    try {
+      const organizationId = requireOrganizationId();
+      const columns = entity === "school-students"
+        ? "admission_number,first_name,other_names,last_name,gender,class_name,stream,is_boarding,status,date_of_birth,school_pay_number,learner_id,notes"
+        : "id,name,contact_name,email,phone,address,tax_number,notes,is_active";
+      const records = await fetchAllPages<Record<string, unknown>>((from, to) => supabase.from(entity === "school-students" ? "students" : "vendors")
+        .select(columns).eq("organization_id", organizationId).order("id").range(from, to));
+      const rows = records.map((row) => entity === "school-students"
+        ? { ...row, day_boarding: row.is_boarding ? "Boarding" : "Day", is_boarding: undefined }
+        : row);
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Current Records");
+      XLSX.writeFile(wb, `${entity}-bulk-update.xlsx`);
+      setMessage(`Downloaded ${rows.length} current record(s). Keep the matching column unchanged and edit only fields that should change.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to download current records.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const runImport = async () => {
     setMessage(null);
     if (!file) {
@@ -710,10 +900,19 @@ export function AdminLocalImportPage() {
   return (
     <div className="app-card p-6 space-y-4">
       <div>
-        <h2 className="text-lg font-semibold text-slate-900">Bulk Import</h2>
+        <h2 className="text-lg font-semibold text-slate-900">Bulk Import & Update</h2>
         <p className="text-sm text-slate-600 mt-1">
-          Import CSV/XLSX into your cloud organization. Desktop installations can also import local business records.
+          Add new records with insert-only import, or safely preview and apply updates to existing records.
         </p>
+      </div>
+
+      <div className="flex gap-2">
+        <button type="button" className={mode === "import" ? "app-btn-primary" : "app-btn-secondary"} onClick={() => { setMode("import"); setUpdatePreview([]); setMessage(null); }}>
+          Add New Records
+        </button>
+        <button type="button" className={mode === "update" ? "app-btn-primary" : "app-btn-secondary"} onClick={() => { setMode("update"); if (entity !== "school-students" && entity !== "vendors") setEntity("school-students"); setUpdatePreview([]); setMessage(null); }}>
+          Update Existing Records
+        </button>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -721,10 +920,10 @@ export function AdminLocalImportPage() {
           <label className="block text-sm font-medium text-slate-700 mb-1">Entity</label>
           <select
             value={entity}
-            onChange={(e) => setEntity(e.target.value as ImportEntity)}
+            onChange={(e) => { setEntity(e.target.value as ImportEntity); setUpdatePreview([]); setMessage(null); }}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
           >
-            {availableEntityOptions.map((opt) => (
+            {availableEntityOptions.filter((opt) => mode === "import" || ["school-students", "vendors"].includes(opt.id)).map((opt) => (
               <option key={opt.id} value={opt.id}>
                 {opt.label}
               </option>
@@ -736,32 +935,42 @@ export function AdminLocalImportPage() {
           <input
             type="file"
             accept=".csv,.xlsx,.xls"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => { setFile(e.target.files?.[0] ?? null); setUpdatePreview([]); setMessage(null); }}
             className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white"
           />
         </div>
       </div>
 
-      <p className="text-xs text-slate-500">
-        Required columns for {selected.label}: {selected.required.join(", ")}.
-      </p>
-      {entity === "school-fee-structures" ? <p className="text-xs text-amber-700">Fee structures are added as new records so prior terms remain unchanged.</p> : null}
-      {entity === "school-purchases" ? <p className="text-xs text-amber-700">Imported supplier bills are saved as pending approval and are not posted until approved.</p> : null}
-      {entity === "school-payments" ? <p className="text-xs text-amber-700">Use approved bill IDs. Each payment posts through the normal supplier-payment journal workflow.</p> : null}
-      {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected.</p> : null}
+      {mode === "import" ? <>
+        <p className="text-xs text-slate-500">Required columns for {selected.label}: {selected.required.join(", ")}.</p>
+        {entity === "school-students" ? <p className="text-xs text-amber-700">Student import adds new records only. Existing identifiers are rejected and never overwritten.</p> : null}
+        {entity === "school-fee-structures" ? <p className="text-xs text-amber-700">Fee structures are added as new records so prior terms remain unchanged.</p> : null}
+        {entity === "school-purchases" ? <p className="text-xs text-amber-700">Imported supplier bills are saved as pending approval and are not posted until approved.</p> : null}
+        {entity === "school-payments" ? <p className="text-xs text-amber-700">Use approved bill IDs. Each payment posts through the normal supplier-payment journal workflow.</p> : null}
+        {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected.</p> : null}
+      </> : <p className="text-xs text-amber-700">Download current records first. Keep {entity === "school-students" ? "admission_number" : "id"} unchanged. Blank cells are ignored; use {CLEAR_VALUE} to clear an optional field.</p>}
 
       <div className="flex items-center gap-3">
-        <button type="button" className="app-btn-secondary" onClick={downloadTemplate}>
-          Download CSV Template
-        </button>
-        <button type="button" className="app-btn-secondary" onClick={downloadXlsxTemplate}>
-          Download XLSX Template
-        </button>
-        <button type="button" className="app-btn-primary" disabled={running} onClick={() => void runImport()}>
-          {running ? "Importing..." : "Import File"}
-        </button>
+        {mode === "import" ? <>
+          <button type="button" className="app-btn-secondary" onClick={downloadTemplate}>Download CSV Template</button>
+          <button type="button" className="app-btn-secondary" onClick={downloadXlsxTemplate}>Download XLSX Template</button>
+          <button type="button" className="app-btn-primary" disabled={running} onClick={() => void runImport()}>{running ? "Importing..." : "Import File"}</button>
+        </> : <>
+          <button type="button" className="app-btn-secondary" disabled={running} onClick={() => void downloadCurrentRecords()}>Download Current Records</button>
+          <button type="button" className="app-btn-secondary" disabled={running || !file} onClick={() => void previewUpdates()}>{running ? "Checking..." : "Preview Updates"}</button>
+          <button type="button" className="app-btn-primary" disabled={running || !updatePreview.length} onClick={() => void applyUpdates()}>{running ? "Updating..." : `Apply ${updatePreview.length} Update(s)`}</button>
+        </>}
         {file ? <span className="text-xs text-slate-600">{file.name}</span> : null}
       </div>
+
+      {mode === "update" && updatePreview.length ? (
+        <div className="border border-slate-200 rounded-lg overflow-auto max-h-80">
+          <table className="min-w-full text-xs">
+            <thead className="bg-slate-50 sticky top-0"><tr><th className="text-left p-2">Row</th><th className="text-left p-2">Record</th><th className="text-left p-2">Proposed changes</th></tr></thead>
+            <tbody>{updatePreview.map((item) => <tr key={`${item.recordId}-${item.rowNumber}`} className="border-t border-slate-100"><td className="p-2 align-top">{item.rowNumber}</td><td className="p-2 align-top font-medium">{item.matchLabel}</td><td className="p-2">{item.changeLabels.join("; ")}</td></tr>)}</tbody>
+          </table>
+        </div>
+      ) : null}
 
       {message ? <p className="text-sm text-slate-700">{message}</p> : null}
     </div>

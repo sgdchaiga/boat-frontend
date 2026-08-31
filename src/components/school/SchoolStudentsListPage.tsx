@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import * as XLSX from "xlsx";
 import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 import { toSchoolTitleCase } from "@/lib/schoolTextCase";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type StudentRow = {
   id: string;
@@ -64,12 +65,16 @@ export function StudentsListPage() {
       }
       return;
     }
-    const { data, error: loadErr } = await supabase.from("students").select("*");
-    if (loadErr) {
-      setError(loadErr.message);
+    try {
+      const data = await fetchAllPages<StudentRow>((from, to) => {
+        let query = supabase.from("students").select("*").order("id").range(from, to);
+        if (orgId) query = query.eq("organization_id", orgId);
+        return query;
+      });
+      setRows(data.map(normalizeStudentCase));
+    } catch (loadErr) {
+      setError(loadErr instanceof Error ? loadErr.message : "Failed to load students.");
       setRows([]);
-    } else {
-      setRows(((data || []) as StudentRow[]).map(normalizeStudentCase));
     }
     setLoading(false);
   };

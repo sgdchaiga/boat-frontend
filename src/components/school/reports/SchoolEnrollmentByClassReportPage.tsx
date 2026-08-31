@@ -4,6 +4,7 @@ import { jsPDF } from "jspdf";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type ClassOpt = { id: string; name: string };
 type StudentRow = { id: string; admission_number: string; school_pay_number: string | null; first_name: string; last_name: string; class_id: string | null; class_name: string | null; stream: string | null; gender: string | null; is_boarding: boolean; status: string };
@@ -41,13 +42,15 @@ export function SchoolEnrollmentByClassReportPage({ readOnly: _readOnly }: Props
   const load = useCallback(async () => {
     setLoading(true);
     if (!orgId) { setLoading(false); return; }
-    const [cRes, sRes] = await Promise.all([
+    const [cRes, allStudents] = await Promise.all([
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
-      supabase.from("students").select("id,admission_number,school_pay_number,first_name,last_name,class_id,class_name,stream,gender,is_boarding,status").eq("organization_id", orgId),
+      fetchAllPages<StudentRow>((from, to) => supabase.from("students")
+        .select("id,admission_number,school_pay_number,first_name,last_name,class_id,class_name,stream,gender,is_boarding,status")
+        .eq("organization_id", orgId).order("id").range(from, to)),
     ]);
-    setErr(cRes.error?.message || sRes.error?.message || null);
+    setErr(cRes.error?.message || null);
     setClasses((cRes.data as ClassOpt[]) || []);
-    setStudents(((sRes.data as StudentRow[]) || []).filter((student) => student.status === "active"));
+    setStudents(allStudents.filter((student) => student.status === "active"));
     setLoading(false);
   }, [orgId]);
   useEffect(() => { void load(); }, [load]);
