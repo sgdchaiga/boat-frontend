@@ -90,7 +90,7 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "chart-of-accounts": [
     { id: "", code: "1000", name: "Cash on Hand", type: "Asset", parent_code: "", is_active: "1" },
   ],
-  "school-students": [{ id: "", admission_number: "", first_name: "Amina", other_names: "Zawedde", last_name: "Nabirye", class_name: "Senior 1", stream: "East", day_boarding: "Day", status: "active", date_of_birth: "2012-03-15", school_pay_number: "", learner_id: "", parent_name: "Sarah Nabirye", parent_phone: "+256700000001", relationship: "Mother", notes: "Admission number is generated automatically. SchoolPay and learner IDs must be unique when provided." }],
+  "school-students": [{ id: "", admission_number: "", first_name: "Amina", other_names: "Zawedde", last_name: "Nabirye", gender: "Female", class_name: "Senior 1", stream: "East", day_boarding: "Day", status: "active", date_of_birth: "2012-03-15", school_pay_number: "", learner_id: "", parent_name: "Sarah Nabirye", parent_phone: "+256700000001", relationship: "Mother", notes: "Admission number is generated automatically. Use Female, Male, or Other for gender. SchoolPay and learner IDs must be unique when provided." }],
   "school-parents": [{ id: "", full_name: "Sarah Nabirye", phone: "+256700000001", phone_alt: "", email: "", address: "Kampala", student_admission_number: "S0001", relationship: "Mother", is_primary: "1", notes: "Primary guardian" }],
   "school-classes": [{ id: "", name: "Senior 1", code: "S1", sort_order: "1", is_active: "1" }],
   "school-streams": [{ id: "", name: "East", code: "E", sort_order: "1", is_active: "1" }],
@@ -136,6 +136,14 @@ function asBoarding(row: ParsedRow): boolean {
   if (["boarding", "boarder"].includes(dayBoarding)) return true;
   if (["day", "day scholar", "day_student", "day student"].includes(dayBoarding)) return false;
   return asBool(row.is_boarding, false);
+}
+
+function asGender(value: unknown): "Female" | "Male" | "Other" | null {
+  const gender = asText(value).toLowerCase();
+  if (["f", "female", "girl"].includes(gender)) return "Female";
+  if (["m", "male", "boy"].includes(gender)) return "Male";
+  if (["o", "other", "non-binary", "nonbinary"].includes(gender)) return "Other";
+  return null;
 }
 
 function asStudentStatus(value: unknown): "active" | "left" | "graduated" | "suspended" {
@@ -325,7 +333,7 @@ export function AdminLocalImportPage() {
         if (!asText(row.first_name) || !asText(row.last_name) || !asText(row.class_name)) return [];
         const admissionNumber = asText(row.admission_number) || nextSchoolAdmissionNumber(existingAdmissionNumbers);
         existingAdmissionNumbers.push(admissionNumber);
-        return [{ ...base, admission_number: admissionNumber, first_name: toSchoolTitleCase(row.first_name), other_names: toSchoolTitleCase(row.other_names) || null, last_name: toSchoolTitleCase(row.last_name), class_name: toSchoolTitleCase(row.class_name), stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
+        return [{ ...base, admission_number: admissionNumber, first_name: toSchoolTitleCase(row.first_name), other_names: toSchoolTitleCase(row.other_names) || null, last_name: toSchoolTitleCase(row.last_name), gender: asGender(row.gender), class_name: toSchoolTitleCase(row.class_name), stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row), status: asStudentStatus(row.status), date_of_birth: asText(row.date_of_birth) || null, notes: asText(row.notes) || null }];
       }
       if (type === "school-parents") {
         if (!asText(row.full_name)) return [];
@@ -393,7 +401,7 @@ export function AdminLocalImportPage() {
       const studentPayload = {
         organization_id: organizationId, first_name: firstName,
         other_names: toSchoolTitleCase(row.other_names) || null, last_name: lastName,
-        class_name: className, stream: toSchoolTitleCase(row.stream) || null, is_boarding: asBoarding(row),
+        class_name: className, stream: toSchoolTitleCase(row.stream) || null, gender: asGender(row.gender), is_boarding: asBoarding(row),
         status: asStudentStatus(row.status),
         date_of_birth: asText(row.date_of_birth) || null, school_pay_number: schoolPayNumber || null,
         learner_id: learnerId || null, notes: asText(row.notes) || null,
