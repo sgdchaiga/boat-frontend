@@ -1248,6 +1248,44 @@ const approvedAt = new Date().toISOString();
                 </span>
               </p>
             </div>
+            {isSchool && (
+              <div className="mt-5 grid gap-2 sm:grid-cols-2">
+                {requirePoApproval && viewOrder.status === "pending" && canApprovePO && (
+                  <button
+                    type="button"
+                    disabled={readOnly}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={() => { const order = viewOrder; setViewOrder(null); void handleApprove(order); }}
+                  >
+                    <CheckCircle className="h-4 w-4" /> Approve purchase order
+                  </button>
+                )}
+                {requirePoApproval && viewOrder.status === "pending" && !canApprovePO && (
+                  <p className="rounded-lg border border-amber-200 bg-amber-50 p-2.5 text-xs text-amber-800 sm:col-span-2">
+                    This purchase order is waiting for a user with purchase-order approval rights.
+                  </p>
+                )}
+                {canConvertToBill(viewOrder) && (
+                  <button
+                    type="button"
+                    disabled={readOnly}
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+                    onClick={() => { const order = viewOrder; setViewOrder(null); void handleConvertToBill(order); }}
+                  >
+                    <Package className="h-4 w-4" /> Receive goods &amp; create bill
+                  </button>
+                )}
+                {billsByPoId[viewOrder.id] && (
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-800 px-4 py-2.5 text-sm font-semibold text-white"
+                    onClick={() => { const billId = billsByPoId[viewOrder.id]; setViewOrder(null); onNavigate?.("purchases_bills", { highlightBillId: billId }); }}
+                  >
+                    <FileText className="h-4 w-4" /> Open linked bill
+                  </button>
+                )}
+              </div>
+            )}
             <button
               type="button"
               className="mt-6 w-full app-btn-primary py-2.5"

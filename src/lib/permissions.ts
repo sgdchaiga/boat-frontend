@@ -282,8 +282,8 @@ export async function loadPermissionSnapshot(input: {
 
 function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean {
   if (roleKey === "super_admin") return true;
-  if (permission === "purchase_orders") return roleKey === "admin" || roleKey === "manager";
-  if (permission === "bills") return roleKey === "admin" || roleKey === "manager" || roleKey === "accountant";
+  if (permission === "purchase_orders") return ["admin", "manager", "headteacher", "director"].includes(roleKey);
+  if (permission === "bills") return ["admin", "manager", "accountant", "bursar", "headteacher", "director"].includes(roleKey);
   if (permission === "vendor_credits") return roleKey === "admin" || roleKey === "manager";
   if (permission === "chart_of_accounts") return roleKey === "admin" || roleKey === "manager";
   if (permission === "sacco_savings_settings") return roleKey === "admin" || roleKey === "manager";
