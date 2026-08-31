@@ -23,6 +23,7 @@ type StudentRow = {
   parent_id: string | null;
 
   date_of_birth: string | null;
+  gender: string | null;
   is_boarding: boolean;
   has_health_issue: boolean;
   photo_url: string | null;
@@ -54,6 +55,7 @@ export function SchoolStudentsBioPage() {
     stream_id: "",
     parent_id: "",
     date_of_birth: "",
+    gender: "",
     is_boarding: false,
     has_health_issue: false,
     photo_url: "",
@@ -168,6 +170,7 @@ export function SchoolStudentsBioPage() {
         class_name: selectedClass.name,
         stream: selectedStream?.name ?? null,
         date_of_birth: form.date_of_birth || null,
+        gender: form.gender || null,
         is_boarding: form.is_boarding,
         has_health_issue: form.has_health_issue,
         photo_url: form.photo_url || null,
@@ -185,8 +188,9 @@ export function SchoolStudentsBioPage() {
           class_id: "",
           stream_id: "",
           parent_id: "",
-          date_of_birth: "",
-          is_boarding: false,
+        date_of_birth: "",
+        gender: "",
+        is_boarding: false,
           has_health_issue: false,
           photo_url: "",
         });
@@ -228,8 +232,9 @@ export function SchoolStudentsBioPage() {
         class_id: "",
         stream_id: "",
         parent_id: "",
-        date_of_birth: "",
-        is_boarding: false,
+          date_of_birth: "",
+          gender: "",
+          is_boarding: false,
         has_health_issue: false,
         photo_url: "",
       });
@@ -332,6 +337,13 @@ export function SchoolStudentsBioPage() {
             onChange={e => setForm({ ...form, date_of_birth: e.target.value })}
             className="border p-2 rounded w-full" />
         </div>
+
+        <select value={form.gender} onChange={e => setForm({ ...form, gender: e.target.value })} className="border p-2 rounded">
+          <option value="">Gender</option>
+          <option value="Female">Female</option>
+          <option value="Male">Male</option>
+          <option value="Other">Other</option>
+        </select>
 
         {/* BOARDING */}
         <select
