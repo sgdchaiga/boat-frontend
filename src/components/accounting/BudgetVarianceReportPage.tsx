@@ -66,6 +66,7 @@ export function BudgetVarianceReportPage() {
   const [linesLoading, setLinesLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [actualByGlId, setActualByGlId] = useState<Map<string, number>>(new Map());
+  const [actualByLineId, setActualByLineId] = useState<Map<string, number>>(new Map());
   const [actualsLoading, setActualsLoading] = useState(false);
   const [departmentFilter, setDepartmentFilter] = useState("all");
   const [transfers,setTransfers] = useState<TransferRow[]>([]);
@@ -160,6 +161,10 @@ export function BudgetVarianceReportPage() {
   const lineActualDisplay = useMemo(() => {
     const m = new Map<string, number>();
     for (const l of calculationLines) {
+      if (actualByLineId.has(l.id)) {
+        m.set(l.id, actualByLineId.get(l.id) || 0);
+        continue;
+      }
       if (!l.gl_account_id) {
         m.set(l.id, 0);
         continue;
@@ -175,7 +180,7 @@ export function BudgetVarianceReportPage() {
     }
     for(const parent of topLevelLines){const children=visibleLines.filter(line=>line.parent_line_id===parent.id);if(children.length)m.set(parent.id,children.reduce((sum,child)=>sum+(m.get(child.id)||0),0));}
     return m;
-  }, [calculationLines, topLevelLines, visibleLines, actualByGlId, budgetSumByGl,transferNetByLine]);
+  }, [calculationLines, topLevelLines, visibleLines, actualByGlId, actualByLineId, budgetSumByGl,transferNetByLine]);
 
   const lineVariance = useMemo(() => {
     const m = new Map<string, number>();
@@ -204,8 +209,21 @@ export function BudgetVarianceReportPage() {
     setActualsLoading(true);
     const { from: fromStr, to: toStr } = budgetPeriodRange(selectedBudget);
     try {
-      const totals = await fetchJournalActualsByGlIds(supabase, orgId, fromStr, toStr, glIds, accountTypeById);
-      setActualByGlId(totals);
+      const exact = await supabase.rpc("school_budget_actuals", { p_budget_id: selectedBudget.id });
+      if (!exact.error && exact.data) {
+        const byLine = new Map((exact.data as Array<{ budget_line_id: string; actual: number }>).map((row) => [row.budget_line_id, Number(row.actual || 0)]));
+        setActualByLineId(byLine);
+        const totals = new Map<string, number>();
+        for (const line of lines) {
+          if (!line.gl_account_id) continue;
+          totals.set(line.gl_account_id, (totals.get(line.gl_account_id) || 0) + (byLine.get(line.id) || 0));
+        }
+        setActualByGlId(totals);
+      } else {
+        setActualByLineId(new Map());
+        const totals = await fetchJournalActualsByGlIds(supabase, orgId, fromStr, toStr, glIds, accountTypeById);
+        setActualByGlId(totals);
+      }
     } catch (e) {
       console.error("Budget variance actuals:", e);
       setActualByGlId(new Map());
@@ -276,9 +294,8 @@ export function BudgetVarianceReportPage() {
         <h1 className="text-2xl font-bold text-slate-900">Budget variance analysis</h1>
         <PageNotes ariaLabel="Budget variance">
           <p>
-            Compares each budget line (with a GL account) to net journal activity for the budget period. Actual is split proportionally when several lines share
-            an account. The bar shows <strong>% of budget</strong> consumed by actuals (expense: higher use = more spent; income lines are interpreted against
-            budget the same way).
+            Compares each vote to exact journal activity tagged with its budget-line dimension. Untagged legacy activity remains in the general ledger but is not
+            guessed into a department or vote. The bar shows <strong>% of budget</strong> consumed by actuals and approved commitments.
           </p>
         </PageNotes>
       </div>

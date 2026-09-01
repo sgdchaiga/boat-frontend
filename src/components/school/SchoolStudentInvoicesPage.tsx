@@ -14,7 +14,9 @@ type StudentOpt = {
   class_id: string | null;
   class_name: string;
   status: string;
+  is_boarding: boolean;
 };
+type FeeLine = { code?: string; label?: string; amount?: number; priority?: number; applies_to?: "all" | "day" | "boarding" };
 type FeeOpt = {
   id: string;
   class_id: string | null;
@@ -55,6 +57,7 @@ type InvRow = {
   notes: string | null;
   issue_date?: string | null;
   due_date?: string | null;
+  line_items?: FeeLine[] | null;
 };
 
 type InvEditDraft = {
@@ -137,7 +140,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       <div class="meta"><strong>Student:</strong> ${name}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}<br>
       <strong>Term:</strong> ${invoice.academic_year} · ${invoice.term_name}<br><strong>Issue date:</strong> ${invoice.issue_date ?? "—"}<br>
       <strong>Due date:</strong> ${invoice.due_date ?? "—"}</div>
-      <table><tr><th>Description</th><th class="num">Amount</th></tr><tr><td>School fees</td><td class="num">${Number(invoice.subtotal).toLocaleString()}</td></tr>
+      <table><tr><th>Description</th><th class="num">Amount</th></tr>${Array.isArray(invoice.line_items)&&invoice.line_items.length?invoice.line_items.map((line)=>`<tr><td>${line.label||line.code||"School fees"}</td><td class="num">${Number(line.amount||0).toLocaleString()}</td></tr>`).join(""):`<tr><td>School fees</td><td class="num">${Number(invoice.subtotal).toLocaleString()}</td></tr>`}
       <tr><td>Discounts, bursary and scholarship</td><td class="num">-${(Number(invoice.discount_amount)+Number(invoice.bursary_amount)+Number(invoice.scholarship_amount)).toLocaleString()}</td></tr>
       <tr><th>Total due</th><th class="num">${Number(invoice.total_due).toLocaleString()}</th></tr><tr><td>Paid</td><td class="num">${Number(invoice.amount_paid).toLocaleString()}</td></tr></table>
       <div class="total">Balance: ${balance.toLocaleString()}</div>${demandNote ? "<p>Please settle the outstanding balance by the due date or contact the school bursar.</p>" : ""}`);
@@ -193,7 +196,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("created_at", { ascending: false }),
       supabase
         .from("students")
-        .select("id,first_name,last_name,admission_number,class_id,class_name,status")
+        .select("id,first_name,last_name,admission_number,class_id,class_name,status,is_boarding")
         .eq("organization_id", orgId)
         .order("last_name"),
       supabase
@@ -231,10 +234,13 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     load();
   }, [load]);
 
-  const sumLines = (fi: FeeOpt | undefined) => {
-    const lines = fi?.line_items as { amount?: number }[] | null;
-    if (!Array.isArray(lines)) return 0;
-    return lines.reduce((a, x) => a + Number(x.amount ?? 0), 0);
+  const applicableLines = (fi: FeeOpt | undefined, isBoarding: boolean): FeeLine[] => {
+    const lines = fi?.line_items as FeeLine[] | null;
+    if (!Array.isArray(lines)) return [];
+    return lines.filter((line) => {
+      const applies = line.applies_to || (String(line.code || "").toUpperCase() === "BOARD" ? "boarding" : "all");
+      return applies === "all" || (applies === "boarding" && isBoarding) || (applies === "day" && !isBoarding);
+    }).map((line)=>({...line,amount:Number(line.amount||0)}));
   };
 
   const bulkFee = useMemo(() => fees.find((f) => f.id === bulk.fee_structure_id), [fees, bulk.fee_structure_id]);
@@ -309,7 +315,6 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const orgId = user?.organization_id;
     if (!orgId) return;
 
-    const subtotalBase = sumLines(fee);
     const disc = Number(bulk.discount_amount) || 0;
     const schol = Number(bulk.scholarship_amount) || 0;
 
@@ -354,9 +359,12 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
 
     const t0 = Date.now();
     const invoiceRows = toCreate.map((s, idx) => {
+      const appliedLines=applicableLines(fee,s.is_boarding);
+      const subtotalBase=appliedLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
       const isNewStudent = !rows.some((r) => r.student_id === s.id);
       const specialTotal = specialFeeTotalFor(s.id, fee.academic_year, fee.term_name, isNewStudent);
       const subtotal = subtotalBase + specialTotal;
+      const invoiceLines=specialTotal>0?[...appliedLines,{code:"SPECIAL",label:"Special fees",amount:specialTotal,priority:999,applies_to:"all" as const}]:appliedLines;
       const burs = Number(
         bursaries.find((b) => b.student_id === s.id && b.academic_year === fee.academic_year && b.term_name === fee.term_name)?.amount ?? 0
       );
@@ -368,6 +376,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       term_name: fee.term_name,
       invoice_number: `INV-${t0.toString(36).toUpperCase()}-${idx}-${s.id.slice(0, 8)}`,
       subtotal,
+      line_items: invoiceLines,
       discount_amount: disc,
       bursary_amount: burs,
       scholarship_amount: schol,
@@ -446,10 +455,14 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       setErr("Fee structure not found.");
       return;
     }
-    const subtotalBase = sumLines(fee);
+    const student=students.find((s)=>s.id===form.student_id);
+    if(!student){setErr("Student not found.");return;}
+    const appliedLines=applicableLines(fee,student.is_boarding);
+    const subtotalBase=appliedLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
     const isNewStudent = !rows.some((r) => r.student_id === form.student_id);
     const specialTotal = specialFeeTotalFor(form.student_id, fee.academic_year, fee.term_name, isNewStudent);
     const subtotal = subtotalBase + specialTotal;
+    const invoiceLines=specialTotal>0?[...appliedLines,{code:"SPECIAL",label:"Special fees",amount:specialTotal,priority:999,applies_to:"all" as const}]:appliedLines;
     const disc = Number(form.discount_amount) || 0;
     const burs =
       Number(
@@ -472,6 +485,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           term_name: fee.term_name,
           invoice_number: invNo,
           subtotal,
+          line_items: invoiceLines,
           discount_amount: disc,
           bursary_amount: burs,
           scholarship_amount: schol,
@@ -498,6 +512,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         term_name: fee.term_name,
         invoice_number: invNo,
         subtotal,
+        line_items: invoiceLines,
         discount_amount: disc,
         bursary_amount: burs,
         scholarship_amount: schol,

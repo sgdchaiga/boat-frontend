@@ -10,7 +10,6 @@ import { budgetPeriodRange, budgetVariance, frequencyPeriodMultiplier, netJourna
 import { randomUuid } from "@/lib/randomUuid";
 import { canApprove } from "@/lib/permissions";
 import { SchoolBudgetDriversPanel } from "@/components/accounting/SchoolBudgetDriversPanel";
-import { STANDARD_SCHOOL_BUDGET_LINES, standardSchoolBudgetLineRows } from "@/lib/schoolBudgetLines";
 
 type BudgetRow = {
   id: string;
@@ -40,6 +39,11 @@ type LineRow = {
   quantity: number | null;
   unit_price: number | null;
   department_id: string | null;
+  cost_centre_id: string | null;
+  vote_id: string | null;
+  subvote_id: string | null;
+  fund_code: string;
+  project_code: string | null;
   budget_type: string;
   term_1_amount: number;
   term_2_amount: number;
@@ -50,6 +54,9 @@ type LineRow = {
 };
 
 type DepartmentPick = { id: string; name: string };
+type CostCentrePick = { id: string; department_id: string; centre_code: string; centre_name: string };
+type VotePick = { id: string; vote_code: string; vote_name: string; budget_type: string; default_department_id: string | null; default_gl_account_id: string | null };
+type SubvotePick = { id: string; vote_id: string; subvote_code: string; subvote_name: string; default_cost_centre_id: string | null; default_gl_account_id: string | null };
 type WorkflowRow = { id: string; from_status: string | null; to_status: string; note: string | null; acted_at: string; acted_by: string | null };
 
 const BUDGET_FREQUENCIES = [
@@ -103,6 +110,11 @@ function lineRowChanged(a: LineRow, b: LineRow) {
     (a.quantity ?? null) !== (b.quantity ?? null) ||
     (a.unit_price ?? null) !== (b.unit_price ?? null)
     || a.department_id !== b.department_id
+    || a.cost_centre_id !== b.cost_centre_id
+    || a.vote_id !== b.vote_id
+    || a.subvote_id !== b.subvote_id
+    || a.fund_code !== b.fund_code
+    || a.project_code !== b.project_code
     || a.budget_type !== b.budget_type
     || Number(a.term_1_amount) !== Number(b.term_1_amount)
     || Number(a.term_2_amount) !== Number(b.term_2_amount)
@@ -128,6 +140,9 @@ export function BudgetingPage({ readOnly }: Props) {
   const [lines, setLines] = useState<LineRow[]>([]);
   const [accounts, setAccounts] = useState<GLPick[]>([]);
   const [departments, setDepartments] = useState<DepartmentPick[]>([]);
+  const [costCentres, setCostCentres] = useState<CostCentrePick[]>([]);
+  const [votes, setVotes] = useState<VotePick[]>([]);
+  const [subvotes, setSubvotes] = useState<SubvotePick[]>([]);
   const [loading, setLoading] = useState(true);
   const [linesLoading, setLinesLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -141,6 +156,11 @@ export function BudgetingPage({ readOnly }: Props) {
     unit_price: "",
     amount: "",
     department_id: "",
+    cost_centre_id: "",
+    vote_id: "",
+    subvote_id: "",
+    fund_code: "SCHOOL_FUNDS",
+    project_code: "",
     budget_type: "operating_expense",
     term_1_amount: "",
     term_2_amount: "",
@@ -192,6 +212,18 @@ export function BudgetingPage({ readOnly }: Props) {
     setDepartments((data as DepartmentPick[]) || []);
   }, [orgId]);
 
+  const loadSchoolDimensions = useCallback(async () => {
+    if (!orgId || user?.business_type !== "school") { setCostCentres([]); setVotes([]); setSubvotes([]); return; }
+    const [centresResult, votesResult, subvotesResult] = await Promise.all([
+      supabase.from("school_cost_centres").select("id,department_id,centre_code,centre_name").eq("organization_id", orgId).eq("is_active", true).order("centre_code"),
+      supabase.from("school_budget_votes").select("id,vote_code,vote_name,budget_type,default_department_id,default_gl_account_id").eq("organization_id", orgId).eq("is_active", true).order("vote_code"),
+      supabase.from("school_budget_subvotes").select("id,vote_id,subvote_code,subvote_name,default_cost_centre_id,default_gl_account_id").eq("organization_id", orgId).eq("is_active", true).order("subvote_code"),
+    ]);
+    setCostCentres((centresResult.data as CostCentrePick[]) || []);
+    setVotes((votesResult.data as VotePick[]) || []);
+    setSubvotes((subvotesResult.data as SubvotePick[]) || []);
+  }, [orgId, user?.business_type]);
+
   const accountTypeById = useMemo(() => new Map(accounts.map((a) => [a.id, a.account_type])), [accounts]);
 
   const loadLines = useCallback(
@@ -200,7 +232,7 @@ export function BudgetingPage({ readOnly }: Props) {
       const { data, error } = await supabase
         .from("budget_lines")
         .select(
-          "id,budget_id,parent_line_id,gl_account_id,line_label,amount,sort_order,unit,frequency,quantity,unit_price,department_id,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,assumptions,gl_accounts(account_code,account_name)"
+          "id,budget_id,parent_line_id,gl_account_id,line_label,amount,sort_order,unit,frequency,quantity,unit_price,department_id,cost_centre_id,vote_id,subvote_id,fund_code,project_code,budget_type,term_1_amount,term_2_amount,term_3_amount,annual_other_amount,assumptions,gl_accounts(account_code,account_name)"
         )
         .eq("budget_id", budgetId)
         .order("sort_order", { ascending: true })
@@ -216,6 +248,11 @@ export function BudgetingPage({ readOnly }: Props) {
           quantity: l.quantity ?? null,
           unit_price: l.unit_price ?? null,
           department_id: l.department_id ?? null,
+          cost_centre_id: l.cost_centre_id ?? null,
+          vote_id: l.vote_id ?? null,
+          subvote_id: l.subvote_id ?? null,
+          fund_code: l.fund_code ?? "SCHOOL_FUNDS",
+          project_code: l.project_code ?? null,
           budget_type: l.budget_type ?? "operating_expense",
           term_1_amount: Number(l.term_1_amount ?? 0),
           term_2_amount: Number(l.term_2_amount ?? 0),
@@ -240,6 +277,7 @@ export function BudgetingPage({ readOnly }: Props) {
     loadAccounts();
   }, [loadAccounts]);
   useEffect(() => { void loadDepartments(); }, [loadDepartments]);
+  useEffect(() => { void loadSchoolDimensions(); }, [loadSchoolDimensions]);
 
   useEffect(() => {
     loadBudgets();
@@ -510,6 +548,11 @@ export function BudgetingPage({ readOnly }: Props) {
       quantity: qtyParsed != null && Number.isFinite(qtyParsed) ? qtyParsed : null,
       unit_price: priceParsed != null && Number.isFinite(priceParsed) ? priceParsed : null,
       department_id: draftLine.department_id || null,
+      cost_centre_id: draftLine.cost_centre_id || null,
+      vote_id: draftLine.vote_id || null,
+      subvote_id: draftLine.subvote_id || null,
+      fund_code: draftLine.fund_code.trim() || "SCHOOL_FUNDS",
+      project_code: draftLine.project_code.trim() || null,
       budget_type: draftLine.budget_type,
       term_1_amount: hasTerms ? terms[0] : 0,
       term_2_amount: hasTerms ? terms[1] : 0,
@@ -528,6 +571,11 @@ export function BudgetingPage({ readOnly }: Props) {
       unit_price: "",
       amount: "",
       department_id: "",
+      cost_centre_id: "",
+      vote_id: "",
+      subvote_id: "",
+      fund_code: "SCHOOL_FUNDS",
+      project_code: "",
       budget_type: "operating_expense",
       term_1_amount: "",
       term_2_amount: "",
@@ -579,6 +627,11 @@ export function BudgetingPage({ readOnly }: Props) {
             quantity: el.quantity,
             unit_price: el.unit_price,
             department_id: el.department_id,
+            cost_centre_id: el.cost_centre_id,
+            vote_id: el.vote_id,
+            subvote_id: el.subvote_id,
+            fund_code: el.fund_code,
+            project_code: el.project_code,
             budget_type: el.budget_type,
             term_1_amount: el.term_1_amount,
             term_2_amount: el.term_2_amount,
@@ -606,6 +659,11 @@ export function BudgetingPage({ readOnly }: Props) {
           quantity: el.quantity,
           unit_price: el.unit_price,
           department_id: el.department_id,
+          cost_centre_id: el.cost_centre_id,
+          vote_id: el.vote_id,
+          subvote_id: el.subvote_id,
+          fund_code: el.fund_code,
+          project_code: el.project_code,
           budget_type: el.budget_type,
           term_1_amount: el.term_1_amount,
           term_2_amount: el.term_2_amount,
@@ -664,7 +722,7 @@ export function BudgetingPage({ readOnly }: Props) {
     }
     if (user?.business_type === "school" && data && "id" in data) {
       const budgetId = (data as { id: string }).id;
-      const standardResult = await supabase.from("budget_lines").insert(standardSchoolBudgetLineRows(budgetId));
+      const standardResult = await supabase.rpc("add_school_votes_to_budget", { p_budget_id: budgetId });
       if (standardResult.error) {
         await supabase.from("budgets").delete().eq("id", budgetId);
         setErr(`The budget could not be prepared with the standard school lines: ${standardResult.error.message}`);
@@ -683,20 +741,16 @@ export function BudgetingPage({ readOnly }: Props) {
 
   const addMissingStandardSchoolLines = async () => {
     if (!selectedBudget || readOnly || user?.business_type !== "school" || addingStandardLines) return;
-    const existingLabels = new Set(lines.map((line) => line.line_label.trim().toLowerCase()));
-    const missing = STANDARD_SCHOOL_BUDGET_LINES.filter((line) => !existingLabels.has(line.line_label.toLowerCase()));
-    if (!missing.length) {
-      setErr("All standard school budget lines are already present.");
-      return;
-    }
     setAddingStandardLines(true);
     setErr(null);
-    const rows = standardSchoolBudgetLineRows(selectedBudget.id)
-      .filter((row) => missing.some((line) => line.line_label === row.line_label))
-      .map((row, index) => ({ ...row, sort_order: lines.length + index }));
-    const { error } = await supabase.from("budget_lines").insert(rows);
+    const { data, error } = await supabase.rpc("add_school_votes_to_budget", { p_budget_id: selectedBudget.id });
     if (error) setErr(error.message);
-    else await loadLines(selectedBudget.id);
+    else {
+      if (Number(data || 0) === 0) setErr("All school votes are already present.");
+      await loadLines(selectedBudget.id);
+      await loadDepartments();
+      await loadAccounts();
+    }
     setAddingStandardLines(false);
   };
 
@@ -930,7 +984,7 @@ export function BudgetingPage({ readOnly }: Props) {
                   {!editingLines && canApproveBudget && ["approved", "active"].includes(selectedBudget.status) && <button type="button" onClick={() => void createRevision(selectedBudget)} className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium">Create revision</button>}
                   {!editingLines && user?.business_type === "school" && canPrepareBudget && ["draft", "submitted", "reviewed"].includes(selectedBudget.status) && (
                     <button type="button" onClick={() => void addMissingStandardSchoolLines()} disabled={addingStandardLines || linesLoading} className="inline-flex items-center gap-1.5 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-1.5 text-xs font-medium text-indigo-800 disabled:opacity-50">
-                      <Plus className="h-3.5 w-3.5" />{addingStandardLines ? "Adding…" : "Add standard school lines"}
+                      <Plus className="h-3.5 w-3.5" />{addingStandardLines ? "Adding…" : "Add school vote structure"}
                     </button>
                   )}
                   {!editingLines ? (
@@ -1036,7 +1090,8 @@ export function BudgetingPage({ readOnly }: Props) {
                               {showReadOnlyLines ? (
                                 <>
                                   <div className="font-medium">{l.parent_line_id ? "↳ " : ""}{l.line_label}{hasSubLines && <span className="ml-2 rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">Sub-line total</span>}</div>
-                                  <div className="text-xs text-indigo-700">{departments.find((d) => d.id === l.department_id)?.name || "Central / unassigned"} · {l.budget_type.replaceAll("_", " ")}</div>
+                                  <div className="text-xs text-indigo-700">{departments.find((d) => d.id === l.department_id)?.name || "Central / unassigned"} · {costCentres.find((c) => c.id === l.cost_centre_id)?.centre_name || "No cost centre"} · {l.budget_type.replaceAll("_", " ")}</div>
+                                  {l.vote_id && <div className="text-xs text-slate-600">Vote {votes.find((v) => v.id === l.vote_id)?.vote_code} · {subvotes.find((s) => s.id === l.subvote_id)?.subvote_name || "No sub-vote"} · Fund {l.fund_code}{l.project_code ? ` · Project ${l.project_code}` : ""}</div>}
                                   {l.gl_accounts && (
                                     <div className="text-xs text-slate-500 font-mono">
                                       {l.gl_accounts.account_code} · {l.gl_accounts.account_name}
@@ -1051,6 +1106,14 @@ export function BudgetingPage({ readOnly }: Props) {
                                     value={l.line_label}
                                     onChange={(e) => updateEditedLine(l.id, { line_label: e.target.value })}
                                   />
+                                  <div className="grid grid-cols-2 gap-1">
+                                    <select className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.vote_id ?? ""} onChange={(e) => { const voteId=e.target.value||null; const vote=votes.find((v)=>v.id===voteId); updateEditedLine(l.id,{vote_id:voteId,subvote_id:null,department_id:vote?.default_department_id||l.department_id,gl_account_id:vote?.default_gl_account_id||l.gl_account_id}); }}>
+                                      <option value="">No vote</option>{votes.map((v)=><option key={v.id} value={v.id}>{v.vote_code} — {v.vote_name}</option>)}
+                                    </select>
+                                    <select className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.subvote_id ?? ""} onChange={(e) => { const subvoteId=e.target.value||null; const sub=subvotes.find((s)=>s.id===subvoteId); updateEditedLine(l.id,{subvote_id:subvoteId,cost_centre_id:sub?.default_cost_centre_id||l.cost_centre_id,gl_account_id:sub?.default_gl_account_id||l.gl_account_id}); }} disabled={!l.vote_id}>
+                                      <option value="">No sub-vote</option>{subvotes.filter((s)=>s.vote_id===l.vote_id).map((s)=><option key={s.id} value={s.id}>{s.subvote_code} — {s.subvote_name}</option>)}
+                                    </select>
+                                  </div>
                                   {hasSubLines && <p className="text-[10px] font-medium text-indigo-700">Amounts are calculated from sub-lines.</p>}
                                   <select
                                     className="w-full text-xs border border-slate-200 rounded px-2 py-1"
@@ -1079,6 +1142,10 @@ export function BudgetingPage({ readOnly }: Props) {
                                     <select className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.budget_type} onChange={(e) => updateEditedLine(l.id, { budget_type: e.target.value })}>
                                       <option value="income">Income</option><option value="operating_expense">Operating expense</option><option value="staff_cost">Staff cost</option><option value="capital_expenditure">Capital expenditure</option>
                                     </select>
+                                  </div>
+                                  <div className="grid grid-cols-2 gap-1">
+                                    <select className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.cost_centre_id ?? ""} onChange={(e)=>updateEditedLine(l.id,{cost_centre_id:e.target.value||null})}><option value="">No cost centre</option>{costCentres.filter((c)=>!l.department_id||c.department_id===l.department_id).map((c)=><option key={c.id} value={c.id}>{c.centre_code} — {c.centre_name}</option>)}</select>
+                                    <input className="w-full text-xs border border-slate-200 rounded px-2 py-1" value={l.project_code ?? ""} placeholder="Project code" onChange={(e)=>updateEditedLine(l.id,{project_code:e.target.value.trim()||null})}/>
                                   </div>
                                   <div className="grid grid-cols-4 gap-1">
                                     {(["term_1_amount","term_2_amount","term_3_amount","annual_other_amount"] as const).map((key, index) => <input key={key} type="number" min={0} step="0.01" disabled={hasSubLines} title={["Term 1","Term 2","Term 3","Annual/holiday"][index]} className="w-full text-xs border border-slate-200 rounded px-1 py-1 text-right disabled:bg-slate-100" value={l[key]} onChange={(e) => { const value=Math.max(0,Number(e.target.value)||0); const next={...l,[key]:value}; updateEditedLine(l.id,{[key]:value,amount:next.term_1_amount+next.term_2_amount+next.term_3_amount+next.annual_other_amount}); }} />)}
@@ -1219,6 +1286,8 @@ export function BudgetingPage({ readOnly }: Props) {
                       <option value="">Main budget line</option>
                       {displayLines.filter((line) => !line.parent_line_id).map((line) => <option key={line.id} value={line.id}>Sub-line of: {line.line_label}</option>)}
                     </select>
+                    <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm sm:col-span-2" value={draftLine.vote_id} onChange={(e)=>{const vote=votes.find((v)=>v.id===e.target.value);setDraftLine((d)=>({...d,vote_id:e.target.value,subvote_id:"",line_label:vote?.vote_name||d.line_label,department_id:vote?.default_department_id||d.department_id,gl_account_id:vote?.default_gl_account_id||d.gl_account_id,budget_type:vote && ["income","operating_expense","staff_cost","capital_expenditure"].includes(vote.budget_type)?vote.budget_type:d.budget_type}));}}><option value="">Vote (optional)</option>{votes.map((v)=><option key={v.id} value={v.id}>{v.vote_code} — {v.vote_name}</option>)}</select>
+                    <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm sm:col-span-2" value={draftLine.subvote_id} disabled={!draftLine.vote_id} onChange={(e)=>{const sub=subvotes.find((s)=>s.id===e.target.value);setDraftLine((d)=>({...d,subvote_id:e.target.value,line_label:sub?.subvote_name||d.line_label,cost_centre_id:sub?.default_cost_centre_id||d.cost_centre_id,gl_account_id:sub?.default_gl_account_id||d.gl_account_id}));}}><option value="">Sub-vote (optional)</option>{subvotes.filter((s)=>s.vote_id===draftLine.vote_id).map((s)=><option key={s.id} value={s.id}>{s.subvote_code} — {s.subvote_name}</option>)}</select>
                     <select
                       className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm sm:col-span-2 lg:col-span-3 xl:col-span-2"
                       value={draftLine.gl_account_id}
@@ -1234,6 +1303,7 @@ export function BudgetingPage({ readOnly }: Props) {
                     <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" value={draftLine.department_id} onChange={(e) => setDraftLine((d) => ({ ...d, department_id: e.target.value }))}>
                       <option value="">Central / shared department</option>{departments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
                     </select>
+                    <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" value={draftLine.cost_centre_id} onChange={(e)=>setDraftLine((d)=>({...d,cost_centre_id:e.target.value}))}><option value="">Cost centre</option>{costCentres.filter((c)=>!draftLine.department_id||c.department_id===draftLine.department_id).map((c)=><option key={c.id} value={c.id}>{c.centre_code} — {c.centre_name}</option>)}</select>
                     <select className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" value={draftLine.budget_type} onChange={(e) => setDraftLine((d) => ({ ...d, budget_type: e.target.value }))}>
                       <option value="income">Income</option><option value="operating_expense">Operating expense</option><option value="staff_cost">Staff cost</option><option value="capital_expenditure">Capital expenditure</option>
                     </select>
@@ -1243,6 +1313,8 @@ export function BudgetingPage({ readOnly }: Props) {
                       value={draftLine.line_label}
                       onChange={(e) => setDraftLine((d) => ({ ...d, line_label: e.target.value }))}
                     />
+                    <input className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" placeholder="Fund code" value={draftLine.fund_code} onChange={(e)=>setDraftLine((d)=>({...d,fund_code:e.target.value}))}/>
+                    <input className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm" placeholder="Project code (optional)" value={draftLine.project_code} onChange={(e)=>setDraftLine((d)=>({...d,project_code:e.target.value}))}/>
                     <input
                       className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm"
                       placeholder="Unit (e.g. hrs, kg)"

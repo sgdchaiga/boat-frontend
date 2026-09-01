@@ -5,7 +5,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
-type LineItem = { code: string; label: string; amount: number; priority: number };
+type LineItem = { code: string; label: string; amount: number; priority: number; applies_to: "all" | "day" | "boarding" };
 
 type FeeRow = {
   id: string;
@@ -34,9 +34,9 @@ type FeeEditState = {
 };
 
 const defaultLines = (): LineItem[] => [
-  { code: "TUITION", label: "Tuition", amount: 0, priority: 1 },
-  { code: "BOARD", label: "Boarding", amount: 0, priority: 2 },
-  { code: "MEALS", label: "Meals", amount: 0, priority: 3 },
+  { code: "TUITION", label: "Tuition", amount: 0, priority: 1, applies_to: "all" },
+  { code: "BOARD", label: "Boarding", amount: 0, priority: 2, applies_to: "boarding" },
+  { code: "MEALS", label: "Meals", amount: 0, priority: 3, applies_to: "all" },
 ];
 
 const linesFromRow = (r: FeeRow): LineItem[] => {
@@ -47,6 +47,7 @@ const linesFromRow = (r: FeeRow): LineItem[] => {
     label: String(l.label ?? ""),
     amount: Number(l.amount) || 0,
     priority: Math.max(1, Number(l.priority) || 1),
+    applies_to: l.applies_to === "day" || l.applies_to === "boarding" ? l.applies_to : (String(l.code).toUpperCase() === "BOARD" ? "boarding" : "all"),
   }));
 };
 
@@ -141,7 +142,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
   const addLine = () => {
     setForm((f) => ({
       ...f,
-      lines: [...f.lines, { code: "", label: "", amount: 0, priority: f.lines.length + 1 }],
+      lines: [...f.lines, { code: "", label: "", amount: 0, priority: f.lines.length + 1, applies_to: "all" }],
     }));
   };
 
@@ -164,7 +165,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
 
   const editAddLine = () => {
     setEditFee((ef) =>
-      ef ? { ...ef, lines: [...ef.lines, { code: "", label: "", amount: 0, priority: ef.lines.length + 1 }] } : ef
+      ef ? { ...ef, lines: [...ef.lines, { code: "", label: "", amount: 0, priority: ef.lines.length + 1, applies_to: "all" }] } : ef
     );
   };
 
@@ -202,6 +203,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
         label: l.label.trim(),
         amount: Number(l.amount) || 0,
         priority: Math.max(1, Number(l.priority) || 1),
+        applies_to: l.applies_to,
       }))
       .filter((l) => l.code || l.label);
     if (cleaned.length === 0) return { error: "Add at least one fee line with a code or label." };
@@ -357,7 +359,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
     if (!Array.isArray(items) || items.length === 0) return "—";
     return [...items]
       .sort((a, b) => (Number(a.priority) || 1) - (Number(b.priority) || 1))
-      .map((l) => `${l.label || l.code} (P${Math.max(1, Number(l.priority) || 1)}): ${Number(l.amount).toLocaleString()}`)
+      .map((l) => `${l.label || l.code} [${l.applies_to === "all" ? "All" : l.applies_to === "day" ? "Day" : "Boarding"}] (P${Math.max(1, Number(l.priority) || 1)}): ${Number(l.amount).toLocaleString()}`)
       .join(" · ");
   };
 
@@ -457,7 +459,8 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
                   <tr>
                     <th className="text-left p-2 font-semibold text-slate-700 w-[22%]">Code</th>
                     <th className="text-left p-2 font-semibold text-slate-700 w-[38%]">Description</th>
-                    <th className="text-right p-2 font-semibold text-slate-700 w-[16%]">Priority</th>
+                    <th className="text-left p-2 font-semibold text-slate-700 w-[18%]">Applies to</th>
+                    <th className="text-right p-2 font-semibold text-slate-700 w-[12%]">Priority</th>
                     <th className="text-right p-2 font-semibold text-slate-700 w-[22%]">Amount</th>
                     <th className="w-16 p-2" />
                   </tr>
@@ -473,6 +476,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
                           onChange={(e) => setLine(i, { code: e.target.value })}
                         />
                       </td>
+                      <td className="p-2 align-top"><select className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm" value={line.applies_to} onChange={(e)=>setLine(i,{applies_to:e.target.value as LineItem["applies_to"]})}><option value="all">All students</option><option value="day">Day only</option><option value="boarding">Boarding only</option></select></td>
                       <td className="p-2 align-top">
                         <input
                           className="w-full border border-slate-300 rounded-md px-2 py-1.5 text-sm"
@@ -647,6 +651,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
                                 <tr>
                                   <th className="text-left p-2 font-semibold text-slate-700">Code</th>
                                   <th className="text-left p-2 font-semibold text-slate-700">Description</th>
+                                  <th className="text-left p-2 font-semibold text-slate-700">Applies to</th>
                                   <th className="text-right p-2 font-semibold text-slate-700">Priority</th>
                                   <th className="text-right p-2 font-semibold text-slate-700">Amount</th>
                                   <th className="w-12 p-2" />
@@ -662,6 +667,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
                                         onChange={(e) => editSetLine(i, { code: e.target.value })}
                                       />
                                     </td>
+                                    <td className="p-1.5"><select className="w-full border border-slate-300 rounded px-2 py-1 text-sm" value={line.applies_to} onChange={(e)=>editSetLine(i,{applies_to:e.target.value as LineItem["applies_to"]})}><option value="all">All students</option><option value="day">Day only</option><option value="boarding">Boarding only</option></select></td>
                                     <td className="p-1.5">
                                       <input
                                         className="w-full border border-slate-300 rounded px-2 py-1 text-sm"
