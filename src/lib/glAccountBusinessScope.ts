@@ -43,6 +43,10 @@ export function isGlAccountRelevantForBusinessType(account: AccountLike, busines
   const text = `${account.account_code || ""} ${account.account_name || ""} ${account.category || ""}`;
   const taggedIndustries = Object.entries(INDUSTRY_PATTERNS).filter(([, pattern]) => pattern.test(text)).map(([industry]) => industry);
   if (selectedType === "school") {
+    // A legacy template may have been incorrectly relabelled as `school`.
+    // Recognizable non-school industry names are stronger evidence than that
+    // stale tag (for example, "Raw Materials Inventory").
+    if (taggedIndustries.some((industry) => industry !== "school") && !taggedIndustries.includes("school")) return false;
     if (accountType === "school") return true;
     if (
       SCHOOL_STANDARD_CODES.has(String(account.account_code || "").trim()) &&
