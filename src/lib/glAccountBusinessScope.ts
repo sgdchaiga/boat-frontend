@@ -14,6 +14,25 @@ const INDUSTRY_PATTERNS: Record<string, RegExp> = {
   manufacturing: /\b(raw materials? inventory|raw materials?|manufacturing wip|work in progress|finished goods(?: production| inventory)?|factory overhead|production overhead|production clearing|cost of goods manufactured|scrap inventory)\b/i,
 };
 
+/**
+ * Canonical school chart codes. This also covers the later regular-expense
+ * additions. It lets older school databases keep their legitimate accounts
+ * even before the migration that tags them with `business_type = school`.
+ */
+const SCHOOL_STANDARD_CODES = new Set([
+  "1000", "1100", "1110", "1120", "1130", "1140", "1150", "1160", "1170", "1180",
+  "1200", "1210", "1220", "1230", "1240", "1250", "1260", "1290",
+  "2000", "2100", "2110", "2120", "2130", "2140", "2150", "2160", "2200", "2210",
+  "3000", "3100", "3200", "3300",
+  "4000", "4100", "4110", "4120", "4130", "4140", "4150", "4160", "4170", "4180", "4190", "4200", "4210",
+  "5000", "5100", "5110", "5120", "5130", "5140", "5150", "5160", "5170", "5180", "5190",
+  "6000", "6100", "6110", "6120", "6130", "6140", "6150", "6160", "6170",
+  "6200", "6210", "6220", "6230", "6240", "6250", "6260", "6270", "6280",
+  "6300", "6310", "6320", "6330", "6340", "6350", "6360", "6370", "6380", "6390",
+  "6400", "6410", "6420", "6430", "6500", "6510", "6520", "6530",
+  "6600", "6610", "6620", "6630", "6640", "6650", "6660", "6700", "6800", "6900", "6910", "6920",
+]);
+
 export function isGlAccountRelevantForBusinessType(account: AccountLike, businessType?: string | null): boolean {
   const selectedType = String(businessType || "").toLowerCase();
   if (!selectedType || selectedType === "mixed") return true;
@@ -23,6 +42,17 @@ export function isGlAccountRelevantForBusinessType(account: AccountLike, busines
   if (accountType && accountType !== "mixed" && accountType !== selectedType) return false;
   const text = `${account.account_code || ""} ${account.account_name || ""} ${account.category || ""}`;
   const taggedIndustries = Object.entries(INDUSTRY_PATTERNS).filter(([, pattern]) => pattern.test(text)).map(([industry]) => industry);
+  if (selectedType === "school") {
+    if (accountType === "school") return true;
+    if (
+      SCHOOL_STANDARD_CODES.has(String(account.account_code || "").trim()) &&
+      (taggedIndustries.length === 0 || taggedIndustries.includes("school"))
+    ) return true;
+    // Retain clearly school-specific legacy/custom accounts, but do not allow
+    // untagged hotel, retail, clinic, lending or manufacturing templates into
+    // the school chart merely because their business_type was never populated.
+    return taggedIndustries.includes("school");
+  }
   if (taggedIndustries.length === 0) return true;
   if (selectedType === "general_business" || selectedType === "retail" || selectedType === "restaurant") return false;
   return taggedIndustries.includes(selectedType);
