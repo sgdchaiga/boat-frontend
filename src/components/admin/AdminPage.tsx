@@ -1,4 +1,4 @@
-import { ReactNode, useEffect, useState } from "react";
+import { ReactNode, useEffect, useMemo, useState } from "react";
 import {
   Settings,
   Users,
@@ -60,12 +60,12 @@ export function AdminPage({ readOnly = false, initialTab = null }: AdminPageProp
     return "users";
   });
   const [permissionsFocusStaffId, setPermissionsFocusStaffId] = useState<string | null>(null);
-  const visibleTabs = TABS.filter((tab) => {
+  const visibleTabs = useMemo(() => TABS.filter((tab) => {
     if (!showRecipeManagement && tab.id === "recipes") return false;
     if (!showHotelPosControls && tab.id === "hotel_pos") return false;
     if (!showHotelPosControls && tab.id === "pos_cogs_reconciliation") return false;
     return true;
-  });
+  }), [showRecipeManagement, showHotelPosControls]);
 
   useEffect(() => {
     if (!visibleTabs.some((t) => t.id === activeTab)) {
