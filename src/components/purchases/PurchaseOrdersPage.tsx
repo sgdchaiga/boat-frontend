@@ -278,6 +278,14 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     }
   };
 
+  const openPurchaseFlow = () => {
+    if (isSchool && simpleMode) {
+      onNavigate?.("purchases_bills", { cashPurchaseOpen: true });
+      return;
+    }
+    openCreate();
+  };
+
   const fetchData = async () => {
     setLoading(true);
     try {
@@ -1037,7 +1045,9 @@ const approvedAt = new Date().toISOString();
               type="button"
               onClick={() => setSimpleModePersist(true)}
               className={`px-3 py-1.5 rounded-md transition ${
-                simpleMode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                simpleMode
+                  ? isSchool ? "bg-emerald-600 text-white shadow-sm" : "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-600 hover:bg-emerald-50 hover:text-emerald-800"
               }`}
             >
               {isSchool ? "Direct Purchase" : "Simple"}
@@ -1046,7 +1056,9 @@ const approvedAt = new Date().toISOString();
               type="button"
               onClick={() => setSimpleModePersist(false)}
               className={`px-3 py-1.5 rounded-md transition ${
-                !simpleMode ? "bg-white text-slate-900 shadow-sm" : "text-slate-600 hover:text-slate-900"
+                !simpleMode
+                  ? isSchool ? "bg-indigo-600 text-white shadow-sm" : "bg-white text-slate-900 shadow-sm"
+                  : "text-slate-600 hover:bg-indigo-50 hover:text-indigo-800"
               }`}
             >
               {isSchool ? "Purchase Order" : "Advanced"}
@@ -1054,14 +1066,24 @@ const approvedAt = new Date().toISOString();
           </div>
           <button
             type="button"
-            onClick={openCreate}
+            onClick={openPurchaseFlow}
             disabled={readOnly}
-            className="app-btn-primary inline-flex items-center justify-center gap-2 px-5 py-2.5 text-base font-semibold disabled:cursor-not-allowed"
+            className={`inline-flex items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-base font-semibold text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${isSchool && simpleMode ? "bg-emerald-600 hover:bg-emerald-700" : "bg-indigo-600 hover:bg-indigo-700"}`}
           >
-            <Plus className="w-5 h-5" /> {isSchool ? "New Purchase Order" : "Record purchase"}
+            <Plus className="w-5 h-5" /> {isSchool ? (simpleMode ? "Record Direct Purchase" : "New Purchase Order") : "Record purchase"}
           </button>
         </div>
       </div>
+
+      {isSchool && (
+        <div className={`mb-4 rounded-xl border p-4 text-sm ${simpleMode ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-indigo-200 bg-indigo-50 text-indigo-900"}`}>
+          {simpleMode ? (
+            <><strong>Direct Purchase:</strong> use when goods have already arrived. It creates the supplier bill, receives stock immediately, and lets you record payment now or send it to Treasury.</>
+          ) : (
+            <><strong>Purchase Order:</strong> use before goods arrive. The order follows approval first, then Goods Received creates the supplier bill and stock receipt.</>
+          )}
+        </div>
+      )}
 
       {isSchool && !loading && <>
         <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">

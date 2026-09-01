@@ -165,7 +165,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     setLoading(true);
     const summaryWindowStart = new Date(`${summaryDate}T00:00:00.000Z`); summaryWindowStart.setUTCDate(summaryWindowStart.getUTCDate() - 1);
     const summaryWindowEnd = new Date(`${summaryDate}T00:00:00.000Z`); summaryWindowEnd.setUTCDate(summaryWindowEnd.getUTCDate() + 2);
-    const [requestRes, collectionRes, summaryCollectionRes, accountRes, workflowRes, initialVendorPaymentRes, expenseRes] = await Promise.all([
+    const [requestRes, collectionRes, summaryCollectionRes, accountRes, workflowRes, initialVendorPaymentRes, expenseRes, schoolRevenueRes, schoolPaymentRes] = await Promise.all([
       supabase.from("treasury_requests").select("*").eq("organization_id", user.organization_id).order("requested_at", { ascending: false }),
       supabase.from("payments").select("id,amount,payment_source,paid_at,payment_method,transaction_id,billing_id,stay_id").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).order("paid_at", { ascending: false }).limit(5000),
       supabase.from("payments").select("id,amount,payment_source,paid_at,payment_method,transaction_id,billing_id,stay_id").eq("organization_id", user.organization_id).eq("payment_status", "completed").in("payment_source", ["pos_hotel", "pos_retail", "pos_clinic", "debtor"]).gte("paid_at", summaryWindowStart.toISOString()).lt("paid_at", summaryWindowEnd.toISOString()).order("paid_at", { ascending: false }),
@@ -173,6 +173,8 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       supabase.from("organization_permissions").select("allowed").eq("organization_id", user.organization_id).eq("role_key", "__org__").eq("permission_key", "treasury_spend_money_approval_enabled").maybeSingle(),
       supabase.from("vendor_payments").select("id,amount,payment_date,payment_method,reference,status,vendors(name)").eq("organization_id", user.organization_id).order("payment_date", { ascending: false }).limit(300),
       supabase.from("expenses").select("id,amount,description,expense_date,status,vendors(name)").eq("organization_id", user.organization_id).order("expense_date", { ascending: false }).limit(300),
+      supabase.from("school_other_revenue").select("id,revenue_type,payer_name,amount,method,reference,received_at").eq("organization_id", user.organization_id).gte("received_at", summaryWindowStart.toISOString()).lt("received_at", summaryWindowEnd.toISOString()).order("received_at", { ascending: false }),
+      supabase.from("school_payments").select("id,amount,method,reference,paid_at,students(first_name,last_name,admission_number)").eq("organization_id", user.organization_id).gte("paid_at", summaryWindowStart.toISOString()).lt("paid_at", summaryWindowEnd.toISOString()).order("paid_at", { ascending: false }),
     ]);
     if (requestRes.error) console.error("Unable to load Treasury requests:", requestRes.error);
     if (collectionRes.error) console.error("Unable to load Treasury collections:", collectionRes.error);
@@ -184,10 +186,40 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     }
     if (vendorPaymentRes.error) console.error("Unable to load Treasury supplier payments:", vendorPaymentRes.error);
     if (expenseRes.error) console.error("Unable to load Treasury expenses:", expenseRes.error);
+    if (schoolRevenueRes.error) console.error("Unable to load Treasury school other revenue:", schoolRevenueRes.error);
+    if (schoolPaymentRes.error) console.error("Unable to load Treasury school fee collections:", schoolPaymentRes.error);
     setRequests((requestRes.data || []) as TreasuryRequest[]);
     const collectionsById = new Map<string, Collection>();
     for (const row of [...(collectionRes.data || []), ...(summaryCollectionRes.data || [])] as Collection[]) collectionsById.set(row.id, row);
-    const loadedCollections = [...collectionsById.values()];
+    const schoolRevenueCollections: Collection[] = ((schoolRevenueRes.data || []) as Array<{ id: string; revenue_type: string; payer_name: string | null; amount: number; method: string; reference: string | null; received_at: string }>).map((row) => ({
+      id: `school-revenue-${row.id}`,
+      amount: Number(row.amount || 0),
+      payment_source: "school_other_revenue",
+      paid_at: row.received_at,
+      payment_method: row.method,
+      transaction_id: row.id,
+      billing_id: null,
+      stay_id: null,
+      details: `${row.revenue_type}${row.payer_name ? ` · ${row.payer_name}` : ""}`,
+      department: "Other income",
+    }));
+    const schoolFeeCollections: Collection[] = ((schoolPaymentRes.data || []) as Array<{ id: string; amount: number; method: string; reference: string | null; paid_at: string; students: { first_name: string | null; last_name: string | null; admission_number: string | null } | { first_name: string | null; last_name: string | null; admission_number: string | null }[] | null }>).map((row) => {
+      const student = Array.isArray(row.students) ? row.students[0] : row.students;
+      const studentName = student ? `${student.first_name || ""} ${student.last_name || ""}`.trim() : "";
+      return {
+        id: `school-fee-${row.id}`,
+        amount: Number(row.amount || 0),
+        payment_source: "school_fees",
+        paid_at: row.paid_at,
+        payment_method: row.method,
+        transaction_id: row.id,
+        billing_id: null,
+        stay_id: null,
+        details: `School fees${studentName ? ` · ${studentName}` : ""}${student?.admission_number ? ` (${student.admission_number})` : ""}`,
+        department: "School fees",
+      };
+    });
+    const loadedCollections = [...collectionsById.values(), ...schoolRevenueCollections, ...schoolFeeCollections];
     const retailSaleIds = [...new Set(
       loadedCollections
         .filter((row) => row.payment_source === "pos_retail" && row.transaction_id)
@@ -227,8 +259,8 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       const isRoom = billing?.charge_type === "room" || Boolean(room?.room_number);
       return {
         ...row,
-        details: billing?.description || (isRoom ? `Room ${room?.room_number || "charge"}${guestName ? ` · ${guestName}` : ""}` : methodLabel(row.payment_source)),
-        department: isRoom ? "Rooms" : row.payment_source === "pos_retail" ? "Retail" : row.payment_source === "pos_clinic" ? "Clinic" : row.payment_source === "pos_hotel" ? "Hotel POS" : "Billing",
+        details: row.details || billing?.description || (isRoom ? `Room ${room?.room_number || "charge"}${guestName ? ` · ${guestName}` : ""}` : methodLabel(row.payment_source)),
+        department: row.department || (isRoom ? "Rooms" : row.payment_source === "pos_retail" ? "Retail" : row.payment_source === "pos_clinic" ? "Clinic" : row.payment_source === "pos_hotel" ? "Hotel POS" : "Billing"),
       };
     }));
     const hotelOrderIds = [...new Set(loadedCollections
