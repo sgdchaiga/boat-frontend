@@ -454,6 +454,62 @@ export function IncomeStatementPage() {
           effectiveLines = [...effectiveLines, ...cashPosLines];
         }
 
+        if (businessType === "hotel" || businessType === "mixed") {
+          let guestPaymentsQuery = supabase
+            .from("payments")
+            .select("id,amount,paid_at,stay_id,payment_source")
+            .eq("payment_status", "completed")
+            .not("stay_id", "is", null)
+            .gte("paid_at", `${fromDate}T00:00:00Z`)
+            .lt("paid_at", paidToExclusive.toISOString());
+          if (orgId) guestPaymentsQuery = guestPaymentsQuery.eq("organization_id", orgId);
+          const [guestPaymentsResult, roomRevenueSettingResult] = await Promise.all([
+            guestPaymentsQuery,
+            orgId
+              ? supabase.from("journal_gl_settings").select("revenue_gl_account_id").eq("organization_id", orgId).maybeSingle()
+              : Promise.resolve({ data: null, error: null }),
+          ]);
+          if (guestPaymentsResult.error) throw new Error(guestPaymentsResult.error.message);
+          if (roomRevenueSettingResult.error) throw new Error(roomRevenueSettingResult.error.message);
+          const roomRevenueAccountId = (roomRevenueSettingResult.data as { revenue_gl_account_id?: string | null } | null)?.revenue_gl_account_id;
+          if (roomRevenueAccountId) {
+            const roomRevenueAccountResult = await supabase
+              .from("gl_accounts")
+              .select("id,account_code,account_name,account_type,category")
+              .eq("id", roomRevenueAccountId)
+              .maybeSingle();
+            if (roomRevenueAccountResult.error) throw new Error(roomRevenueAccountResult.error.message);
+            const roomRevenueAccount = roomRevenueAccountResult.data as {
+              id: string;
+              account_code: string;
+              account_name: string;
+              account_type: string;
+              category?: string | null;
+            } | null;
+            if (roomRevenueAccount) {
+              const guestPaymentLines = ((guestPaymentsResult.data || []) as Array<{
+                amount: number | null;
+                paid_at: string | null;
+                payment_source: string | null;
+              }>)
+                // POS receipts are already attributed above. Debtor/legacy stay
+                // payments cover both normal guest billing and Cash Room Register.
+                .filter((payment) => !["pos_hotel", "pos_retail", "pos_clinic"].includes(String(payment.payment_source || "").toLowerCase()))
+                .map((payment) => ({
+                  debit: 0,
+                  credit: Number(payment.amount || 0),
+                  gl_accounts: roomRevenueAccount,
+                  journal_entries: {
+                    entry_date: String(payment.paid_at || fromDate).slice(0, 10),
+                    reference_type: "guest_room_payment",
+                    reference_id: null,
+                  },
+                }));
+              effectiveLines = [...effectiveLines, ...guestPaymentLines];
+            }
+          }
+        }
+
         // A vendor-payment journal settles Accounts Payable and does not repeat the
         // bill's expense/COGS debit. Attribute payments back to the original bill
         // debit lines so cash-basis purchases agree with the posting comparison.
