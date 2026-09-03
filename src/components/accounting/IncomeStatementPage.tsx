@@ -26,6 +26,7 @@ import {
   type BarSalesReconciliation,
   type OperationalRevenueDetail,
 } from "../../lib/hotelOperationalRevenue";
+import { parseBillAllocationsJson } from "../../lib/billStatus";
 
 type TrendPoint = { period: string; revenue: number; expenses: number };
 const JOURNAL_LINE_PAGE_SIZE = 1000;
@@ -452,6 +453,92 @@ export function IncomeStatementPage() {
           });
           effectiveLines = [...effectiveLines, ...cashPosLines];
         }
+
+        // A vendor-payment journal settles Accounts Payable and does not repeat the
+        // bill's expense/COGS debit. Attribute payments back to the original bill
+        // debit lines so cash-basis purchases agree with the posting comparison.
+        let vendorPaymentsQuery = supabase
+          .from("vendor_payments")
+          .select("id,bill_id,bill_allocations,amount,status")
+          .gte("payment_date", fromDate)
+          .lt("payment_date", paidToExclusive.toISOString().slice(0, 10));
+        if (orgId) vendorPaymentsQuery = vendorPaymentsQuery.eq("organization_id", orgId);
+        const vendorPaymentsResult = await vendorPaymentsQuery;
+        if (vendorPaymentsResult.error) throw new Error(vendorPaymentsResult.error.message);
+        const vendorPayments = ((vendorPaymentsResult.data || []) as Array<{
+          id: string;
+          bill_id: string | null;
+          bill_allocations: unknown;
+          amount: number | null;
+          status?: string | null;
+        }>).filter((payment) => payment.status !== "reversed");
+        const vendorPaymentIds = vendorPayments.map((payment) => payment.id);
+        const allocationTableRows: Array<{ vendor_payment_id: string; bill_id: string; amount: number }> = [];
+        for (let start = 0; start < vendorPaymentIds.length; start += 200) {
+          const ids = vendorPaymentIds.slice(start, start + 200);
+          if (!ids.length) continue;
+          const result = await supabase
+            .from("vendor_payment_bill_allocations")
+            .select("vendor_payment_id,bill_id,amount")
+            .in("vendor_payment_id", ids);
+          if (!result.error) allocationTableRows.push(...((result.data || []) as typeof allocationTableRows));
+        }
+        const tableAllocations = new Map<string, Array<{ bill_id: string; amount: number }>>();
+        allocationTableRows.forEach((row) =>
+          tableAllocations.set(row.vendor_payment_id, [
+            ...(tableAllocations.get(row.vendor_payment_id) || []),
+            { bill_id: row.bill_id, amount: Number(row.amount || 0) },
+          ])
+        );
+        const paidBillAllocations = vendorPayments.flatMap((payment) => {
+          const json = parseBillAllocationsJson(payment.bill_allocations);
+          const table = tableAllocations.get(payment.id) || [];
+          return json.length
+            ? json
+            : table.length
+              ? table
+              : payment.bill_id
+                ? [{ bill_id: payment.bill_id, amount: Number(payment.amount || 0) }]
+                : [];
+        });
+        const paidBillIds = [...new Set(paidBillAllocations.map((allocation) => allocation.bill_id))];
+        const paidBillLines: typeof effectiveLines = [];
+        for (let start = 0; start < paidBillIds.length; start += 150) {
+          const ids = paidBillIds.slice(start, start + 150);
+          if (!ids.length) continue;
+          const query = filterJournalLinesByOrganizationId(
+            supabase
+              .from("journal_entry_lines")
+              .select("debit,credit,gl_accounts!inner(id,account_code,account_name,account_type,category),journal_entries!inner(entry_date,reference_type,reference_id,organization_id,is_posted,is_deleted)")
+              .eq("journal_entries.reference_type", "bill")
+              .eq("journal_entries.is_posted", true)
+              .eq("journal_entries.is_deleted", false)
+              .in("journal_entries.reference_id", ids),
+            orgId,
+            superAdmin
+          );
+          const result = await query;
+          if (result.error) throw new Error(result.error.message);
+          paidBillLines.push(...((result.data || []) as typeof effectiveLines));
+        }
+        const debitLinesByBill = new Map<string, typeof effectiveLines>();
+        paidBillLines.forEach((line) => {
+          const billId = line.journal_entries?.reference_id;
+          if (!billId || Number(line.debit || 0) - Number(line.credit || 0) <= 0) return;
+          debitLinesByBill.set(billId, [...(debitLinesByBill.get(billId) || []), line]);
+        });
+        const attributedPurchaseLines: typeof effectiveLines = [];
+        paidBillAllocations.forEach((allocation) => {
+          const sourceLines = debitLinesByBill.get(allocation.bill_id) || [];
+          const totalDebit = sourceLines.reduce((sum, line) => sum + Number(line.debit || 0) - Number(line.credit || 0), 0);
+          if (totalDebit <= 0) return;
+          sourceLines.forEach((line) => attributedPurchaseLines.push({
+            ...line,
+            debit: Number(allocation.amount || 0) * (Number(line.debit || 0) - Number(line.credit || 0)) / totalDebit,
+            credit: 0,
+          }));
+        });
+        effectiveLines = [...effectiveLines, ...attributedPurchaseLines];
       }
 
       type AccRow = {
