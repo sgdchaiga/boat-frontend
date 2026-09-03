@@ -682,6 +682,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_financial_payments_by_charge_type",
     "reports_daily_purchases_summary",
     "reports_expenses",
+    "reports_expense_posting_comparison",
     "reports_purchases_by_item",
     "reports_sales_by_item",
     "reports_room_billing",

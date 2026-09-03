@@ -119,6 +119,7 @@ const FinancialPaymentsByMethodPage = lazyNamed(() => import('./components/repor
 const FinancialPaymentsByChargeTypePage = lazyNamed(() => import('./components/reports/FinancialPaymentsByChargeTypePage'), 'FinancialPaymentsByChargeTypePage');
 const DailyPurchasesSummaryPage = lazyNamed(() => import('./components/reports/DailyPurchasesSummaryPage'), 'DailyPurchasesSummaryPage');
 const ExpensesReportPage = lazyNamed(() => import('./components/reports/ExpensesReportPage'), 'ExpensesReportPage');
+const ExpensePostingComparisonReportPage = lazyNamed(() => import('./components/reports/ExpensePostingComparisonReportPage'), 'ExpensePostingComparisonReportPage');
 const ManufacturingDailyProductionReportPage = lazyNamed(() => import('./components/reports/ManufacturingDailyProductionReportPage'), 'ManufacturingDailyProductionReportPage');
 const DailySummaryReportPage = lazyNamed(() => import('./components/reports/DailySummaryReportPage'), 'DailySummaryReportPage');
 const RetailShiftVarianceReportPage = lazyNamed(() => import('./components/reports/RetailShiftVarianceReportPage'), 'RetailShiftVarianceReportPage');
@@ -1593,6 +1594,8 @@ function AppContent() {
         return <DailyPurchasesSummaryPage />;
       case 'reports_expenses':
         return <ExpensesReportPage />;
+      case 'reports_expense_posting_comparison':
+        return <ExpensePostingComparisonReportPage />;
       case 'reports_stock_movement':
         return <StockMovementReportPage />;
       case 'reports_stock_summary':

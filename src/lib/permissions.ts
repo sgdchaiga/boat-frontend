@@ -157,6 +157,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "reports_daily_purchases_summary", label: "Purchases summary", group: "Reports" },
   { page: "reports_purchases_by_item", label: "Purchases by item", group: "Reports" },
   { page: "reports_expenses", label: "Expenses report", group: "Reports" },
+  { page: "reports_expense_posting_comparison", label: "Expense posting comparison", group: "Reports" },
   { page: "reports_stock_summary", label: "Stock summary", group: "Reports" },
   { page: "reports_stock_movement", label: "Stock movement", group: "Reports" },
   { page: "reports_stock_adjustments", label: "Inventory movements", group: "Reports" },

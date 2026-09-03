@@ -58,6 +58,7 @@ type InvRow = {
   issue_date?: string | null;
   due_date?: string | null;
   line_items?: FeeLine[] | null;
+  fee_structure_id?: string | null;
 };
 
 type InvEditDraft = {
@@ -103,6 +104,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   });
   const [bulkRunning, setBulkRunning] = useState(false);
   const [bulkSummary, setBulkSummary] = useState<string | null>(null);
+  const [correction, setCorrection] = useState({ from_fee_structure_id: "", to_fee_structure_id: "" });
+  const [correctionRunning, setCorrectionRunning] = useState(false);
+  const [correctionSummary, setCorrectionSummary] = useState<string | null>(null);
+  const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
   const [schoolHeader, setSchoolHeader] = useState({ name: "School", address: "", logoUrl: "" });
 
   useEffect(() => {
@@ -140,8 +145,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       <div class="meta"><strong>Student:</strong> ${name}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}<br>
       <strong>Term:</strong> ${invoice.academic_year} · ${invoice.term_name}<br><strong>Issue date:</strong> ${invoice.issue_date ?? "—"}<br>
       <strong>Due date:</strong> ${invoice.due_date ?? "—"}</div>
-      <table><tr><th>Description</th><th class="num">Amount</th></tr>${Array.isArray(invoice.line_items)&&invoice.line_items.length?invoice.line_items.map((line)=>`<tr><td>${line.label||line.code||"School fees"}</td><td class="num">${Number(line.amount||0).toLocaleString()}</td></tr>`).join(""):`<tr><td>School fees</td><td class="num">${Number(invoice.subtotal).toLocaleString()}</td></tr>`}
-      <tr><td>Discounts, bursary and scholarship</td><td class="num">-${(Number(invoice.discount_amount)+Number(invoice.bursary_amount)+Number(invoice.scholarship_amount)).toLocaleString()}</td></tr>
+      <table><tr><th>Description</th><th class="num">Amount</th></tr>${invoiceDocumentLines(invoice)}
+      ${Number(invoice.discount_amount)>0?`<tr><td>Discount</td><td class="num">-${Number(invoice.discount_amount).toLocaleString()}</td></tr>`:""}
+      ${Number(invoice.bursary_amount)>0?`<tr><td>Bursary</td><td class="num">-${Number(invoice.bursary_amount).toLocaleString()}</td></tr>`:""}
+      ${Number(invoice.scholarship_amount)>0?`<tr><td>Scholarship</td><td class="num">-${Number(invoice.scholarship_amount).toLocaleString()}</td></tr>`:""}
       <tr><th>Total due</th><th class="num">${Number(invoice.total_due).toLocaleString()}</th></tr><tr><td>Paid</td><td class="num">${Number(invoice.amount_paid).toLocaleString()}</td></tr></table>
       <div class="total">Balance: ${balance.toLocaleString()}</div>${demandNote ? "<p>Please settle the outstanding balance by the due date or contact the school bursar.</p>" : ""}`);
   };
@@ -243,6 +250,17 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }).map((line)=>({...line,amount:Number(line.amount||0)}));
   };
 
+  const isSpecialLine = (line: FeeLine) => String(line.code || "").toUpperCase().startsWith("SPECIAL");
+
+  const invoiceDocumentLines = (invoice: InvRow) => {
+    const lines = Array.isArray(invoice.line_items) ? invoice.line_items : [];
+    if (!lines.length) return `<tr><td>Fee structure</td><td class="num">${Number(invoice.subtotal).toLocaleString()}</td></tr>`;
+    const regular = lines.filter((line) => !isSpecialLine(line));
+    const special = lines.filter(isSpecialLine);
+    const regularTotal = regular.reduce((sum, line) => sum + Number(line.amount || 0), 0);
+    return `${regular.length ? `<tr><th>Fee structure total</th><th class="num">${regularTotal.toLocaleString()}</th></tr>${regular.map((line) => `<tr><td style="padding-left:28px">↳ ${line.label || line.code || "School fees"}</td><td class="num">${Number(line.amount || 0).toLocaleString()}</td></tr>`).join("")}` : ""}${special.map((line) => `<tr><td>${line.label || "Special fee structure"}</td><td class="num">${Number(line.amount || 0).toLocaleString()}</td></tr>`).join("")}`;
+  };
+
   const bulkFee = useMemo(() => fees.find((f) => f.id === bulk.fee_structure_id), [fees, bulk.fee_structure_id]);
   const selectedFee = useMemo(() => fees.find((f) => f.id === form.fee_structure_id), [fees, form.fee_structure_id]);
   const selectedStudent = useMemo(() => students.find((s) => s.id === form.student_id), [students, form.student_id]);
@@ -255,18 +273,18 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     );
   }, [bursaries, form.student_id, selectedFee]);
 
-  const specialFeeTotalFor = useCallback(
+  const specialFeeLinesFor = useCallback(
     (studentId: string, academicYear: string, termName: string, isNewStudent: boolean) => {
       const rows = specialFees.filter((sf) => sf.academic_year === academicYear && sf.term_name === termName && sf.is_active);
-      let total = 0;
-      rows.forEach((sf) => {
+      const result: FeeLine[] = [];
+      rows.forEach((sf, index) => {
         if (sf.fee_type === "new_student") {
-          if (isNewStudent) total += Number(sf.amount) || 0;
+          if (isNewStudent) result.push({ code: "SPECIAL_NEW_STUDENT", label: "New student fee", amount: Number(sf.amount) || 0, priority: 900 + index, applies_to: "all" });
           return;
         }
-        total += Number(sf.amount) || 0;
+        result.push({ code: `SPECIAL_${sf.fee_type.toUpperCase()}`, label: sf.fee_type === "uneb" ? "UNEB fee" : "Exam fee", amount: Number(sf.amount) || 0, priority: 900 + index, applies_to: "all" });
       });
-      return total;
+      return result;
     },
     [specialFees]
   );
@@ -362,9 +380,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       const appliedLines=applicableLines(fee,s.is_boarding);
       const subtotalBase=appliedLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
       const isNewStudent = !rows.some((r) => r.student_id === s.id);
-      const specialTotal = specialFeeTotalFor(s.id, fee.academic_year, fee.term_name, isNewStudent);
+       const specialLines = specialFeeLinesFor(s.id, fee.academic_year, fee.term_name, isNewStudent);
+       const specialTotal = specialLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
       const subtotal = subtotalBase + specialTotal;
-      const invoiceLines=specialTotal>0?[...appliedLines,{code:"SPECIAL",label:"Special fees",amount:specialTotal,priority:999,applies_to:"all" as const}]:appliedLines;
+       const invoiceLines=[...appliedLines,...specialLines];
       const burs = Number(
         bursaries.find((b) => b.student_id === s.id && b.academic_year === fee.academic_year && b.term_name === fee.term_name)?.amount ?? 0
       );
@@ -460,9 +479,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const appliedLines=applicableLines(fee,student.is_boarding);
     const subtotalBase=appliedLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
     const isNewStudent = !rows.some((r) => r.student_id === form.student_id);
-    const specialTotal = specialFeeTotalFor(form.student_id, fee.academic_year, fee.term_name, isNewStudent);
+    const specialLines = specialFeeLinesFor(form.student_id, fee.academic_year, fee.term_name, isNewStudent);
+    const specialTotal = specialLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
     const subtotal = subtotalBase + specialTotal;
-    const invoiceLines=specialTotal>0?[...appliedLines,{code:"SPECIAL",label:"Special fees",amount:specialTotal,priority:999,applies_to:"all" as const}]:appliedLines;
+    const invoiceLines=[...appliedLines,...specialLines];
     const disc = Number(form.discount_amount) || 0;
     const burs =
       Number(
@@ -640,6 +660,65 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }
   };
 
+  const correctInvoicesByFeeStructure = async () => {
+    if (readOnly || correctionRunning) return;
+    const fromFee = fees.find((fee) => fee.id === correction.from_fee_structure_id);
+    const toFee = fees.find((fee) => fee.id === correction.to_fee_structure_id);
+    if (!fromFee || !toFee) {
+      setErr("Choose the invoiced fee structure and the structure whose current values should be applied.");
+      return;
+    }
+    if (fromFee.academic_year !== toFee.academic_year || fromFee.term_name !== toFee.term_name) {
+      setErr("The corrected fee structure must be for the same academic year and term.");
+      return;
+    }
+    const affected = rows.filter((row) => row.fee_structure_id === fromFee.id && row.status !== "cancelled");
+    if (!affected.length) {
+      setCorrectionSummary("No active invoices use the selected incorrect fee structure.");
+      return;
+    }
+    const orgId = user?.organization_id;
+    if (!orgId) return;
+    setErr(null);
+    setCorrectionSummary(null);
+    setCorrectionRunning(true);
+    let updatedCount = 0;
+    try {
+      for (const invoice of affected) {
+        const student = students.find((item) => item.id === invoice.student_id);
+        if (!student) throw new Error(`Student for ${invoice.invoice_number} could not be found.`);
+        const regularLines = applicableLines(toFee, student.is_boarding);
+        const wasNewStudentCharge = (invoice.line_items || []).some((line) => String(line.code || "").toUpperCase() === "SPECIAL_NEW_STUDENT");
+        const isOnlyInvoice = !rows.some((row) => row.student_id === invoice.student_id && row.id !== invoice.id && row.status !== "cancelled");
+        const specialLines = specialFeeLinesFor(invoice.student_id, toFee.academic_year, toFee.term_name, wasNewStudentCharge || isOnlyInvoice);
+        const line_items = [...regularLines, ...specialLines];
+        const subtotal = line_items.reduce((sum, line) => sum + Number(line.amount || 0), 0);
+        const total_due = Math.max(0, subtotal - Number(invoice.discount_amount || 0) - Number(invoice.bursary_amount || 0) - Number(invoice.scholarship_amount || 0));
+        const paid = Number(invoice.amount_paid || 0);
+        const status = paid >= total_due ? "paid" : paid > 0 ? "partial" : invoice.status === "draft" ? "draft" : "sent";
+        const changes = { fee_structure_id: toFee.id, academic_year: toFee.academic_year, term_name: toFee.term_name, line_items, subtotal, total_due, status };
+        let updated: InvRow;
+        if (canUseSchoolApi()) {
+          updated = await updateSchoolRow<InvRow>("invoices", orgId, invoice.id, { ...changes, staff_user_id: user?.id ?? null });
+        } else {
+          const result = await supabase.from("student_invoices").update(changes).eq("organization_id", orgId).eq("id", invoice.id).select("*").single();
+          if (result.error) throw result.error;
+          updated = result.data as InvRow;
+        }
+        const { journalMessage } = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: updated });
+        if (journalMessage) throw new Error(`${invoice.invoice_number} was corrected, but GL reposting failed: ${journalMessage}`);
+        updatedCount += 1;
+      }
+      setCorrectionSummary(`${fromFee.id === toFee.id ? "Refreshed" : "Corrected"} ${updatedCount} invoice${updatedCount === 1 ? "" : "s"}${fromFee.id === toFee.id ? ` using the current ${toFee.class_name} fee structure` : ` from ${fromFee.class_name} to ${toFee.class_name}`}. Payments and reductions were preserved.`);
+      await load();
+    } catch (error) {
+      setErr(`${updatedCount} invoice${updatedCount === 1 ? "" : "s"} corrected before the operation stopped. ${error instanceof Error ? error.message : "Bulk correction failed."}`);
+      await load();
+    } finally {
+      setCorrectionRunning(false);
+    }
+  };
+
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -777,6 +856,28 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           {bulkSummary && <p className="text-sm text-slate-700">{bulkSummary}</p>}
         </div>
       )}
+      {!readOnly && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 space-y-3">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-900">Correct invoices by fee structure</h2>
+            <p className="text-xs text-slate-600 mt-1">Recalculate every active invoice using a corrected fee structure. Select the same structure twice after editing its amounts, or select a different replacement structure. Existing payments, bursaries, discounts and scholarships are preserved.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={correction.from_fee_structure_id} onChange={(e) => setCorrection((value) => ({ ...value, from_fee_structure_id: e.target.value }))}>
+              <option value="">Structure currently on invoices</option>
+              {fees.map((fee) => <option key={fee.id} value={fee.id}>{fee.class_name} · {fee.academic_year} {fee.term_name}</option>)}
+            </select>
+            <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={correction.to_fee_structure_id} onChange={(e) => setCorrection((value) => ({ ...value, to_fee_structure_id: e.target.value }))}>
+              <option value="">Apply current values from</option>
+              {fees.map((fee) => <option key={fee.id} value={fee.id}>{fee.class_name} · {fee.academic_year} {fee.term_name}</option>)}
+            </select>
+          </div>
+          <button type="button" disabled={correctionRunning} onClick={correctInvoicesByFeeStructure} className="px-4 py-2 bg-amber-700 text-white rounded-lg text-sm hover:bg-amber-800 disabled:opacity-50">
+            {correctionRunning ? "Correcting…" : "Correct matching invoices"}
+          </button>
+          {correctionSummary && <p className="text-sm text-slate-700">{correctionSummary}</p>}
+        </div>
+      )}
       <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
@@ -863,7 +964,24 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                   </tr>
                 ) : (
                   <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
-                    <td className="p-3 font-mono text-slate-800">{r.invoice_number}</td>
+                    <td className="p-3 font-mono text-slate-800">
+                      {r.invoice_number}
+                      {expandedInvoiceId === r.id && (
+                        <div className="mt-2 min-w-64 rounded-lg border border-violet-200 bg-violet-50 p-2 font-sans text-xs text-slate-700">
+                          <div className="flex justify-between gap-4 font-semibold">
+                            <span>Fee structure total</span>
+                            <span>{(r.line_items || []).filter((line) => !isSpecialLine(line)).reduce((sum, line) => sum + Number(line.amount || 0), 0).toLocaleString()}</span>
+                          </div>
+                          {(r.line_items || []).filter((line) => !isSpecialLine(line)).map((line, index) => (
+                            <div key={`${line.code || line.label}-${index}`} className="flex justify-between gap-4 pl-3 py-0.5"><span>↳ {line.label || line.code || "School fees"}</span><span>{Number(line.amount || 0).toLocaleString()}</span></div>
+                          ))}
+                          {(r.line_items || []).filter(isSpecialLine).map((line, index) => (
+                            <div key={`${line.code || line.label}-${index}`} className="flex justify-between gap-4 border-t border-violet-100 pt-1 mt-1"><span>{line.label || "Special fee structure"}</span><span>{Number(line.amount || 0).toLocaleString()}</span></div>
+                          ))}
+                          {Number(r.bursary_amount) > 0 && <div className="flex justify-between gap-4 border-t border-violet-100 pt-1 mt-1 text-emerald-700"><span>Bursary</span><span>-{Number(r.bursary_amount).toLocaleString()}</span></div>}
+                        </div>
+                      )}
+                    </td>
                     <td className="p-3 text-slate-700">{studentLabel(r.student_id)}</td>
                     <td className="p-3 text-slate-700">
                       {r.academic_year} · {r.term_name}
@@ -876,6 +994,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                         <button type="button" onClick={() => printInvoice(r)} className="text-xs font-medium text-sky-700">Invoice</button>
                         <button type="button" onClick={() => printInvoice(r, true)} className="text-xs font-medium text-amber-700">Demand note</button>
                         <button type="button" onClick={() => printStatement(r.student_id)} className="text-xs font-medium text-emerald-700">Statement</button>
+                        <button type="button" onClick={() => setExpandedInvoiceId((id) => id === r.id ? null : r.id)} className="text-xs font-medium text-violet-700">{expandedInvoiceId === r.id ? "Hide fees" : "Drill down"}</button>
                       {!readOnly && (
                         <button
                           type="button"

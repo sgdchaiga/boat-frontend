@@ -18,6 +18,7 @@ const PURCHASES_PAGES = new Set([
   "reports_daily_purchases_summary",
   "reports_purchases_by_item",
   "reports_expenses",
+  "reports_expense_posting_comparison",
 ]);
 const INVENTORY_PAGES = new Set([
   "reports_stock_summary",
@@ -67,6 +68,7 @@ export function getSimpleOrgReportHubCategories(
         { name: "Goods received & supplier bills", page: "purchases_bills" },
         { name: "Purchases summary", page: "reports_daily_purchases_summary" },
         { name: "Purchases by item", page: "reports_purchases_by_item" },
+        { name: "Expense posting comparison", page: "reports_expense_posting_comparison" },
         { name: "Stock summary", page: "reports_stock_summary" },
         { name: "Stock movement", page: "reports_stock_movement" },
         { name: "Inventory adjustments", page: "reports_stock_adjustments" },

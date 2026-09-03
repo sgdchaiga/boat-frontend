@@ -77,6 +77,7 @@ export function getSimpleOrgReportNavChildren(args: { businessType: BusinessType
     { name: "Goods received & supplier bills", page: "purchases_bills" },
     ...(businessType === "clinic" ? [] : [periodPurchasesReport]),
     ...(businessType !== "clinic" ? [{ name: "Expense report", page: "reports_expenses" as const }] : []),
+    { name: "Expense posting comparison", page: "reports_expense_posting_comparison" },
     { name: "Sales by item", page: "reports_sales_by_item" },
     { name: "Stock summary", page: "reports_stock_summary" },
     { name: "Inventory movements", page: "reports_stock_adjustments" },
