@@ -129,7 +129,7 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
       <div className="flex flex-wrap items-center gap-2">
         <div><p className="text-xs font-medium text-slate-500">{payrollBusinessLabel(user?.business_type)} › Payroll › {mode === "employees" ? "Employees" : "Salary Structure"}</p><h1 className="text-2xl font-bold text-slate-900">{mode === "employees" ? "Employees" : "Salary Structure"}</h1><p className="mt-1 text-sm text-slate-600">{mode === "employees" ? "Maintain payroll eligibility and employment information." : "Maintain salary, allowances and recurring payroll values."}</p></div>
         <PayrollGuide guideId="staff" />
-        {mode === "employees" && !readOnly && payrollAccess.canPrepare && <button type="button" onClick={() => setAddingEmployee(true)} className="ml-auto rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Add employee</button>}
+        {mode === "employees" && !readOnly && payrollAccess.canPrepare && <div className="ml-auto"><button type="button" onClick={() => setAddingEmployee(true)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Add employee (no user account)</button><p className="mt-1 text-xs text-slate-500">Add staff directly to payroll without creating a BOAT login.</p></div>}
       </div>
       {readOnly && <ReadOnlyNotice />}
       {!readOnly && !payrollAccess.canPrepare && (

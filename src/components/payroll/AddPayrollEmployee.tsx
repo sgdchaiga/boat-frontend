@@ -32,7 +32,7 @@ export function AddPayrollEmployee({ businessType, onCreated, onCancel }: {
     finally { setBusy(false); }
   };
   return <form className="rounded-xl border border-blue-200 bg-blue-50/40 p-4" onSubmit={(e) => { e.preventDefault(); void save(); }}>
-    <h2 className="font-semibold text-slate-900">Add employee</h2>
+    <h2 className="font-semibold text-slate-900">Add employee (no user account)</h2>
     <p className="mt-1 text-sm text-slate-600">Create an employee and payroll profile. This does not create a BOAT login.</p>
     <fieldset disabled={busy || !!createdId} className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {([
