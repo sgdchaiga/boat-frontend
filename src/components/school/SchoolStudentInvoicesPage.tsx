@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
-import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
+import { getSchoolAccountingBasis, syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
 import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 
 type ClassOpt = { id: string; name: string };
@@ -107,6 +107,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const [correction, setCorrection] = useState({ from_fee_structure_id: "", to_fee_structure_id: "" });
   const [correctionRunning, setCorrectionRunning] = useState(false);
   const [correctionSummary, setCorrectionSummary] = useState<string | null>(null);
+  const correctionStop = useRef(false);
+  const [correctionProgress, setCorrectionProgress] = useState("");
   const [expandedInvoiceId, setExpandedInvoiceId] = useState<string | null>(null);
   const [schoolHeader, setSchoolHeader] = useState({ name: "School", address: "", logoUrl: "" });
 
@@ -682,9 +684,16 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     setErr(null);
     setCorrectionSummary(null);
     setCorrectionRunning(true);
+    correctionStop.current = false;
+    setCorrectionProgress(`Preparing ${affected.length} invoices…`);
     let updatedCount = 0;
+    let savedCount = 0;
     try {
+      const usesApi = canUseSchoolApi();
+      const accountingBasis = usesApi ? undefined : await getSchoolAccountingBasis(orgId);
       for (const invoice of affected) {
+        if (correctionStop.current) break;
+        setCorrectionProgress(`${updatedCount} of ${affected.length} completed. Updating ${invoice.invoice_number}…`);
         const student = students.find((item) => item.id === invoice.student_id);
         if (!student) throw new Error(`Student for ${invoice.invoice_number} could not be found.`);
         const regularLines = applicableLines(toFee, student.is_boarding);
@@ -698,24 +707,30 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         const status = paid >= total_due ? "paid" : paid > 0 ? "partial" : invoice.status === "draft" ? "draft" : "sent";
         const changes = { fee_structure_id: toFee.id, academic_year: toFee.academic_year, term_name: toFee.term_name, line_items, subtotal, total_due, status };
         let updated: InvRow;
-        if (canUseSchoolApi()) {
+        if (usesApi) {
           updated = await updateSchoolRow<InvRow>("invoices", orgId, invoice.id, { ...changes, staff_user_id: user?.id ?? null });
         } else {
           const result = await supabase.from("student_invoices").update(changes).eq("organization_id", orgId).eq("id", invoice.id).select("*").single();
           if (result.error) throw result.error;
           updated = result.data as InvRow;
         }
-        const { journalMessage } = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: updated });
-        if (journalMessage) throw new Error(`${invoice.invoice_number} was corrected, but GL reposting failed: ${journalMessage}`);
+        savedCount += 1;
+        setRows((current) => current.map((row) => row.id === updated.id ? updated : row));
+        // The school API posts accounting in the same transaction as the invoice update.
+        if (!usesApi) {
+          setCorrectionProgress(`${updatedCount} of ${affected.length} completed. Posting accounting for ${invoice.invoice_number}…`);
+          const { journalMessage } = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: updated, accountingBasis });
+          if (journalMessage) throw new Error(`${invoice.invoice_number} was corrected, but GL reposting failed: ${journalMessage}`);
+        }
         updatedCount += 1;
       }
       setCorrectionSummary(`${fromFee.id === toFee.id ? "Refreshed" : "Corrected"} ${updatedCount} invoice${updatedCount === 1 ? "" : "s"}${fromFee.id === toFee.id ? ` using the current ${toFee.class_name} fee structure` : ` from ${fromFee.class_name} to ${toFee.class_name}`}. Payments and reductions were preserved.`);
-      await load();
+      if (correctionStop.current) setCorrectionSummary(`Stopped after ${updatedCount} of ${affected.length} invoices. Completed changes were saved.`);
     } catch (error) {
-      setErr(`${updatedCount} invoice${updatedCount === 1 ? "" : "s"} corrected before the operation stopped. ${error instanceof Error ? error.message : "Bulk correction failed."}`);
-      await load();
+      setErr(`${savedCount} invoices saved; ${updatedCount} completed including accounting. Operation stopped. ${error instanceof Error ? error.message : "Bulk correction failed."}`);
     } finally {
       setCorrectionRunning(false);
+      setCorrectionProgress("");
     }
   };
 
@@ -876,6 +891,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
             {correctionRunning ? "Correcting…" : "Correct matching invoices"}
           </button>
           {correctionSummary && <p className="text-sm text-slate-700">{correctionSummary}</p>}
+          {correctionRunning && <div className="space-y-2">
+            <p role="status" className="text-sm text-slate-700">{correctionProgress}</p>
+            <button type="button" onClick={() => { correctionStop.current = true; setCorrectionProgress((value) => `${value} Stopping after this invoice finishes.`); }} className="text-sm font-medium text-amber-800 underline">Stop after current invoice</button>
+          </div>}
         </div>
       )}
       <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">

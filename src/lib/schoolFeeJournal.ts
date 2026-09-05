@@ -17,6 +17,7 @@ export async function getSchoolAccountingBasis(organizationId: string): Promise<
 export async function syncStudentInvoiceAccounting(opts: {
   organizationId: string;
   staffUserId: string | null;
+  accountingBasis?: SchoolAccountingBasis;
   invoice: {
     id: string;
     student_id: string;
@@ -28,8 +29,9 @@ export async function syncStudentInvoiceAccounting(opts: {
   };
 }): Promise<{ journalMessage?: string }> {
   const { organizationId, staffUserId, invoice } = opts;
-  const basis = await getSchoolAccountingBasis(organizationId);
-  await deleteJournalEntryByReference("school_invoice", invoice.id);
+  const basis = opts.accountingBasis ?? await getSchoolAccountingBasis(organizationId);
+  const retired = await deleteJournalEntryByReference("school_invoice", invoice.id, organizationId);
+  if (!retired.ok) return { journalMessage: retired.error };
   if (basis !== "accrual") {
     return {};
   }
