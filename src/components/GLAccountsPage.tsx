@@ -4,7 +4,7 @@ import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
 import { canApprove } from "../lib/approvalRights";
 import { PageNotes } from "./common/PageNotes";
-import { isGlAccountRelevantForBusinessType } from "../lib/glAccountBusinessScope";
+import { isGlAccountRelevantForChart } from "../lib/glAccountBusinessScope";
 
 type GLAccount = {
   id: string;
@@ -104,7 +104,7 @@ export function GLAccountsPage() {
         created_at: String(row.created_at ?? new Date().toISOString()),
       } as GLAccount;
     });
-    setAccounts(normalized.filter((account) => isGlAccountRelevantForBusinessType(account, user?.business_type)));
+    setAccounts(normalized.filter((account) => isGlAccountRelevantForChart(account, user?.business_type)));
     setLoading(false);
   };
 

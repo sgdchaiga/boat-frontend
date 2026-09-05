@@ -14,6 +14,14 @@ const INDUSTRY_PATTERNS: Record<string, RegExp> = {
   manufacturing: /\b(raw materials? inventory|raw materials?|manufacturing wip|work in progress|finished goods(?: production| inventory)?|factory overhead|production overhead|production clearing|cost of goods manufactured|scrap inventory)\b/i,
 };
 
+// Legacy standard setup stamped every template account with the tenant's type.
+// Match other industries by name, not code: account codes overlap across charts.
+const NON_MANUFACTURING_ACCOUNT_NAMES = /\b(hotel|guest|rooms? (?:revenue|charges?|income)|accommodation|housekeeping|sauna|(?:bar|kitchen|restaurant|food|beverage|food\s*(?:&|and)\s*beverage) (?:pos|sales|revenue|income|inventory|cost of sales|equipment)|inventory\s*[-–—]\s*(?:bar|kitchen)|conference\s*(?:&|and)\s*events income|laundry (?:income|revenue)|clinic|patient|consultation|laboratory|medical (?:service|revenue|fees|supplies|inventory)|pharmacy|dispensary|school|student|tuition|bursary|term fees?|sacco|vsla|microfinance|loan portfolio|loan principal receivable|borrower|member savings|share[- ]?out|teller vault)\b/i;
+
+export function isUnrelatedManufacturingAccountName(name?: string | null): boolean {
+  return NON_MANUFACTURING_ACCOUNT_NAMES.test(String(name || ""));
+}
+
 /**
  * Canonical school chart codes. This also covers the later regular-expense
  * additions. It lets older school databases keep their legitimate accounts
@@ -65,4 +73,14 @@ export function isGlAccountRelevantForBusinessType(account: AccountLike, busines
 /** Keep a chart or picker aligned to the active business while retaining neutral custom accounts. */
 export function filterGlAccountsForBusinessType<T extends AccountLike>(accounts: T[], businessType?: string | null): T[] {
   return accounts.filter((account) => isGlAccountRelevantForBusinessType(account, businessType));
+}
+
+/** Curate chart maintenance without changing the accounts included in historical reports. */
+export function isGlAccountRelevantForChart(account: AccountLike, businessType?: string | null): boolean {
+  if (String(businessType || "").trim().toLowerCase() === "manufacturing") {
+    const tag = String(account.business_type || "").trim().toLowerCase();
+    if (tag && tag !== "mixed" && tag !== "manufacturing") return false;
+    return !isUnrelatedManufacturingAccountName(account.account_name);
+  }
+  return isGlAccountRelevantForBusinessType(account, businessType);
 }
