@@ -16,6 +16,8 @@ export const SCHOOL_PAGE = {
   invoices: "school_invoices",
   payments: "school_fee_payments",
   otherRevenue: "school_other_revenue",
+  rentalRegister: "school_rental_register",
+  rentalPayments: "school_rental_payments",
   receipts: "school_receipts",
   collections: "school_collections_summary",
   fixedDeposit: "school_fixed_deposit",

@@ -38,6 +38,8 @@ interface PaymentsPageProps {
   highlightPaymentId?: string;
   /** Open the Record payment drawer on load (e.g. from Transactions → Add payment). */
   openRecordPayment?: boolean;
+  /** Customer selected by a rental invoice; allocations are still chosen explicitly. */
+  initialCustomerId?: string;
 }
 
 type PaymentSortKey = "customer" | "transaction_id" | "amount" | "payment_method" | "payment_status" | "paid_at";
@@ -151,7 +153,7 @@ async function enrichPaymentsWithCustomerLabels(
   }));
 }
 
-export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordPayment = false }: PaymentsPageProps) {
+export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordPayment = false, initialCustomerId }: PaymentsPageProps) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
@@ -166,6 +168,7 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
 
   const [showRecordPayment, setShowRecordPayment] = useState(false);
   const [customerKey, setCustomerKey] = useState("");
+  useEffect(() => { if (initialCustomerId) setCustomerKey(`rc:${initialCustomerId}`); }, [initialCustomerId]);
   const [paymentStayId, setPaymentStayId] = useState("");
   const [paymentAmount, setPaymentAmount] = useState("");
   const [allocationInputs, setAllocationInputs] = useState<Record<string, string>>({});
@@ -229,10 +232,10 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
     }));
     const rc = retailCustomers.map((c) => ({
       id: `rc:${c.id}`,
-      label: `${c.name} (Retail)`,
+      label: user?.business_type === 'school' ? c.name : `${c.name} (Retail)`,
     }));
     return [...hc, ...rc];
-  }, [hotelCustomers, retailCustomers]);
+  }, [hotelCustomers, retailCustomers, user?.business_type]);
 
   const loadOutstandingInvoices = useCallback(
     async (kind: "hc" | "rc", customerId: string, customerNameHint?: string) => {

@@ -246,6 +246,7 @@ const SchoolFeeStructuresPage = lazyNamed(() => import('./components/school/Scho
 const SchoolSpecialFeeStructuresPage = lazyNamed(() => import('./components/school/SchoolSpecialFeeStructuresPage'), 'SchoolSpecialFeeStructuresPage');
 const SchoolBursaryPage = lazyNamed(() => import('./components/school/SchoolBursaryPage'), 'SchoolBursaryPage');
 const SchoolStudentInvoicesPage = lazyNamed(() => import('./components/school/SchoolStudentInvoicesPage'), 'SchoolStudentInvoicesPage');
+const SchoolRentalRegisterPage = lazyNamed(() => import('./components/school/SchoolRentalRegisterPage'), 'SchoolRentalRegisterPage');
 const SchoolFeePaymentsPage = lazyNamed(() => import('./components/school/SchoolFeePaymentsPage'), 'SchoolFeePaymentsPage');
 const SchoolOtherRevenuePage = lazyNamed(() => import('./components/school/SchoolOtherRevenuePage'), 'SchoolOtherRevenuePage');
 const SchoolCollectionsSummaryPage = lazyNamed(() => import('./components/school/SchoolCollectionsSummaryPage'), 'SchoolCollectionsSummaryPage');
@@ -1334,6 +1335,10 @@ function AppContent() {
         );
       case SCHOOL_PAGE.otherRevenue:
         return <SchoolOtherRevenuePage readOnly={access.readOnly} />;
+      case SCHOOL_PAGE.rentalRegister:
+        return <SchoolRentalRegisterPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case SCHOOL_PAGE.rentalPayments:
+        return <PaymentsPage readOnly={access.readOnly} initialCustomerId={pageState?.rentalCustomerId as string | undefined} openRecordPayment={pageState?.openRecordPayment === true} />;
       case SCHOOL_PAGE.collections:
         return <SchoolCollectionsSummaryPage readOnly={access.readOnly} />;
       case SCHOOL_PAGE.fixedDeposit:

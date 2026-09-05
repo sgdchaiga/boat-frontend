@@ -834,6 +834,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         children: [
           { name: 'School fees', page: SCHOOL_PAGE.payments },
           { name: 'Other revenue', page: SCHOOL_PAGE.otherRevenue },
+          { name: 'Rental charges register', page: SCHOOL_PAGE.rentalRegister },
+          { name: 'Rent collections', page: SCHOOL_PAGE.rentalPayments },
           { name: 'Daily collections', page: SCHOOL_PAGE.collections },
         ],
       },
@@ -1150,7 +1152,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Overview', page: 'finance_overview' },
       { group: 'Receive', items: [
         { name: 'School Fees', page: SCHOOL_PAGE.payments },
-        { name: 'Rent Collections', page: SCHOOL_PAGE.otherRevenue },
+        { name: 'Rental Charges Register', page: SCHOOL_PAGE.rentalRegister },
+        { name: 'Rent Collections', page: SCHOOL_PAGE.rentalPayments },
         { name: 'Other Income', page: SCHOOL_PAGE.otherRevenue },
         { name: 'Daily Collections', page: SCHOOL_PAGE.collections },
       ] },
