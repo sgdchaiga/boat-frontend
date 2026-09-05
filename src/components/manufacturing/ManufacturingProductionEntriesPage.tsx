@@ -6,6 +6,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { createJournalForManufacturingCostingEntry } from "../../lib/journal";
 import { Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
+import { nextProductionOrderSerial, nextProductionLineSerial } from "../../lib/productionSerial";
 
 type WorkOrderRow = { id: string; product_name: string };
 type StaffRow = { id: string; full_name: string };
@@ -114,7 +115,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
     if (fetchError) setError(fetchError.message);
     const rows = (data || []) as Array<Record<string, unknown>>;
     setRowsData(rows);
-    setManualSerial((current) => current.trim() || nextProductionSerial(rows[0]?.manual_serial_number));
+    setManualSerial((current) => current.trim() || (simpleMode ? nextProductionSerial(rows[0]?.manual_serial_number) : nextProductionOrderSerial(rows.map((row) => row.manual_serial_number))));
     setLoading(false);
   };
 
@@ -147,7 +148,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
     setQuantityIn("");
     setDirectProcessingCost("");
     setNotes("");
-    setManualSerial(nextSerial ?? nextProductionSerial(rowsData[0]?.manual_serial_number));
+    setManualSerial(nextSerial ?? (simpleMode ? nextProductionSerial(rowsData[0]?.manual_serial_number) : nextProductionOrderSerial(rowsData.map((row) => row.manual_serial_number))));
     setProductionDate(new Date().toISOString().slice(0, 10));
     setProducedQty("");
     setScrapQty("");
@@ -208,7 +209,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
       return alert("Each production item must have a unique serial number.");
     }
     setPendingItems((current) => [...current, item]);
-    setManualSerial(nextProductionSerial(item.manualSerial));
+    setManualSerial(nextProductionLineSerial(item.manualSerial));
     setWorkOrderId("");
     setProductId("");
     setProducedQty("");
@@ -286,7 +287,12 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
           }
         }
       }
-      const nextSerial = editingId ? undefined : nextProductionSerial(draftItems[draftItems.length - 1].manualSerial);
+      const nextSerial = simpleMode
+        ? (editingId ? undefined : nextProductionSerial(draftItems[draftItems.length - 1].manualSerial))
+        : nextProductionOrderSerial([
+          ...rowsData.filter((row) => row.id !== editingId).map((row) => row.manual_serial_number),
+          ...draftItems.map((item) => item.manualSerial),
+        ]);
       resetForm(nextSerial);
       await loadEntries();
     }
@@ -317,7 +323,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
       </div>
       <div className="rounded-xl border border-slate-200 bg-white p-4">
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
-          <label className="text-xs text-slate-600">{simpleMode ? "Batch / lot number" : "Serial number"}<input value={manualSerial} onChange={(e) => setManualSerial(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Suggested from the previous entry; you can change it.</span></label>
+          <label className="text-xs text-slate-600">{simpleMode ? "Batch / lot number" : "Serial number"}<input value={manualSerial} onChange={(e) => setManualSerial(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">{simpleMode ? "Suggested from the previous entry; you can change it." : "Order_line (28_1, 28_2). Saving starts the next order; you can change it."}</span></label>
           <label className="text-xs text-slate-600">{simpleMode ? "Processing date" : "Production date"}<input type="date" value={productionDate} onChange={(e) => setProductionDate(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>
           {simpleMode && <label className="text-xs text-slate-600">Input product<select value={inputProductId} onChange={(e) => setInputProductId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">Select input stock...</option>{allProducts.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select></label>}
           {simpleMode && <label className="text-xs text-slate-600">Quantity in<input type="number" min="0.001" step="0.001" value={quantityIn} onChange={(e) => setQuantityIn(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
