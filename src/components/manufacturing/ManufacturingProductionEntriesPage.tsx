@@ -7,11 +7,12 @@ import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { createJournalForManufacturingCostingEntry } from "../../lib/journal";
 import { Pencil, Plus, Settings2, Trash2, X } from "lucide-react";
 import { nextProductionOrderSerial, nextProductionLineSerial } from "../../lib/productionSerial";
+import { suggestedScrap } from "../../lib/manufacturingBom";
 
 type WorkOrderRow = { id: string; product_name: string };
 type StaffRow = { id: string; full_name: string };
 type ProductRow = { id: string; name: string; manufacturing_item_type?: string | null };
-type BomRow = { id: string; product_id: string; version: string; status: string; output_qty: number; materials: unknown[] };
+type BomRow = { id: string; product_id: string; version: string; status: string; output_qty: number; expected_scrap_qty?: number; materials: unknown[] };
 type PendingProductionItem = {
   key: string;
   manualSerial: string;
@@ -100,6 +101,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
   const [productionDate, setProductionDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [producedQty, setProducedQty] = useState("");
   const [scrapQty, setScrapQty] = useState("");
+  const [scrapOverridden, setScrapOverridden] = useState(false);
   const [pendingItems, setPendingItems] = useState<PendingProductionItem[]>([]);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -125,7 +127,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
       filterByOrganizationId(supabase.from("manufacturing_work_orders").select("id,product_name").order("created_at", { ascending: false }), orgId, superAdmin),
       filterByOrganizationId(supabase.from("staff").select("id,full_name").order("full_name"), orgId, superAdmin),
       filterByOrganizationId(supabase.from("products").select("id,name,manufacturing_item_type").eq("active", true).order("name"), orgId, superAdmin),
-      filterByOrganizationId(supabase.from("manufacturing_boms").select("id,product_id,version,status,output_qty,materials").in("status", ["Active", "Draft"]).order("updated_at", { ascending: false }), orgId, superAdmin),
+      filterByOrganizationId(supabase.from("manufacturing_boms").select("*").in("status", ["Active", "Draft"]).order("updated_at", { ascending: false }), orgId, superAdmin),
     ]);
     setWorkOrders((woRes.data || []) as WorkOrderRow[]);
     setStaffList((staffRes.data || []) as StaffRow[]);
@@ -138,6 +140,11 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
 
   useEffect(() => { void loadEntries(); void loadRefs(); }, [orgId, superAdmin]);
   useEffect(() => { if (user?.id && !postedByStaffId) setPostedByStaffId(user.id); }, [user?.id, postedByStaffId]);
+  useEffect(() => {
+    if (editingId || simpleMode || scrapOverridden) return;
+    const bom = boms.find((b) => b.product_id === productId && b.status === "Active") || boms.find((b) => b.product_id === productId);
+    setScrapQty(suggestedScrap(bom, Number(producedQty)));
+  }, [boms, productId, producedQty, editingId, simpleMode, scrapOverridden]);
 
   const resetForm = (nextSerial?: string) => {
     setEditingId(null);
@@ -152,6 +159,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
     setProductionDate(new Date().toISOString().slice(0, 10));
     setProducedQty("");
     setScrapQty("");
+    setScrapOverridden(false);
     setPostedByStaffId(user?.id ?? "");
   };
 
@@ -168,6 +176,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
     setProductionDate(String(row.production_date || String(row.posted_at || "").slice(0, 10)));
     setProducedQty(String(row.produced_qty || 0));
     setScrapQty(String(row.scrap_qty || 0));
+    setScrapOverridden(true);
     setPostedByStaffId(String(row.posted_by_staff_id || user?.id || ""));
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
@@ -214,6 +223,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
     setProductId("");
     setProducedQty("");
     setScrapQty("");
+    setScrapOverridden(false);
   };
 
   const handleSave = async () => {
@@ -333,7 +343,7 @@ export function ManufacturingProductionEntriesPage({ readOnly = false, simpleMod
           {simpleMode && Number(quantityIn) > 0 && Number(producedQty) >= 0 && <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm"><span className="block text-xs text-slate-500">Yield / processing loss</span><strong>{((Number(producedQty) / Number(quantityIn)) * 100).toFixed(1)}% yield</strong><span className="ml-2 text-slate-500">({Math.max(0, Number(quantityIn) - Number(producedQty)).toFixed(3)} loss)</span></div>}
           {!simpleMode && <label className="text-xs text-slate-600">Production order (optional)<select value={workOrderId} onChange={(e) => setWorkOrderId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">No production order</option>{workOrders.map((order) => <option key={order.id} value={order.id}>{order.product_name}</option>)}</select></label>}
           {!simpleMode && <label className="text-xs text-slate-600">Employee in charge<select value={postedByStaffId} onChange={(e) => setPostedByStaffId(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">{staffList.map((staff) => <option key={staff.id} value={staff.id}>{staff.full_name}</option>)}</select></label>}
-          {!simpleMode && <label className="text-xs text-slate-600">Scrap / by-product quantity<input type="number" min="0" step="0.001" value={scrapQty} onChange={(e) => setScrapQty(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Records recoverable scrap or by-product inventory from any processing industry.</span></label>}
+          {!simpleMode && <label className="text-xs text-slate-600">Scrap / by-product quantity<input type="number" min="0" step="0.001" value={scrapQty} onChange={(e) => { setScrapQty(e.target.value); setScrapOverridden(true); }} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="mt-1 block text-[11px] text-slate-400">Suggested from the BOM for this quantity. Enter actual scrap if different.</span></label>}
           {simpleMode && <label className="text-xs text-slate-600 md:col-span-2">Notes<textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
           {!simpleMode && <label className="text-xs text-slate-600">Search<input value={search} onChange={(e) => setSearch(e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" /></label>}
           {!simpleMode && !editingId ? <div className="flex items-end"><button type="button" onClick={addProductionItem} disabled={readOnly} className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-brand-300 bg-brand-50 px-4 py-2 text-sm font-semibold text-brand-800 hover:bg-brand-100 disabled:opacity-50"><Plus className="h-4 w-4" />Add item</button></div> : null}
