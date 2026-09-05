@@ -15,6 +15,8 @@ import {
   Landmark,
   Calculator,
   Briefcase,
+  UsersRound,
+  Building2,
 } from "lucide-react";
 import type { BusinessType } from "@/contexts/AuthContext";
 import { HOTEL_PAGE } from "@/lib/hotelPages";
@@ -317,7 +319,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     { name: "Cost allocation", page: "accounting_cost_allocation" },
     { name: "Cash & float reconciliation", page: "accounting_bank_reconciliation" },
   ];
-  if (allowPayroll) {
+  if (allowPayroll && businessType !== "manufacturing") {
     settings.push({ name: "Payroll", page: PAYROLL_PAGE.hub });
   }
   settings.push({ name: "Integrations", page: "system_integrations" });
@@ -398,6 +400,25 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
           ],
         } as NavItem]
       : []),
+    ...(businessType === "manufacturing" && allowPayroll ? [{
+      name: "Payroll",
+      icon: UsersRound,
+      children: [
+        { name: "Overview", page: PAYROLL_PAGE.hub },
+        { name: "Employees", page: PAYROLL_PAGE.staff },
+        { name: "Salary structure", page: PAYROLL_PAGE.salary },
+        { name: "Payroll periods", page: PAYROLL_PAGE.periods },
+        { name: "Process payroll", page: PAYROLL_PAGE.run },
+        { name: "Review & approve", page: PAYROLL_PAGE.review },
+        { name: "Payments", page: PAYROLL_PAGE.payments },
+        { name: "Loans & advances", page: PAYROLL_PAGE.loans },
+        { name: "Statutory deductions", page: PAYROLL_PAGE.statutory },
+        { name: "Payroll reports", page: PAYROLL_PAGE.reports },
+        { name: "Settings & accounting", page: PAYROLL_PAGE.settings },
+        { name: "Audit trail", page: PAYROLL_PAGE.audit },
+      ],
+    } as NavItem] : []),
+    ...(allowFixedAssets ? [{ name: "Fixed assets", icon: Building2, page: "fixed_assets" } as NavItem] : []),
     /** No per-report sidebar links — category + report pickers live in the in-page reports hub. */
     { name: "Reports", icon: TrendingUp, page: getSimpleOrgDefaultReportRoute(businessType) },
     { name: "Modelling Studio", icon: Calculator, page: "financial_modelling_studio" },
