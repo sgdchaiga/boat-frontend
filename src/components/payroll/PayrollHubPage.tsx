@@ -4,6 +4,7 @@ import { PAYROLL_PAGE } from "@/lib/payrollPages";
 import { PayrollGuide } from "@/components/payroll/PayrollGuide";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
+import { payrollBusinessLabel } from "@/lib/payrollBusiness";
 
 type Props = { onNavigate: (page: string) => void };
 type PayrollRun = { id: string; status: string; payroll_period_id: string };
@@ -78,7 +79,7 @@ export function PayrollHubPage({ onNavigate }: Props) {
 
   return (
     <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
-      <nav aria-label="Breadcrumb" className="text-xs font-medium text-slate-500">School <span className="mx-1 text-slate-300">›</span> Payroll <span className="mx-1 text-slate-300">›</span> <span className="text-slate-700">Overview</span></nav>
+      <nav aria-label="Breadcrumb" className="text-xs font-medium text-slate-500">{payrollBusinessLabel(user?.business_type)} <span className="mx-1 text-slate-300">›</span> Payroll <span className="mx-1 text-slate-300">›</span> <span className="text-slate-700">Overview</span></nav>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-2">
           <div><h1 className="text-2xl font-bold tracking-tight text-slate-900">Payroll Overview</h1><p className="mt-1 text-sm text-slate-600">Monitor payroll costs, processing progress and employee payments.</p></div>

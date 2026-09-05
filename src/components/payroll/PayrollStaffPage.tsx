@@ -5,6 +5,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PayrollGuide } from "@/components/payroll/PayrollGuide";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { grossFromProfile, parsePayrollMoney } from "@/lib/payrollCalculation";
+import { payrollBusinessLabel, payrollStaffTypes, mergePayrollProfile } from "@/lib/payrollBusiness";
+import { AddPayrollEmployee } from "@/components/payroll/AddPayrollEmployee";
 
 type StaffRow = {
   id: string;
@@ -48,6 +50,8 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [addingEmployee, setAddingEmployee] = useState(false);
+  const [success, setSuccess] = useState("");
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -71,6 +75,7 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
   }, [orgId]);
 
   useEffect(() => {
+    setAddingEmployee(false); setSuccess("");
     load();
   }, [load]);
 
@@ -78,39 +83,41 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
     if (readOnly || !orgId || !payrollAccess.canPrepare) return;
     setSavingId(staffId);
     setErr(null);
+    setSuccess("");
     const existing = profiles[staffId];
+    const merged = mergePayrollProfile(existing || {} as ProfileRow, draft);
     const payload = {
       staff_id: staffId,
-      employee_code: draft.employee_code ?? existing?.employee_code ?? null,
-      department: draft.department ?? existing?.department ?? null,
-      job_title: draft.job_title ?? existing?.job_title ?? null,
-      base_salary: parsePayrollMoney(draft.base_salary ?? existing?.base_salary ?? 0),
-      housing_allowance: parsePayrollMoney(draft.housing_allowance ?? existing?.housing_allowance ?? 0),
-      transport_allowance: parsePayrollMoney(draft.transport_allowance ?? existing?.transport_allowance ?? 0),
-      responsibility_allowance: parsePayrollMoney(draft.responsibility_allowance ?? existing?.responsibility_allowance ?? 0),
-      salary_grade: draft.salary_grade ?? existing?.salary_grade ?? null,
-      recurring_deductions: draft.recurring_deductions ?? existing?.recurring_deductions ?? [],
-      staff_type: draft.staff_type ?? existing?.staff_type ?? null,
-      date_joined: draft.date_joined ?? existing?.date_joined ?? null,
-      bank_name: draft.bank_name ?? existing?.bank_name ?? null,
-      bank_account_number: draft.bank_account_number ?? existing?.bank_account_number ?? null,
-      mobile_money_number: draft.mobile_money_number ?? existing?.mobile_money_number ?? null,
-      payment_method: draft.payment_method ?? existing?.payment_method ?? "bank",
-      tin: draft.tin ?? existing?.tin ?? null,
-      nssf_number: draft.nssf_number ?? existing?.nssf_number ?? null,
-      is_on_payroll: draft.is_on_payroll ?? existing?.is_on_payroll ?? true,
+      employee_code: merged.employee_code ?? null,
+      department: merged.department ?? null,
+      job_title: merged.job_title ?? null,
+      base_salary: parsePayrollMoney(merged.base_salary ?? 0),
+      housing_allowance: parsePayrollMoney(merged.housing_allowance ?? 0),
+      transport_allowance: parsePayrollMoney(merged.transport_allowance ?? 0),
+      responsibility_allowance: parsePayrollMoney(merged.responsibility_allowance ?? 0),
+      salary_grade: merged.salary_grade ?? null,
+      recurring_deductions: merged.recurring_deductions ?? [],
+      staff_type: merged.staff_type ?? null,
+      date_joined: merged.date_joined ?? null,
+      bank_name: merged.bank_name ?? null,
+      bank_account_number: merged.bank_account_number ?? null,
+      mobile_money_number: merged.mobile_money_number ?? null,
+      payment_method: merged.payment_method ?? "bank",
+      tin: merged.tin ?? null,
+      nssf_number: merged.nssf_number ?? null,
+      is_on_payroll: merged.is_on_payroll ?? true,
     };
-    if (existing?.id) {
-      const { error } = await supabase.from("payroll_employee_profiles").update(payload).eq("id", existing.id);
-      if (error) setErr(error.message);
-    } else {
-      const { error } = await supabase
-        .from("payroll_employee_profiles")
-        .insert({ organization_id: orgId, ...payload });
-      if (error) setErr(error.message);
-    }
-    setSavingId(null);
-    load();
+    try {
+      const query = existing?.id
+        ? supabase.from("payroll_employee_profiles").update(payload).eq("id", existing.id).eq("organization_id", orgId)
+        : supabase.from("payroll_employee_profiles").insert({ organization_id: orgId, ...payload });
+      const { data, error } = await query.select("*").single();
+      if (error) throw error;
+      setProfiles((current) => ({ ...current, [staffId]: data as ProfileRow }));
+      setSuccess("Payroll profile saved.");
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : String((error as { message?: string }).message || error));
+    } finally { setSavingId(null); }
   };
 
   if (!orgId) {
@@ -120,8 +127,9 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-4">
       <div className="flex flex-wrap items-center gap-2">
-        <div><p className="text-xs font-medium text-slate-500">School › Payroll › {mode === "employees" ? "Employees" : "Salary Structure"}</p><h1 className="text-2xl font-bold text-slate-900">{mode === "employees" ? "Employees" : "Salary Structure"}</h1><p className="mt-1 text-sm text-slate-600">{mode === "employees" ? "Maintain payroll eligibility and employment information." : "Maintain salary, allowances and recurring payroll values."}</p></div>
+        <div><p className="text-xs font-medium text-slate-500">{payrollBusinessLabel(user?.business_type)} › Payroll › {mode === "employees" ? "Employees" : "Salary Structure"}</p><h1 className="text-2xl font-bold text-slate-900">{mode === "employees" ? "Employees" : "Salary Structure"}</h1><p className="mt-1 text-sm text-slate-600">{mode === "employees" ? "Maintain payroll eligibility and employment information." : "Maintain salary, allowances and recurring payroll values."}</p></div>
         <PayrollGuide guideId="staff" />
+        {mode === "employees" && !readOnly && payrollAccess.canPrepare && <button type="button" onClick={() => setAddingEmployee(true)} className="ml-auto rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white">Add employee</button>}
       </div>
       {readOnly && <ReadOnlyNotice />}
       {!readOnly && !payrollAccess.canPrepare && (
@@ -130,6 +138,17 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
         </p>
       )}
       {err && <p className="text-red-600 text-sm">{err}</p>}
+      {success && <p role="status" className="text-sm text-emerald-700">{success}</p>}
+      {addingEmployee && !readOnly && payrollAccess.canPrepare && <AddPayrollEmployee key={orgId} businessType={user?.business_type} onCancel={() => setAddingEmployee(false)} onCreated={async (id) => {
+        const [s, p] = await Promise.all([
+          supabase.from("staff").select("id,full_name,email,role").eq("id", id).eq("organization_id", orgId).single(),
+          supabase.from("payroll_employee_profiles").select("*").eq("staff_id", id).eq("organization_id", orgId).single(),
+        ]);
+        if (s.error) throw s.error; if (p.error) throw p.error;
+        setStaff((current) => [...current.filter((row) => row.id !== id), s.data as StaffRow].sort((a, b) => a.full_name.localeCompare(b.full_name)));
+        setProfiles((current) => ({ ...current, [id]: p.data as ProfileRow }));
+        setAddingEmployee(false); setSuccess("Employee added to payroll. Open Salary Structure to set allowances and deductions.");
+      }} />}
       {loading ? (
         <p className="text-slate-500">Loading…</p>
       ) : (
@@ -142,6 +161,7 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
                 staff={s}
                 profile={p}
                 mode={mode}
+                businessType={user?.business_type}
                 disabled={readOnly || !payrollAccess.canPrepare}
                 saving={savingId === s.id}
                 onSave={(d) => void saveProfile(s.id, d)}
@@ -166,6 +186,7 @@ function salaryFieldToInputValue(
 
 function StaffSalaryCard({
   staff,
+  businessType,
   profile,
   mode,
   disabled,
@@ -173,6 +194,7 @@ function StaffSalaryCard({
   onSave,
 }: {
   staff: StaffRow;
+  businessType?: string | null;
   profile?: ProfileRow;
   mode: "employees" | "salary";
   disabled?: boolean;
@@ -227,7 +249,7 @@ function StaffSalaryCard({
         <div>
           <p className="font-semibold text-slate-900">{staff.full_name}</p>
           <p className="text-xs text-slate-500">
-            {staff.email} · {staff.role ?? "—"}
+            {staff.email}{staff.email ? " · " : ""}{staff.role === "payroll_employee" ? "Payroll employee · No login" : staff.role ?? "—"}
           </p>
         </div>
         <label className="flex items-center gap-2 text-sm">
@@ -248,7 +270,7 @@ function StaffSalaryCard({
           disabled={disabled}
           onChange={(e) => setCode(e.target.value)}
         />
-        <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={staffType} disabled={disabled} onChange={(e) => setStaffType(e.target.value)}><option value="">Staff type</option><option value="Teaching">Teaching</option><option value="Non-Teaching">Non-teaching</option></select>
+        <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={staffType} disabled={disabled} onChange={(e) => setStaffType(e.target.value)}><option value="">Staff type</option>{staffType && !payrollStaffTypes(businessType).includes(staffType) && <option value={staffType}>{staffType} (previous classification)</option>}{payrollStaffTypes(businessType).map((type) => <option key={type} value={type}>{type}</option>)}</select>
         <input type="date" className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={dateJoined} disabled={disabled} onChange={(e) => setDateJoined(e.target.value)} />
         <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={paymentMethod} disabled={disabled} onChange={(e) => setPaymentMethod(e.target.value)}><option value="bank">Bank</option><option value="mobile_money">Mobile money</option><option value="cash">Cash</option></select>
         <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Bank name" value={bankName} disabled={disabled} onChange={(e) => setBankName(e.target.value)} />
@@ -326,16 +348,19 @@ function StaffSalaryCard({
         type="button"
         disabled={disabled || saving}
         onClick={() =>
-          onSave({
+          onSave(mode === "employees" ? {
             employee_code: code || null,
             department: dept || null,
             job_title: job || null,
+            staff_type: staffType || null, date_joined: dateJoined || null, bank_name: bankName || null, bank_account_number: bankAccount || null, mobile_money_number: mobileMoney || null, payment_method: paymentMethod, tin: tin || null, nssf_number: nssfNumber || null,
+            is_on_payroll: onPayroll,
+          } : {
             base_salary: parsePayrollMoney(base === "" ? 0 : base),
             housing_allowance: parsePayrollMoney(housing === "" ? 0 : housing),
             transport_allowance: parsePayrollMoney(transport === "" ? 0 : transport),
             responsibility_allowance: parsePayrollMoney(responsibility === "" ? 0 : responsibility), salary_grade: grade || null,
-            recurring_deductions: recurring ? [{ label: "Recurring deduction", amount: parsePayrollMoney(recurring) }] : [],
-            staff_type: staffType || null, date_joined: dateJoined || null, bank_name: bankName || null, bank_account_number: bankAccount || null, mobile_money_number: mobileMoney || null, payment_method: paymentMethod, tin: tin || null, nssf_number: nssfNumber || null,
+            ...(parsePayrollMoney(recurring) !== (Array.isArray(profile?.recurring_deductions) ? (profile.recurring_deductions as { amount?: number }[]).reduce((sum, d) => sum + Number(d.amount || 0), 0) : 0)
+              ? { recurring_deductions: recurring ? [{ label: "Recurring deduction", amount: parsePayrollMoney(recurring) }] : [] } : {}),
             is_on_payroll: onPayroll,
           })
         }

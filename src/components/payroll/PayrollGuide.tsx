@@ -43,7 +43,7 @@ const GUIDE_META: Record<PayrollGuideId, { ariaLabel: string; body: ReactNode }>
     body: (
       <>
         <p>
-          Lists everyone in your organization who has a staff record. For each person, save a <strong>payroll profile</strong>{" "}
+          Add employees directly here without creating a BOAT login. Existing staff accounts are also listed. For each person, save a <strong>payroll profile</strong>{" "}
           with base salary and allowances. Gross pay for payroll is the sum of those amounts (plus any other allowances
           stored in the system for that profile).
         </p>
