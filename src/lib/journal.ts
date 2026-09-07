@@ -2967,15 +2967,15 @@ async function buildBillDebitLines(
     cost_price: number | null;
   }>;
   const productIds = Array.from(new Set(rows.map((row) => row.product_id).filter((id): id is string => !!id)));
-  const productById = new Map<string, { name: string; departmentId: string | null }>();
+  const productById = new Map<string, { name: string; departmentId: string | null; stockAccountId: string | null }>();
   if (productIds.length > 0) {
     const { data: products, error: prodError } = await supabase
       .from("products")
-      .select("id, name, department_id")
+      .select("id, name, department_id, stock_account")
       .in("id", productIds);
     if (prodError) throw prodError;
-    ((products || []) as Array<{ id: string; name: string; department_id: string | null }>).forEach((product) => {
-      productById.set(product.id, { name: product.name, departmentId: product.department_id ?? null });
+    ((products || []) as Array<{ id: string; name: string; department_id: string | null; stock_account: string | null }>).forEach((product) => {
+      productById.set(product.id, { name: product.name, departmentId: product.department_id ?? null, stockAccountId: product.stock_account?.trim() || null });
     });
   }
 
@@ -2998,10 +2998,10 @@ async function buildBillDebitLines(
     }
     const product = productById.get(row.product_id);
     if (!product) throw new Error(`Purchase-order item ${row.description || row.product_id} is not linked to a valid product.`);
-    if (!product.departmentId) throw new Error(`Product “${product.name}” has no department. Assign a department and its stock account before posting the bill.`);
-    const stockGlAccountId = departmentGl.get(product.departmentId)?.stock ?? null;
+    const stockGlAccountId = product.stockAccountId
+      ?? (product.departmentId ? departmentGl.get(product.departmentId)?.stock : null);
     if (!stockGlAccountId) {
-      throw new Error(`Product “${product.name}” belongs to a department with no stock account mapping.`);
+      throw new Error(`Product “${product.name}” has no inventory account. Assign an inventory account to the item or configure its department's stock account before posting the bill.`);
     }
     const key = `department:${product.departmentId}:${stockGlAccountId}`;
     const existing = grouped.get(key);
@@ -3009,7 +3009,7 @@ async function buildBillDebitLines(
       glAccountId: stockGlAccountId,
       departmentId: product.departmentId,
       amount: roundMoney((existing?.amount || 0) + lineAmount),
-      description: "Item department inventory (GRN)",
+      description: "Item inventory (GRN)",
     });
   }
 
