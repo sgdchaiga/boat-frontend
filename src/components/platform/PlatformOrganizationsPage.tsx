@@ -3,6 +3,8 @@ import { Plus, Pencil, Copy, Search, X, KeyRound } from "lucide-react";
 import { createClient } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { PageNotes } from "@/components/common/PageNotes";
+import { ChartSetupChoice } from "@/components/accounting/ChartSetupChoice";
+import type { ChartAccountImport } from "@/lib/chartOfAccountsImport";
 
 type Org = {
   id: string;
@@ -174,6 +176,8 @@ export function PlatformOrganizationsPage() {
   const [newName, setNewName] = useState("");
   const [newSlug, setNewSlug] = useState("");
   const [newBiz, setNewBiz] = useState("hotel");
+  const [newChartSource, setNewChartSource] = useState<"template" | "custom">("template");
+  const [newChartAccounts, setNewChartAccounts] = useState<ChartAccountImport[]>([]);
   const [newSalesWorkflow, setNewSalesWorkflow] = useState<"invoice" | "quick_sale" | "both">("both");
   const [newPlanId, setNewPlanId] = useState("");
   const [createFirstAdmin, setCreateFirstAdmin] = useState(true);
@@ -521,6 +525,7 @@ export function PlatformOrganizationsPage() {
     }
     setSaving(true);
     setErr(null);
+    if (newChartSource === "custom" && !newChartAccounts.length) { setErr("Upload a chart of accounts before creating this organization."); setSaving(false); return; }
     const slug = newSlug.trim() || slugify(newName);
     const { data: inserted, error: e1 } = await supabase
       .from("organizations")
@@ -540,7 +545,8 @@ export function PlatformOrganizationsPage() {
     }
     let setupError: string | null = null;
     if (inserted?.id) {
-      setupError = await ensureStandardSetup(inserted.id, newBiz);
+      const chartResult = await supabase.rpc("configure_initial_chart_of_accounts", { p_organization_id: inserted.id, p_source: newChartSource, p_accounts: newChartSource === "custom" ? newChartAccounts : [] });
+      setupError = chartResult.error?.message ?? null;
     }
     if (newPlanId && inserted?.id) {
       const { error: e2 } = await supabase.from("organization_subscriptions").insert({
@@ -1206,6 +1212,7 @@ export function PlatformOrganizationsPage() {
                 </option>
               ))}
             </select>
+            <ChartSetupChoice source={newChartSource} onSourceChange={setNewChartSource} accounts={newChartAccounts} onAccountsChange={setNewChartAccounts} disabled={saving} />
             {newBiz === "general_business" && (
               <>
                 <label className="block text-sm font-medium text-slate-700 mb-1">Sales workflow</label>

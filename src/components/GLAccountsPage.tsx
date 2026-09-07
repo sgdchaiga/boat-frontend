@@ -5,8 +5,11 @@ import { useAuth } from "../contexts/AuthContext";
 import { canApprove } from "../lib/approvalRights";
 import { PageNotes } from "./common/PageNotes";
 import { isGlAccountRelevantForChart } from "../lib/glAccountBusinessScope";
+import { ChartSetupChoice } from "./accounting/ChartSetupChoice";
+import type { ChartAccountImport } from "../lib/chartOfAccountsImport";
 
 type GLAccount = {
+  account_source?: string | null;
   id: string;
   account_code: string;
   account_name: string;
@@ -53,6 +56,11 @@ export function GLAccountsPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [showInactiveAccounts, setShowInactiveAccounts] = useState(false);
+  const [chartPending, setChartPending] = useState(false);
+  const [chartSource, setChartSource] = useState<"template" | "custom">("template");
+  const [chartAccounts, setChartAccounts] = useState<ChartAccountImport[]>([]);
+  const [chartSaving, setChartSaving] = useState(false);
+  const [chartError, setChartError] = useState("");
 
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<GLAccount | null>(null);
@@ -72,6 +80,10 @@ export function GLAccountsPage() {
 
   const fetchAccounts = async () => {
     setLoading(true);
+    if (orgId) {
+      const { data: organization } = await supabase.from("organizations").select("chart_of_accounts_source").eq("id", orgId).single();
+      setChartPending(organization?.chart_of_accounts_source === "pending");
+    }
     let q = supabase
       .from("gl_accounts")
       .select("*")
@@ -95,6 +107,7 @@ export function GLAccountsPage() {
       return {
         id: String(row.id ?? ""),
         account_code: String(row.account_code ?? row.code ?? ""),
+        account_source: row.account_source == null ? null : String(row.account_source),
         account_name: String(row.account_name ?? row.name ?? ""),
         account_type: accountType,
         category: row.category == null ? null : String(row.category),
@@ -249,6 +262,19 @@ export function GLAccountsPage() {
       </div>
 
       {/* TABLE */}
+      {chartPending && accounts.length === 0 && canManageChartOfAccounts && <section className="mb-6">
+        <ChartSetupChoice source={chartSource} onSourceChange={setChartSource} accounts={chartAccounts} onAccountsChange={setChartAccounts} disabled={chartSaving} />
+        {chartError && <p role="alert" className="mb-2 text-rose-700">{chartError}</p>}
+        <button type="button" disabled={chartSaving || (chartSource === "custom" && !chartAccounts.length)} className="rounded-lg bg-brand-700 px-4 py-2 text-white disabled:opacity-50" onClick={async () => {
+          setChartSaving(true); setChartError("");
+          try {
+            const { error } = await supabase.rpc("configure_initial_chart_of_accounts", { p_organization_id: orgId, p_source: chartSource, p_accounts: chartSource === "custom" ? chartAccounts : [] });
+            if (error) throw error;
+            await fetchAccounts();
+          } catch (cause) { setChartError(cause instanceof Error ? cause.message : String((cause as { message?: string })?.message || "Unable to configure chart.")); }
+          finally { setChartSaving(false); }
+        }}>{chartSaving ? "Creating accounts..." : "Create chart of accounts"}</button>
+      </section>}
       <div className="mb-3 flex flex-wrap items-center gap-3">
         <input
           type="text"

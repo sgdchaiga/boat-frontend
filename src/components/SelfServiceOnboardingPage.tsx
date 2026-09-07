@@ -12,6 +12,8 @@ import {
 import { APP_NAME } from "@/constants/branding";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
+import { ChartSetupChoice } from "./accounting/ChartSetupChoice";
+import type { ChartAccountImport } from "@/lib/chartOfAccountsImport";
 
 type TemplateCode =
   | "hotel"
@@ -160,6 +162,8 @@ export const SelfServiceOnboardingPage: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [created, setCreated] = useState(false);
+  const [chartSource, setChartSource] = useState<"template" | "custom">("template");
+  const [chartAccounts, setChartAccounts] = useState<ChartAccountImport[]>([]);
 
   const template = useMemo(
     () => TEMPLATES.find((item) => item.code === templateCode) ?? TEMPLATES[0],
@@ -178,6 +182,7 @@ export const SelfServiceOnboardingPage: React.FC = () => {
       return;
     }
 
+    if (chartSource === "custom" && !chartAccounts.length) { setError("Upload your chart of accounts before creating the workspace."); return; }
     setSaving(true);
     const { data, error: rpcError } = await supabase.rpc("create_self_service_organization", {
       p_business_name: businessName.trim(),
@@ -186,7 +191,7 @@ export const SelfServiceOnboardingPage: React.FC = () => {
       p_currency: currency,
       p_admin_full_name: user?.full_name || user?.email || "",
       p_phone: user?.phone || "",
-      p_answers: answers,
+      p_answers: { ...answers, chart_of_accounts_source: chartSource, chart_accounts: chartSource === "custom" ? chartAccounts : [] },
     });
 
     if (rpcError) {
@@ -237,7 +242,7 @@ export const SelfServiceOnboardingPage: React.FC = () => {
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-950">Business profile</h2>
-                <p className="text-sm text-slate-600">BOAT will create the accounts, roles, settings, and allocation defaults for this template.</p>
+                <p className="text-sm text-slate-600">Choose your business setup and how to create your chart of accounts.</p>
               </div>
             </div>
 
@@ -367,11 +372,12 @@ export const SelfServiceOnboardingPage: React.FC = () => {
               ))}
             </div>
 
+            <ChartSetupChoice source={chartSource} onSourceChange={setChartSource} accounts={chartAccounts} onAccountsChange={setChartAccounts} disabled={saving} />
             <div className="mt-6 rounded-md border border-slate-200 bg-slate-50 p-3">
               <h3 className="text-sm font-bold text-slate-800">Created automatically</h3>
               <ul className="mt-2 space-y-1 text-sm text-slate-600">
-                <li>Chart of accounts and journal account settings</li>
-                <li>Cost centres, allocation drivers, and allocation rules</li>
+                <li>{chartSource === "custom" ? "Your uploaded chart of accounts" : "Template chart of accounts and journal account settings"}</li>
+                {chartSource === "template" && <li>Cost centres, allocation drivers, and allocation rules</li>}
                 <li>Departments, starter records, tax defaults, and payment methods</li>
                 <li>Staff roles, module settings, and starter trial workspace</li>
               </ul>

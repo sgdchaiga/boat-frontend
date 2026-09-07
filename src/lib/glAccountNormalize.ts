@@ -1,4 +1,5 @@
 export type NormalizedGlAccount = {
+  account_source?: string | null;
   id: string;
   account_code: string;
   account_name: string;
@@ -10,6 +11,7 @@ export type NormalizedGlAccount = {
 
 export function normalizeGlAccountRow(row: Record<string, unknown>): NormalizedGlAccount {
   return {
+    account_source: row.account_source == null ? null : String(row.account_source),
     id: String(row.id ?? ""),
     account_code: String(row.account_code ?? row.code ?? ""),
     account_name: String(row.account_name ?? row.name ?? ""),

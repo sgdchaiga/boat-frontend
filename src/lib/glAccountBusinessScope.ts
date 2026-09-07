@@ -1,4 +1,5 @@
 type AccountLike = {
+  account_source?: string | null;
   account_code?: string | null;
   account_name?: string | null;
   category?: string | null;
@@ -42,6 +43,7 @@ const SCHOOL_STANDARD_CODES = new Set([
 ]);
 
 export function isGlAccountRelevantForBusinessType(account: AccountLike, businessType?: string | null): boolean {
+  if (account.account_source === "custom") return true;
   const selectedType = String(businessType || "").toLowerCase();
   if (!selectedType || selectedType === "mixed") return true;
   const accountType = String(account.business_type || "").trim().toLowerCase();
@@ -77,6 +79,7 @@ export function filterGlAccountsForBusinessType<T extends AccountLike>(accounts:
 
 /** Curate chart maintenance without changing the accounts included in historical reports. */
 export function isGlAccountRelevantForChart(account: AccountLike, businessType?: string | null): boolean {
+  if (account.account_source === "custom") return true;
   if (String(businessType || "").trim().toLowerCase() === "manufacturing") {
     const tag = String(account.business_type || "").trim().toLowerCase();
     if (tag && tag !== "mixed" && tag !== "manufacturing") return false;
