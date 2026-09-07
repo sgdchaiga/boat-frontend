@@ -1,5 +1,5 @@
 import { supabase } from "./supabase";
-import { createJournalForExpenseWithLines, type ExpenseJournalLineInput } from "./journal";
+import { createJournalForExpenseWithLines, resolveBankChargesGlAccountId, type ExpenseJournalLineInput } from "./journal";
 
 type QueueBase = {
   organizationId: string | null | undefined;
@@ -44,7 +44,26 @@ export async function approveExpenseAndPost(input: {
   organizationId: string;
   expenseId: string;
   approvedBy: string | null;
+  requestId?: string;
+  expectedUpdatedAt?: string;
 }): Promise<void> {
+  const localAuth = ["true", "1", "yes"].includes((import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase());
+  if (!localAuth) {
+    let requestId = input.requestId;
+    let updatedAt = input.expectedUpdatedAt;
+    if (!requestId || !updatedAt) {
+      const request = await supabase.from("treasury_requests").select("id,updated_at").eq("organization_id", input.organizationId).eq("source_type", "expense").eq("source_id", input.expenseId).single();
+      if (request.error) throw request.error;
+      requestId = request.data.id;
+      updatedAt = request.data.updated_at;
+    }
+    const { error } = await supabase.rpc("review_treasury_expense", {
+      p_request_id: requestId, p_expected_updated_at: updatedAt,
+      p_approve: true, p_bank_charges_account_id: await resolveBankChargesGlAccountId(input.organizationId),
+    });
+    if (error) throw error;
+    return;
+  }
   const [expenseResult, linesResult, requestResult] = await Promise.all([
     supabase.from("expenses").select("expense_date,status").eq("id", input.expenseId).eq("organization_id", input.organizationId).single(),
     supabase.from("expense_lines").select("expense_gl_account_id,source_cash_gl_account_id,amount,bank_charges,vat_amount,vat_gl_account_id,bank_charges_gl_account_id,comment,quantity").eq("expense_id", input.expenseId).order("sort_order"),

@@ -1116,7 +1116,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
   const schoolRole = normalizeNavRoleKey(user?.role);
   const canUseAdvancedAccounting = isSuperAdmin || ["accountant", "finance_manager", "manager", "admin", "super_admin", "owner"].includes(schoolRole);
-  const canUseSchoolPayroll = isSuperAdmin || ["bursar", "accountant", "headteacher", "head_teacher", "finance_manager", "manager", "admin", "super_admin", "owner"].includes(schoolRole);
+  const canUseSchoolPayroll = isSuperAdmin || ["bursar", "assistant_bursar", "assistant_bursar_com", "accountant", "headteacher", "head_teacher", "finance_manager", "manager", "admin", "super_admin", "owner"].includes(schoolRole);
   const professionalSchoolNavigation: NavItem[] = [
     { name: 'School Dashboard', icon: LayoutDashboard, page: SCHOOL_PAGE.dashboard },
     { name: 'Students & Billing', icon: UsersRound, children: [

@@ -27,6 +27,7 @@ type TreasuryRequest = {
   vendor_id: string | null;
   status: Status;
   requested_at: string;
+  updated_at: string;
   payment_method: string | null;
   payment_reference: string | null;
 };
@@ -116,6 +117,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const { user } = useAuth();
   const [requests, setRequests] = useState<TreasuryRequest[]>([]);
   const [expandedExpenseId, setExpandedExpenseId] = useState<string | null>(null);
+  const [editingExpenseRequest, setEditingExpenseRequest] = useState(false);
   const [collections, setCollections] = useState<Collection[]>([]);
   const [hotelDepartmentShares, setHotelDepartmentShares] = useState<HotelDepartmentShare[]>([]);
   const [disbursements, setDisbursements] = useState<Disbursement[]>([]);
@@ -576,7 +578,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const dailyDepartmentTotals = useMemo(() => dailyDepartmentRows.reduce((sum, row) => ({ cashIn: sum.cashIn + row.cashIn, cashOut: sum.cashOut + row.cashOut }), { cashIn: 0, cashOut: 0 }), [dailyDepartmentRows]);
 
   const setStatus = async (request: TreasuryRequest, status: "approved" | "rejected") => {
-    if (readOnly) return;
+    if (readOnly || editingExpenseRequest) return;
     const rejectionReason = status === "rejected" && request.source_type === "expense"
       ? window.prompt("Reason for rejecting and cancelling this expense", "Rejected in Treasury")
       : null;
@@ -590,6 +592,8 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
           organizationId: user.organization_id,
           expenseId: request.source_id,
           approvedBy: user?.id ?? null,
+          requestId: request.id,
+          expectedUpdatedAt: request.updated_at,
         });
       } else if (status === "rejected" && request.source_type === "expense") {
         const reason = rejectionReason!.trim();
@@ -974,12 +978,12 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
                   <td className="px-5 py-4 font-bold text-slate-900">{money.format(request.amount)}</td>
                   <td className="px-5 py-4"><StatusBadge status={request.status} /></td>
                   <td className="px-5 py-4"><div className="flex justify-end gap-2">
-                    {request.source_type === "expense" && <button type="button" aria-expanded={expandedExpenseId === request.id} aria-controls={`expense-details-${request.id}`} onClick={() => setExpandedExpenseId(current => current === request.id ? null : request.id)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100">{expandedExpenseId === request.id ? "Hide details" : "View details"}</button>}
-                    {request.status === "pending_approval" && <><button disabled={workingId === request.id || readOnly} onClick={() => setStatus(request, "approved")} className="rounded-lg bg-emerald-100 p-2 text-emerald-700 hover:bg-emerald-200" title="Approve"><Check className="h-4 w-4" /></button><button disabled={workingId === request.id || readOnly} onClick={() => setStatus(request, "rejected")} className="rounded-lg bg-rose-100 p-2 text-rose-700 hover:bg-rose-200" title="Reject"><X className="h-4 w-4" /></button></>}
+                    {request.source_type === "expense" && <button type="button" disabled={editingExpenseRequest} aria-expanded={expandedExpenseId === request.id} aria-controls={`expense-details-${request.id}`} onClick={() => setExpandedExpenseId(current => current === request.id ? null : request.id)} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 disabled:opacity-50">{expandedExpenseId === request.id ? "Hide details" : "View details"}</button>}
+                    {request.status === "pending_approval" && <><button disabled={workingId === request.id || readOnly || editingExpenseRequest} onClick={() => setStatus(request, "approved")} className="rounded-lg bg-emerald-100 p-2 text-emerald-700 hover:bg-emerald-200 disabled:opacity-50" title="Approve"><Check className="h-4 w-4" /></button><button disabled={workingId === request.id || readOnly || editingExpenseRequest} onClick={() => setStatus(request, "rejected")} className="rounded-lg bg-rose-100 p-2 text-rose-700 hover:bg-rose-200 disabled:opacity-50" title="Reject"><X className="h-4 w-4" /></button></>}
                     {request.status === "approved" && <button disabled={workingId === request.id || readOnly} onClick={() => openReleaseDialog(request)} className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-bold text-white hover:bg-slate-700">Release funds</button>}
                   </div></td>
                 </tr>
-                {request.source_type === "expense" && expandedExpenseId === request.id && user?.organization_id && <tr id={`expense-details-${request.id}`}><td colSpan={5} className="bg-slate-50 px-5 py-5"><ExpenseRequestDetails expenseId={request.source_id} organizationId={user.organization_id} payee={request.payee_name} /></td></tr>}
+                {request.source_type === "expense" && expandedExpenseId === request.id && user?.organization_id && <tr id={`expense-details-${request.id}`}><td colSpan={5} className="bg-slate-50 px-5 py-5"><ExpenseRequestDetails expenseId={request.source_id} requestId={request.id} organizationId={user.organization_id} payee={request.payee_name} canEdit={!readOnly && !workingId && request.status === "pending_approval"} onEditingChange={setEditingExpenseRequest} onSaved={fetchData} /></td></tr>}
                 </Fragment>
               ))}
             </tbody>

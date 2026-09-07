@@ -39,7 +39,7 @@ export function getRolesForOrganization(
     return ["admin", "manager", "accountant"];
   }
   if (t === "school") {
-    return ["admin", "manager", "accountant", "bursar", "headteacher", "director", "procurement_officer"];
+    return ["admin", "manager", "accountant", "bursar", "assistant_bursar", "headteacher", "director", "procurement_officer"];
   }
   // other: common operational roles without hotel-only titles
   return ["admin", "manager", "accountant", "receptionist"];
