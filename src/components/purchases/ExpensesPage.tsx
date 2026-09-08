@@ -1284,13 +1284,16 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         }
       }
 
-      const approvalEnabled = orgId ? await isSpendMoneyApprovalEnabled(orgId) : false;
+      // Existing pending entries still require review if approvals were later disabled.
+      const requiresApproval = expenses.some((expense) => expense.id === editingExpenseId && expense.approval_status === "pending_approval");
+      const approvalEnabled = requiresApproval || (orgId ? await isSpendMoneyApprovalEnabled(orgId) : false);
       if (!approvalEnabled) {
         const journal = await createJournalForExpenseWithLines(expenseId, expDate, journalRows, user?.id ?? null);
         if (!journal.ok) throw new Error(`Expense was saved, but its cash journal could not be posted: ${journal.error}`);
       }
 
       await queueExpenseForTreasury({
+        requiresApproval,
         organizationId: user?.organization_id,
         sourceId: expenseId,
         amount: totalRounded,
@@ -1870,9 +1873,9 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                     <div className="flex justify-end gap-1">{canApproveSpendMoney && e.approval_status === "pending_approval" && <button type="button" onClick={() => void approveExpense(e)} disabled={approvalWorkingId === e.id} className="inline-flex items-center gap-1 rounded-lg border border-emerald-300 bg-emerald-50 px-2 py-1 text-xs font-semibold text-emerald-800 hover:bg-emerald-100 disabled:opacity-50" title="Approve and post this spending entry"><Check className="h-3.5 w-3.5"/>Approve</button>}<button
                       type="button"
                       onClick={() => void openEditModal(e.id)}
-                      disabled={e.status === "cancelled" || e.approval_status === "pending_approval"}
+                      disabled={e.status === "cancelled"}
                       className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                      title={e.status === "cancelled" ? e.cancellation_reason || "Cancelled expenses cannot be edited" : e.approval_status === "pending_approval" ? "Pending entries must be approved or rejected before editing" : "Edit expense"}
+                      title={e.status === "cancelled" ? e.cancellation_reason || "Cancelled expenses cannot be edited" : e.approval_status === "pending_approval" ? "Edit expense — approval will still be required" : "Edit expense"}
                     >
                       <Pencil className="w-3.5 h-3.5" />
                       Edit

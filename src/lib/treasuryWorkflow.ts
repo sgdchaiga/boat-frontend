@@ -94,9 +94,9 @@ export async function approveExpenseAndPost(input: {
   if (error) throw error;
 }
 
-export async function queueExpenseForTreasury(input: QueueBase): Promise<void> {
+export async function queueExpenseForTreasury(input: QueueBase & { requiresApproval?: boolean }): Promise<void> {
   if (!input.organizationId) throw new Error("Your account is not linked to an organization.");
-  const approvalEnabled = await isSpendMoneyApprovalEnabled(input.organizationId);
+  const approvalEnabled = input.requiresApproval || await isSpendMoneyApprovalEnabled(input.organizationId);
   const releasedAt = new Date().toISOString();
   await upsertTreasuryRequest({
     organization_id: input.organizationId,

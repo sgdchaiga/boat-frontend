@@ -1,0 +1,13 @@
+import fs from 'node:fs';
+const path='src/components/SelfServiceOnboardingPage.tsx';
+let s=fs.readFileSync(path,'utf8');
+const replace=(a,b)=>{if(!s.includes(a))throw new Error(a);s=s.replace(a,b);};
+replace('import { supabase } from "@/lib/supabase";', 'import { supabase } from "@/lib/supabase";\nimport { ChartSetupChoice } from "./accounting/ChartSetupChoice";\nimport type { ChartAccountImport } from "@/lib/chartOfAccountsImport";');
+replace('const [created, setCreated] = useState(false);','const [created, setCreated] = useState(false);\n  const [chartSource, setChartSource] = useState<"template" | "custom">("template");\n  const [chartAccounts, setChartAccounts] = useState<ChartAccountImport[]>([]);');
+replace('    setSaving(true);','    if (chartSource === "custom" && !chartAccounts.length) { setError("Upload your chart of accounts before creating the workspace."); return; }\n    setSaving(true);');
+replace('p_answers: answers,','p_answers: { ...answers, chart_of_accounts_source: chartSource, chart_accounts: chartSource === "custom" ? chartAccounts : [] },');
+replace('BOAT will create the accounts, roles, settings, and allocation defaults for this template.','Choose your business setup and how to create your chart of accounts.');
+replace('            <div className="mt-6 rounded-md border border-slate-200 bg-slate-50 p-3">','            <ChartSetupChoice source={chartSource} onSourceChange={setChartSource} accounts={chartAccounts} onAccountsChange={setChartAccounts} disabled={saving} />\n            <div className="mt-6 rounded-md border border-slate-200 bg-slate-50 p-3">');
+replace('<li>Chart of accounts and journal account settings</li>','<li>{chartSource === "custom" ? "Your uploaded chart of accounts" : "Template chart of accounts and journal account settings"}</li>');
+replace('<li>Cost centres, allocation drivers, and allocation rules</li>','{chartSource === "template" && <li>Cost centres, allocation drivers, and allocation rules</li>}');
+fs.writeFileSync(path,s);
