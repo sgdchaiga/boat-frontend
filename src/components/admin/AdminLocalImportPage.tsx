@@ -111,7 +111,7 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "school-subjects": [{ id: "", name: "Mathematics", code: "MATH", sort_order: "1", is_active: "1" }],
   "school-teachers": [{ id: "", full_name: "Grace Namusoke", employee_number: "T001", phone: "+256700000002", email: "", notes: "Mathematics", is_active: "1" }],
   "school-fee-structures": [{ id: "", class_name: "Senior 1", stream: "", academic_year: "2026", term_name: "Term 2", currency: "UGX", tuition: "450000", boarding: "300000", meals: "150000", transport: "0", other: "0", is_active: "1" }],
-  "school-expenses": [{ expense_date: "2026-08-27", amount: "150000", description: "Examination stationery", vendor_name: "Kampala Stationers", expense_account_code: "6100", cash_account_code: "1000", notes: "Term 2 exams" }],
+  "school-expenses": [{ expense_date: "2026-08-27", amount: "150000", description: "Examination stationery", vendor_name: "Kampala Stationers", payee: "Kampala Stationers", cheque_number: "000123", voucher_number: "PV-2026-001", expense_account_code: "6100", cash_account_code: "1000", notes: "Term 2 exams" }],
   "school-other-income": [{ revenue_type: "Hall hire", payer_name: "Community Association", amount: "300000", method: "bank", reference: "DEP-1001", received_at: "2026-08-27", notes: "Weekend hall hire" }],
   "school-purchases": [{ vendor_name: "Kampala Stationers", bill_date: "2026-08-27", due_date: "2026-09-27", amount: "800000", description: "Exercise books", reference: "INV-4102" }],
   "school-payments": [{ bill_id: "paste-approved-bill-uuid-here", amount: "400000", payment_date: "2026-08-27", payment_method: "bank", reference: "PAY-4102" }],
@@ -288,17 +288,26 @@ export function AdminLocalImportPage() {
   };
 
   const importVendors = async (rows: ParsedRow[]) => {
-    const organizationId = user?.organization_id || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || "00000000-0000-0000-0000-000000000001";
-    const existing = await desktopApi.localSelect({ table: "vendors", filters: [{ column: "organization_id", operator: "eq", value: organizationId }] });
-    const existingIds = new Set(existing.rows.map((row) => asText(row.id)).filter(Boolean));
+    const isDesktop = desktopApi.isAvailable();
+    const organizationId = isDesktop
+      ? user?.organization_id || (import.meta.env.VITE_LOCAL_ORGANIZATION_ID || "").trim() || "00000000-0000-0000-0000-000000000001"
+      : requireOrganizationId();
+    const existingRows = isDesktop
+      ? (await desktopApi.localSelect({ table: "vendors", filters: [{ column: "organization_id", operator: "eq", value: organizationId }] })).rows
+      : await fetchAllPages<{ id: string }>((from, to) => supabase.from("vendors")
+        .select("id").eq("organization_id", organizationId).order("id").range(from, to));
+    const existingIds = new Set(existingRows.map((row) => asText(row.id)).filter(Boolean));
     const seenIds = new Set<string>();
     const mapped = rows
       .filter((row) => asText(row.name))
       .map((row) => {
-        const requestedId = asText(row.id);
+        const requestedId = isDesktop ? asText(row.id) : asText(row.id).toLowerCase();
+        if (!isDesktop && requestedId && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(requestedId)) {
+          throw new Error(`Vendor ID ${requestedId} must be a UUID in cloud mode. Leave id blank for new vendors.`);
+        }
         if (requestedId && existingIds.has(requestedId)) throw new Error(`Vendor ID ${requestedId} already exists. Vendor imports are insert-only; use Update Existing Records instead.`);
         if (requestedId && seenIds.has(requestedId)) throw new Error(`Vendor ID ${requestedId} is repeated in this import file.`);
-        const id = requestedId || generateId("vnd");
+        const id = requestedId || (isDesktop ? generateId("vnd") : crypto.randomUUID());
         seenIds.add(id);
         return {
           id,
@@ -314,7 +323,12 @@ export function AdminLocalImportPage() {
         };
       });
     if (mapped.length === 0) return 0;
-    await desktopApi.localUpsert({ table: "vendors", rows: mapped });
+    if (isDesktop) {
+      await desktopApi.localUpsert({ table: "vendors", rows: mapped });
+    } else {
+      const result = await supabase.from("vendors").insert(mapped);
+      if (result.error) throw new Error(result.error.message);
+    }
     return mapped.length;
   };
 
@@ -622,7 +636,10 @@ export function AdminLocalImportPage() {
       const cashGl = byCode.get(asText(row.cash_account_code).toLowerCase());
       if (!expenseDate || !description || amount <= 0 || !expenseGl || !cashGl) continue;
       const vendorId = asText(row.vendor_name) ? await findOrCreateVendor(organizationId, asText(row.vendor_name)) : null;
-      const expense = await supabase.from("expenses").insert({ organization_id: organizationId, vendor_id: vendorId, amount, description, expense_date: expenseDate }).select("id").single();
+      const payee = asText(row.payee) || asText(row.payee_name) || asText(row.vendor_name);
+      const chequeNumber = asText(row.cheque_number) || asText(row.cheque_no);
+      const voucherNumber = asText(row.voucher_number) || asText(row.voucher_no);
+      const expense = await supabase.from("expenses").insert({ organization_id: organizationId, vendor_id: vendorId, amount, description, expense_date: expenseDate, payee_name: payee || null, cheque_number: chequeNumber || null, voucher_number: voucherNumber || null }).select("id").single();
       if (expense.error) throw expense.error;
       const line = { expense_gl_account_id: expenseGl, source_cash_gl_account_id: cashGl, amount, bank_charges: 0, vat_amount: 0, vat_gl_account_id: null, bank_charges_gl_account_id: null, comment: asText(row.notes) || null, quantity: 1, sort_order: 0, vendor_id: vendorId };
       const lineResult = await supabase.from("expense_lines").insert({ expense_id: expense.data.id, ...line });
@@ -631,7 +648,7 @@ export function AdminLocalImportPage() {
         const journal = await createJournalForExpenseWithLines(expense.data.id, expenseDate, [line], user?.id || null);
         if (!journal.ok) throw new Error(journal.error);
       }
-      await queueExpenseForTreasury({ organizationId, sourceId: expense.data.id, amount, purpose: description, requestedBy: user?.id || null, vendorId });
+      await queueExpenseForTreasury({ organizationId, sourceId: expense.data.id, amount, purpose: description, requestedBy: user?.id || null, vendorId, payeeName: payee || null });
       imported += 1;
     }
     return imported;
@@ -846,7 +863,9 @@ export function AdminLocalImportPage() {
       }
       let imported = 0;
       const cloudSchoolImport = entity.startsWith("school-") && !desktopApi.isAvailable();
-      if (cloudSchoolImport) {
+      if (entity === "vendors") {
+        imported = await importVendors(rows);
+      } else if (cloudSchoolImport) {
         if (entity === "school-students") imported = await importCloudStudents(rows);
         else if (entity === "school-parents") imported = await importCloudParents(rows);
         else if (["school-classes", "school-streams", "school-subjects", "school-teachers"].includes(entity)) imported = await importCloudSchoolReference(rows, entity);
@@ -860,7 +879,6 @@ export function AdminLocalImportPage() {
         if (entity === "products") imported = await importProducts(rows);
         else if (entity === "retail-customers") imported = await importRetailCustomers(rows);
         else if (entity === "hotel-customers") imported = await importHotelCustomers(rows);
-        else if (entity === "vendors") imported = await importVendors(rows);
         else if (entity === "chart-of-accounts") imported = await importChartOfAccounts(rows);
         else if (entity.startsWith("school-")) imported = await importSchoolRows(rows, entity);
       }
@@ -947,7 +965,7 @@ export function AdminLocalImportPage() {
         {entity === "school-fee-structures" ? <p className="text-xs text-amber-700">Fee structures are added as new records so prior terms remain unchanged.</p> : null}
         {entity === "school-purchases" ? <p className="text-xs text-amber-700">Imported supplier bills are saved as pending approval and are not posted until approved.</p> : null}
         {entity === "school-payments" ? <p className="text-xs text-amber-700">Use approved bill IDs. Each payment posts through the normal supplier-payment journal workflow.</p> : null}
-        {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected.</p> : null}
+        {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected. Payee, cheque_number and voucher_number are optional. Format cheque and voucher numbers as text to preserve leading zeros. If payee is blank, vendor_name is used.</p> : null}
       </> : <p className="text-xs text-amber-700">Download current records first. Keep {entity === "school-students" ? "admission_number" : "id"} unchanged. Blank cells are ignored; use {CLEAR_VALUE} to clear an optional field.</p>}
 
       <div className="flex items-center gap-3">
