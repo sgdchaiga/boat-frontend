@@ -1,3 +1,4 @@
+import { useSchoolInvoiceFilters } from "../SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Wallet } from "lucide-react";
 import { jsPDF } from "jspdf";
@@ -5,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { canUseSchoolApi, listSchoolRows } from "@/lib/schoolApiData";
 import { SCHOOL_PAGE } from "@/lib/schoolPages";
 
 type InvRow = {
@@ -16,6 +18,7 @@ type InvRow = {
   amount_paid: number;
   status: string;
   student_id: string;
+  issue_date?: string | null;
 };
 
 type StudentOpt = {
@@ -36,7 +39,7 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
   const [rawRows, setRawRows] = useState<(InvRow & { balance: number; student?: StudentOpt })[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  const [termFilter, setTermFilter] = useState("");
+  const [students, setStudents] = useState<StudentOpt[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -44,40 +47,55 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
       setLoading(false);
       return;
     }
-    const [iRes, sRes] = await Promise.all([
-      supabase
-        .from("student_invoices")
-        .select("id,invoice_number,academic_year,term_name,total_due,amount_paid,status,student_id")
-        .eq("organization_id", orgId)
-        .neq("status", "cancelled"),
-      supabase.from("students").select("id,first_name,last_name,admission_number,class_name,class_id").eq("organization_id", orgId),
-    ]);
-    setErr(iRes.error?.message || sRes.error?.message || null);
-    const invs = (iRes.data as InvRow[]) || [];
-    const studs = (sRes.data as StudentOpt[]) || [];
-    const map = new Map(studs.map((s) => [s.id, s]));
+    setErr(null);
+    try {
+      let invs: InvRow[];
+      let studs: StudentOpt[];
+      // Use the same data source as term-charge creation and invoice corrections.
+      if (canUseSchoolApi()) {
+        [invs, studs] = await Promise.all([
+          listSchoolRows<InvRow>("invoices", orgId),
+          listSchoolRows<StudentOpt>("students", orgId),
+        ]);
+      } else {
+        const [iRes, sRes] = await Promise.all([
+          supabase.from("student_invoices")
+            .select("id,invoice_number,academic_year,term_name,total_due,amount_paid,status,student_id,issue_date")
+            .eq("organization_id", orgId).neq("status", "cancelled"),
+          supabase.from("students").select("id,first_name,last_name,admission_number,class_name,class_id").eq("organization_id", orgId),
+        ]);
+        if (iRes.error) throw iRes.error;
+        if (sRes.error) throw sRes.error;
+        invs = (iRes.data as InvRow[]) || [];
+        studs = (sRes.data as StudentOpt[]) || [];
+      }
+      setStudents(studs);
+      const map = new Map(studs.map((s) => [s.id, s]));
 
-    const list = invs
-      .map((inv) => {
-        const balance = Number(inv.total_due ?? 0) - Number(inv.amount_paid ?? 0);
-        return { ...inv, balance, student: map.get(inv.student_id) };
-      })
-      .filter((r) => r.balance > 0.005);
+      const list = invs
+        .filter((inv) => inv.status !== "cancelled")
+        .map((inv) => {
+          const balance = Number(inv.total_due ?? 0) - Number(inv.amount_paid ?? 0);
+          return { ...inv, balance, student: map.get(inv.student_id) };
+        })
+        .filter((r) => r.balance > 0.005);
 
-    list.sort((a, b) => b.balance - a.balance);
-    setRawRows(list);
-    setLoading(false);
+      list.sort((a, b) => b.balance - a.balance);
+      setRawRows(list);
+    } catch (error) {
+      setRawRows([]);
+      setStudents([]);
+      setErr(error instanceof Error ? error.message : (error as { message?: string })?.message || "Failed to load outstanding balances.");
+    } finally {
+      setLoading(false);
+    }
   }, [orgId]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const rows = useMemo(() => {
-    if (!termFilter.trim()) return rawRows;
-    const q = termFilter.trim().toLowerCase();
-    return rawRows.filter((r) => `${r.academic_year} ${r.term_name}`.toLowerCase().includes(q));
-  }, [rawRows, termFilter]);
+  const { filteredRows: rows, controls: invoiceFilters } = useSchoolInvoiceFilters(rawRows, students);
 
   const totalOutstanding = useMemo(() => rows.reduce((s, r) => s + r.balance, 0), [rows]);
 
@@ -141,11 +159,12 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
           </PageNotes>
         </div>
         <div className="flex gap-2">
-          <button type="button" onClick={exportPdf} className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1">
+          <button type="button" onClick={() => void load()} disabled={loading} className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-50">{loading ? "Loading…" : "Refresh"}</button>
+          <button type="button" disabled={loading || !!err} onClick={exportPdf} className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50 flex items-center gap-1">
             <Download className="w-4 h-4" />
             PDF
           </button>
-          <button type="button" onClick={exportCsv} className="px-3 py-2 text-sm bg-slate-900 text-white rounded-lg hover:bg-slate-800 flex items-center gap-1">
+          <button type="button" disabled={loading || !!err} onClick={exportCsv} className="px-3 py-2 text-sm bg-slate-900 text-white rounded-lg hover:bg-slate-800 flex items-center gap-1">
             <Download className="w-4 h-4" />
             CSV
           </button>
@@ -153,17 +172,8 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 flex flex-wrap gap-4 items-end">
-        <label className="flex flex-col gap-1 text-xs text-slate-600 flex-1 min-w-[200px]">
-          Filter by year / term (contains)
-          <input
-            type="text"
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            placeholder="e.g. 2025 or Term 1"
-            value={termFilter}
-            onChange={(e) => setTermFilter(e.target.value)}
-          />
-        </label>
+      {invoiceFilters}
+      <div className="rounded-xl border border-slate-200 bg-white p-4">
         <p className="text-sm text-slate-700 pb-2">
           <span className="text-slate-500">Total outstanding:</span>{" "}
           <span className="font-semibold text-slate-900">{totalOutstanding.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
@@ -195,7 +205,7 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
             ) : rows.length === 0 ? (
               <tr>
                 <td colSpan={9} className="p-6 text-slate-500">
-                  No outstanding balances.
+                  No outstanding balances match the selected filters.
                 </td>
               </tr>
             ) : (

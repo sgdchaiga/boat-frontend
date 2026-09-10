@@ -1,3 +1,4 @@
+import { useSchoolInvoiceFilters } from "./SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -79,8 +80,10 @@ function moneyDraftFromDb(n: number | null | undefined): string {
 
 export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const { user } = useAuth();
+  const [activeTab, setActiveTab] = useState<"invoices" | "charges">("invoices");
   const [rows, setRows] = useState<InvRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
+  const { filteredRows, controls: invoiceFilters } = useSchoolInvoiceFilters(rows, students);
   const [fees, setFees] = useState<FeeOpt[]>([]);
   const [bursaries, setBursaries] = useState<BursaryOpt[]>([]);
   const [specialFees, setSpecialFees] = useState<SpecialFeeOpt[]>([]);
@@ -187,7 +190,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           listSchoolRows<ClassOpt>("classes", orgId),
         ]);
         setRows(invoices);
-        setStudents(studentRows.filter((s) => s.status !== "left" && s.status !== "graduated"));
+        setStudents(studentRows);
         setFees(feeRows.filter((f) => (f as FeeOpt & { is_active?: boolean }).is_active !== false));
         setClasses(classRows);
         setBursaries([]);
@@ -737,12 +740,18 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
-        <h1 className="text-2xl font-bold text-slate-900">Student invoices</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Student invoices and balances</h1>
         <PageNotes ariaLabel="Invoices">
           <p>Term invoices pick fee structures automatically by student class. Bursary deductions come from the Bursary page, and active special fees (new student, exam, UNEB) are added automatically for the term.</p>
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
+      {!readOnly && <div className="flex flex-wrap gap-2" aria-label="Invoice views">
+        <button type="button" aria-pressed={activeTab === "invoices"} onClick={() => setActiveTab("invoices")} className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === "invoices" ? "bg-slate-900 text-white" : "bg-white border border-slate-300 text-slate-700"}`}>Student invoices and balances</button>
+        <button type="button" aria-pressed={activeTab === "charges"} onClick={() => setActiveTab("charges")} className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === "charges" ? "bg-slate-900 text-white" : "bg-white border border-slate-300 text-slate-700"}`}>Create term charges</button>
+      </div>}
+      {!readOnly && activeTab === "charges" && <section className="space-y-6" aria-label="Create term charges">
+      <h2 className="text-lg font-semibold text-slate-900">Create term charges</h2>
       {!readOnly && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <select
@@ -897,7 +906,11 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           </div>}
         </div>
       )}
-      <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      </section>}
+      {(readOnly || activeTab === "invoices") && <section className="space-y-4" aria-label="Student invoices and balances">
+      {invoiceFilters}
+      <p className="text-sm text-slate-700">Outstanding balance for matching invoices: <strong>{filteredRows.filter((row) => row.status !== "cancelled").reduce((sum, row) => sum + Math.max(0, Number(row.total_due) - Number(row.amount_paid)), 0).toLocaleString()}</strong></p>
+      <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
@@ -906,6 +919,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
               <th className="text-left p-3 font-semibold text-slate-700">Term</th>
               <th className="text-right p-3 font-semibold text-slate-700">Due</th>
               <th className="text-right p-3 font-semibold text-slate-700">Paid</th>
+              <th className="text-right p-3 font-semibold text-slate-700">Balance</th>
               <th className="text-left p-3 font-semibold text-slate-700">Status</th>
               <th className="text-right p-3 font-semibold text-slate-700 min-w-52">Actions</th>
             </tr>
@@ -913,21 +927,21 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">
+                <td colSpan={8} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">
-                  No invoices yet.
+                <td colSpan={8} className="p-6 text-slate-500">
+                  No invoices match the selected filters.
                 </td>
               </tr>
             ) : (
-              rows.map((r) =>
+              filteredRows.map((r) =>
                 editingId === r.id && editDraft ? (
                   <tr key={r.id} className="border-b border-slate-100 bg-indigo-50/40">
-                    <td className="p-2" colSpan={readOnly ? 6 : 7}>
+                    <td className="p-2" colSpan={8}>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 py-1 text-xs text-slate-600 mb-2">
                         <span className="md:col-span-3 font-mono text-slate-800">{r.invoice_number}</span>
                         <span>
@@ -1007,6 +1021,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                     </td>
                     <td className="p-3 text-right text-slate-900">{Number(r.total_due).toLocaleString()}</td>
                     <td className="p-3 text-right text-slate-600">{Number(r.amount_paid).toLocaleString()}</td>
+                    <td className="p-3 text-right font-medium text-slate-900">{r.status === "cancelled" ? "—" : Math.max(0, Number(r.total_due) - Number(r.amount_paid)).toLocaleString()}</td>
                     <td className="p-3 capitalize text-slate-600">{r.status}</td>
                     <td className="p-3 text-right">
                       <div className="flex flex-wrap justify-end gap-2">
@@ -1032,6 +1047,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           </tbody>
         </table>
       </div>
+      </section>}
     </div>
   );
 }
