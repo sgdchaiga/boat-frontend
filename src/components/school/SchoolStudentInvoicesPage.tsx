@@ -157,6 +157,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       ${Number(invoice.discount_amount)>0?`<tr><td>Discount</td><td class="num">-${Number(invoice.discount_amount).toLocaleString()}</td></tr>`:""}
       ${Number(invoice.bursary_amount)>0?`<tr><td>Bursary</td><td class="num">-${Number(invoice.bursary_amount).toLocaleString()}</td></tr>`:""}
       ${Number(invoice.scholarship_amount)>0?`<tr><td>Scholarship</td><td class="num">-${Number(invoice.scholarship_amount).toLocaleString()}</td></tr>`:""}
+      ${invoiceAdditionalLines(invoice).map((line) => `<tr><td>${String(line.label || "Other charges").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</td><td class="num">${Number(line.amount || 0).toLocaleString()}</td></tr>`).join("")}
       <tr><th>Total due</th><th class="num">${Number(invoice.total_due).toLocaleString()}</th></tr><tr><td>Paid</td><td class="num">${Number(invoice.amount_paid).toLocaleString()}</td></tr></table>
       <div class="total">Balance: ${balance.toLocaleString()}</div>${demandNote ? "<p>Please settle the outstanding balance by the due date or contact the school bursar.</p>" : ""}`);
   };
@@ -259,13 +260,16 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
 
   const isSpecialLine = (line: FeeLine) => String(line.code || "").toUpperCase().startsWith("SPECIAL");
 
-  const invoiceDocumentLines = (invoice: InvRow) => {
+  const invoiceAdditionalLines = (invoice: InvRow) => {
     const lines = Array.isArray(invoice.line_items) ? invoice.line_items : [];
-    if (!lines.length) return `<tr><td>Fee structure</td><td class="num">${Number(invoice.subtotal).toLocaleString()}</td></tr>`;
-    const regular = lines.filter((line) => !isSpecialLine(line));
-    const special = lines.filter(isSpecialLine);
-    const regularTotal = regular.reduce((sum, line) => sum + Number(line.amount || 0), 0);
-    return `${regular.length ? `<tr><th>Fee structure total</th><th class="num">${regularTotal.toLocaleString()}</th></tr>${regular.map((line) => `<tr><td style="padding-left:28px">↳ ${line.label || line.code || "School fees"}</td><td class="num">${Number(line.amount || 0).toLocaleString()}</td></tr>`).join("")}` : ""}${special.map((line) => `<tr><td>${line.label || "Special fee structure"}</td><td class="num">${Number(line.amount || 0).toLocaleString()}</td></tr>`).join("")}`;
+    return lines.filter(isSpecialLine);
+  };
+
+  const invoiceDocumentLines = (invoice: InvRow) => {
+    const additionalTotal = invoiceAdditionalLines(invoice).reduce((sum, line) => sum + Number(line.amount || 0), 0);
+    // Use the saved invoice subtotal so the printed summary reconciles to its charges.
+    const feeStructureTotal = Number(invoice.subtotal) - additionalTotal;
+    return `<tr><td>Fee structure total</td><td class="num">${feeStructureTotal.toLocaleString()}</td></tr>`;
   };
 
   const bulkFee = useMemo(() => fees.find((f) => f.id === bulk.fee_structure_id), [fees, bulk.fee_structure_id]);
