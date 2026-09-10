@@ -1,3 +1,4 @@
+import { SchoolInvoiceListExport, type InvoiceExportRow } from "./SchoolInvoiceListExport";
 import { schoolInvoiceCoverage } from "@/lib/schoolInvoiceCoverage";
 import { fetchAllPages } from "@/lib/supabasePagination";
 import { useSchoolInvoiceFilters } from "./SchoolInvoiceFilters";
@@ -86,7 +87,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const [activeTab, setActiveTab] = useState<"invoices" | "charges">("invoices");
   const [rows, setRows] = useState<InvRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
-  const { filteredRows, controls: invoiceFilters } = useSchoolInvoiceFilters(rows, students);
+  const { filteredRows, controls: invoiceFilters } = useSchoolInvoiceFilters(rows, students, { showResidency: true });
   const [fees, setFees] = useState<FeeOpt[]>([]);
   const [bursaries, setBursaries] = useState<BursaryOpt[]>([]);
   const [specialFees, setSpecialFees] = useState<SpecialFeeOpt[]>([]);
@@ -174,9 +175,27 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   };
 
   const studentLabel = useMemo(() => {
-    const m = new Map(students.map((s) => [s.id, `${s.admission_number} — ${s.first_name} ${s.last_name}`]));
+    const m = new Map(students.map((s) => [s.id, `${s.first_name} ${s.last_name}`]));
     return (id: string) => m.get(id) ?? id.slice(0, 8);
   }, [students]);
+
+  const studentsById = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
+  const exportRows = useMemo<InvoiceExportRow[]>(() => filteredRows.map((invoice) => {
+    const student = studentsById.get(invoice.student_id);
+    return {
+      invoice: invoice.invoice_number,
+      name: student ? `${student.first_name} ${student.last_name}`.trim() : "Unknown student",
+      admission: student?.admission_number || "",
+      schoolPay: student?.school_pay_number || "",
+      className: student?.class_name || "",
+      residency: student?.is_boarding === true ? "Boarding" : student?.is_boarding === false ? "Day" : "—",
+      year: invoice.academic_year, term: invoice.term_name,
+      issueDate: invoice.issue_date || "", dueDate: invoice.due_date || "",
+      due: Number(invoice.total_due), paid: Number(invoice.amount_paid),
+      balance: invoice.status === "cancelled" ? "—" : Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid)),
+      status: invoice.status,
+    };
+  }), [filteredRows, studentsById]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -777,7 +796,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
             <option value="">Student</option>
             {students.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.admission_number} — {s.first_name} {s.last_name}
+                {s.first_name} {s.last_name}
               </option>
             ))}
           </select>
@@ -932,13 +951,16 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       </section>}
       {(readOnly || activeTab === "invoices") && <section className="space-y-4" aria-label="Student invoices and balances">
       {invoiceFilters}
+      <SchoolInvoiceListExport rows={exportRows} school={schoolHeader} disabled={loading || !!err} onError={setErr} />
       <p className="text-sm text-slate-700">Outstanding balance for matching invoices: <strong>{filteredRows.filter((row) => row.status !== "cancelled").reduce((sum, row) => sum + Math.max(0, Number(row.total_due) - Number(row.amount_paid)), 0).toLocaleString()}</strong></p>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="text-left p-3 font-semibold text-slate-700">Invoice</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Student</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Student name</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Admission number</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Day/Boarding</th>
               <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Term</th>
               <th className="text-right p-3 font-semibold text-slate-700">Due</th>
@@ -951,13 +973,13 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="p-6 text-slate-500">
+                <td colSpan={11} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="p-6 text-slate-500">
+                <td colSpan={11} className="p-6 text-slate-500">
                   No invoices match the selected filters.
                 </td>
               </tr>
@@ -965,7 +987,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
               filteredRows.map((r) =>
                 editingId === r.id && editDraft ? (
                   <tr key={r.id} className="border-b border-slate-100 bg-indigo-50/40">
-                    <td className="p-2" colSpan={9}>
+                    <td className="p-2" colSpan={11}>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 py-1 text-xs text-slate-600 mb-2">
                         <span className="md:col-span-3 font-mono text-slate-800">{r.invoice_number}</span>
                         <span>
@@ -1040,6 +1062,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                       )}
                     </td>
                     <td className="p-3 text-slate-700">{studentLabel(r.student_id)}</td>
+                    <td className="p-3 font-mono text-slate-700">{studentsById.get(r.student_id)?.admission_number || "—"}</td>
+                    <td className="p-3 text-slate-700">{studentsById.get(r.student_id)?.is_boarding === true ? "Boarding" : studentsById.get(r.student_id)?.is_boarding === false ? "Day" : "—"}</td>
                   <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-700">
                       {r.academic_year} · {r.term_name}

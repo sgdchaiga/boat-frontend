@@ -1,10 +1,10 @@
 import { useMemo, useState } from "react";
 
-type Student = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null; class_id: string | null; class_name: string };
+type Student = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null; class_id: string | null; class_name: string; is_boarding?: boolean | null };
 type Invoice = { student_id: string; invoice_number: string; academic_year: string; term_name: string; status: string; issue_date?: string | null };
-const emptyFilters = { search: "", student: "", className: "", year: "", term: "", status: "", from: "", to: "" };
+const emptyFilters = { residency: "", search: "", student: "", className: "", year: "", term: "", status: "", from: "", to: "" };
 
-export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[]) {
+export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[], optionsConfig: { showResidency?: boolean } = {}) {
   const [filters, setFilters] = useState(emptyFilters);
   const studentMap = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
   const filteredRows = useMemo(() => rows.filter((row) => {
@@ -12,6 +12,7 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
     const search = filters.search.trim().toLowerCase();
     const date = row.issue_date?.slice(0, 10);
     return (!search || `${row.invoice_number} ${student?.first_name ?? ""} ${student?.last_name ?? ""} ${student?.admission_number ?? ""} ${student?.school_pay_number ?? ""}`.toLowerCase().includes(search))
+      && (!filters.residency || (filters.residency === "boarding" ? student?.is_boarding === true : student?.is_boarding === false))
       && (!filters.student || row.student_id === filters.student)
       && (!filters.className || student?.class_name?.trim() === filters.className)
       && (!filters.year || row.academic_year === filters.year)
@@ -36,7 +37,8 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
     <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
         <label className="text-xs text-slate-600 space-y-1"><span>Search student / invoice</span><input className={controlClass} placeholder="Name, admission, SchoolPay or invoice" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} /></label>
-        {select("Students", "student", students.map((student) => ({ value: student.id, label: `${student.admission_number} — ${student.first_name} ${student.last_name}${student.school_pay_number ? ` · SchoolPay: ${student.school_pay_number}` : ""}` })).sort((a, b) => a.label.localeCompare(b.label)))}
+        {select("Students", "student", students.map((student) => ({ value: student.id, label: `${student.first_name} ${student.last_name}` })).sort((a, b) => a.label.localeCompare(b.label)))}
+        {optionsConfig.showResidency && select("Day/Boarding", "residency", [{ value: "day", label: "Day" }, { value: "boarding", label: "Boarding" }])}
         {select("Classes", "className", simpleOptions(students.map((student) => student.class_name?.trim() || "")))}
         {select("Academic years", "year", simpleOptions(rows.map((row) => row.academic_year)))}
         {select("Terms", "term", simpleOptions(rows.map((row) => row.term_name)))}

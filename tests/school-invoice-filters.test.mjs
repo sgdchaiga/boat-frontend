@@ -5,8 +5,8 @@ import test from 'node:test';
 import ts from 'typescript';
 
 const students = [
-  { id: 'a', first_name: 'Jane', last_name: 'Doe', admission_number: 'ADM01', school_pay_number: '0012345678', class_id: 'c1', class_name: 'P1' },
-  { id: 'b', first_name: 'John', last_name: 'Doe', admission_number: 'ADM02', class_id: 'c2', class_name: 'P2' },
+  { id: 'a', first_name: 'Jane', last_name: 'Doe', admission_number: 'ADM01', school_pay_number: '0012345678', class_id: 'c1', class_name: 'P1', is_boarding: false },
+  { id: 'b', first_name: 'John', last_name: 'Doe', admission_number: 'ADM02', class_id: 'c2', class_name: 'P2', is_boarding: true },
 ];
 const rows = [
   { student_id: 'a', invoice_number: 'INV01', academic_year: '2026', term_name: 'Term 1', status: 'partial', issue_date: '2026-01-10' },
@@ -40,4 +40,11 @@ test('date filters exclude undated invoices and clearing filters restores all ro
 
 test('search finds SchoolPay codes including leading zeros', () => {
   assert.deepEqual(filter({ search: '0012345678' }), ['INV01', 'INV03']);
+});
+
+test('day and boarding filters combine with existing invoice filters', () => {
+  assert.deepEqual(filter({ residency: 'day' }), ['INV01', 'INV03']);
+  assert.deepEqual(filter({ residency: 'boarding' }), ['INV02']);
+  assert.deepEqual(filter({ residency: 'day', year: '2026' }), ['INV01']);
+  assert.deepEqual(filter({ residency: 'boarding', student: 'a' }), []);
 });
