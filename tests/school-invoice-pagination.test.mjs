@@ -18,5 +18,5 @@ test('loads Senior Five students beyond the first 1000 school records', async ()
 test('invoice loading, student loading and duplicate checks all use pagination', () => {
   const source = readFileSync(new URL('../src/components/school/SchoolStudentInvoicesPage.tsx', import.meta.url), 'utf8');
   assert.match(source, /fetchAllPages<StudentOpt>/);
-  assert.equal((source.match(/fetchAllPages<InvRow>/g) || []).length, 2);
+  assert.equal((source.match(/fetchAllPages<InvRow>/g) || []).length, 3);
 });

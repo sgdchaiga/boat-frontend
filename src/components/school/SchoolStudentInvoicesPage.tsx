@@ -1,3 +1,4 @@
+import { schoolInvoiceCoverage } from "@/lib/schoolInvoiceCoverage";
 import { fetchAllPages } from "@/lib/supabasePagination";
 import { useSchoolInvoiceFilters } from "./SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -664,8 +665,11 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }
   };
 
+  const correctionFee = fees.find((fee) => fee.id === correction.from_fee_structure_id);
+  const correctionCoverage = correctionFee ? schoolInvoiceCoverage(students, rows, correctionFee) : null;
+
   const correctInvoicesByFeeStructure = async () => {
-    if (readOnly || correctionRunning) return;
+    if (readOnly || correctionRunning || bulkRunning || loading) return;
     const fromFee = fees.find((fee) => fee.id === correction.from_fee_structure_id);
     const toFee = fees.find((fee) => fee.id === correction.to_fee_structure_id);
     if (!fromFee || !toFee) {
@@ -676,22 +680,29 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       setErr("The corrected fee structure must be for the same academic year and term.");
       return;
     }
-    const affected = rows.filter((row) => row.fee_structure_id === fromFee.id && row.status !== "cancelled");
-    if (!affected.length) {
-      setCorrectionSummary("No active invoices use the selected incorrect fee structure.");
-      return;
-    }
     const orgId = user?.organization_id;
     if (!orgId) return;
     setErr(null);
     setCorrectionSummary(null);
     setCorrectionRunning(true);
     correctionStop.current = false;
-    setCorrectionProgress(`Preparing ${affected.length} invoices…`);
+    setCorrectionProgress("Loading current invoices…");
     let updatedCount = 0;
     let savedCount = 0;
     try {
       const usesApi = canUseSchoolApi();
+      const currentInvoices = usesApi
+        ? await listSchoolRows<InvRow>("invoices", orgId)
+        : await fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices").select("*")
+          .eq("organization_id", orgId).order("id").range(from, to));
+      setRows(currentInvoices);
+      const affected = currentInvoices.filter((invoice) => invoice.fee_structure_id === fromFee.id && invoice.status !== "cancelled");
+      if (!affected.length) {
+        setCorrectionSummary("No non-cancelled invoices use the selected fee structure. Check the coverage counts below for missing invoices or invoices using another structure.");
+        return;
+      }
+      setCorrectionProgress(`Preparing ${affected.length} existing invoices…`);
+
       const accountingBasis = usesApi ? undefined : await getSchoolAccountingBasis(orgId);
       for (const invoice of affected) {
         if (correctionStop.current) break;
@@ -700,7 +711,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         if (!student) throw new Error(`Student for ${invoice.invoice_number} could not be found.`);
         const regularLines = applicableLines(toFee, student.is_boarding);
         const wasNewStudentCharge = (invoice.line_items || []).some((line) => String(line.code || "").toUpperCase() === "SPECIAL_NEW_STUDENT");
-        const isOnlyInvoice = !rows.some((row) => row.student_id === invoice.student_id && row.id !== invoice.id && row.status !== "cancelled");
+        const isOnlyInvoice = !currentInvoices.some((row) => row.student_id === invoice.student_id && row.id !== invoice.id && row.status !== "cancelled");
         const specialLines = specialFeeLinesFor(invoice.student_id, toFee.academic_year, toFee.term_name, wasNewStudentCharge || isOnlyInvoice);
         const line_items = [...regularLines, ...specialLines];
         const subtotal = line_items.reduce((sum, line) => sum + Number(line.amount || 0), 0);
@@ -884,7 +895,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         <div className="rounded-xl border border-amber-200 bg-amber-50/40 p-4 space-y-3">
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Correct invoices by fee structure</h2>
-            <p className="text-xs text-slate-600 mt-1">Recalculate every active invoice using a corrected fee structure. Select the same structure twice after editing its amounts, or select a different replacement structure. Existing payments, bursaries, discounts and scholarships are preserved.</p>
+            <p className="text-xs text-slate-600 mt-1">Recalculate existing non-cancelled invoices linked to the selected fee structure. This does not create invoices for students who have never been invoiced. Select the same structure twice after editing its amounts, or select a different replacement structure. Existing payments, bursaries, discounts and scholarships are preserved.</p>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={correction.from_fee_structure_id} onChange={(e) => setCorrection((value) => ({ ...value, from_fee_structure_id: e.target.value }))}>
@@ -896,7 +907,14 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
               {fees.map((fee) => <option key={fee.id} value={fee.id}>{fee.class_name} · {fee.academic_year} {fee.term_name}</option>)}
             </select>
           </div>
-          <button type="button" disabled={correctionRunning} onClick={correctInvoicesByFeeStructure} className="px-4 py-2 bg-amber-700 text-white rounded-lg text-sm hover:bg-amber-800 disabled:opacity-50">
+          {correctionFee && correctionCoverage && <div className="rounded-lg border border-amber-200 bg-white p-3 space-y-2 text-sm text-slate-700">
+            <p className="font-semibold">{correctionFee.class_name} · {correctionFee.academic_year} {correctionFee.term_name}</p>
+            <p>{correctionCoverage.students} students in this class: {correctionCoverage.selectedStudents} with this fee structure, {correctionCoverage.otherStudents} with another or unlinked fee structure, {correctionCoverage.cancelledStudents} with cancelled invoices only, {correctionCoverage.missingStudents.length} without an invoice for this term.</p>
+            <p>Correction will update {correctionCoverage.matchingInvoices} existing invoices linked to this structure.</p>
+            {correctionCoverage.missingStudents.length > 0 && <p>Missing invoices must be created using Bulk invoicing above. Select this class and term; existing invoices are skipped. Only active students are eligible for bulk generation.</p>}
+            <button type="button" disabled={loading || correctionRunning || bulkRunning} onClick={() => void load()} className="font-medium text-amber-800 underline">Refresh invoice counts</button>
+          </div>}
+          <button type="button" disabled={correctionRunning || bulkRunning || loading} onClick={correctInvoicesByFeeStructure} className="px-4 py-2 bg-amber-700 text-white rounded-lg text-sm hover:bg-amber-800 disabled:opacity-50">
             {correctionRunning ? "Correcting…" : "Correct matching invoices"}
           </button>
           {correctionSummary && <p className="text-sm text-slate-700">{correctionSummary}</p>}
