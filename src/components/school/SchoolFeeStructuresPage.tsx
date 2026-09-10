@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Copy, Plus, Trash2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -47,7 +47,7 @@ const linesFromRow = (r: FeeRow): LineItem[] => {
     label: String(l.label ?? ""),
     amount: Number(l.amount) || 0,
     priority: Math.max(1, Number(l.priority) || 1),
-    applies_to: l.applies_to === "day" || l.applies_to === "boarding" ? l.applies_to : (String(l.code).toUpperCase() === "BOARD" ? "boarding" : "all"),
+    applies_to: l.applies_to === "all" || l.applies_to === "day" || l.applies_to === "boarding" ? l.applies_to : (String(l.code).toUpperCase() === "BOARD" ? "boarding" : "all"),
   }));
 };
 
@@ -75,6 +75,9 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
     term_name: "Term 1",
     lines: defaultLines(),
   });
+  const formRef = useRef<HTMLDivElement>(null);
+  const [cloneSource, setCloneSource] = useState<FeeRow | null>(null);
+  const [saving, setSaving] = useState(false);
   const [editingFeeId, setEditingFeeId] = useState<string | null>(null);
   const [editFee, setEditFee] = useState<FeeEditState | null>(null);
 
@@ -190,7 +193,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
     if (src.stream_id) {
       const s = streams.find((x) => x.id === src.stream_id);
       stream = s ? s.name : null;
-    } else if (streams.length === 0) {
+    } else {
       stream = src.stream.trim() || null;
     }
     return { class_name, stream };
@@ -212,7 +215,7 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
   };
 
   const save = async () => {
-    if (readOnly) return;
+    if (readOnly || saving) return;
     const { class_name, stream } = buildPayload(form);
 
     if (classes.length > 0) {
@@ -243,12 +246,14 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
       academic_year: form.academic_year.trim(),
       term_name: form.term_name.trim(),
       line_items: vl.lines,
-      currency: "UGX",
+      currency: cloneSource?.currency || "UGX",
       is_active: true,
     };
+    setSaving(true);
     if (canUseSchoolApi()) {
       try {
         await createSchoolRow<FeeRow>("fee-structures", user?.organization_id || "", payload);
+        setCloneSource(null);
         setForm({
           class_id: "",
           stream_id: "",
@@ -261,25 +266,59 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
         load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to save fee structure.");
+      } finally {
+        setSaving(false);
       }
       return;
     }
-    const { error } = await supabase.from("fee_structures").insert({
-      ...payload,
-    });
-    if (error) setErr(error.message);
-    else {
-      setForm({
-        class_id: "",
-        stream_id: "",
-        class_name: "",
-        stream: "",
-        academic_year: new Date().getFullYear().toString(),
-        term_name: "Term 1",
-        lines: defaultLines(),
+    try {
+      const { error } = await supabase.from("fee_structures").insert({
+        ...payload,
       });
-      load();
+      if (error) setErr(error.message);
+      else {
+        setCloneSource(null);
+        setForm({
+          class_id: "",
+          stream_id: "",
+          class_name: "",
+          stream: "",
+          academic_year: new Date().getFullYear().toString(),
+          term_name: "Term 1",
+          lines: defaultLines(),
+        });
+        load();
+      }
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Failed to save fee structure.");
+    } finally {
+      setSaving(false);
     }
+  };
+
+  const cloneFee = (row: FeeRow) => {
+    if (readOnly || saving) return;
+    setErr(null);
+    setEditingFeeId(null);
+    setEditFee(null);
+    setCloneSource(row);
+    setForm({
+      class_id: row.class_id ?? "",
+      stream_id: row.stream_id ?? "",
+      class_name: row.class_name,
+      stream: row.stream ?? "",
+      academic_year: row.academic_year,
+      term_name: row.term_name,
+      lines: linesFromRow(row),
+    });
+    formRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    formRef.current?.focus({ preventScroll: true });
+  };
+
+  const cancelClone = () => {
+    setCloneSource(null);
+    setErr(null);
+    setForm({ class_id: "", stream_id: "", class_name: "", stream: "", academic_year: new Date().getFullYear().toString(), term_name: "Term 1", lines: defaultLines() });
   };
 
   const startEditFee = (r: FeeRow) => {
@@ -376,7 +415,12 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
       {!readOnly && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
+        <div ref={formRef} tabIndex={-1} className="rounded-xl border border-slate-200 bg-white p-4 space-y-4">
+          {cloneSource && <div className="rounded-lg bg-indigo-50 p-3 space-y-1">
+            <h2 className="font-semibold text-indigo-900">Clone fee structure</h2>
+            <p className="text-sm text-indigo-800">Copying {cloneSource.class_name} · {cloneSource.academic_year} {cloneSource.term_name}. Review the class, stream, year, term and amounts below. Saving creates a new active structure.</p>
+            <button type="button" disabled={saving} onClick={cancelClone} className="text-sm font-medium text-indigo-700 underline">Cancel clone</button>
+          </div>}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             {classes.length > 0 ? (
               <select
@@ -526,8 +570,8 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
               </table>
             </div>
           </div>
-          <button type="button" onClick={save} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800">
-            Save structure
+          <button type="button" onClick={save} disabled={saving} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800">
+            {saving ? "Saving…" : cloneSource ? "Save cloned structure" : "Save structure"}
           </button>
         </div>
       )}
@@ -745,6 +789,9 @@ export function SchoolFeeStructuresPage({ readOnly }: Props) {
                     </td>
                     {!readOnly && (
                       <td className="p-3 text-right align-top">
+                        <button type="button" disabled={saving} onClick={() => cloneFee(r)} className="mr-3 inline-flex items-center gap-1 text-xs font-medium text-indigo-700 hover:text-indigo-900 disabled:opacity-50">
+                          <Copy className="w-3.5 h-3.5" /> Clone
+                        </button>
                         <button
                           type="button"
                           onClick={() => startEditFee(r)}
