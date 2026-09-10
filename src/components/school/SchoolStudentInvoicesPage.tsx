@@ -1,3 +1,4 @@
+import { fetchAllPages } from "@/lib/supabasePagination";
 import { useSchoolInvoiceFilters } from "./SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -205,12 +206,11 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }
 
     const [iRes, sRes, fRes, cRes, bRes, sfRes] = await Promise.all([
-      supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("created_at", { ascending: false }),
-      supabase
-        .from("students")
+      fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("id").range(from, to)).then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
+      fetchAllPages<StudentOpt>((from, to) => supabase.from("students")
         .select("id,first_name,last_name,admission_number,class_id,class_name,status,is_boarding")
-        .eq("organization_id", orgId)
-        .order("last_name"),
+        .eq("organization_id", orgId).order("id").range(from, to))
+        .then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
       supabase
         .from("fee_structures")
         .select("id,class_id,class_name,term_name,academic_year,line_items")
@@ -322,8 +322,13 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }
   }, [form.student_id, form.fee_structure_id, fees, students]);
 
+  const bulkCandidates = students.filter((student) => student.status === "active" && matchesClassFilter(student, bulk.class_id)
+    && (!bulk.match_fee_class || !bulkFee?.class_id || matchesFeeStructureClass(student, bulkFee)));
+  const bulkExisting = new Set(rows.filter((row) => bulkFee && row.academic_year === bulkFee.academic_year && row.term_name === bulkFee.term_name).map((row) => row.student_id));
+  const bulkMissingCount = bulkCandidates.filter((student) => !bulkExisting.has(student.id)).length;
+
   const generateBulkInvoices = async () => {
-    if (readOnly) return;
+    if (readOnly || bulkRunning || loading) return;
     if (!bulk.fee_structure_id) {
       setErr("Select a fee structure for bulk invoicing.");
       setBulkSummary(null);
@@ -352,18 +357,17 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     setBulkRunning(true);
 
     let existingStudentIds: string[] = [];
-    if (canUseSchoolApi()) {
-      existingStudentIds = rows
-        .filter((r) => r.academic_year === fee.academic_year && r.term_name === fee.term_name)
-        .map((r) => r.student_id);
-    } else {
-      const { data: existing } = await supabase
-        .from("student_invoices")
-        .select("student_id")
-        .eq("organization_id", orgId)
-        .eq("academic_year", fee.academic_year)
-        .eq("term_name", fee.term_name);
-      existingStudentIds = (existing ?? []).map((x) => x.student_id);
+    try {
+      const existing = canUseSchoolApi()
+        ? await listSchoolRows<InvRow>("invoices", orgId)
+        : await fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices").select("*")
+          .eq("organization_id", orgId).eq("academic_year", fee.academic_year)
+          .eq("term_name", fee.term_name).order("id").range(from, to));
+      existingStudentIds = existing.filter((row) => row.academic_year === fee.academic_year && row.term_name === fee.term_name).map((row) => row.student_id);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Could not check existing invoices. No invoices were created.");
+      setBulkRunning(false);
+      return;
     }
 
     const invoiced = new Set<string>(existingStudentIds);
@@ -411,26 +415,21 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     });
 
     if (canUseSchoolApi()) {
+      let createdCount = 0;
       try {
-        const insertedRows: InvRow[] = [];
         for (const invoice of invoiceRows) {
-          const row = await createSchoolRow<InvRow>("invoices", orgId, { ...invoice, staff_user_id: user?.id ?? null });
-          insertedRows.push(row);
-          const { journalMessage } = await syncStudentInvoiceAccounting({
-            organizationId: orgId,
-            staffUserId: user?.id ?? null,
-            invoice: row,
-          });
-          if (journalMessage) throw new Error(`Invoice ${row.invoice_number} was created, but GL posting failed: ${journalMessage}`);
+          await createSchoolRow<InvRow>("invoices", orgId, { ...invoice, staff_user_id: user?.id ?? null });
+          createdCount += 1;
+          setBulkSummary(`Created ${createdCount} of ${invoiceRows.length} missing invoices…`);
         }
-        setBulkRunning(false);
-        setBulkSummary(
-          `Created ${insertedRows.length} invoice${insertedRows.length === 1 ? "" : "s"}. Skipped ${skippedDup} (already invoiced for this term).`
-        );
+        setBulkSummary(`Created ${createdCount} invoices. Skipped ${skippedDup} (already invoiced for this term).`);
         await load();
       } catch (error) {
-        setBulkRunning(false);
+        await load();
         setErr(error instanceof Error ? error.message : "Failed to create bulk invoices.");
+        setBulkSummary(`Created ${createdCount} of ${invoiceRows.length} missing invoices before stopping. Retry to generate the remaining invoices; existing invoices will be skipped.`);
+      } finally {
+        setBulkRunning(false);
       }
       return;
     }
@@ -869,7 +868,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
             <div className="md:col-span-2 flex flex-wrap items-center gap-3">
               <button
                 type="button"
-                disabled={bulkRunning}
+                disabled={bulkRunning || loading}
                 onClick={generateBulkInvoices}
                 className="px-4 py-2 bg-indigo-700 text-white rounded-lg text-sm hover:bg-indigo-800 disabled:opacity-50"
               >
@@ -877,6 +876,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
               </button>
             </div>
           </div>
+          {bulkFee && <p className="text-sm text-slate-700">{bulkCandidates.length} eligible active students · {bulkCandidates.length - bulkMissingCount} already invoiced for this term · {bulkMissingCount} missing invoices. Generation creates only missing invoices.</p>}
           {bulkSummary && <p className="text-sm text-slate-700">{bulkSummary}</p>}
         </div>
       )}

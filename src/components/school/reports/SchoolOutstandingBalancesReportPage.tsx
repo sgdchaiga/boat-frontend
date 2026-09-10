@@ -1,3 +1,4 @@
+import { fetchAllPages } from "@/lib/supabasePagination";
 import { useSchoolInvoiceFilters } from "../SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Wallet } from "lucide-react";
@@ -58,16 +59,14 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
           listSchoolRows<StudentOpt>("students", orgId),
         ]);
       } else {
-        const [iRes, sRes] = await Promise.all([
-          supabase.from("student_invoices")
+        [invs, studs] = await Promise.all([
+          fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices")
             .select("id,invoice_number,academic_year,term_name,total_due,amount_paid,status,student_id,issue_date")
-            .eq("organization_id", orgId).neq("status", "cancelled"),
-          supabase.from("students").select("id,first_name,last_name,admission_number,class_name,class_id").eq("organization_id", orgId),
+            .eq("organization_id", orgId).neq("status", "cancelled").order("id").range(from, to)),
+          fetchAllPages<StudentOpt>((from, to) => supabase.from("students")
+            .select("id,first_name,last_name,admission_number,class_name,class_id")
+            .eq("organization_id", orgId).order("id").range(from, to)),
         ]);
-        if (iRes.error) throw iRes.error;
-        if (sRes.error) throw sRes.error;
-        invs = (iRes.data as InvRow[]) || [];
-        studs = (sRes.data as StudentOpt[]) || [];
       }
       setStudents(studs);
       const map = new Map(studs.map((s) => [s.id, s]));

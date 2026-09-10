@@ -21,8 +21,9 @@ async function render(apiMode, fail = false) {
     '@/contexts/AuthContext': { useAuth: () => ({ user: { organization_id: 'org' } }) },
     '@/contexts/AppContext': { useAppContext: () => ({}) },
     '../SchoolInvoiceFilters': { useSchoolInvoiceFilters: (rows) => ({ filteredRows: rows }) },
+    '@/lib/supabasePagination': { fetchAllPages: async (fetchPage) => (await fetchPage(0, 999)).data },
     '@/lib/schoolApiData': { canUseSchoolApi: () => apiMode, listSchoolRows: async (resource, org) => { calls.push([resource, org]); if (fail) throw new Error('Unavailable'); return resource === 'invoices' ? invoices : students; } },
-    '@/lib/supabase': { supabase: { from: (table) => { assert.equal(apiMode, false); calls.push(table); const query = { select: () => query, eq: () => query, neq: () => query, then: (resolve) => resolve({ data: table === 'student_invoices' ? invoices : students }) }; return query; } } },
+    '@/lib/supabase': { supabase: { from: (table) => { assert.equal(apiMode, false); calls.push(table); const query = { select: () => query, eq: () => query, neq: () => query, order: () => query, range: () => query, then: (resolve) => resolve({ data: table === 'student_invoices' ? invoices : students }) }; return query; } } },
   };
   vm.runInNewContext(code, { exports, require: (name) => deps[name] || {} });
   exports.SchoolOutstandingBalancesReportPage({});
