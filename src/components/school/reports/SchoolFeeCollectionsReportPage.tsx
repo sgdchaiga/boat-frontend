@@ -1,3 +1,4 @@
+import autoTable from "jspdf-autotable";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { jsPDF } from "jspdf";
@@ -12,6 +13,7 @@ type StudentOpt = {
   first_name: string;
   last_name: string;
   admission_number: string;
+  school_pay_number?: string | null;
   class_id: string | null;
   class_name: string;
 };
@@ -81,7 +83,7 @@ export function SchoolFeeCollectionsReportPage({ readOnly: _readOnly }: Props) {
     const [sRes, cRes] = await Promise.all([
       supabase
         .from("students")
-        .select("id,first_name,last_name,admission_number,class_id,class_name")
+        .select("id,first_name,last_name,admission_number,school_pay_number,class_id,class_name")
         .eq("organization_id", orgId)
         .order("last_name"),
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
@@ -153,25 +155,23 @@ export function SchoolFeeCollectionsReportPage({ readOnly: _readOnly }: Props) {
     doc.text("Fee collections report", 14, 18);
     doc.setFontSize(9);
     doc.text(`Payments: ${payments.length} · Total: ${grandTotal.toFixed(2)}`, 14, 26);
-    let y = 38;
-    doc.setFontSize(8);
-    payments.slice(0, 40).forEach((r) => {
-      const paid = r.paid_at ? new Date(r.paid_at).toLocaleString() : "";
-      const line = `${paid} ${studentLabel(r.student_id)} ${methodLabel(r.method)} ${Number(r.amount).toFixed(2)}`;
-      doc.text(line.substring(0, 120), 14, y);
-      y += 4;
+    autoTable(doc, {
+      startY: 34,
+      head: [["Paid at", "Student", "SchoolPay code", "Method", "Amount"]],
+      body: payments.map((row) => [new Date(row.paid_at).toLocaleString(), studentLabel(row.student_id), studentById.get(row.student_id)?.school_pay_number || "—", methodLabel(row.method), Number(row.amount).toFixed(2)]),
+      styles: { fontSize: 8, overflow: "linebreak" },
     });
-    if (payments.length > 40) doc.text(`… and ${payments.length - 40} more rows (export CSV for full list).`, 14, y);
     doc.save("school_fee_collections_report.pdf");
   };
 
   const exportCsv = () => {
-    const header = ["paid_at", "student", "class", "method", "amount", "reference"];
+    const header = ["paid_at", "student", "school_pay_number", "class", "method", "amount", "reference"];
     const rows = payments.map((r) => {
       const st = studentById.get(r.student_id);
       return [
         r.paid_at,
         studentLabel(r.student_id),
+        st?.school_pay_number || "",
         classLabelForStudent(st),
         methodLabel(r.method),
         String(r.amount),
@@ -297,12 +297,13 @@ export function SchoolFeeCollectionsReportPage({ readOnly: _readOnly }: Props) {
         })}
       </div>
 
-      <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="text-left p-3 font-semibold text-slate-700">Paid at</th>
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
+              <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
@@ -311,13 +312,13 @@ export function SchoolFeeCollectionsReportPage({ readOnly: _readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="p-6 text-slate-500">
+                <td colSpan={6} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : payments.length === 0 ? (
               <tr>
-                <td colSpan={5} className="p-6 text-slate-500">
+                <td colSpan={6} className="p-6 text-slate-500">
                   No payments match the filters.
                 </td>
               </tr>
@@ -331,6 +332,7 @@ export function SchoolFeeCollectionsReportPage({ readOnly: _readOnly }: Props) {
                       {paid ? paid.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" }) : "—"}
                     </td>
                     <td className="p-3 text-slate-700">{studentLabel(r.student_id)}</td>
+                  <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{st?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-600">{classLabelForStudent(st)}</td>
                     <td className="p-3 text-slate-800">{methodLabel(r.method)}</td>
                     <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>

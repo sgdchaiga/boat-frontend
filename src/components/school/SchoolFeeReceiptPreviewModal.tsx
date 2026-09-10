@@ -110,6 +110,8 @@ export function SchoolFeeReceiptPreviewModal({ detail, loading, onClose }: Props
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-600">Student</dt>
                 <dd className="text-slate-900 text-right">{detail.studentLabel}</dd>
+                <dt className="text-slate-600">SchoolPay code</dt>
+                <dd className="text-slate-900 text-right font-mono">{detail.schoolPayCode || "—"}</dd>
               </div>
               <div className="flex justify-between gap-4">
                 <dt className="text-slate-600">Amount</dt>

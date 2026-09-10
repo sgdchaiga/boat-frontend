@@ -327,7 +327,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             st ? `${st.admission_number} - ${st.first_name} ${st.last_name}` : payment.student_id,
             orgName,
             orgAddress,
-            orgLogoUrl
+            orgLogoUrl,
+            st?.school_pay_number ?? null
           )
         );
         setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash" });
@@ -576,7 +577,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           st ? `${st.admission_number} - ${st.first_name} ${st.last_name}` : payment.student_id,
           orgName,
           orgAddress,
-          orgLogoUrl
+          orgLogoUrl,
+          st?.school_pay_number ?? null
         )
       );
       return;
@@ -617,7 +619,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       ? `${st.admission_number} — ${st.first_name} ${st.last_name}`
       : payment.student_id;
     setReceiptPreview(
-      schoolFeeReceiptDetailFromPayment(payment, receipt_number, issued_at, studentLabel, orgName, orgAddress, orgLogoUrl)
+      schoolFeeReceiptDetailFromPayment(payment, receipt_number, issued_at, studentLabel, orgName, orgAddress, orgLogoUrl, st?.school_pay_number ?? null)
     );
   };
 
@@ -655,7 +657,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             <option value="">Student</option>
             {students.map((s) => (
               <option key={s.id} value={s.id}>
-                {s.admission_number} — {s.first_name} {s.last_name}
+                {s.admission_number} — {s.first_name} {s.last_name}{s.school_pay_number ? ` · SchoolPay: ${s.school_pay_number}` : ""}
               </option>
             ))}
           </select>
@@ -699,6 +701,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="text-left p-3 font-semibold text-slate-700">When</th>
+              <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
@@ -710,13 +713,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={5} className="p-6 text-slate-500">
+                <td colSpan={6} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={5} className="p-6 text-slate-500">
+                <td colSpan={6} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
@@ -724,6 +727,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               rows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                   <td className="p-3 text-slate-700">{new Date(r.paid_at).toLocaleString()}</td>
+                  <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
                   <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
                   <td className="p-3 capitalize text-slate-600">
                     {r.method === "wallet" ? "Wallet" : r.method.replace("_", " ")}

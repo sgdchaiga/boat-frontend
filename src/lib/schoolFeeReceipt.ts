@@ -11,6 +11,7 @@ export type SchoolFeeReceiptDetail = {
   orgAddress: string | null;
   orgLogoUrl: string | null;
   studentLabel: string;
+  schoolPayCode?: string | null;
   amount: number;
   method: string;
   reference: string | null;
@@ -32,7 +33,8 @@ export function schoolFeeReceiptDetailFromPayment(
   studentLabel: string,
   orgName: string | null,
   orgAddress: string | null,
-  orgLogoUrl: string | null = null
+  orgLogoUrl: string | null = null,
+  schoolPayCode: string | null = null
 ): SchoolFeeReceiptDetail {
   return {
     receipt_number,
@@ -41,6 +43,7 @@ export function schoolFeeReceiptDetailFromPayment(
     orgAddress,
     orgLogoUrl,
     studentLabel,
+    schoolPayCode,
     amount: Number(payment.amount),
     method: payment.method,
     reference: payment.reference,
@@ -97,6 +100,7 @@ export function createSchoolFeeReceiptPdfBlob(d: SchoolFeeReceiptDetail): Blob {
   const rows: [string, string][] = [
     ["Receipt #", d.receipt_number],
     ["Student", d.studentLabel],
+    ["SchoolPay code", d.schoolPayCode || "—"],
     ["Amount", String(d.amount)],
     ["Method", methodLabel(d.method)],
     ["Reference", d.reference ?? "—"],
@@ -134,6 +138,7 @@ export function downloadSchoolFeeReceiptExcel(d: SchoolFeeReceiptDetail): void {
     ["Address", d.orgAddress ?? ""],
     ["Receipt #", d.receipt_number],
     ["Student", d.studentLabel],
+    ["SchoolPay code", d.schoolPayCode || "—"],
     ["Amount", d.amount],
     ["Method", methodLabel(d.method)],
     ["Reference", d.reference ?? ""],
@@ -166,8 +171,9 @@ export async function loadSchoolFeeReceiptDetail(
 
   const { data: st } = await supabase
     .from("students")
-    .select("first_name,last_name,admission_number")
+    .select("first_name,last_name,admission_number,school_pay_number")
     .eq("id", pay.student_id)
+    .eq("organization_id", orgId)
     .maybeSingle();
   const studentLabel = st
     ? `${st.admission_number} — ${st.first_name} ${st.last_name}`
@@ -185,6 +191,7 @@ export async function loadSchoolFeeReceiptDetail(
       orgAddress: orgRow?.address?.trim() ? orgRow.address : null,
       orgLogoUrl: orgRow?.logo_url?.trim() ? orgRow.logo_url : null,
       studentLabel,
+      schoolPayCode: st?.school_pay_number ?? null,
       amount: Number(pay.amount),
       method: pay.method,
       reference: pay.reference,

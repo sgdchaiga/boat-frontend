@@ -5,7 +5,7 @@ import test from 'node:test';
 import ts from 'typescript';
 
 const students = [
-  { id: 'a', first_name: 'Jane', last_name: 'Doe', admission_number: 'ADM01', class_id: 'c1', class_name: 'P1' },
+  { id: 'a', first_name: 'Jane', last_name: 'Doe', admission_number: 'ADM01', school_pay_number: '0012345678', class_id: 'c1', class_name: 'P1' },
   { id: 'b', first_name: 'John', last_name: 'Doe', admission_number: 'ADM02', class_id: 'c2', class_name: 'P2' },
 ];
 const rows = [
@@ -36,4 +36,8 @@ test('date filters exclude undated invoices and clearing filters restores all ro
   assert.deepEqual(filter({ from: '2026-01-01' }), ['INV01', 'INV02']);
   assert.deepEqual(filter({ to: '2026-01-10' }), ['INV01']);
   assert.deepEqual(filter({}), ['INV01', 'INV02', 'INV03']);
+});
+
+test('search finds SchoolPay codes including leading zeros', () => {
+  assert.deepEqual(filter({ search: '0012345678' }), ['INV01', 'INV03']);
 });

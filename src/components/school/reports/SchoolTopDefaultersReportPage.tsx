@@ -8,6 +8,7 @@ type Row = {
   student_id: string;
   balance: number;
   admission_number: string;
+  school_pay_number?: string | null;
   first_name: string;
   last_name: string;
   class_name: string;
@@ -16,6 +17,7 @@ type Row = {
 type StudentBrief = {
   id: string;
   admission_number: string;
+  school_pay_number?: string | null;
   first_name: string;
   last_name: string;
   class_name: string;
@@ -58,7 +60,7 @@ export function SchoolTopDefaultersReportPage({ readOnly: _readOnly }: Props) {
 
     const { data: studData, error: sErr } = await supabase
       .from("students")
-      .select("id,admission_number,first_name,last_name,class_name")
+      .select("id,admission_number,school_pay_number,first_name,last_name,class_name")
       .eq("organization_id", orgId)
       .eq("status", "active");
 
@@ -79,6 +81,7 @@ export function SchoolTopDefaultersReportPage({ readOnly: _readOnly }: Props) {
         student_id: id,
         balance,
         admission_number: s.admission_number,
+        school_pay_number: s.school_pay_number,
         first_name: s.first_name,
         last_name: s.last_name,
         class_name: s.class_name,
@@ -120,12 +123,13 @@ export function SchoolTopDefaultersReportPage({ readOnly: _readOnly }: Props) {
       {loading ? (
         <p className="text-slate-500">Loading…</p>
       ) : (
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-slate-50 border-b">
               <tr>
                 <th className="text-left p-2">#</th>
                 <th className="text-left p-2">Student</th>
+                <th className="text-left p-2">SchoolPay code</th>
                 <th className="text-left p-2">Class</th>
                 <th className="text-right p-2">Outstanding</th>
               </tr>
@@ -140,6 +144,7 @@ export function SchoolTopDefaultersReportPage({ readOnly: _readOnly }: Props) {
                     </div>
                     <div className="text-xs text-slate-500 font-mono">{r.admission_number}</div>
                   </td>
+                  <td className="p-2 font-mono">{r.school_pay_number || "—"}</td>
                   <td className="p-2">{r.class_name}</td>
                   <td className="p-2 text-right font-semibold text-amber-800 tabular-nums">{r.balance.toFixed(2)}</td>
                 </tr>

@@ -9,6 +9,7 @@ type StudentOpt = {
   first_name: string;
   last_name: string;
   admission_number: string;
+  school_pay_number?: string | null;
   class_id: string | null;
   class_name: string;
 };
@@ -100,7 +101,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     const [sRes, cRes] = await Promise.all([
       supabase
         .from("students")
-        .select("id,first_name,last_name,admission_number,class_id,class_name")
+        .select("id,first_name,last_name,admission_number,school_pay_number,class_id,class_name")
         .eq("organization_id", orgId)
         .order("last_name"),
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
@@ -272,12 +273,13 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
         </div>
       </div>
 
-      <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="text-left p-3 font-semibold text-slate-700">Paid at</th>
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
+              <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
@@ -287,13 +289,13 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="p-6 text-slate-500">
+                <td colSpan={7} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : payments.length === 0 ? (
               <tr>
-                <td colSpan={6} className="p-6 text-slate-500">
+                <td colSpan={7} className="p-6 text-slate-500">
                   No payments match the current filters.
                 </td>
               </tr>
@@ -312,6 +314,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
                         : "—"}
                     </td>
                     <td className="p-3 text-slate-700">{studentLabel(r.student_id)}</td>
+                  <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{st?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-600">{classLabelForStudent(st)}</td>
                     <td className="p-3 text-slate-800 capitalize">{methodLabel(r.method)}</td>
                     <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>

@@ -14,6 +14,7 @@ type StudentOpt = {
   first_name: string;
   last_name: string;
   admission_number: string;
+  school_pay_number?: string | null;
   class_id: string | null;
   class_name: string;
   status: string;
@@ -149,7 +150,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     printDocument(demandNote ? `Demand note ${invoice.invoice_number}` : `Invoice ${invoice.invoice_number}`, `
       <h1>${demandNote ? "SCHOOL FEES DEMAND NOTE" : "SCHOOL FEES INVOICE"}</h1>
       <div class="muted">${invoice.invoice_number}</div>
-      <div class="meta"><strong>Student:</strong> ${name}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}<br>
+      <div class="meta"><strong>Student:</strong> ${name}<br><strong>SchoolPay code:</strong> ${student?.school_pay_number || "—"}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}<br>
       <strong>Term:</strong> ${invoice.academic_year} · ${invoice.term_name}<br><strong>Issue date:</strong> ${invoice.issue_date ?? "—"}<br>
       <strong>Due date:</strong> ${invoice.due_date ?? "—"}</div>
       <table><tr><th>Description</th><th class="num">Amount</th></tr>${invoiceDocumentLines(invoice)}
@@ -166,7 +167,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const totalDue = items.reduce((sum, r) => sum + Number(r.total_due), 0);
     const totalPaid = items.reduce((sum, r) => sum + Number(r.amount_paid), 0);
     printDocument(`Fees statement - ${student?.admission_number ?? "student"}`, `<h1>SCHOOL FEES STATEMENT</h1>
-      <div class="meta"><strong>Student:</strong> ${student ? `${student.first_name} ${student.last_name}` : studentId}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}</div>
+      <div class="meta"><strong>Student:</strong> ${student ? `${student.first_name} ${student.last_name}` : studentId}<br><strong>SchoolPay code:</strong> ${student?.school_pay_number || "—"}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}</div>
       <table><tr><th>Invoice</th><th>Term</th><th class="num">Due</th><th class="num">Paid</th><th class="num">Balance</th></tr>${items.map((r) => `<tr><td>${r.invoice_number}</td><td>${r.academic_year} ${r.term_name}</td><td class="num">${Number(r.total_due).toLocaleString()}</td><td class="num">${Number(r.amount_paid).toLocaleString()}</td><td class="num">${Math.max(0,Number(r.total_due)-Number(r.amount_paid)).toLocaleString()}</td></tr>`).join("")}</table>
       <div class="total">Total balance: ${Math.max(0,totalDue-totalPaid).toLocaleString()}</div>`);
   };
@@ -209,7 +210,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const [iRes, sRes, fRes, cRes, bRes, sfRes] = await Promise.all([
       fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("id").range(from, to)).then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
       fetchAllPages<StudentOpt>((from, to) => supabase.from("students")
-        .select("id,first_name,last_name,admission_number,class_id,class_name,status,is_boarding")
+        .select("id,first_name,last_name,admission_number,school_pay_number,class_id,class_name,status,is_boarding")
         .eq("organization_id", orgId).order("id").range(from, to))
         .then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
       supabase
@@ -934,6 +935,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
             <tr>
               <th className="text-left p-3 font-semibold text-slate-700">Invoice</th>
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
+              <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Term</th>
               <th className="text-right p-3 font-semibold text-slate-700">Due</th>
               <th className="text-right p-3 font-semibold text-slate-700">Paid</th>
@@ -945,13 +947,13 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="p-6 text-slate-500">
+                <td colSpan={9} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={8} className="p-6 text-slate-500">
+                <td colSpan={9} className="p-6 text-slate-500">
                   No invoices match the selected filters.
                 </td>
               </tr>
@@ -959,7 +961,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
               filteredRows.map((r) =>
                 editingId === r.id && editDraft ? (
                   <tr key={r.id} className="border-b border-slate-100 bg-indigo-50/40">
-                    <td className="p-2" colSpan={8}>
+                    <td className="p-2" colSpan={9}>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-2 py-1 text-xs text-slate-600 mb-2">
                         <span className="md:col-span-3 font-mono text-slate-800">{r.invoice_number}</span>
                         <span>
@@ -1034,6 +1036,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                       )}
                     </td>
                     <td className="p-3 text-slate-700">{studentLabel(r.student_id)}</td>
+                  <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-700">
                       {r.academic_year} · {r.term_name}
                     </td>

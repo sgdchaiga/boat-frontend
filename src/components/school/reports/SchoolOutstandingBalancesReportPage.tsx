@@ -1,3 +1,4 @@
+import autoTable from "jspdf-autotable";
 import { fetchAllPages } from "@/lib/supabasePagination";
 import { useSchoolInvoiceFilters } from "../SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -27,6 +28,7 @@ type StudentOpt = {
   first_name: string;
   last_name: string;
   admission_number: string;
+  school_pay_number?: string | null;
   class_name: string;
   class_id: string | null;
 };
@@ -64,7 +66,7 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
             .select("id,invoice_number,academic_year,term_name,total_due,amount_paid,status,student_id,issue_date")
             .eq("organization_id", orgId).neq("status", "cancelled").order("id").range(from, to)),
           fetchAllPages<StudentOpt>((from, to) => supabase.from("students")
-            .select("id,first_name,last_name,admission_number,class_name,class_id")
+            .select("id,first_name,last_name,admission_number,school_pay_number,class_name,class_id")
             .eq("organization_id", orgId).order("id").range(from, to)),
         ]);
       }
@@ -105,11 +107,12 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
   };
 
   const exportCsv = () => {
-    const header = ["invoice", "student", "class", "term", "year", "total_due", "paid", "balance", "status"];
+    const header = ["invoice", "student", "school_pay_number", "class", "term", "year", "total_due", "paid", "balance", "status"];
     const lines = rows.map((r) =>
       [
         r.invoice_number,
         studentLabel(r),
+        r.student?.school_pay_number || "",
         r.student?.class_name ?? "",
         r.term_name,
         r.academic_year,
@@ -137,14 +140,12 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
     doc.text("Outstanding fee balances", 14, 18);
     doc.setFontSize(9);
     doc.text(`Invoices: ${rows.length} · Total outstanding: ${totalOutstanding.toFixed(2)}`, 14, 26);
-    let y = 36;
-    doc.setFontSize(7);
-    rows.slice(0, 35).forEach((r) => {
-      const line = `${r.invoice_number} ${studentLabel(r)} ${r.balance.toFixed(2)}`;
-      doc.text(line.substring(0, 120), 14, y);
-      y += 3.5;
+    autoTable(doc, {
+      startY: 34,
+      head: [["Invoice", "Student", "SchoolPay code", "Class", "Term", "Balance"]],
+      body: rows.map((row) => [row.invoice_number, studentLabel(row), row.student?.school_pay_number || "—", row.student?.class_name || "—", `${row.academic_year} ${row.term_name}`, row.balance.toFixed(2)]),
+      styles: { fontSize: 8, overflow: "linebreak" },
     });
-    if (rows.length > 35) doc.text(`… ${rows.length - 35} more (export CSV).`, 14, y);
     doc.save("school_outstanding_balances.pdf");
   };
 
@@ -179,12 +180,13 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
         </p>
       </div>
 
-      <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
+      <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               <th className="text-left p-3 font-semibold text-slate-700">Invoice</th>
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
+              <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
               <th className="text-left p-3 font-semibold text-slate-700">Term</th>
               <th className="text-right p-3 font-semibold text-slate-700">Due</th>
@@ -197,13 +199,13 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={9} className="p-6 text-slate-500">
+                <td colSpan={10} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={9} className="p-6 text-slate-500">
+                <td colSpan={10} className="p-6 text-slate-500">
                   No outstanding balances match the selected filters.
                 </td>
               </tr>
@@ -212,6 +214,7 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                   <td className="p-3 font-mono text-slate-800">{r.invoice_number}</td>
                   <td className="p-3 text-slate-700">{studentLabel(r)}</td>
+                  <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{r.student?.school_pay_number || "—"}</td>
                   <td className="p-3 text-slate-600">{r.student?.class_name?.trim() || "—"}</td>
                   <td className="p-3 text-slate-700">
                     {r.academic_year} · {r.term_name}
