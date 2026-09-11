@@ -7,7 +7,7 @@ import { businessDayRangeForDateString, toBusinessDateString } from "../../lib/t
 type Row = Record<string, any>;
 const qty = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 3 });
 
-export function ManufacturingMaterialsReport({ fromDate, toDate }: { fromDate: string; toDate: string }) {
+export function ManufacturingMaterialsReport({ fromDate, toDate, view = "balance" }: { fromDate: string; toDate: string; view?: "balance" | "production" }) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
   const [data, setData] = useState<{ org: string; products: Row[]; movements: Row[]; entries: Row[] } | null>(null);
@@ -72,11 +72,15 @@ export function ManufacturingMaterialsReport({ fromDate, toDate }: { fromDate: s
   if (error) return <p role="alert" className="p-4 bg-red-50 text-red-700">{error}</p>;
   if (!current) return <p className="p-4">Loading material and production reports…</p>;
   return <section className="space-y-4">
-    <div className="flex flex-wrap gap-4">{select("Raw material / consumable", material, setMaterial, materials)}{select("Finished item (production detail)", finished, setFinished, current.products.filter(p => current.entries.some(e => e.product_id === p.id)))}{select("Stock location", location, setLocation, [...new Set(current.movements.map(m => m.location || "default"))].map(id => ({ id, name: id })))}</div>
+    <div className="flex flex-wrap gap-4">{select("Raw material / consumable", material, setMaterial, materials)}{view === "production" && select("Finished item", finished, setFinished, current.products.filter(p => current.entries.some(e => e.product_id === p.id)))}{select("Stock location", location, setLocation, [...new Set(current.movements.map(m => m.location || "default"))].map(id => ({ id, name: id })))}</div>
+    {view === "balance" && <>
     <ReportTable title="Raw material balance" headers={["Raw material", "Unit", "Opening balance", "Purchased / received", "Used for production", "Other net movements", "Closing balance"]} rows={balances} />
     <p className="text-xs text-slate-500">Closing balance at the end of {toDate} = opening balance + purchases − production usage + other net movements. Opening balance includes all recorded movements before {fromDate}. Purchases reflect stock receipts. Other movements include adjustments, transfers and non-production issues. Quantities are in each item's stock unit.</p>
+    </>}
+    {view === "production" && <>
     <ReportTable title="Finished items and raw materials used" headers={["Date", "Batch / serial", "Finished item", "Amount produced", "Output unit", "Scrap quantity", "Raw material", "Material unit", "Raw material used", "Issue unit cost", "Material cost", "Location"]} rows={detail} />
-    <p className="text-xs text-slate-500">One row per recorded material issue. Output and scrap quantities repeat for each material in a batch; do not sum these columns across material rows. Material and location filters apply to both tables; finished-item filter applies only to production detail.</p>
+    <p className="text-xs text-slate-500">One row per recorded material issue. Output and scrap quantities repeat for each material in a batch; do not sum these columns across material rows.</p>
+    </>}
   </section>;
 }
 

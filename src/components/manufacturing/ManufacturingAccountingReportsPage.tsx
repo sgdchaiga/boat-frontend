@@ -1,3 +1,4 @@
+import { loadManufacturingStatement, type ManufacturingStatement } from "../../lib/manufacturingStatement";
 import { businessTodayISO } from "../../lib/timezone";
 import { ManufacturingMaterialsReport } from "./ManufacturingMaterialsReport";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -70,8 +71,9 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
   const orgId = user?.organization_id ?? null;
   const superAdmin = false;
   const requestId = useRef(0);
-  const [fromDate, setFromDate] = useState(firstDayOfMonth());
-  const [toDate, setToDate] = useState(today());
+  const [fromDate, setFromDate] = useState(new URLSearchParams(window.location.search).get("from") || firstDayOfMonth());
+  const [toDate, setToDate] = useState(new URLSearchParams(window.location.search).get("to") || today());
+  const [statement, setStatement] = useState<ManufacturingStatement | null>(null);
   const [rows, setRows] = useState<CostingRow[]>([]);
   const [wipAccount, setWipAccount] = useState<WipAccount | null>(null);
   const [wipLedgerLines, setWipLedgerLines] = useState<WipLedgerLine[]>([]);
@@ -81,6 +83,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const [reportTab, setReportTab] = useState<"statement" | "balance" | "production">("statement");
   const isWip = mode === "wip";
 
   useEffect(() => {
@@ -90,13 +93,15 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
 
   const loadReport = async () => {
     const request = ++requestId.current;
+    setStatement(null);
     setRows([]); setOpeningWip(0); setClosingWip(0); setWipLedgerLines([]);
     setLoading(true);
     setError(null);
     if (!orgId || !fromDate || !toDate || fromDate > toDate) { setRows([]); setError("Select an organisation and a valid date range."); setLoading(false); return; }
     try {
-      const [costingRows, account] = await Promise.all([loadCostingRows(), loadWipAccount()]);
+      const [costingRows, account, sharedStatement] = await Promise.all([loadCostingRows(), loadWipAccount(), isWip ? Promise.resolve(null) : loadManufacturingStatement(orgId, fromDate, toDate)]);
       if (request !== requestId.current) return;
+      setStatement(sharedStatement);
       setRows(costingRows);
       setWipAccount(account);
 
@@ -236,9 +241,9 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
     const labor = rows.reduce((sum, r) => sum + r.labor_cost, 0);
     const overhead = rows.reduce((sum, r) => sum + r.overhead_cost, 0);
     const manufacturingCosts = material + labor + overhead;
-    const cogm = openingWip + manufacturingCosts - closingWip;
+    const cogm = statement?.cogm ?? (openingWip + manufacturingCosts - closingWip);
     return { material, labor, overhead, manufacturingCosts, cogm };
-  }, [rows, openingWip, closingWip]);
+  }, [rows, openingWip, closingWip, statement]);
 
   const exportCsv = () => {
     const lines = [
@@ -271,7 +276,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
     URL.revokeObjectURL(url);
   };
 
-  const title = isWip ? "WIP report" : "Cost of production statement";
+  const title = isWip ? "WIP report" : "Manufacturing account";
   const Icon = isWip ? Route : Factory;
   const setDrill = (key: DrillKey) => setActiveDrill((current) => (current === key ? null : key));
 
@@ -298,10 +303,10 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
             </p>
           </div>
         </div>
-        <button type="button" onClick={exportCsv} disabled={loading || !!error} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50">
+        {(isWip || reportTab === "statement") && <button type="button" onClick={exportCsv} disabled={loading || !!error} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50">
           <Download className="h-4 w-4" aria-hidden />
           CSV
-        </button>
+        </button>}
       </div>
 
       <div className="flex flex-wrap gap-3 rounded-lg border border-slate-200 bg-white p-4">
@@ -315,8 +320,15 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
         </label>
       </div>
 
-      {!isWip && <ManufacturingMaterialsReport key={orgId} fromDate={fromDate} toDate={toDate} />}
+      {!isWip && <nav aria-label="Manufacturing reports" className="flex flex-wrap gap-2 border-b border-slate-200 pb-3">
+        {([ ["statement", "Manufacturing account"], ["balance", "Raw material balance"], ["production", "Finished items and raw materials used"] ] as const).map(([id, label]) => (
+          <button key={id} type="button" aria-pressed={reportTab === id} onClick={() => setReportTab(id)} className={`rounded-lg px-4 py-2 text-sm font-medium ${reportTab === id ? "bg-emerald-700 text-white" : "bg-white text-slate-700 hover:bg-slate-100"}`}>{label}</button>
+        ))}
+      </nav>}
+      {!isWip && reportTab !== "statement" && <ManufacturingMaterialsReport key={orgId} fromDate={fromDate} toDate={toDate} view={reportTab === "production" ? "production" : "balance"} />}
       <p className="text-sm text-slate-600">{user?.organization_name || "Active organisation"} · The cost statement covers the whole organisation. Material, location and finished-item filters apply only to the quantity tables.</p>
+      {(isWip || reportTab === "statement") && <>
+      {!isWip && <a className="text-blue-700 hover:underline" href="?page=accounting_income">Continue to income statement and cost of sales →</a>}
       {!wipAccount && (
         <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
@@ -332,7 +344,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 className="text-sm font-semibold text-slate-900">Manufacturing account schedule</h2>
+        <h2 className="text-sm font-semibold text-slate-900">Cost of goods manufactured</h2>
         <div className="mt-4 divide-y divide-slate-100 text-sm">
           <ScheduleLine label="Opening work in progress" value={openingWip} active={activeDrill === "opening_wip"} onClick={() => setDrill("opening_wip")} />
           <ScheduleLine label="Direct materials used" value={totals.material} active={activeDrill === "material"} onClick={() => setDrill("material")} />
@@ -398,6 +410,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
           </table>
         </div>
       </section>
+      </>}
     </div>
   );
 }

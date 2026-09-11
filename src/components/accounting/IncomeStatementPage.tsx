@@ -1,3 +1,4 @@
+import { loadManufacturingStatement, type ManufacturingStatement } from "../../lib/manufacturingStatement";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
@@ -42,6 +43,8 @@ type DrillLine = {
   line_description: string | null;
 };
 type TotalsSnapshot = {
+  manufacturing: ManufacturingStatement | null;
+  manufacturingLedgerCogs: number;
   mode: IncomeStatementMode;
   revenueRows: AccountTotal[];
   expenseRows: AccountTotal[];
@@ -90,14 +93,19 @@ export function IncomeStatementPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
-  const [dateRange, setDateRange] = useState<DateRangeKey>("this_month");
-  const [customFrom, setCustomFrom] = useState("");
-  const [customTo, setCustomTo] = useState("");
-  const [debouncedCustomFrom, setDebouncedCustomFrom] = useState("");
-  const [debouncedCustomTo, setDebouncedCustomTo] = useState("");
+  const initialFrom = new URLSearchParams(window.location.search).get("from") || "";
+  const initialTo = new URLSearchParams(window.location.search).get("to") || "";
+  const [dateRange, setDateRange] = useState<DateRangeKey>(initialFrom && initialTo ? "custom" : "this_month");
+  const [customFrom, setCustomFrom] = useState(initialFrom);
+  const [customTo, setCustomTo] = useState(initialTo);
+  const [debouncedCustomFrom, setDebouncedCustomFrom] = useState(initialFrom);
+  const [debouncedCustomTo, setDebouncedCustomTo] = useState(initialTo);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [statementMode, setStatementMode] = useState<IncomeStatementMode>("retail");
+  const [manufacturing, setManufacturing] = useState<ManufacturingStatement | null>(null);
+  const [previousManufacturing, setPreviousManufacturing] = useState<ManufacturingStatement | null>(null);
+  const [manufacturingLedgerCogs, setManufacturingLedgerCogs] = useState(0);
   const [revenue, setRevenue] = useState<AccountTotal[]>([]);
   const [expenses, setExpenses] = useState<AccountTotal[]>([]);
   const [cogsRows, setCogsRows] = useState<AccountTotal[]>([]);
@@ -744,6 +752,15 @@ export function IncomeStatementPage() {
         totalExpenseOut = totalCogs + totalOpex;
       }
 
+      let manufacturing: ManufacturingStatement | null = null;
+      const manufacturingLedgerCogs = totalCogs;
+      if (mode === "manufacturing" && basis === "accrual") {
+        manufacturing = await loadManufacturingStatement(orgId || "", fromDate, toDateInclusive);
+        // Factory expenses not capitalised into inventory remain additional period costs.
+        cogsRows = cogsRows.filter(row => classifyRetailExpenseRow(row) !== "cogs");
+        totalCogs = manufacturing.costOfSales + cogsRows.reduce((sum, row) => sum + row.total, 0);
+        totalExpenseOut = totalCogs + totalOpex;
+      }
       let expenseBreakdown: ExpenseSlice[];
       if (mode === "sacco" && saccoResult) {
         expenseBreakdown = [
@@ -764,6 +781,7 @@ export function IncomeStatementPage() {
       }
 
       const snapshot: TotalsSnapshot = {
+        manufacturing, manufacturingLedgerCogs,
         mode,
         revenueRows: rev,
         expenseRows: exp,
@@ -790,6 +808,8 @@ export function IncomeStatementPage() {
 
       if (requestSeq !== requestSeqRef.current) return;
       setStatementMode(currentRes.mode);
+      setManufacturing(currentRes.manufacturing);
+      setManufacturingLedgerCogs(currentRes.manufacturingLedgerCogs);
       setRevenue(currentRes.revenueRows);
       setExpenses(currentRes.expenseRows);
       setCogsRows(currentRes.cogsRows);
@@ -842,6 +862,7 @@ export function IncomeStatementPage() {
       if (requestSeq !== requestSeqRef.current) return;
       setPreviousTotalRevenue(prevRes.totalRevenue);
       setPreviousTotalExpenses(prevRes.totalExpenses);
+      setPreviousManufacturing(prevRes.manufacturing);
       setPreviousTotalCogs(prevRes.totalCogs);
       setPreviousTotalOpex(prevRes.totalOpex);
       setPreviousRevenueRows(prevRes.revenueRows);
@@ -1050,6 +1071,15 @@ export function IncomeStatementPage() {
   const ugxOpts = { currency: "UGX" as const, locale: "en-UG" as const };
   const fmtUgx = (n: number) => formatCurrency(n, ugxOpts);
 
+  const manufacturingSchedule = (statement: ManufacturingStatement | null): Array<[string, number]> => statement ? [
+    ["Opening finished goods inventory", statement.openingFinished],
+    ["Add: cost of goods manufactured", statement.cogm],
+    ["Goods available for sale", statement.openingFinished + statement.cogm],
+    ["Less: closing finished goods inventory", -statement.closingFinished],
+    ["Cost of finished goods sold", statement.costOfSales],
+  ] : [];
+  const manufacturingExportRows = manufacturingSchedule(manufacturing).map(([label, amount]) => ["", label, fmtUgx(amount)]);
+
   const exportExcel = () => {
     const head: (string | number)[][] = [["Income Statement", periodLabel], []];
 
@@ -1089,8 +1119,10 @@ export function IncomeStatementPage() {
       [],
       ["Cost of goods sold"],
       ["Code", "Name", "Amount"],
+      ...manufacturingExportRows,
       ...cogsDisplayed.map((r) => [r.account_code, r.account_name, fmtUgx(r.total)]),
       ["", "Total cost of goods sold", fmtUgx(totalCogs)],
+      ...(manufacturing ? [["", "Posted cost-of-sales accounts (reconciliation only)", fmtUgx(manufacturingLedgerCogs)], ["", "Reconciliation difference", fmtUgx(totalCogs - manufacturingLedgerCogs)]] : []),
       ["", "Gross profit", fmtUgx(grossProfit)],
       [],
       ["Operating expenses"],
@@ -1166,7 +1198,7 @@ export function IncomeStatementPage() {
         {
           title: "Cost of goods sold",
           head: ["Code", "Name", "Amount"],
-          body: cogsDisplayed.map((r) => [r.account_code, r.account_name, fmtUgx(r.total)]),
+          body: [...manufacturingExportRows, ...cogsDisplayed.map((r) => [r.account_code, r.account_name, fmtUgx(r.total)]), ...(manufacturing ? [["", "Total calculated cost of sales", fmtUgx(totalCogs)], ["", "Posted COGS (reconciliation only)", fmtUgx(manufacturingLedgerCogs)], ["", "Reconciliation difference", fmtUgx(totalCogs - manufacturingLedgerCogs)]] : [])],
         },
         {
           title: "Gross profit",
@@ -1204,7 +1236,7 @@ export function IncomeStatementPage() {
               </p>
             ) : statementMode === "manufacturing" ? (
               <p>
-                <strong>Manufacturing:</strong> Revenue is matched against sale-time <strong>Cost of goods sold</strong> journals. Production costing
+                <strong>Manufacturing:</strong> On accrual basis, cost of sales is opening finished goods plus cost of goods manufactured less closing finished goods, plus additional production expenses. Posted COGS is reconciled separately. Production costing
                 capitalizes materials, labour, and overhead into WIP / finished goods first; those costs become COGS only when finished goods are sold.
               </p>
             ) : (
@@ -1351,6 +1383,7 @@ export function IncomeStatementPage() {
             </label>
           )}
         </div>
+        {statementMode === "manufacturing" && basis === "cash" && <p className="text-sm text-amber-800">The manufacturing inventory schedule requires accrual basis. Cash basis shows the cash-basis ledger report.</p>}
         {!loading && !fetchError && <AccountingExportButtons onExcel={exportExcel} onPdf={exportPdf} />}
       </div>
 
@@ -1675,7 +1708,15 @@ export function IncomeStatementPage() {
                   </table>
                 </>
               )}
-              <div className="p-4 border-t border-b bg-slate-50 font-medium">Cost of goods sold</div>
+              <div className="p-4 border-t border-b bg-slate-50 font-medium">Cost of sales</div>
+              {manufacturing && <div className="p-4 space-y-3">
+                <a className="text-blue-700 hover:underline" href={`?page=manufacturing_account&from=${toBusinessDateString(computeRangeInTimezone(dateRange, debouncedCustomFrom, debouncedCustomTo).from)}&to=${toBusinessDateString(new Date(computeRangeInTimezone(dateRange, debouncedCustomFrom, debouncedCustomTo).to.getTime() - 1))}`}>Open separate manufacturing account →</a>
+                <table className="w-full text-sm"><thead><tr><th className="p-2 text-left">Cost of sales calculation</th><th className="p-2 text-right">Amount</th>{compareRange !== "none" && <th className="p-2 text-right">{previousLabel}</th>}</tr></thead><tbody>
+                  {manufacturingSchedule(manufacturing).map(([label, amount], index) => <tr key={label} className="border-t"><td className="p-2">{label}</td><td className="p-2 text-right tabular-nums">{fmtUgx(amount)}</td>{compareRange !== "none" && <td className="p-2 text-right">{fmtUgx(manufacturingSchedule(previousManufacturing)[index]?.[1] || 0)}</td>}</tr>)}
+                </tbody></table>
+                {Math.abs(totalCogs - manufacturingLedgerCogs) > 0.01 && <p role="alert" className="rounded bg-amber-50 p-3 text-amber-900">Reconciliation difference: {fmtUgx(totalCogs - manufacturingLedgerCogs)}. Calculated cost of sales including additional production expenses: {fmtUgx(totalCogs)}; posted cost-of-sales accounts: {fmtUgx(manufacturingLedgerCogs)}. Review reversals, inventory adjustments and unposted production costs before relying on profit.</p>}
+                <p className="text-xs text-slate-600">Additional production expenses below are added once. Posted sale-time COGS is shown for reconciliation and is not added again.</p>
+              </div>}
               <table className="w-full text-sm">
                 <thead className="bg-slate-100">
                   <tr>
@@ -1706,7 +1747,7 @@ export function IncomeStatementPage() {
                       {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousCogsById.get(r.account_id) ?? 0)}</td>}
                     </tr>
                   ))}
-                  {cogsRows.length === 0 && (
+                  {cogsRows.length === 0 && !manufacturing && (
                     <tr>
                       <td colSpan={compareRange !== "none" ? 5 : 4} className="p-3 text-slate-500">
                         No COGS accounts (tag direct costs in your chart).
@@ -1724,7 +1765,7 @@ export function IncomeStatementPage() {
                 <tfoot className="bg-slate-100 font-medium">
                   <tr>
                     <td colSpan={3} className="p-3 text-right">
-                      Total cost of goods sold
+                      Total cost of sales
                     </td>
                     <td className="p-3 text-right">{fmtUgx(totalCogs)}</td>
                     {compareRange !== "none" && <td className="p-3 text-right">{fmtUgx(previousTotalCogs)}</td>}
