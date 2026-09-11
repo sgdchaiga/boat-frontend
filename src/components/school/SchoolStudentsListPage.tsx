@@ -14,6 +14,7 @@ type StudentRow = {
   class_name: string;
   is_boarding: boolean;
   status: string;
+  school_pay_number: string | null;
 };
 
 type EditDraft = {
@@ -36,6 +37,10 @@ function normalizeStudentCase(row: StudentRow): StudentRow {
 export function StudentsListPage() {
   const { user, isSuperAdmin } = useAuth();
   const canDelete = user?.role === "admin" || isSuperAdmin;
+  const canEditSchoolPay = user?.role === "admin" || user?.role === "super_admin" || isSuperAdmin;
+  const [schoolPayEditingId, setSchoolPayEditingId] = useState<string | null>(null);
+  const [schoolPayDraft, setSchoolPayDraft] = useState("");
+  const [schoolPaySaving, setSchoolPaySaving] = useState(false);
   const [rows, setRows] = useState<StudentRow[]>([]);
   const [search, setSearch] = useState("");
   const [classFilter, setClassFilter] = useState("");
@@ -80,7 +85,7 @@ export function StudentsListPage() {
   };
 
   const filtered = rows.filter((r) =>
-    `${r.first_name} ${r.last_name}`.toLowerCase().includes(search.toLowerCase())
+    `${r.first_name} ${r.last_name} ${r.admission_number} ${r.school_pay_number || ""}`.toLowerCase().includes(search.toLowerCase())
   ).filter((r) =>
     !classFilter || (r.class_name || "").toLowerCase().includes(classFilter.toLowerCase())
   );
@@ -93,6 +98,8 @@ export function StudentsListPage() {
   };
 
   const startEdit = (r: StudentRow) => {
+    if (schoolPaySaving) return;
+    setSchoolPayEditingId(null);
     setEditingId(r.id);
     setEditDraft({
       admission_number: r.admission_number || "",
@@ -175,6 +182,82 @@ export function StudentsListPage() {
     await load();
   };
 
+  const saveSchoolPay = async (row: StudentRow) => {
+    if (!canEditSchoolPay || schoolPaySaving) return;
+    const orgId = user?.organization_id;
+    if (!orgId) {
+      setError("Select a school before updating a SchoolPay code.");
+      return;
+    }
+    const code = schoolPayDraft.trim() || null;
+    if (code && rows.some((student) => student.id !== row.id && student.school_pay_number === code)) {
+      setError("That SchoolPay code is already assigned to another student.");
+      return;
+    }
+    setSchoolPaySaving(true);
+    setError(null);
+    try {
+      const payload = { school_pay_number: code };
+      if (canUseSchoolApi()) {
+        await updateSchoolRow<StudentRow>("students", orgId, row.id, payload);
+      } else {
+        const { error: saveError } = await supabase.from("students")
+          .update(payload).eq("id", row.id).eq("organization_id", orgId).select("id").single();
+        if (saveError) throw saveError;
+      }
+      setRows((current) => current.map((student) => student.id === row.id
+        ? { ...student, school_pay_number: code } : student));
+      setSchoolPayEditingId(null);
+    } catch (err) {
+      setError(err && typeof err === "object" && "message" in err
+        ? String(err.message) : "Failed to update SchoolPay code.");
+    } finally {
+      setSchoolPaySaving(false);
+    }
+  };
+
+  const schoolPayCell = (row: StudentRow) => (
+    <td className="p-2">
+      {schoolPayEditingId === row.id && canEditSchoolPay ? (
+        <form className="flex items-center gap-2" onSubmit={(event) => {
+          event.preventDefault();
+          void saveSchoolPay(row);
+        }}>
+          <input
+            autoFocus
+            type="text"
+            aria-label={`SchoolPay code for ${row.first_name} ${row.last_name}`}
+            value={schoolPayDraft}
+            disabled={schoolPaySaving}
+            onChange={(event) => setSchoolPayDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape" && !schoolPaySaving) setSchoolPayEditingId(null);
+            }}
+            className="border p-2 rounded w-40"
+          />
+          <button type="submit" disabled={schoolPaySaving} className="bg-slate-900 text-white px-3 py-1.5 rounded text-xs disabled:opacity-60">
+            {schoolPaySaving ? "Saving..." : "Save"}
+          </button>
+          <button type="button" disabled={schoolPaySaving} onClick={() => setSchoolPayEditingId(null)} className="border px-3 py-1.5 rounded text-xs disabled:opacity-60">Cancel</button>
+        </form>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span>{row.school_pay_number || "—"}</span>
+          {canEditSchoolPay && (
+            <button type="button" disabled={schoolPaySaving || saving} onClick={() => {
+              cancelEdit();
+              setSchoolPayEditingId(row.id);
+              setSchoolPayDraft(row.school_pay_number || "");
+              setError(null);
+            }} aria-label={`Edit SchoolPay code for ${row.first_name} ${row.last_name}`} className="text-indigo-700 hover:text-indigo-900 text-xs font-medium disabled:opacity-60 print:hidden">
+              {row.school_pay_number ? "Edit" : "Add code"}
+            </button>
+          )}
+        </div>
+      )}
+    </td>
+  );
+
   const markAsLeft = async (row: StudentRow) => {
     if (!window.confirm(`Mark ${row.first_name} ${row.last_name} as having left the school?`)) return;
     setError(null);
@@ -199,7 +282,7 @@ export function StudentsListPage() {
       {/* FILTERS */}
       <div className="flex gap-2">
         <input
-          placeholder="Search name"
+          placeholder="Search name, admission or SchoolPay"
           value={search}
           onChange={e => setSearch(e.target.value)}
           className="border p-2 rounded"
@@ -230,6 +313,7 @@ export function StudentsListPage() {
             <th>Class</th>
             <th>Type</th>
             <th>Status</th>
+            <th>SchoolPay code</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -237,11 +321,11 @@ export function StudentsListPage() {
         <tbody>
           {loading ? (
             <tr>
-              <td colSpan={6} className="p-4 text-slate-500">Loading...</td>
+              <td colSpan={7} className="p-4 text-slate-500">Loading...</td>
             </tr>
           ) : filtered.length === 0 ? (
             <tr>
-              <td colSpan={6} className="p-4 text-slate-500">No students found.</td>
+              <td colSpan={7} className="p-4 text-slate-500">No students found.</td>
             </tr>
           ) : (
             filtered.map((r) =>
@@ -254,7 +338,6 @@ export function StudentsListPage() {
                       className="border p-2 rounded w-full"
                     />
                   </td>
-                  <td className="p-2 capitalize">{r.status || "active"}</td>
                   <td className="p-2">
                     <div className="grid grid-cols-2 gap-2">
                       <input
@@ -286,6 +369,8 @@ export function StudentsListPage() {
                       <option value="boarding">Boarding</option>
                     </select>
                   </td>
+                  <td className="p-2 capitalize">{r.status || "active"}</td>
+                  {schoolPayCell(r)}
                   <td className="p-2">
                     <div className="flex gap-2">
                       <button
@@ -309,6 +394,7 @@ export function StudentsListPage() {
                   <td>{r.class_name}</td>
                   <td>{r.is_boarding ? "Boarding" : "Day"}</td>
                   <td className="capitalize">{r.status || "active"}</td>
+                  {schoolPayCell(r)}
                   <td>
                     <div className="flex items-center gap-3">
                       <button type="button" onClick={() => startEdit(r)} className="text-indigo-700 hover:text-indigo-900 text-xs font-medium">

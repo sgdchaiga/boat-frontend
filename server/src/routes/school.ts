@@ -95,6 +95,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
     ],
     patchable: [
       "admission_number",
+      "school_pay_number",
       "first_name",
       "other_names",
       "last_name",
