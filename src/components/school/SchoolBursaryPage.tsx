@@ -4,6 +4,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 import { fetchAllPages } from "@/lib/supabasePagination";
+import { bursaryInvoiceChanges } from "@/lib/schoolBursaryInvoice";
+import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
 
 type StudentOpt = { id: string; admission_number: string; first_name: string; last_name: string };
 type BursaryRow = {
@@ -16,6 +18,11 @@ type BursaryRow = {
 };
 
 type Props = { readOnly?: boolean };
+type BursaryInvoice = {
+  id: string; student_id: string; invoice_number: string; academic_year: string; term_name: string;
+  subtotal: number; discount_amount: number; scholarship_amount: number; amount_paid: number;
+  total_due: number; status: string;
+};
 const TERMS = ["Term 1", "Term 2", "Term 3"];
 
 export function SchoolBursaryPage({ readOnly }: Props) {
@@ -100,6 +107,7 @@ export function SchoolBursaryPage({ readOnly }: Props) {
     setErr(null);
     setSaved(false);
     setSaving(true);
+    let bursarySaved = false;
     try {
     const { error } = await supabase.from("school_bursaries").upsert(
       entered.map((term) => ({
@@ -116,10 +124,31 @@ export function SchoolBursaryPage({ readOnly }: Props) {
       setErr(error.message);
       return;
     }
+    bursarySaved = true;
+    const invoices = await fetchAllPages<BursaryInvoice>((from, to) => supabase
+      .from("student_invoices").select("id,student_id,invoice_number,academic_year,term_name,subtotal,discount_amount,scholarship_amount,amount_paid,total_due,status")
+      .eq("organization_id", user.organization_id).eq("student_id", form.student_id)
+      .eq("academic_year", form.academic_year.trim()).in("term_name", entered.map((term) => term.term_name))
+      .neq("status", "cancelled").order("id").range(from, to));
+    for (const invoice of invoices) {
+      const term = entered.find((item) => item.term_name === invoice.term_name)!;
+      const changes = bursaryInvoiceChanges(invoice, Number(term.amount));
+      if (!changes) continue;
+      const { data: updated, error: invoiceError } = await supabase.from("student_invoices")
+        .update(changes).eq("organization_id", user.organization_id).eq("id", invoice.id)
+        .eq("status", invoice.status).eq("amount_paid", invoice.amount_paid)
+        .select("id,student_id,invoice_number,academic_year,term_name,total_due,status").single();
+      if (invoiceError) throw new Error(`Invoice ${invoice.invoice_number} could not be updated: ${invoiceError.message}`);
+      const { journalMessage } = await syncStudentInvoiceAccounting({
+        organizationId: user.organization_id, staffUserId: user.id ?? null, invoice: updated,
+      });
+      if (journalMessage) throw new Error(`Invoice ${invoice.invoice_number} was updated, but accounting could not be synchronized: ${journalMessage}`);
+    }
     await load();
     setSaved(true);
     } catch (error) {
-      setErr(error instanceof Error ? error.message : "Failed to save bursaries.");
+      const detail = error instanceof Error ? error.message : "Failed to save bursaries.";
+      setErr(bursarySaved ? `Bursaries were saved, but invoice synchronization is incomplete. ${detail} Save again to retry.` : detail);
     } finally {
       setSaving(false);
     }
@@ -134,7 +163,7 @@ export function SchoolBursaryPage({ readOnly }: Props) {
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
-      {saved && <p role="status" className="text-emerald-700 text-sm">Bursaries saved.</p>}
+      {saved && <p role="status" className="text-emerald-700 text-sm">Bursaries saved and existing term invoices updated.</p>}
 
       {!readOnly && (
         <fieldset disabled={saving || loading} className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
