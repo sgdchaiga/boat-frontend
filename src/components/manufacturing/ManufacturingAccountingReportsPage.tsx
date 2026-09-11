@@ -1,3 +1,4 @@
+import { manufacturingAccountLines } from "../../lib/manufacturingStatementMath";
 import { loadManufacturingStatement, type ManufacturingStatement } from "../../lib/manufacturingStatement";
 import { businessTodayISO } from "../../lib/timezone";
 import { ManufacturingMaterialsReport } from "./ManufacturingMaterialsReport";
@@ -237,16 +238,16 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
   };
 
   const totals = useMemo(() => {
-    const material = rows.reduce((sum, r) => sum + r.material_cost, 0);
-    const labor = rows.reduce((sum, r) => sum + r.labor_cost, 0);
-    const overhead = rows.reduce((sum, r) => sum + r.overhead_cost, 0);
-    const manufacturingCosts = material + labor + overhead;
+    const material = statement?.material ?? rows.reduce((sum, r) => sum + r.material_cost, 0);
+    const labor = statement?.labour ?? rows.reduce((sum, r) => sum + r.labor_cost, 0);
+    const overhead = statement?.overhead ?? rows.reduce((sum, r) => sum + r.overhead_cost, 0);
+    const manufacturingCosts = material + labor + overhead + (statement?.detail?.otherDirect || 0);
     const cogm = statement?.cogm ?? (openingWip + manufacturingCosts - closingWip);
     return { material, labor, overhead, manufacturingCosts, cogm };
   }, [rows, openingWip, closingWip, statement]);
 
   const exportCsv = () => {
-    const lines = [
+    const lines = !isWip && statement ? [["Manufacturing Account", "UGX"], ["From", fromDate, "To", toDate], ...manufacturingAccountLines(statement).map(line => [line.label, line.value === null ? "" : String(line.value)])] : [
       ["Manufacturing report", isWip ? "WIP report" : "Manufacturing account"],
       ["From", fromDate, "To", toDate],
       ["Opening WIP", String(openingWip)],
@@ -328,7 +329,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
       {!isWip && reportTab !== "statement" && <ManufacturingMaterialsReport key={orgId} fromDate={fromDate} toDate={toDate} view={reportTab === "production" ? "production" : "balance"} />}
       <p className="text-sm text-slate-600">{user?.organization_name || "Active organisation"} · The cost statement covers the whole organisation. Material, location and finished-item filters apply only to the quantity tables.</p>
       {(isWip || reportTab === "statement") && <>
-      {!isWip && <a className="text-blue-700 hover:underline" href="?page=accounting_income">Continue to income statement and cost of sales →</a>}
+      {!isWip && <a className="text-blue-700 hover:underline" href={`?page=accounting_income&from=${fromDate}&to=${toDate}`}>Continue to income statement and cost of sales →</a>}
       {!wipAccount && (
         <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
@@ -344,6 +345,14 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
       </div>
 
       <section className="rounded-lg border border-slate-200 bg-white p-5">
+        {!isWip && statement ? <>
+          <h2 className="text-lg font-semibold text-slate-900">Manufacturing Account for {Math.round((Date.parse(toDate) - Date.parse(fromDate)) / 86400000) >= 364 && Math.round((Date.parse(toDate) - Date.parse(fromDate)) / 86400000) <= 365 ? "year" : "period"} ended {new Date(`${toDate}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</h2>
+          <p className="mt-1 text-sm text-slate-500">{user?.organization_name || "Active organisation"} · {fromDate} to {toDate}</p>
+          <table className="mt-4 w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left">Particulars</th><th className="p-3 text-right">UGX</th></tr></thead><tbody>
+            {manufacturingAccountLines(statement).map(line => <tr key={line.label} className={line.strong ? "border-t bg-slate-50 font-semibold" : "border-t border-slate-100"}><td className="p-3">{line.label}</td><td className="p-3 text-right tabular-nums">{line.value === null ? "" : line.value < 0 ? `(${Math.abs(line.value).toLocaleString("en-UG", { maximumFractionDigits: 2 })})` : line.value.toLocaleString("en-UG", { maximumFractionDigits: 2 })}</td></tr>)}
+          </tbody></table>
+          <p className="mt-3 text-xs text-slate-500">Inventory balances and raw-material receipts use the posted ledger. Direct labour and applied overhead use production costing, with net separately posted production expenses added once. Unitemised applied overhead is included in other factory overheads. Zero means no amount was identified in these sources. Other raw-material movements are disclosed separately when present.</p>
+        </> : <>
         <h2 className="text-sm font-semibold text-slate-900">Cost of goods manufactured</h2>
         <div className="mt-4 divide-y divide-slate-100 text-sm">
           <ScheduleLine label="Opening work in progress" value={openingWip} active={activeDrill === "opening_wip"} onClick={() => setDrill("opening_wip")} />
@@ -354,6 +363,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
           <ScheduleLine label="Less closing work in progress" value={-closingWip} active={activeDrill === "closing_wip"} onClick={() => setDrill("closing_wip")} />
           <ScheduleLine label="Cost of goods manufactured" value={totals.cogm} strong total active={activeDrill === "cogm"} onClick={() => setDrill("cogm")} />
         </div>
+        </>}
         {activeDrill && (
           <DrillDownPanel
             activeDrill={activeDrill}

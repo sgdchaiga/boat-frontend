@@ -757,7 +757,9 @@ export function IncomeStatementPage() {
       if (mode === "manufacturing" && basis === "accrual") {
         manufacturing = await loadManufacturingStatement(orgId || "", fromDate, toDateInclusive);
         // Factory expenses not capitalised into inventory remain additional period costs.
-        cogsRows = cogsRows.filter(row => classifyRetailExpenseRow(row) !== "cogs");
+        cogsRows = cogsRows.filter(row => classifyRetailExpenseRow(row) !== "cogs" && !manufacturing!.detail?.includedExpenseIds.includes(row.account_id));
+        opexRows = opexRows.filter(row => !manufacturing!.detail?.includedExpenseIds.includes(row.account_id));
+        totalOpex = opexRows.reduce((sum, row) => sum + row.total, 0);
         totalCogs = manufacturing.costOfSales + cogsRows.reduce((sum, row) => sum + row.total, 0);
         totalExpenseOut = totalCogs + totalOpex;
       }

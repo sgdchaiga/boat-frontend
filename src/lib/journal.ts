@@ -2985,16 +2985,9 @@ async function buildBillDebitLines(
     const lineAmount = roundMoney((Number(row.quantity || 0) || 0) * (Number(row.cost_price || 0) || 0));
     if (lineAmount <= 0) continue;
     if (!row.product_id) {
-      if (!acc.expense) throw new Error("A non-item purchase-order line has no configured expense account.");
-      const key = `service:${acc.expense}`;
-      const existing = grouped.get(key);
-      grouped.set(key, {
-        glAccountId: acc.expense,
-        departmentId: null,
-        amount: roundMoney((existing?.amount || 0) + lineAmount),
-        description: "Service / non-item purchases",
-      });
-      continue;
+      throw new Error(
+        `Purchase-order line “${row.description || "Unnamed item"}” is not linked to an item. Edit the purchase order and select the correct item and inventory account before posting the bill. Use Money Out for service expenses with an explicit expense account.`
+      );
     }
     const product = productById.get(row.product_id);
     if (!product) throw new Error(`Purchase-order item ${row.description || row.product_id} is not linked to a valid product.`);
