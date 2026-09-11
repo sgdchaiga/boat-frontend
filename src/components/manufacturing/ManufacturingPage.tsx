@@ -38,8 +38,8 @@ const reportCards = [
     icon: Route,
   },
   {
-    title: "Manufacturing account",
-    desc: "Calculate cost of goods manufactured from materials, labour, overhead, and WIP.",
+    title: "Materials & cost of production",
+    desc: "Raw material balances as of a date, batch material usage, and cost of production statement.",
     page: "manufacturing_account",
     icon: Factory,
   },

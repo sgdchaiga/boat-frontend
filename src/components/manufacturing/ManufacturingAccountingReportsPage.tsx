@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from "react";
+import { businessTodayISO } from "../../lib/timezone";
+import { ManufacturingMaterialsReport } from "./ManufacturingMaterialsReport";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, Download, Factory, Route } from "lucide-react";
 import { PageNotes } from "../common/PageNotes";
 import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
-import { filterByOrganizationId, filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
+import { filterJournalLinesByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { formatCurrency } from "../../lib/accountingReportExport";
 
 type ReportMode = "wip" | "manufacturing_account";
@@ -49,12 +51,8 @@ type Props = {
 };
 
 const money = (value: number) => formatCurrency(value, { currency: "UGX", locale: "en-UG" });
-const today = () => new Date().toISOString().slice(0, 10);
-const firstDayOfMonth = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-};
-const periodKey = (date: string) => date.slice(0, 7);
+const today = businessTodayISO;
+const firstDayOfMonth = () => `${businessTodayISO().slice(0, 7)}-01`;
 
 function toNumber(value: unknown): number {
   const n = Number(value ?? 0);
@@ -62,15 +60,16 @@ function toNumber(value: unknown): number {
 }
 
 function addDays(date: string, days: number): string {
-  const d = new Date(`${date}T00:00:00`);
-  d.setDate(d.getDate() + days);
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
 }
 
 export function ManufacturingAccountingReportsPage({ mode }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
-  const superAdmin = !!user?.isSuperAdmin;
+  const superAdmin = false;
+  const requestId = useRef(0);
   const [fromDate, setFromDate] = useState(firstDayOfMonth());
   const [toDate, setToDate] = useState(today());
   const [rows, setRows] = useState<CostingRow[]>([]);
@@ -86,13 +85,18 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
 
   useEffect(() => {
     void loadReport();
+    return () => { requestId.current += 1; };
   }, [orgId, superAdmin, fromDate, toDate, mode]);
 
   const loadReport = async () => {
+    const request = ++requestId.current;
+    setRows([]); setOpeningWip(0); setClosingWip(0); setWipLedgerLines([]);
     setLoading(true);
     setError(null);
+    if (!orgId || !fromDate || !toDate || fromDate > toDate) { setRows([]); setError("Select an organisation and a valid date range."); setLoading(false); return; }
     try {
       const [costingRows, account] = await Promise.all([loadCostingRows(), loadWipAccount()]);
+      if (request !== requestId.current) return;
       setRows(costingRows);
       setWipAccount(account);
 
@@ -102,6 +106,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
           loadWipBalance(account.id, toDate),
           loadWipLedgerLines(account.id),
         ]);
+        if (request !== requestId.current) return;
         setOpeningWip(opening);
         setClosingWip(closing);
         setWipLedgerLines(ledgerLines);
@@ -111,47 +116,31 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
         setWipLedgerLines([]);
       }
     } catch (e) {
+      if (request !== requestId.current) return;
       setError(e instanceof Error ? e.message : "Failed to load manufacturing report.");
       setRows([]);
       setOpeningWip(0);
       setClosingWip(0);
       setWipLedgerLines([]);
     } finally {
-      setLoading(false);
+      if (request === requestId.current) setLoading(false);
     }
   };
 
   const loadCostingRows = async (): Promise<CostingRow[]> => {
-    const fromPeriod = periodKey(fromDate);
-    const toPeriod = periodKey(toDate);
-    const query = filterByOrganizationId(
-      supabase
-        .from("manufacturing_costing_entries")
-        .select("id,period,product_name,material_cost,labor_cost,overhead_cost,production_entry_id")
-        .gte("period", fromPeriod)
-        .lte("period", toPeriod),
-      orgId,
-      superAdmin
-    );
-    const { data, error: fetchError } = await query.order("period", { ascending: true });
-    if (fetchError) {
-      if (String(fetchError.message || "").includes("production_entry_id")) {
-        const fallbackQuery = filterByOrganizationId(
-          supabase
-            .from("manufacturing_costing_entries")
-            .select("id,period,product_name,material_cost,labor_cost,overhead_cost")
-            .gte("period", fromPeriod)
-            .lte("period", toPeriod),
-          orgId,
-          superAdmin
-        );
-        const fallback = await fallbackQuery.order("period", { ascending: true });
-        if (fallback.error) throw fallback.error;
-        return ((fallback.data || []) as Array<Record<string, unknown>>).map(mapCostingRow);
+    const result: CostingRow[] = [];
+    for (let offset = 0; ; offset += 1000) {
+      const { data, error } = await supabase.from("manufacturing_costing_entries")
+        .select("id,period,product_name,material_cost,labor_cost,overhead_cost,production_entry_id,manufacturing_production_entries(production_date)")
+        .eq("organization_id", orgId!).order("id").range(offset, offset + 999);
+      if (error) throw new Error(error.message);
+      for (const raw of data || []) {
+        const linked = raw.manufacturing_production_entries as unknown as { production_date?: string } | null;
+        const date = raw.production_entry_id ? linked?.production_date : `${String(raw.period).slice(0, 7)}-01`;
+        if (date && date >= fromDate && date <= toDate) result.push(mapCostingRow(raw));
       }
-      throw fetchError;
+      if ((data || []).length < 1000) return result;
     }
-    return ((data || []) as Array<Record<string, unknown>>).map(mapCostingRow);
   };
 
   const loadWipAccount = async (): Promise<WipAccount | null> => {
@@ -187,6 +176,8 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
   };
 
   const loadWipBalance = async (accountId: string, asOfDate: string): Promise<number> => {
+    let total = 0;
+    for (let offset = 0; ; offset += 1000) {
     const query = filterJournalLinesByOrganizationId(
       supabase
         .from("journal_entry_lines")
@@ -198,12 +189,14 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
       orgId,
       superAdmin
     );
-    const { data, error: linesError } = await query;
+    const { data, error: linesError } = await query.order("id").range(offset, offset + 999);
     if (linesError) throw linesError;
-    return ((data || []) as Array<Record<string, unknown>>).reduce(
+    total += ((data || []) as Array<Record<string, unknown>>).reduce(
       (sum, line) => sum + toNumber(line.debit) - toNumber(line.credit),
       0
     );
+    if ((data || []).length < 1000) return total;
+    }
   };
 
   const loadWipLedgerLines = async (accountId: string): Promise<WipLedgerLine[]> => {
@@ -278,7 +271,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
     URL.revokeObjectURL(url);
   };
 
-  const title = isWip ? "WIP report" : "Manufacturing account";
+  const title = isWip ? "WIP report" : "Cost of production statement";
   const Icon = isWip ? Route : Factory;
   const setDrill = (key: DrillKey) => setActiveDrill((current) => (current === key ? null : key));
 
@@ -305,7 +298,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
             </p>
           </div>
         </div>
-        <button type="button" onClick={exportCsv} disabled={loading} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50">
+        <button type="button" onClick={exportCsv} disabled={loading || !!error} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50">
           <Download className="h-4 w-4" aria-hidden />
           CSV
         </button>
@@ -322,6 +315,8 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
         </label>
       </div>
 
+      {!isWip && <ManufacturingMaterialsReport key={orgId} fromDate={fromDate} toDate={toDate} />}
+      <p className="text-sm text-slate-600">{user?.organization_name || "Active organisation"} · The cost statement covers the whole organisation. Material, location and finished-item filters apply only to the quantity tables.</p>
       {!wipAccount && (
         <div className="flex gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
@@ -364,7 +359,7 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
       <section className="overflow-hidden rounded-lg border border-slate-200 bg-white">
         <div className="border-b border-slate-200 p-4">
           <h2 className="text-sm font-semibold text-slate-900">Costing detail</h2>
-          <p className="mt-1 text-sm text-slate-600">Batches included by costing period.</p>
+          <p className="mt-1 text-sm text-slate-600">Linked batches use production dates. Manual monthly costs use the first day of the costing month, matching their posting date.</p>
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
