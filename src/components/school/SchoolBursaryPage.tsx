@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { SearchableCombobox } from "@/components/common/SearchableCombobox";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type StudentOpt = { id: string; admission_number: string; first_name: string; last_name: string };
 type BursaryRow = {
@@ -50,11 +52,16 @@ export function SchoolBursaryPage({ readOnly }: Props) {
         .eq("organization_id", orgId)
         .order("academic_year", { ascending: false })
         .order("term_name", { ascending: false }),
-      supabase
+      fetchAllPages<StudentOpt>((from, to) => supabase
         .from("students")
         .select("id,admission_number,first_name,last_name")
         .eq("organization_id", orgId)
-        .order("admission_number", { ascending: true }),
+        .order("admission_number", { ascending: true })
+        .order("id")
+        .range(from, to)).then(
+          (data) => ({ data, error: null }),
+          (error) => ({ data: null, error: { message: error instanceof Error ? error.message : "Failed to load students." } })
+        ),
     ]);
     setErr(bRes.error?.message || sRes.error?.message || null);
     setRows((bRes.data as BursaryRow[]) || []);
@@ -108,18 +115,14 @@ export function SchoolBursaryPage({ readOnly }: Props) {
 
       {!readOnly && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <select
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          <SearchableCombobox
             value={form.student_id}
-            onChange={(e) => setForm((f) => ({ ...f, student_id: e.target.value }))}
-          >
-            <option value="">Student</option>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.admission_number} — {s.first_name} {s.last_name}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => setForm((f) => ({ ...f, student_id: id }))}
+            options={students.map((s) => ({ id: s.id, label: `${s.first_name} ${s.last_name} — ${s.admission_number}` }))}
+            placeholder="Type student name or admission number…"
+            inputAriaLabel="Search student for bursary"
+            clearable
+          />
           <input
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
             placeholder="Academic year"

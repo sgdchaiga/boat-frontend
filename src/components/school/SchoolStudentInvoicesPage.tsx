@@ -1,6 +1,7 @@
 import { SchoolInvoiceListExport, type InvoiceExportRow } from "./SchoolInvoiceListExport";
 import { schoolInvoiceCoverage } from "@/lib/schoolInvoiceCoverage";
 import { fetchAllPages } from "@/lib/supabasePagination";
+import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 import { useSchoolInvoiceFilters } from "./SchoolInvoiceFilters";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
@@ -788,18 +789,14 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       <h2 className="text-lg font-semibold text-slate-900">Create term charges</h2>
       {!readOnly && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          <select
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          <SearchableCombobox
             value={form.student_id}
-            onChange={(e) => setForm((f) => ({ ...f, student_id: e.target.value }))}
-          >
-            <option value="">Student</option>
-            {students.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.first_name} {s.last_name}
-              </option>
-            ))}
-          </select>
+            onChange={(id) => setForm((f) => ({ ...f, student_id: id }))}
+            options={students.map((s) => ({ id: s.id, label: `${s.first_name} ${s.last_name} — ${s.admission_number}` }))}
+            placeholder="Type student name or admission number…"
+            inputAriaLabel="Search student for term charges"
+            clearable
+          />
           <select
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
             value={form.fee_structure_id}
