@@ -16,6 +16,7 @@ type BursaryRow = {
 };
 
 type Props = { readOnly?: boolean };
+const TERMS = ["Term 1", "Term 2", "Term 3"];
 
 export function SchoolBursaryPage({ readOnly }: Props) {
   const { user } = useAuth();
@@ -23,12 +24,12 @@ export function SchoolBursaryPage({ readOnly }: Props) {
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [terms, setTerms] = useState(TERMS.map((term_name) => ({ term_name, amount: "", notes: "" })));
   const [form, setForm] = useState({
     student_id: "",
     academic_year: new Date().getFullYear().toString(),
-    term_name: "Term 1",
-    amount: "",
-    notes: "",
   });
 
   const studentLabelById = useMemo(() => {
@@ -46,12 +47,15 @@ export function SchoolBursaryPage({ readOnly }: Props) {
       return;
     }
     const [bRes, sRes] = await Promise.all([
-      supabase
+      fetchAllPages<BursaryRow>((from, to) => supabase
         .from("school_bursaries")
         .select("id,student_id,academic_year,term_name,amount,notes")
         .eq("organization_id", orgId)
         .order("academic_year", { ascending: false })
-        .order("term_name", { ascending: false }),
+        .order("id").range(from, to)).then(
+          (data) => ({ data, error: null }),
+          (error) => ({ data: null, error: { message: error instanceof Error ? error.message : "Failed to load bursaries." } })
+        ),
       fetchAllPages<StudentOpt>((from, to) => supabase
         .from("students")
         .select("id,admission_number,first_name,last_name")
@@ -73,34 +77,52 @@ export function SchoolBursaryPage({ readOnly }: Props) {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    setTerms(TERMS.map((term_name) => {
+      const existing = rows.find((row) => row.student_id === form.student_id
+        && row.academic_year === form.academic_year.trim() && row.term_name === term_name);
+      return { term_name, amount: existing ? String(existing.amount) : "", notes: existing?.notes || "" };
+    }));
+    setSaved(false);
+  }, [form.student_id, form.academic_year, rows]);
+
   const save = async () => {
-    if (readOnly) return;
-    if (!form.student_id || !form.academic_year.trim() || !form.term_name.trim() || !form.amount) {
-      setErr("Student, year, term and amount are required.");
+    if (readOnly || saving || loading) return;
+    const entered = terms.filter((term) => term.amount.trim() !== "");
+    if (!user?.organization_id || !form.student_id || !form.academic_year.trim() || entered.length === 0) {
+      setErr("Choose a student, enter an academic year and at least one term amount.");
       return;
     }
-    const amount = Number(form.amount);
-    if (!(amount >= 0)) {
-      setErr("Bursary amount must be 0 or more.");
+    if (entered.some((term) => !Number.isFinite(Number(term.amount)) || Number(term.amount) < 0)) {
+      setErr("Each bursary amount must be a valid number of 0 or more.");
       return;
     }
     setErr(null);
+    setSaved(false);
+    setSaving(true);
+    try {
     const { error } = await supabase.from("school_bursaries").upsert(
-      {
+      entered.map((term) => ({
+        organization_id: user.organization_id,
         student_id: form.student_id,
         academic_year: form.academic_year.trim(),
-        term_name: form.term_name.trim(),
-        amount,
-        notes: form.notes.trim() || null,
-      },
+        term_name: term.term_name,
+        amount: Number(term.amount),
+        notes: term.notes.trim() || null,
+      })),
       { onConflict: "organization_id,student_id,academic_year,term_name" }
     );
     if (error) {
       setErr(error.message);
       return;
     }
-    setForm((f) => ({ ...f, student_id: "", amount: "", notes: "" }));
-    void load();
+    await load();
+    setSaved(true);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Failed to save bursaries.");
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -112,9 +134,10 @@ export function SchoolBursaryPage({ readOnly }: Props) {
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
+      {saved && <p role="status" className="text-emerald-700 text-sm">Bursaries saved.</p>}
 
       {!readOnly && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <fieldset disabled={saving || loading} className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <SearchableCombobox
             value={form.student_id}
             onChange={(id) => setForm((f) => ({ ...f, student_id: id }))}
@@ -122,6 +145,7 @@ export function SchoolBursaryPage({ readOnly }: Props) {
             placeholder="Type student name or admission number…"
             inputAriaLabel="Search student for bursary"
             clearable
+            disabled={saving || loading}
           />
           <input
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
@@ -129,29 +153,27 @@ export function SchoolBursaryPage({ readOnly }: Props) {
             value={form.academic_year}
             onChange={(e) => setForm((f) => ({ ...f, academic_year: e.target.value }))}
           />
-          <input
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            placeholder="Term"
-            value={form.term_name}
-            onChange={(e) => setForm((f) => ({ ...f, term_name: e.target.value }))}
-          />
-          <input
-            type="number"
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            placeholder="Bursary amount"
-            value={form.amount}
-            onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
-          />
-          <input
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm md:col-span-2"
-            placeholder="Notes (optional)"
-            value={form.notes}
-            onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
-          />
+          <div className="md:col-span-2 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead><tr><th className="p-2 text-left">Term</th><th className="p-2 text-left">Bursary amount</th><th className="p-2 text-left">Notes (optional)</th></tr></thead>
+              <tbody>{terms.map((term, index) => (
+                <tr key={term.term_name} className="border-t">
+                  <th scope="row" className="p-2 text-left whitespace-nowrap">{term.term_name}</th>
+                  <td className="p-2"><input type="number" min="0" step="any" aria-label={`${term.term_name} bursary amount`} placeholder="Amount" value={term.amount}
+                    onChange={(event) => { setSaved(false); setTerms((current) => current.map((item, i) => i === index ? { ...item, amount: event.target.value } : item)); }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2" /></td>
+                  <td className="p-2"><input aria-label={`${term.term_name} notes`} value={term.notes}
+                    onChange={(event) => { setSaved(false); setTerms((current) => current.map((item, i) => i === index ? { ...item, notes: event.target.value } : item)); }}
+                    className="w-full border border-slate-300 rounded-lg px-3 py-2" /></td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+          <p className="md:col-span-2 text-xs text-slate-600">Existing amounts load for the selected student and year. Leave an amount blank to keep that term unchanged; enter 0 to remove its reduction.</p>
           <button type="button" onClick={save} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 w-fit">
-            Save bursary
+            {saving ? "Saving…" : "Save term bursaries"}
           </button>
-        </div>
+        </fieldset>
       )}
 
       <div className="rounded-xl border border-slate-200 overflow-hidden bg-white">
