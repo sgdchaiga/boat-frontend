@@ -6,6 +6,7 @@ import { useGeneralBusinessMode } from "@/lib/generalBusinessMode";
 import { supabase } from "@/lib/supabase";
 import { isGlAccountRelevantForBusinessType } from "@/lib/glAccountBusinessScope";
 import { GlAccountPicker } from "@/components/common/GlAccountPicker";
+import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 import { downloadCsv, downloadXlsx, exportAccountingPdf } from "@/lib/accountingReportExport";
 import { createJournalForBill, createJournalForVendorPayment, deleteJournalEntryByReference, getDefaultGlAccounts } from "@/lib/journal";
 import { postStockInFromPurchaseOrderForBill } from "@/lib/poGrnStock";
@@ -29,6 +30,8 @@ type CashbookRow = {
   status: string;
   headquarters?: string;
   glAccount?: string;
+  vote?: string;
+  subvote?: string;
   postedAt?: string;
   submittedBy?: string;
   comments?: string;
@@ -44,6 +47,8 @@ type GlPosition = { opening: number; movement: number; closing: number };
 type ChannelPosition = { channel: string; opening: number; movement: number; closing: number };
 type QueuedDraft = DraftEntry & { id: string; queuedAt: string };
 type GlOption = { id: string; account_code: string; account_name: string; account_type: string; category: string | null };
+type SchoolVote = { id: string; vote_code: string; vote_name: string };
+type SchoolSubvote = { id: string; vote_id: string; subvote_code: string; subvote_name: string; default_gl_account_id: string | null };
 type MasterOption = { id: string; name: string; code?: string };
 type InventoryProductOption = { id: string; name: string; cost_price: number | null; sales_price: number | null; unit_of_measure: string | null; department_id: string | null; track_inventory: boolean | null };
 type SheetEntry = { transactionDate: string; headquarters: string; paymentMethod: string; description: string; comments: string; supplier: string; customer: string; counterpartGlId: string; cashGlId: string; cashIn: string; cashOut: string; reference: string };
@@ -134,6 +139,12 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const [glPosition, setGlPosition] = useState<GlPosition | null>(null);
   const [channelPositions, setChannelPositions] = useState<ChannelPosition[]>([]);
   const [glOptions, setGlOptions] = useState<GlOption[]>([]);
+  const [schoolVotes, setSchoolVotes] = useState<SchoolVote[]>([]);
+  const [schoolSubvotes, setSchoolSubvotes] = useState<SchoolSubvote[]>([]);
+  const [subvoteId, setSubvoteId] = useState("");
+  const [otherSchoolAccount, setOtherSchoolAccount] = useState(false);
+  const [subvoteError, setSubvoteError] = useState<string | null>(null);
+  const [subvotesLoading, setSubvotesLoading] = useState(false);
   const [sheetEntry, setSheetEntry] = useState<SheetEntry>(() => ({ transactionDate: todayISO(), headquarters: "", paymentMethod: "cash", description: "", comments: "", supplier: "", customer: "", counterpartGlId: "", cashGlId: "", cashIn: "", cashOut: "", reference: "" }));
   const [postingEntry, setPostingEntry] = useState(false);
   const [postingQuickTransaction, setPostingQuickTransaction] = useState(false);
@@ -157,6 +168,26 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const [canControlEntries,setCanControlEntries] = useState(Boolean(user?.isSuperAdmin || ["admin", "super_admin", "manager", "accountant"].includes(roleKey)));
   const isMicrofinance = workspaceLabel.toLowerCase() === "microfinance";
   const isSchool = workspaceLabel.toLowerCase() === "school";
+
+  useEffect(() => {
+    let cancelled = false;
+    setSchoolVotes([]); setSchoolSubvotes([]); setSubvoteId(""); setOtherSchoolAccount(false); setSubvoteError(null);
+    setSheetEntry((entry) => ({ ...entry, counterpartGlId: "" }));
+    setSubvotesLoading(false);
+    if (!orgId || !isSchool) return;
+    setSubvotesLoading(true);
+    void Promise.all([
+      supabase.from("school_budget_votes").select("id,vote_code,vote_name").eq("organization_id", orgId).eq("is_active", true).order("vote_code"),
+      supabase.from("school_budget_subvotes").select("id,vote_id,subvote_code,subvote_name,default_gl_account_id").eq("organization_id", orgId).eq("is_active", true).order("subvote_code"),
+    ]).then(([votes, subvotes]) => {
+      if (cancelled) return;
+      setSubvotesLoading(false);
+      if (votes.error || subvotes.error) { setSubvoteError("Subvotes could not be loaded. Refresh to retry or choose Other account."); return; }
+      setSchoolVotes((votes.data || []) as SchoolVote[]);
+      setSchoolSubvotes((subvotes.data || []) as SchoolSubvote[]);
+    });
+    return () => { cancelled = true; };
+  }, [orgId, isSchool]);
 
   useEffect(()=>{if(!orgId)return;void (supabase as any).rpc("gb_cashbook_can_control",{target_org:orgId}).then(({data,error}:any)=>{if(!error)setCanControlEntries(Boolean(data));});},[orgId,user?.isSuperAdmin,roleKey]);
 
@@ -262,7 +293,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
         .order("expense_date", { ascending: false })
         .limit(rowLimit),
       (supabase as any).from("general_business_cashbook_entries")
-        .select("id,posted_at,transaction_date,headquarters,payment_method,description,comments,supplier_name,customer_name,cash_in,cash_out,reference,workspace_type,approval_status,created_by,counterpart:gl_accounts!counterpart_gl_account_id(account_code,account_name),creator:staff!created_by(full_name)")
+        .select("id,posted_at,transaction_date,headquarters,payment_method,description,comments,supplier_name,customer_name,cash_in,cash_out,reference,workspace_type,approval_status,created_by,counterpart:gl_accounts!counterpart_gl_account_id(account_code,account_name),creator:staff!created_by(full_name)" + (isSchool ? ",school_vote_label,school_subvote_label" : ""))
         .eq("organization_id", orgId).gte("transaction_date", queryFrom).lte("transaction_date", queryTo)
         .order("transaction_date", { ascending: false }).limit(rowLimit),
       supabase.from("gl_accounts").select("id,account_code,account_name,account_type,category").eq("organization_id", orgId).eq("is_active", true).order("account_code"),
@@ -388,6 +419,8 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       status: "Posted",
       headquarters: entry.headquarters || "—",
       glAccount: entry.counterpart ? `${entry.counterpart.account_code} - ${entry.counterpart.account_name}` : "—",
+      vote: entry.school_vote_label || "",
+      subvote: entry.school_subvote_label || "",
       postedAt: entry.posted_at,
       submittedBy: entry.creator?.full_name || "—",
       comments: entry.comments || "",
@@ -475,7 +508,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
       if (dateTo && row.date > dateTo) return false;
       if (direction === "in" && row.cashIn <= 0) return false;
       if (direction === "out" && row.cashOut <= 0) return false;
-      if (needle && !`${row.description} ${row.party} ${row.method} ${row.reference}`.toLowerCase().includes(needle)) return false;
+      if (needle && !`${row.description} ${row.party} ${row.method} ${row.reference} ${row.vote || ""} ${row.subvote || ""} ${row.glAccount || ""}`.toLowerCase().includes(needle)) return false;
       return true;
     });
   }, [dateFrom, dateTo, direction, rows, search]);
@@ -491,6 +524,12 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
     return /cash|bank|mobile|momo|wallet|till|float/.test(text);
   }), [glOptions]);
   const counterpartGlOptions = useMemo(() => glOptions.filter((account) => !cashGlOptions.some((cash) => cash.id === account.id)), [cashGlOptions, glOptions]);
+
+  const selectedSubvote = schoolSubvotes.find((subvote) => subvote.id === subvoteId);
+  const mappedSchoolAccount = glOptions.find((account) => account.id === selectedSubvote?.default_gl_account_id);
+  const schoolSubvoteOptions = schoolVotes.flatMap((vote) => schoolSubvotes
+    .filter((subvote) => subvote.vote_id === vote.id)
+    .map((subvote) => ({ id: subvote.id, label: `${vote.vote_code} — ${vote.vote_name} / ${subvote.subvote_code} — ${subvote.subvote_name}` })));
 
   const daily = useMemo(() => {
     const dayRows = rows.filter((row) => row.date === summaryDate);
@@ -531,23 +570,31 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
 
   const postSheetEntry = async () => {
     if (!orgId) return;
+    if (postingEntry) return;
+    if (isSchool && !otherSchoolAccount && (!selectedSubvote || !mappedSchoolAccount)) {
+      setEntryMessage("Select a subvote with an active linked account before posting. Ask your accountant to map any unlinked subvote."); return;
+    }
+    const counterpartId = isSchool && !otherSchoolAccount ? mappedSchoolAccount?.id : sheetEntry.counterpartGlId;
     const cashIn = Number(sheetEntry.cashIn || 0);
     const cashOut = Number(sheetEntry.cashOut || 0);
-    if (!sheetEntry.transactionDate || !sheetEntry.description.trim() || !sheetEntry.counterpartGlId || !sheetEntry.cashGlId) {
+    if (!sheetEntry.transactionDate || !sheetEntry.description.trim() || !counterpartId || !sheetEntry.cashGlId) {
       setEntryMessage("Transaction date, description, GL account and cash/bank account are required."); return;
     }
+    if (!Number.isFinite(cashIn) || !Number.isFinite(cashOut)) { setEntryMessage("Enter a valid amount."); return; }
+    if (counterpartId === sheetEntry.cashGlId) { setEntryMessage("The posting account and cash/bank account must be different."); return; }
     if (!((cashIn > 0 && cashOut === 0) || (cashOut > 0 && cashIn === 0))) {
       setEntryMessage("Enter either Cash In or Cash Out, but not both."); return;
     }
     if (!online) { setEntryMessage("Direct ledger posting requires connectivity. Use the offline queue for work that must be completed later."); return; }
     setPostingEntry(true); setEntryMessage(null);
-    const { data: postedId, error } = await (supabase as any).rpc("post_general_business_cashbook_entry", {
+    const { data: postedId, error } = await (supabase as any).rpc(isSchool ? "post_school_cashbook_entry" : "post_general_business_cashbook_entry", {
       p_organization_id: orgId, p_transaction_date: sheetEntry.transactionDate,
       p_headquarters: sheetEntry.headquarters, p_payment_method: sheetEntry.paymentMethod,
       p_description: sheetEntry.description.trim(), p_supplier_name: sheetEntry.supplier,
-      p_customer_name: sheetEntry.customer, p_counterpart_gl_account_id: sheetEntry.counterpartGlId,
+      p_customer_name: sheetEntry.customer, p_counterpart_gl_account_id: counterpartId,
       p_cash_gl_account_id: sheetEntry.cashGlId, p_cash_in: cashIn, p_cash_out: cashOut,
       p_reference: sheetEntry.reference,
+      ...(isSchool ? { p_subvote_id: otherSchoolAccount ? null : subvoteId } : {}),
     });
     setPostingEntry(false);
     if (error) { setEntryMessage(errorMessage(error)); return; }
@@ -749,7 +796,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
   const exportCsv = () => {
     downloadCsv(`${isMicrofinance?"microfinance":isSchool?"school":"general-business"}-cashbook-${dateFrom}-${dateTo}.csv`, exportRows());
   };
-  const exportRows = (): (string|number)[][] => [["Date","Description","Party","Method","Reference","Cash In","Cash Out","Status","Source"],...filteredRows.map(row=>[row.date,row.description,row.party,row.method,row.reference,row.cashIn,row.cashOut,row.approvalStatus||row.status,row.source])];
+  const exportRows = (): (string|number)[][] => [["Date","Description","Party","Method","Reference","Cash In","Cash Out","Status","Source",...(isSchool ? ["Vote","Subvote","GL account"] : [])],...filteredRows.map(row=>[row.date,row.description,row.party,row.method,row.reference,row.cashIn,row.cashOut,row.approvalStatus||row.status,row.source,...(isSchool ? [row.vote || "",row.subvote || "",row.glAccount || ""] : [])])];
   const exportExcel = () => downloadXlsx(`${isMicrofinance?"microfinance":isSchool?"school":"general-business"}-cashbook-${dateFrom}-${dateTo}.xlsx`,exportRows(),{companyName:workspaceLabel,sheetName:"Cashbook"});
   const exportPdf = () => exportAccountingPdf({title:`${workspaceLabel} Cashbook`,subtitle:`${dateFrom} to ${dateTo}`,filename:`${isMicrofinance?"microfinance":isSchool?"school":"general-business"}-cashbook-${dateFrom}-${dateTo}.pdf`,sections:[{title:"Cashbook register",head:exportRows()[0].map(String),body:exportRows().slice(1)}]});
 
@@ -832,11 +879,25 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
           {showComments && <Field label="Comments"><textarea value={sheetEntry.comments} onChange={(e) => setSheetEntry((v) => ({ ...v, comments: e.target.value }))} rows={2} placeholder="Optional internal comment" className="cashbook-input" /></Field>}
           <Field label="Supplier"><select value={sheetEntry.supplier} onChange={(e) => setSheetEntry((v) => ({ ...v, supplier: e.target.value }))} className="cashbook-input"><option value="">No supplier</option>{suppliers.map((supplier) => <option key={supplier.id} value={supplier.name}>{supplier.name}</option>)}</select></Field>
           <Field label="Customer"><select value={sheetEntry.customer} onChange={(e) => setSheetEntry((v) => ({ ...v, customer: e.target.value }))} className="cashbook-input"><option value="">No customer</option>{customers.map((customer) => <option key={customer.id} value={customer.name}>{customer.name}</option>)}</select></Field>
-          <Field label="GL account"><GlAccountPicker value={sheetEntry.counterpartGlId} onChange={(id) => setSheetEntry((v) => ({ ...v, counterpartGlId: id }))} options={counterpartGlOptions} placeholder="Type account name or code, e.g. sta" emptyOption={{ label: "Select income, expense or balance account" }} /></Field>
+          {isSchool && <div className="sm:col-span-2 space-y-2">
+            <Field label="Subvote / Account">
+              <SearchableCombobox value={otherSchoolAccount ? "other" : subvoteId}
+                onChange={(id) => { setOtherSchoolAccount(id === "other"); setSubvoteId(id === "other" ? "" : id); setSheetEntry((entry) => ({ ...entry, counterpartGlId: "" })); setEntryMessage(null); }}
+                options={[...schoolSubvoteOptions, { id: "other", label: "Other account — transfers, opening balances or non-budget entries" }]}
+                placeholder="Search vote or subvote name or code" emptyOption={{ label: subvotesLoading ? "Loading subvotes…" : "Select subvote or Other account" }}
+                disabled={postingEntry || subvotesLoading} inputAriaLabel="Search school vote or subvote by name or code" />
+            </Field>
+            {subvoteError && <p role="alert" className="text-sm text-amber-800">{subvoteError}</p>}
+            {!subvotesLoading && !subvoteError && schoolSubvoteOptions.length === 0 && <p className="text-sm text-slate-600">No active subvotes are configured. Choose Other account to post using the chart of accounts.</p>}
+            {selectedSubvote && <p className={`text-sm ${mappedSchoolAccount ? "text-slate-600" : "text-amber-800"}`}>
+              {mappedSchoolAccount ? `Linked account: ${mappedSchoolAccount.account_code} — ${mappedSchoolAccount.account_name}` : "This subvote has no active linked account. Ask your accountant to configure its GL mapping before posting."}
+            </p>}
+          </div>}
+          {(!isSchool || otherSchoolAccount) && <Field label="GL account"><GlAccountPicker value={sheetEntry.counterpartGlId} onChange={(id) => setSheetEntry((v) => ({ ...v, counterpartGlId: id }))} options={isSchool ? glOptions.filter((account) => account.id !== sheetEntry.cashGlId) : counterpartGlOptions} placeholder="Type account name or code, e.g. sta" emptyOption={{ label: "Select income, expense or balance account" }} /></Field>}
           <Field label="Cash / bank GL"><GlAccountPicker value={sheetEntry.cashGlId} onChange={(id) => setSheetEntry((v) => ({ ...v, cashGlId: id }))} options={cashGlOptions} placeholder="Type cash, bank or mobile account" emptyOption={{ label: "Select account receiving or paying" }} /></Field>
           <Field label="Cash In"><input type="number" min="0" value={sheetEntry.cashIn} onChange={(e) => setSheetEntry((v) => ({ ...v, cashIn: e.target.value, cashOut: e.target.value ? "" : v.cashOut }))} className="cashbook-input" /></Field>
           <Field label="Cash Out"><input type="number" min="0" value={sheetEntry.cashOut} onChange={(e) => setSheetEntry((v) => ({ ...v, cashOut: e.target.value, cashIn: e.target.value ? "" : v.cashIn }))} className="cashbook-input" /></Field>
-          <div className="flex items-end"><button type="button" disabled={postingEntry || !online} onClick={() => void postSheetEntry()} className="app-btn-primary w-full justify-center disabled:opacity-50" style={{ backgroundColor: cashbookSettings.primary_color, borderRadius: cashbookSettings.button_radius }}>{postingEntry ? "Posting…" : "Post cashbook entry"}</button></div>
+          <div className="flex items-end"><button type="button" disabled={postingEntry || !online || (isSchool && !otherSchoolAccount && (!selectedSubvote || !mappedSchoolAccount))} onClick={() => void postSheetEntry()} className="app-btn-primary w-full justify-center disabled:opacity-50" style={{ backgroundColor: cashbookSettings.primary_color, borderRadius: cashbookSettings.button_radius }}>{postingEntry ? "Posting…" : "Post cashbook entry"}</button></div>
         </div>
         {entryMessage && <p className={`mt-3 rounded-lg p-3 text-sm ${entryMessage.startsWith("Cashbook entry posted") ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}>{entryMessage}</p>}
       </section>}
@@ -871,7 +932,7 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
             <thead className="bg-slate-900 text-xs uppercase tracking-wide text-white"><tr><th className="px-3 py-3 text-left">Details</th><th className="px-3 py-3 text-left">Trx Date</th><th className="px-3 py-3 text-right">MOMO</th><th className="px-3 py-3 text-right">Bank / wallet</th><th className="px-3 py-3 text-right">Cash In</th><th className="px-3 py-3 text-right">Cash Out</th><th className="px-3 py-3 text-right">Channel balance</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
               <tr className="bg-slate-50 font-semibold"><td className="px-3 py-2">Balance b/f</td><td className="px-3 py-2">{summaryDate}</td><td /><td /><td /><td /><td className="px-3 py-2 text-right">{glPosition ? money.format(glPosition.opening) : "—"}</td></tr>
-              {dailyLines.map((row) => <tr key={`daily:${row.id}`}><td className="px-3 py-2"><span className="font-medium text-slate-900">{row.description}</span><span className="block text-xs text-slate-500">{row.party} · {readable(row.channel)}</span></td><td className="px-3 py-2">{row.date}</td><SignedCell value={row.momo} /><SignedCell value={row.bank} /><AmountCell value={row.physicalIn} tone="in" /><AmountCell value={row.physicalOut} tone="out" /><td className="px-3 py-2 text-right font-semibold">{money.format(row.channelBalance)}</td></tr>)}
+              {dailyLines.map((row) => <tr key={`daily:${row.id}`}><td className="px-3 py-2"><span className="font-medium text-slate-900">{row.description}</span><span className="block text-xs text-slate-500">{row.party} · {readable(row.channel)}{isSchool && row.subvote ? ` · ${row.vote} / ${row.subvote}` : ""}</span></td><td className="px-3 py-2">{row.date}</td><SignedCell value={row.momo} /><SignedCell value={row.bank} /><AmountCell value={row.physicalIn} tone="in" /><AmountCell value={row.physicalOut} tone="out" /><td className="px-3 py-2 text-right font-semibold">{money.format(row.channelBalance)}</td></tr>)}
               {dailyLines.length === 0 && <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-500">No entries for this date.</td></tr>}
             </tbody>
             <tfoot className="border-t-2 border-slate-300 bg-brand-50 font-bold"><tr><td className="px-3 py-3">Daily totals</td><td className="px-3 py-3">{dailyLines.length} entries</td><SignedCell value={dailyLines.reduce((s,r) => s+r.momo,0)} /><SignedCell value={dailyLines.reduce((s,r) => s+r.bank,0)} /><AmountCell value={dailyLines.reduce((s,r) => s+r.physicalIn,0)} tone="in" /><AmountCell value={dailyLines.reduce((s,r) => s+r.physicalOut,0)} tone="out" /><td className="px-3 py-3 text-right">{glPosition ? money.format(glPosition.closing) : "—"}</td></tr></tfoot>
@@ -885,19 +946,19 @@ export function GeneralBusinessCashbookPage({ onNavigate, view = "register", wor
           <label className="text-xs font-semibold text-slate-600">From<input type="date" value={dateFrom} onChange={(event) => setDateFrom(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
           <label className="text-xs font-semibold text-slate-600">To<input type="date" value={dateTo} onChange={(event) => setDateTo(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal" /></label>
           <label className="text-xs font-semibold text-slate-600">Direction<select value={direction} onChange={(event) => setDirection(event.target.value as "all" | CashbookDirection)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-normal"><option value="all">Cash in and out</option><option value="in">Cash in</option><option value="out">Cash out</option></select></label>
-          <label className="text-xs font-semibold text-slate-600">Search<div className="relative mt-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Description, party, method or reference" className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm font-normal" /></div></label>
+          <label className="text-xs font-semibold text-slate-600">Search<div className="relative mt-1"><Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder={isSchool ? "Description, subvote, account or reference" : "Description, party, method or reference"} className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm font-normal" /></div></label>
         </div>
 
         <div className="overflow-x-auto">
           <table className="boat-mobile-card-table w-full min-w-[1120px] text-sm">
             <thead className="bg-slate-50 text-xs uppercase tracking-wide text-slate-500">
-              <tr><th className="px-4 py-3 text-left">Trx date</th><th className="px-4 py-3 text-left">Description / GL</th><th className="px-4 py-3 text-left">Customer / supplier</th><th className="px-4 py-3 text-left">Pay method</th><th className="px-4 py-3 text-left">Reference / headquarters</th><th className="px-4 py-3 text-right">Cash in</th><th className="px-4 py-3 text-right">Cash out</th><th className="px-4 py-3 text-left">Status / audit</th></tr>
+              <tr><th className="px-4 py-3 text-left">Trx date</th><th className="px-4 py-3 text-left">{isSchool ? "Description / Subvote / GL" : "Description / GL"}</th><th className="px-4 py-3 text-left">Customer / supplier</th><th className="px-4 py-3 text-left">Pay method</th><th className="px-4 py-3 text-left">Reference / headquarters</th><th className="px-4 py-3 text-right">Cash in</th><th className="px-4 py-3 text-right">Cash out</th><th className="px-4 py-3 text-left">Status / audit</th></tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? <tr><td colSpan={8} className="px-4 py-12 text-center text-slate-500">Loading cashbook…</td></tr> : filteredRows.length === 0 ? <tr><td colSpan={8} className="px-4 py-12 text-center text-slate-500">No cash movements match these filters.</td></tr> : filteredRows.map((row) => (
                 <tr key={row.id} className="hover:bg-slate-50">
                   <td className="whitespace-nowrap px-4 py-3 text-slate-700">{row.date || "—"}</td>
-                  <td className="px-4 py-3"><div className="font-semibold text-slate-900">{row.description}</div>{showComments && row.comments && <div className="mt-1 text-xs italic text-slate-500">{row.comments}</div>}<div className="mt-0.5 text-xs text-slate-500">{row.glAccount || row.source.replaceAll("_", " ")}</div></td>
+                  <td className="px-4 py-3"><div className="font-semibold text-slate-900">{row.description}</div>{showComments && row.comments && <div className="mt-1 text-xs italic text-slate-500">{row.comments}</div>}{isSchool && row.subvote && <div className="mt-1 text-xs font-semibold text-brand-700">{row.vote} / {row.subvote}</div>}<div className="mt-0.5 text-xs text-slate-500">{row.glAccount || row.source.replaceAll("_", " ")}</div></td>
                   <td className="px-4 py-3 text-slate-700">{row.party}</td>
                   <td className="px-4 py-3 capitalize text-slate-700">{row.method}</td>
                   <td className="max-w-[220px] truncate px-4 py-3 font-mono text-xs text-slate-600" title={row.reference}>{row.reference}<span className="mt-1 block font-sans text-[10px] text-slate-400">{row.headquarters || "—"}</span></td>

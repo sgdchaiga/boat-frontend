@@ -33,6 +33,7 @@ export function SchoolBursaryPage({ readOnly }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
   const [terms, setTerms] = useState(TERMS.map((term_name) => ({ term_name, amount: "", notes: "" })));
   const [form, setForm] = useState({
     student_id: "",
@@ -145,6 +146,9 @@ export function SchoolBursaryPage({ readOnly }: Props) {
       if (journalMessage) throw new Error(`Invoice ${invoice.invoice_number} was updated, but accounting could not be synchronized: ${journalMessage}`);
     }
     await load();
+    const missingTerms = entered.filter((term) => !invoices.some((invoice) => invoice.term_name === term.term_name));
+    setSaveMessage(`Bursaries saved. ${invoices.length} existing invoice${invoices.length === 1 ? "" : "s"} updated.`
+      + (missingTerms.length ? ` No active invoice found for ${missingTerms.map((term) => term.term_name).join(", ")} in ${form.academic_year.trim()}. Check the invoice's student, year and term; future invoices use the saved bursary.` : ""));
     setSaved(true);
     } catch (error) {
       const detail = error instanceof Error ? error.message : "Failed to save bursaries.";
@@ -163,7 +167,7 @@ export function SchoolBursaryPage({ readOnly }: Props) {
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
-      {saved && <p role="status" className="text-emerald-700 text-sm">Bursaries saved and existing term invoices updated.</p>}
+      {saved && <p role="status" className="text-emerald-700 text-sm">{saveMessage}</p>}
 
       {!readOnly && (
         <fieldset disabled={saving || loading} className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
