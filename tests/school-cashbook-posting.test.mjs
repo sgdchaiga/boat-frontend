@@ -39,6 +39,8 @@ test('school subvotes post atomically and survive corrections and reversals', as
       CREATE TABLE gl_accounts(id uuid PRIMARY KEY,organization_id uuid,account_type text,account_name text,category text,is_active boolean DEFAULT true);
       CREATE TABLE journal_entries(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),entry_date date,description text,reference_type text,reference_id uuid,created_by uuid,organization_id uuid,is_posted boolean,is_deleted boolean);
       CREATE TABLE journal_entry_lines(id uuid DEFAULT gen_random_uuid(),journal_entry_id uuid,gl_account_id uuid,debit numeric,credit numeric,line_description text,sort_order integer);
+      CREATE TABLE expenses(id uuid PRIMARY KEY,organization_id uuid);
+      CREATE TABLE expense_lines(id uuid PRIMARY KEY DEFAULT gen_random_uuid(),expense_id uuid,expense_gl_account_id uuid);
       CREATE TABLE school_budget_votes(id uuid PRIMARY KEY,organization_id uuid,vote_code text,vote_name text,is_active boolean DEFAULT true);
       CREATE TABLE school_budget_subvotes(id uuid PRIMARY KEY,organization_id uuid,vote_id uuid,subvote_code text,subvote_name text,default_gl_account_id uuid,is_active boolean DEFAULT true);
     `);
@@ -46,6 +48,7 @@ test('school subvotes post atomically and survive corrections and reversals', as
     await db.query('ALTER TABLE general_business_cashbook_entries ADD COLUMN comments text');
     await db.query(migration('20260802130000_general_microfinance_cashbook_controls'));
     await db.query(migration('20260912120000_school_cashbook_subvotes'));
+    await db.query(migration('20260912130000_school_spend_money_subvotes'));
     const uuid = (n) => `00000000-0000-0000-0000-${String(n).padStart(12,'0')}`;
     const [org, outsider, staff, expense, cash, changed, vote, sub1, sub2, foreignVote, foreignSub] = Array.from({length:11},(_,i)=>uuid(i+1));
     await db.query(`INSERT INTO organizations VALUES ($1,'school'),($2,'school');`,[org,outsider]);
@@ -56,6 +59,11 @@ test('school subvotes post atomically and survive corrections and reversals', as
     for (const [id,v,o,name] of [[sub1,vote,org,'Firewood'],[sub2,vote,org,'Food'],[foreignSub,foreignVote,outsider,'Foreign']]) {
       await db.query(`INSERT INTO school_budget_subvotes VALUES ($1,$2,$3,'01.1',$4,$5,true)`,[id,o,v,name,expense]);
     }
+    await db.query('INSERT INTO expenses VALUES ($1,$2)',[uuid(20),org]);
+    await db.query('INSERT INTO expense_lines(expense_id,expense_gl_account_id,school_subvote_id) VALUES ($1,$2,$3)',[uuid(20),expense,sub1]);
+    const savedExpenseLine = (await db.query('SELECT school_subvote_id FROM expense_lines')).rows[0];
+    assert.equal(savedExpenseLine.school_subvote_id,sub1);
+    await assert.rejects(db.query('INSERT INTO expense_lines(expense_id,expense_gl_account_id,school_subvote_id) VALUES ($1,$2,$3)',[uuid(20),expense,foreignSub]), /same school/);
     const post = async (sub, account=expense, amountIn=0, amountOut=100) => (await db.query(`SELECT post_school_cashbook_entry($1,current_date,'','cash','Test','','',$2,$3,$4,$5,'ref',$6) id`,[org,account,cash,amountIn,amountOut,sub])).rows[0].id;
     const first = await post(sub1);
     const second = await post(sub2);

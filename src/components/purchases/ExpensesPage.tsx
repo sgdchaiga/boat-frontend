@@ -18,6 +18,11 @@ import { approveExpenseAndPost, isSpendMoneyApprovalEnabled, queueExpenseForTrea
 import { clearCashbookDraft } from "../../lib/cashbookDraft";
 import { isGlAccountRelevantForBusinessType } from "../../lib/glAccountBusinessScope";
 
+import { schoolSpendingPeriod, schoolBudgetCoversDate, schoolBudgetIsSpendable, schoolBudgetUnavailableMessage, schoolBudgetLeafLines, type SchoolSpendingBudget } from "../../lib/schoolSpendingBudget";
+
+type SpendingSubvote = { id: string; vote_id: string; subvote_code: string; subvote_name: string; default_gl_account_id: string | null };
+type SpendingVote = { id: string; vote_code: string; vote_name: string };
+
 const SIMPLE_EXPENSE_MODE_KEY = "boat.expenses.simple_mode";
 
 /** Human-facing groups only — GL codes are resolved in code, never shown in Simple mode. */
@@ -149,6 +154,7 @@ const SIMPLE_GL_CODE_TO_CATEGORY = buildGlCodeToSimpleCategoryMap();
 type PaymentMethodSimple = "cash" | "bank" | "mobile" | "wallet";
 
 type SimpleExpenseLine = {
+  school_subvote_id?: string;
   key: string;
   item: string;
   quantity: string;
@@ -453,6 +459,7 @@ interface Expense {
 }
 
 type LineDraft = {
+  school_subvote_id?: string;
   key: string;
   /** Optional vendor for this line only */
   vendor_id: string;
@@ -648,7 +655,14 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const [showSimpleDetails, setShowSimpleDetails] = useState(false);
   const [schoolBudgetByGl, setSchoolBudgetByGl] = useState<Map<string, number>>(new Map());
   const [schoolSpentByGl, setSchoolSpentByGl] = useState<Map<string, number>>(new Map());
-  const [schoolBudgetGlId, setSchoolBudgetGlId] = useState("");
+  const [schoolSubvotes, setSchoolSubvotes] = useState<SpendingSubvote[]>([]);
+  const [schoolVotes, setSchoolVotes] = useState<SpendingVote[]>([]);
+  const [schoolSubvoteError, setSchoolSubvoteError] = useState<string | null>(null);
+  const [schoolBudgetLoading, setSchoolBudgetLoading] = useState(false);
+  const [schoolBudgetNames, setSchoolBudgetNames] = useState("");
+  const [schoolBudgetBySubvote, setSchoolBudgetBySubvote] = useState<Map<string, number>>(new Map());
+  const [schoolSpentBySubvote, setSchoolSpentBySubvote] = useState<Map<string, number>>(new Map());
+  const [glLoadError, setGlLoadError] = useState<string | null>(null);
   const [schoolBudgetError, setSchoolBudgetError] = useState<string | null>(null);
   const [approvalEnabled, setApprovalEnabled] = useState(true);
   const [approvalWorkingId, setApprovalWorkingId] = useState<string | null>(null);
@@ -661,60 +675,90 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
       (import.meta.env.VITE_LOCAL_AUTH || "").trim().toLowerCase() === "1") &&
     (import.meta.env.VITE_DEPLOYMENT_MODE || "").trim().toLowerCase() === "lan";
 
+  const isSchool = String(user?.business_type || "").toLowerCase() === "school";
   useEffect(() => {
-    if (!orgId || String(user?.business_type || "").toLowerCase() !== "school") {
-      setSchoolBudgetByGl(new Map());
-      setSchoolBudgetError(null);
-      return;
-    }
+    let cancelled = false;
+    setSchoolSubvotes([]); setSchoolVotes([]); setSchoolSubvoteError(null);
+    if (!orgId || !isSchool) return;
+    void Promise.all([
+      supabase.from("school_budget_votes").select("id,vote_code,vote_name").eq("organization_id", orgId).eq("is_active", true).order("vote_code"),
+      supabase.from("school_budget_subvotes").select("id,vote_id,subvote_code,subvote_name,default_gl_account_id").eq("organization_id", orgId).eq("is_active", true).order("subvote_code"),
+    ]).then(([votes, subvotes]) => {
+      if (cancelled) return;
+      if (votes.error || subvotes.error) { setSchoolSubvoteError("Could not load school votes and subvotes. Refresh to retry."); return; }
+      setSchoolVotes((votes.data || []) as SpendingVote[]);
+      setSchoolSubvotes((subvotes.data || []) as SpendingSubvote[]);
+    });
+    return () => { cancelled = true; };
+  }, [orgId, isSchool, showModal]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSchoolBudgetByGl(new Map()); setSchoolSpentByGl(new Map());
+    setSchoolBudgetBySubvote(new Map()); setSchoolSpentBySubvote(new Map());
+    setSchoolBudgetNames(""); setSchoolBudgetError(null); setSchoolBudgetLoading(false);
+    if (!orgId || !isSchool) return;
+    setSchoolBudgetLoading(true);
     void (async () => {
-      const selectedDate = expenseDate || localDateISO();
-      const { data: budgetRows, error: budgetError } = await supabase.from("budgets").select("id,start_date,end_date").eq("organization_id", orgId).eq("is_active", true).lte("start_date", selectedDate).gte("end_date", selectedDate);
-      if (budgetError) {
-        setSchoolBudgetError(budgetError.message);
-        setSchoolBudgetByGl(new Map());
-        setSchoolSpentByGl(new Map());
-        return;
-      }
-      const typedBudgets = (budgetRows || []) as Array<{ id: string; start_date: string; end_date: string }>;
-      const ids = typedBudgets.map((b) => b.id);
-      if (!ids.length) {
-        setSchoolBudgetError(`No active budget covers the expense date ${selectedDate}. Open Budget formulation and activate the Term 2 budget after checking its start and end dates.`);
-        setSchoolBudgetByGl(new Map()); setSchoolSpentByGl(new Map()); return;
-      }
-      const { data, error: lineError } = await supabase.from("budget_lines").select("gl_account_id,amount").in("budget_id", ids);
-      if (lineError) {
-        setSchoolBudgetError(lineError.message);
-        setSchoolBudgetByGl(new Map());
-        setSchoolSpentByGl(new Map());
-        return;
-      }
-      const totals = new Map<string, number>();
-      for (const row of (data || []) as Array<{ gl_account_id: string | null; amount: number }>) {
-        if (row.gl_account_id) totals.set(row.gl_account_id, (totals.get(row.gl_account_id) || 0) + Number(row.amount || 0));
-      }
-      setSchoolBudgetError(totals.size ? null : "The active Term 2 budget has no lines linked to expense accounts. Edit its lines and select a GL account for each expense vote.");
-      setSchoolBudgetByGl(totals);
-      const from = typedBudgets.map((b) => b.start_date).sort()[0];
-      const sortedEndDates = typedBudgets.map((b) => b.end_date).sort();
-      const to = sortedEndDates[sortedEndDates.length - 1];
-      const { data: expenseRows } = await supabase.from("expenses").select("id,status").eq("organization_id", orgId).gte("expense_date", from).lte("expense_date", to).neq("status", "cancelled");
-      const expenseIds = (expenseRows || []).map((row: { id: string }) => row.id);
-      const spent = new Map<string, number>();
-      if (expenseIds.length) {
-        const { data: spentRows } = await supabase.from("expense_lines").select("expense_gl_account_id,amount,vat_amount").in("expense_id", expenseIds);
-        for (const row of (spentRows || []) as Array<{ expense_gl_account_id: string; amount: number; vat_amount: number | null }>) spent.set(row.expense_gl_account_id, (spent.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
-      }
-      setSchoolSpentByGl(spent);
+      try {
+        const selectedDate = expenseDate || localDateISO();
+        const { data: budgetRows, error: budgetError } = await supabase.from("budgets")
+          .select("id,name,start_date,end_date,financial_year,period_mode,status,is_active").eq("organization_id", orgId);
+        if (budgetError) throw budgetError;
+        const allBudgets = (budgetRows || []) as SchoolSpendingBudget[];
+        const typedBudgets = allBudgets.filter(b => schoolBudgetIsSpendable(b) && schoolBudgetCoversDate(b, selectedDate));
+        if (!typedBudgets.length) throw new Error(schoolBudgetUnavailableMessage(allBudgets, selectedDate));
+        const { data, error: lineError } = await supabase.from("budget_lines")
+          .select("id,parent_line_id,gl_account_id,subvote_id,amount").in("budget_id", typedBudgets.map(b => b.id));
+        if (lineError) throw lineError;
+        const totals = new Map<string, number>();
+        const subvoteTotals = new Map<string, number>();
+        for (const row of schoolBudgetLeafLines((data || []) as Array<{ id: string; parent_line_id: string | null; gl_account_id: string | null; subvote_id: string | null; amount: number }>)) {
+          if (row.gl_account_id) totals.set(row.gl_account_id, (totals.get(row.gl_account_id) || 0) + Number(row.amount || 0));
+          if (row.subvote_id) subvoteTotals.set(row.subvote_id, (subvoteTotals.get(row.subvote_id) || 0) + Number(row.amount || 0));
+        }
+        const periods = typedBudgets.map(b => schoolSpendingPeriod(b)!);
+        const from = periods.map(p => p.from).sort()[0];
+        const endDates = periods.map(p => p.to).sort();
+        const to = endDates[endDates.length - 1];
+        const { data: expenseRows, error: expenseError } = await supabase.from("expenses").select("id,expense_date")
+          .eq("organization_id", orgId).gte("expense_date", from).lte("expense_date", to).neq("status", "cancelled");
+        if (expenseError) throw expenseError;
+        const expenseIds = (expenseRows || []).filter(row => row.id !== editingExpenseId && periods.some(p => p.from <= row.expense_date && row.expense_date <= p.to)).map(row => row.id);
+        const spent = new Map<string, number>();
+        const subvoteSpent = new Map<string, number>();
+        // Keep each request below URL limits for schools with large annual registers.
+        for (let offset = 0; offset < expenseIds.length; offset += 200) {
+          const { data: spentRows, error: spentError } = await supabase.from("expense_lines")
+            .select("expense_gl_account_id,school_subvote_id,amount,vat_amount").in("expense_id", expenseIds.slice(offset, offset + 200));
+          if (spentError) throw spentError;
+          for (const row of (spentRows || [])) {
+            const amount = Number(row.amount || 0) + Number(row.vat_amount || 0);
+            spent.set(row.expense_gl_account_id, (spent.get(row.expense_gl_account_id) || 0) + amount);
+            if (row.school_subvote_id) subvoteSpent.set(row.school_subvote_id, (subvoteSpent.get(row.school_subvote_id) || 0) + amount);
+          }
+        }
+        if (cancelled) return;
+        setSchoolBudgetByGl(totals); setSchoolBudgetBySubvote(subvoteTotals);
+        setSchoolSpentByGl(spent); setSchoolSpentBySubvote(subvoteSpent);
+        setSchoolBudgetNames(typedBudgets.map(b => b.name).join(", "));
+        if (!totals.size) setSchoolBudgetError("The active budget has no posting lines linked to GL accounts. Link its expense subvotes to the chart of accounts in Budget formulation.");
+      } catch (error) {
+        if (!cancelled) setSchoolBudgetError(formatSupabaseError(error));
+      } finally { if (!cancelled) setSchoolBudgetLoading(false); }
     })();
-  }, [orgId, user?.business_type, showModal, expenseDate]);
+    return () => { cancelled = true; };
+  }, [orgId, isSchool, showModal, expenseDate, editingExpenseId]);
 
   const loadGlAccounts = useCallback(async () => {
+    if (!orgId) { setGlAccounts([]); return; }
+    setGlLoadError(null);
     const { data, error } = await supabase
       .from("gl_accounts")
-      .select("*");
+      .select("*").eq("organization_id", orgId).eq("is_active", true);
     if (error) {
       console.error("GL accounts load error:", error.message);
+      setGlLoadError(`Could not load GL accounts: ${error.message}`);
       setGlAccounts([]);
       return;
     }
@@ -728,7 +772,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         )
       );
     setGlAccounts(normalized);
-  }, [user?.business_type]);
+  }, [orgId, user?.business_type]);
 
   const loadVendors = useCallback(async () => {
     const loadLocalVendors = async () => {
@@ -1007,10 +1051,8 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   }, [glAccounts]);
 
   const expenseGlOptions = useMemo(() => {
-    const expenseAccounts = glAccounts.filter((a) => a.account_type === "expense");
-    if (String(user?.business_type || "").toLowerCase() !== "school") return expenseAccounts;
-    return expenseAccounts.filter((account) => schoolBudgetByGl.has(account.id));
-  }, [glAccounts, schoolBudgetByGl, user?.business_type]);
+    return glAccounts.filter((a) => a.account_type === "expense");
+  }, [glAccounts]);
 
   const schoolExpenseBudgetEntries = useMemo(
     () => [...schoolBudgetByGl.entries()].filter(([glId]) => glAccounts.some((account) => account.id === glId && account.account_type === "expense")),
@@ -1097,6 +1139,16 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     setSimpleLines((prev) => (prev.length <= 1 ? prev : prev.filter((r) => r.key !== key)));
   };
 
+  const renderSubvotePicker = (id: string, onSelect: (id: string, glId: string) => void) => (
+    <div className="mb-2 min-w-[220px]">
+      <SearchableCombobox value={id} options={schoolVotes.flatMap(vote => schoolSubvotes.filter(sub => sub.vote_id === vote.id).map(sub => ({ id: sub.id, label: `${vote.vote_code} — ${vote.vote_name} / ${sub.subvote_code} — ${sub.subvote_name}` })))}
+        onChange={(nextId) => { const sub = schoolSubvotes.find(s => s.id === nextId); onSelect(nextId, sub?.default_gl_account_id || ""); }}
+        placeholder="Search vote or subvote" emptyOption={{ label: "Choose subvote, or select GL below" }} inputAriaLabel="School expense subvote" />
+      {id && schoolBudgetBySubvote.has(id) && <p className="mt-1 text-xs text-indigo-700">Subvote budget: {(schoolBudgetBySubvote.get(id) || 0).toLocaleString()} · Available: {Math.max(0, (schoolBudgetBySubvote.get(id) || 0) - (schoolSpentBySubvote.get(id) || 0)).toLocaleString()}</p>}
+      {id && !expenseGlOptions.some(account => account.id === schoolSubvotes.find(sub => sub.id === id)?.default_gl_account_id) && <p className="mt-1 text-xs text-amber-700">This subvote needs an active expense GL mapping before posting.</p>}
+    </div>
+  );
+
   const handleSave = async () => {
     if (!orgId) {
       alert("Your user account is not linked to a school organization. Expense was not saved.");
@@ -1105,6 +1157,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     const rate = parseNum(vatRatePercent);
     const journalRows: ExpenseJournalLineInput[] = [];
     const vendorIdsPerJournalRow: (string | null)[] = [];
+    const subvoteIdsPerJournalRow: (string | null)[] = [];
 
     if (simpleExpenseMode) {
       const js = orgId ? await resolveJournalAccountSettings(orgId) : loadJournalAccountSettings();
@@ -1117,9 +1170,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         const rowTotal = round2(net + vat);
         if (rowTotal <= 0) continue;
 
-        const expGl = String(user?.business_type || "").toLowerCase() === "school" && schoolBudgetGlId
-          ? schoolBudgetGlId
-          : r.expense_gl_account_id || mapCategoryToExpenseGlId(r.category, expenseGlOptions, r.item.trim());
+        const expGl = r.school_subvote_id ? r.expense_gl_account_id : r.expense_gl_account_id || mapCategoryToExpenseGlId(r.category, expenseGlOptions, r.item.trim());
         const srcGl = mapPaymentMethodToGlId(r.payment_method, cashSourceOptions);
         if (!expGl || !srcGl) {
           alert(
@@ -1145,6 +1196,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           quantity: Math.max(0, parseNum(r.quantity)) || 1,
         });
         vendorIdsPerJournalRow.push(simpleVendorId);
+        subvoteIdsPerJournalRow.push(r.school_subvote_id || null);
       }
 
       if (journalRows.length === 0) {
@@ -1172,6 +1224,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           quantity: Math.max(0, parseNum(r.quantity)) || 1,
         });
         vendorIdsPerJournalRow.push(r.vendor_id.trim() || null);
+        subvoteIdsPerJournalRow.push(r.school_subvote_id || null);
       }
 
       if (journalRows.length === 0) {
@@ -1182,7 +1235,19 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
 
     if (String(user?.business_type || "").toLowerCase() === "school") {
       if (!schoolExpenseBudgetEntries.length) { alert(schoolBudgetError || "Expense blocked: the active budget has no lines linked to school expense accounts for this date."); return; }
-      if (simpleExpenseMode && !schoolBudgetGlId) { alert("Select the approved budget line before saving this expense."); return; }
+      if (schoolBudgetLoading || schoolBudgetError) { alert(schoolBudgetError || "Wait for the annual budget check to finish."); return; }
+      const requestedSubvotes = new Map<string, number>();
+      for (let i = 0; i < journalRows.length; i++) {
+        const id = subvoteIdsPerJournalRow[i];
+        if (!id) continue;
+        const subvote = schoolSubvotes.find(s => s.id === id);
+        if (!subvote || subvote.default_gl_account_id !== journalRows[i].expense_gl_account_id) { alert("The subvote has no matching active GL mapping. Select the subvote again or ask your accountant to update it."); return; }
+        requestedSubvotes.set(id, (requestedSubvotes.get(id) || 0) + Number(journalRows[i].amount || 0) + Number(journalRows[i].vat_amount || 0));
+      }
+      for (const [id, amount] of requestedSubvotes) {
+        const available = Math.max(0, (schoolBudgetBySubvote.get(id) || 0) - (schoolSpentBySubvote.get(id) || 0));
+        if (!schoolBudgetBySubvote.has(id) || amount > available) { alert(`Expense blocked: ${schoolSubvotes.find(s => s.id === id)?.subvote_name || "Subvote"} has ${available.toLocaleString()} available in the active budget. Review its allocation or request approval through Budget & Vote Book.`); return; }
+      }
       const requested = new Map<string, number>();
       for (const row of journalRows) requested.set(row.expense_gl_account_id, (requested.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
       const unbudgeted = [...requested.keys()].find((glId) => !schoolBudgetByGl.has(glId));
@@ -1232,6 +1297,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           quantity: jr.quantity ?? 1,
           sort_order: idx,
           vendor_id: vendorIdsPerJournalRow[idx] ?? null,
+          ...(isSchool ? { school_subvote_id: subvoteIdsPerJournalRow[idx] ?? null } : {}),
         }));
 
       let expenseId: string;
@@ -1379,7 +1445,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     setSimpleLines([emptySimpleLine()]);
     setSimpleNotes("");
     setSimpleVendorId(null);
-    setSchoolBudgetGlId("");
+
     setSimpleIncludeVat(false);
     setShowSimpleDetails(false);
     setShowModal(true);
@@ -1410,7 +1476,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     setSimpleLines([emptySimpleLine()]);
     setSimpleNotes("");
     setSimpleVendorId(null);
-    setSchoolBudgetGlId("");
+
     setSimpleIncludeVat(false);
     setShowSimpleDetails(false);
   };
@@ -1479,7 +1545,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
       const { data: lineRows, error: lineErr } = await supabase
         .from("expense_lines")
         .select(
-          "vendor_id, expense_gl_account_id, source_cash_gl_account_id, amount, vat_amount, vat_gl_account_id, comment, quantity, sort_order"
+          "vendor_id, expense_gl_account_id, source_cash_gl_account_id, amount, vat_amount, vat_gl_account_id, comment, quantity, sort_order" + (isSchool ? ",school_subvote_id" : "")
         )
         .eq("expense_id", expenseId)
         .order("sort_order", { ascending: true });
@@ -1525,6 +1591,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         return {
           key: randomUuid(),
           vendor_id: l.vendor_id ?? "",
+          school_subvote_id: (lr as { school_subvote_id?: string }).school_subvote_id || "",
           expense_gl_account_id: l.expense_gl_account_id,
           source_cash_gl_account_id: l.source_cash_gl_account_id,
           amount: net > 0 ? String(net) : "",
@@ -1569,6 +1636,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                 amount: net > 0 ? String(net) : "",
                 payment_method: inferPaymentMethodFromGlId(l.source_cash_gl_account_id, cashSourceOptions),
                 category: inferCategoryFromExpenseGl(l.expense_gl_account_id, expenseGlOptions),
+                school_subvote_id: (lr as { school_subvote_id?: string }).school_subvote_id || "",
                 expense_gl_account_id: l.expense_gl_account_id,
                 typeLocked: true,
               };
@@ -1976,6 +2044,13 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
             ) : (
               <>
                 <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+                {glLoadError && <p role="alert" className="mb-3 text-sm text-red-700">{glLoadError}</p>}
+                {isSchool && <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 text-sm">
+                  <p className="font-semibold">{schoolBudgetLoading ? "Checking budget…" : schoolBudgetNames ? `Budget: ${schoolBudgetNames}` : "School budget"}</p>
+                  {schoolBudgetError && <p role="alert" className="mt-2 text-red-700">{schoolBudgetError}</p>}
+                  {!schoolBudgetError && !schoolBudgetLoading && <p className="mt-1 text-indigo-800">Select a subvote or expense GL for each item. Available budget is checked before saving.</p>}
+                  {schoolSubvoteError && <p role="alert" className="mt-2 text-red-700">{schoolSubvoteError}</p>}
+                </div>}
                 {simpleExpenseMode ? (
                   <>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-5">
@@ -2007,28 +2082,13 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                       ) : null}
                     </div>
 
-                    {String(user?.business_type || "").toLowerCase() === "school" && (
-                      <div className="mb-5 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3">
-                        <label className="block text-sm font-semibold text-slate-800 mb-1">Approved budget line *</label>
-                        <select value={schoolBudgetGlId} onChange={(e) => setSchoolBudgetGlId(e.target.value)} className="w-full rounded-lg border border-indigo-300 bg-white px-3 py-2 text-sm">
-                          <option value="">Select the budget this expense will use</option>
-                          {schoolExpenseBudgetEntries.map(([glId, budget]) => {
-                            const account=glAccounts.find((row)=>row.id===glId); const spent=schoolSpentByGl.get(glId)||0; const remaining=Math.max(0,budget-spent);
-                            return <option key={glId} value={glId}>{account ? `${account.account_code} - ${account.account_name}` : "Budget line"} · Remaining ${remaining.toLocaleString()}</option>;
-                          })}
-                        </select>
-                        {!schoolExpenseBudgetEntries.length && <p className="mt-2 text-xs font-medium text-red-700">{schoolBudgetError || "The active budget has no lines linked to school expense accounts for the selected date."}</p>}
-                        {schoolBudgetGlId && <p className="mt-2 text-xs text-indigo-800">Approved: {(schoolBudgetByGl.get(schoolBudgetGlId)||0).toLocaleString()} · Spent: {(schoolSpentByGl.get(schoolBudgetGlId)||0).toLocaleString()} · Remaining: {Math.max(0,(schoolBudgetByGl.get(schoolBudgetGlId)||0)-(schoolSpentByGl.get(schoolBudgetGlId)||0)).toLocaleString()}</p>}
-                      </div>
-                    )}
-
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 mb-2">What you spent</p>
 
                     <div className="space-y-3 mb-3">
                       {simpleLines.map((row, idx) => {
                         const t = simpleLineTotals[idx] ?? { net: 0, vat: 0, rowTotal: 0 };
                         const automaticCategory = guessCategoryFromItem(row.item) || row.category;
-                        const displayedExpenseGlId = schoolBudgetGlId || row.expense_gl_account_id || mapCategoryToExpenseGlId(automaticCategory, expenseGlOptions, row.item.trim()) || "";
+                        const displayedExpenseGlId = row.school_subvote_id ? row.expense_gl_account_id : row.expense_gl_account_id || mapCategoryToExpenseGlId(automaticCategory, expenseGlOptions, row.item.trim()) || "";
                         return (
                           <div key={row.key} className="border border-slate-200 rounded-lg p-4 space-y-3 bg-slate-50/40">
                             <div>
@@ -2085,10 +2145,12 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Expense account</label>
+                              {isSchool && renderSubvotePicker(row.school_subvote_id || "", (id, glId) => updateSimpleLine(row.key, { school_subvote_id: id, expense_gl_account_id: glId, typeLocked: Boolean(id) }))}
                               <GlAccountPicker
                                 value={displayedExpenseGlId}
                                 onChange={(id) => updateSimpleLine(row.key, {
                                   expense_gl_account_id: id,
+                                  school_subvote_id: "",
                                   category: id ? inferCategoryFromExpenseGl(id, expenseGlOptions) : row.category,
                                   typeLocked: Boolean(id),
                                 })}
@@ -2096,7 +2158,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                 placeholder="Search regular expense accounts…"
                                 emptyOption={{ label: `Automatic — ${SIMPLE_EXPENSE_TYPE_LABELS[row.category]}` }}
                               />
-                              <p className="mt-1 text-[11px] text-slate-500">BOAT selects this account from the description. Search by name or code to override it.</p>
+                              <p className="mt-1 text-[11px] text-slate-500">{isSchool ? "Choosing a subvote fills its linked GL. Selecting a different GL clears the subvote." : "BOAT selects this account from the description. Search by name or code to override it."}</p>
                             </div>
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">Paid using</label>
@@ -2283,7 +2345,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                             <th className="text-left p-2 font-semibold min-w-[220px]">Narration / item purchased</th>
                             <th className="text-right p-2 font-semibold w-24">Quantity</th>
                             <th className="text-left p-2 font-semibold min-w-[160px]">Source of funds</th>
-                            <th className="text-left p-2 font-semibold min-w-[160px]">Expense GL</th>
+                            <th className="text-left p-2 font-semibold min-w-[160px]">{isSchool ? "Subvote / Expense GL" : "Expense GL"}</th>
                             <th className="text-center p-2 font-semibold w-14" title="Apply VAT for this line">
                               VAT
                             </th>
@@ -2342,9 +2404,10 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                     />
                                   </td>
                                   <td className="p-2 align-top">
+                                    {isSchool && renderSubvotePicker(row.school_subvote_id || "", (id, glId) => updateLine(row.key, { school_subvote_id: id, expense_gl_account_id: glId }))}
                                     <GlAccountPicker
                                       value={row.expense_gl_account_id}
-                                      onChange={(id) => updateLine(row.key, { expense_gl_account_id: id })}
+                                      onChange={(id) => updateLine(row.key, { expense_gl_account_id: id, school_subvote_id: "" })}
                                       options={expenseGlOptions}
                                       placeholder="Type code or name…"
                                     />
