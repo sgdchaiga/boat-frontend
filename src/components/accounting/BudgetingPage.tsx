@@ -132,9 +132,9 @@ type Props = { readOnly?: boolean };
 export function BudgetingPage({ readOnly }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
-  const canPrepareBudget = canApprove("budget_prepare", user?.role);
-  const canReviewBudget = canApprove("budget_review", user?.role);
-  const canApproveBudget = canApprove("budget_approve", user?.role);
+  const canPrepareBudget = Boolean(user?.isSuperAdmin) || canApprove("budget_prepare", user?.role);
+  const canReviewBudget = Boolean(user?.isSuperAdmin) || canApprove("budget_review", user?.role);
+  const canApproveBudget = Boolean(user?.isSuperAdmin) || canApprove("budget_approve", user?.role);
   const [budgets, setBudgets] = useState<BudgetRow[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [lines, setLines] = useState<LineRow[]>([]);
