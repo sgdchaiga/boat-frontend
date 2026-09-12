@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -69,6 +69,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   const [auditTimezone, setAuditTimezone] = useState("Africa/Kampala");
   const [savingAuditSchedule, setSavingAuditSchedule] = useState(false);
   const [folioStayId, setFolioStayId] = useState(focusStayId || "");
+  const [groupByRoomDay, setGroupByRoomDay] = useState(true);
   const handledFocusStayRef = useRef("");
   const { from: billingDateFrom, to: billingDateTo } = useMemo(
     () => billingRangeToDates(billingRange),
@@ -148,6 +149,26 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
       return cmp * m;
     });
   }, [filteredBillings, billingSort]);
+
+  const billingGroups = useMemo(() => {
+    if (!groupByRoomDay) return [{ key: "all", room: "", day: "", rows: sortedBillings }];
+    const groups = new Map<string, { key: string; room: string; day: string; rows: BillingWithCustomer[] }>();
+    let dateFormatter: Intl.DateTimeFormat;
+    try {
+      dateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: auditTimezone, year: "numeric", month: "2-digit", day: "2-digit" });
+    } catch {
+      dateFormatter = new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Kampala", year: "numeric", month: "2-digit", day: "2-digit" });
+    }
+    for (const row of sortedBillings) {
+      const room = row.stays?.rooms?.room_number || "Unassigned";
+      const day = row.stay_night_date || dateFormatter.format(new Date(row.charged_at));
+      const key = JSON.stringify([room, day]);
+      const group = groups.get(key) || { key, room, day, rows: [] };
+      group.rows.push(row);
+      groups.set(key, group);
+    }
+    return [...groups.values()].sort((a, b) => b.day.localeCompare(a.day) || a.room.localeCompare(b.room, undefined, { numeric: true }));
+  }, [sortedBillings, groupByRoomDay, auditTimezone]);
 
 
   const toggleBillingSort = (key: BillingSortKey) => {
@@ -584,6 +605,13 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
 
       <div className="flex flex-wrap items-center justify-end gap-3 border-b border-slate-200 mb-4 pb-2">
         <label className="flex items-center gap-2 text-xs text-slate-600">
+          <span>View</span>
+          <select value={groupByRoomDay ? "room_day" : "all"} onChange={(e) => setGroupByRoomDay(e.target.value === "room_day")} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
+            <option value="room_day">By room and day</option>
+            <option value="all">All charges</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-xs text-slate-600">
           <span>Folio</span>
           <select value={folioStayId} onChange={(e) => setFolioStayId(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
             <option value="">All guests</option>
@@ -591,7 +619,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
           </select>
         </label>
         <label className="flex items-center gap-2 text-xs text-slate-600">
-          <span className="whitespace-nowrap">Date range</span>
+          <span className="whitespace-nowrap">Posting date range</span>
           <select
             value={billingRange}
             onChange={(e) => setBillingRange(e.target.value as BillingRangePreset)}
@@ -613,11 +641,14 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
             : "No charges in this range. Change the date range or choose All dates."}
         </p>
       ) : (
+        <div className="overflow-x-auto">
+        {groupByRoomDay && <p className="mb-3 text-xs text-slate-500">Grouped by folio night, or posting day in the property timezone for other charges. Subtotals include the charges in the selected posting date range.</p>}
         <table className="w-full border">
           <thead className="bg-slate-50">
             <tr>
               {billTh("id", "Order #")}
               {billTh("customer", "Customer")}
+              <th className="p-3 text-left font-semibold text-slate-700">Room</th>
               {billTh("charge_type", "Department")}
               {billTh("description", "Description")}
               {billTh("amount", "Amount", "right")}
@@ -628,7 +659,19 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
             </tr>
           </thead>
           <tbody>
-            {sortedBillings.map((b) => (
+            {billingGroups.map((group) => (
+              <Fragment key={group.key}>
+                {groupByRoomDay && (
+                  <tr className="border-t bg-blue-50">
+                    <th colSpan={10} scope="rowgroup" className="p-3 text-left">
+                      <div className="flex flex-wrap justify-between gap-2">
+                        <span>{group.day} · {group.room === "Unassigned" ? "Unassigned room" : `Room ${group.room}`}</span>
+                        <span>{group.rows.length} charge{group.rows.length === 1 ? "" : "s"} · Total {group.rows.reduce((sum, row) => sum + Number(row.amount), 0).toFixed(2)}</span>
+                      </div>
+                    </th>
+                  </tr>
+                )}
+            {group.rows.map((b) => (
               <tr key={b.id} className="border-t">
                 <td className="p-3 font-mono text-sm">{b.id.slice(0, 8)}</td>
                 <td className="p-3">
@@ -638,6 +681,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
                       ? "—"
                       : "Walk-in / No stay"}
                 </td>
+                <td className="p-3">{b.stays?.rooms?.room_number || "—"}</td>
                 <td className="p-3 capitalize">{b.charge_type}</td>
                 <td className="p-3">{b.description}</td>
                 <td className="p-3 text-right">{Number(b.amount).toFixed(2)}</td>
@@ -658,8 +702,11 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
                 </td>
               </tr>
             ))}
+              </Fragment>
+            ))}
           </tbody>
         </table>
+        </div>
       )}
 
       {showAddCharge && (

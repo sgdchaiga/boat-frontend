@@ -6,6 +6,9 @@ import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { fetchStockLedgerMovementsForProducts } from "../../lib/stockLedger";
 import { effectiveStockMovementInOut } from "../../lib/stockMovementEffective";
 import { PageNotes } from "../common/PageNotes";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
+import * as XLSX from "xlsx";
 
 interface Row {
   product_id: string;
@@ -433,6 +436,71 @@ export function StockMovementReportPage() {
     return Array.from(totals.values()).sort((a, b) => a.date.localeCompare(b.date));
   }, [dailyRows, selectedLocation, selectedProductId]);
 
+  const exportReport = (format: "pdf" | "xlsx") => {
+    if (loading || filteredRows.length === 0) return;
+    const { from, to } = computeRangeInTimezone(dateRange, customFrom, customTo);
+    const period = `${toBusinessDateString(from)} to ${toBusinessDateString(new Date(to.getTime() - 1))}`;
+    const context = [
+      `Period: ${period} (Africa/Kampala)`,
+      `Location: ${selectedLocation || "All locations"}`,
+      `Item: ${selectedProductId ? selectedProductName : "All items"}`,
+    ];
+    const sections = [{
+      title: "Stock Movement",
+      headers: ["Location", "Product", "Opening stock", "Received", "Total (OS+Rec)", "Sales", "Sales amount", "Adjustments", "Closing stock"],
+      data: filteredRows.map((r) => [r.location, r.product_name, r.openingQty, r.receivedQty, r.totalOsRec, r.salesQty, r.salesAmount, r.rejectsQty, r.closingQty]),
+      widths: [22, 40, 18, 16, 20, 16, 20, 18, 18],
+    }];
+    if (selectedProductId) sections.push({
+      title: "Daily Movement",
+      headers: ["Date", "Opening", "Purchases", "Sales", "Adjustments", "Other net movements", "Closing balance"],
+      data: selectedDailyRows.map((r) => [r.date, r.openingQty, r.purchasesQty, r.salesQty, r.adjustmentsQty, r.otherNetQty, r.closingQty]),
+      widths: [16, 18, 18, 18, 18, 24, 20],
+    });
+    const filename = `stock_movement_${toBusinessDateString(from)}_${toBusinessDateString(new Date(to.getTime() - 1))}`;
+    if (format === "xlsx") {
+      const workbook = XLSX.utils.book_new();
+      for (const section of sections) {
+        const sheet = XLSX.utils.aoa_to_sheet([
+          [section.title], ...context.map((line) => [line]), [], section.headers, ...section.data,
+        ]);
+        sheet["!cols"] = section.widths.map((wch) => ({ wch }));
+        sheet["!autofilter"] = { ref: XLSX.utils.encode_range({ s: { r: 5, c: 0 }, e: { r: 5 + section.data.length, c: section.headers.length - 1 } }) };
+        section.data.forEach((row, rowIndex) => row.forEach((value, columnIndex) => {
+          if (typeof value === "number") sheet[XLSX.utils.encode_cell({ r: rowIndex + 6, c: columnIndex })].z = "#,##0.00;[Red](#,##0.00)";
+        }));
+        XLSX.utils.book_append_sheet(workbook, sheet, section.title);
+      }
+      XLSX.writeFile(workbook, `${filename}.xlsx`);
+      return;
+    }
+    const doc = new jsPDF("landscape");
+    sections.forEach((section, index) => {
+      if (index) doc.addPage();
+      doc.setFontSize(14);
+      doc.text(section.title, 14, 14);
+      doc.setFontSize(9);
+      const lines = context.flatMap((line) => doc.splitTextToSize(line, 265) as string[]);
+      doc.text(lines, 14, 22);
+      autoTable(doc, {
+        startY: 25 + lines.length * 4,
+        head: [section.headers],
+        body: section.data.map((row) => row.map((value) => typeof value === "number" ? value.toFixed(2) : value)),
+        theme: "grid",
+        styles: { fontSize: 8, cellPadding: 2, overflow: "linebreak" },
+        headStyles: { fillColor: [15, 23, 42] },
+        columnStyles: Object.fromEntries(section.headers.map((_, column) => [column, { halign: column >= (index ? 1 : 2) ? "right" : "left" }])),
+        margin: { bottom: 16 },
+      });
+    });
+    for (let page = 1; page <= doc.getNumberOfPages(); page++) {
+      doc.setPage(page);
+      doc.setFontSize(8);
+      doc.text(`Page ${page} of ${doc.getNumberOfPages()}`, 283, 202, { align: "right" });
+    }
+    doc.save(`${filename}.pdf`);
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -451,6 +519,8 @@ export function StockMovementReportPage() {
           </div>
         </div>
         <div className="flex flex-wrap gap-2 items-center">
+          <button type="button" onClick={() => exportReport("pdf")} disabled={loading || filteredRows.length === 0} className="border rounded-lg px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">Export PDF</button>
+          <button type="button" onClick={() => exportReport("xlsx")} disabled={loading || filteredRows.length === 0} className="border rounded-lg px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">Export Excel</button>
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value as DateRangeKey)}
