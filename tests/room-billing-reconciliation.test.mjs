@@ -18,10 +18,11 @@ test("billing organization is repaired and maintained from its stay", () => {
   assert.match(migration, /get_hotel_billing_register/);
 });
 
-test("billing register has exact runtime types and a tenant-scoped page fallback", () => {
+test("billing history uses visible stays without the legacy staff-scoped RPC", () => {
   assert.match(runtimeFix, /b\.description::text/);
   assert.match(runtimeFix, /rm\.room_number::text/);
-  assert.match(billingPage, /Billing register unavailable/);
+  assert.doesNotMatch(billingPage, /rpc\("get_hotel_billing_register"/);
+  assert.match(billingPage, /orgId, false/);
   assert.match(billingPage, /\.in\("stay_id", ids\)/);
   assert.match(billingPage, /"message" in error/);
 });
