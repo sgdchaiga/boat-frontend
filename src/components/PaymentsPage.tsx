@@ -428,6 +428,14 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
     void loadHotelFolioBalances(customerParsed.id);
   }, [showRecordPayment, customerParsed, loadHotelFolioBalances]);
 
+  // A payment opened from Guest billing already has a stay selected. Once its
+  // live folio is available, start with the exact unpaid balance.
+  useEffect(() => {
+    if (!initialStayId || paymentStayId !== initialStayId || paymentAmount.trim() || loadingFolios) return;
+    const selectedFolio = folioBalances.find((folio) => folio.stayId === initialStayId);
+    if (selectedFolio) setPaymentAmount(selectedFolio.balance.toFixed(2));
+  }, [initialStayId, paymentStayId, paymentAmount, loadingFolios, folioBalances]);
+
   useEffect(() => {
     if (!detailPayment) {
       setDetailInvoiceMeta({});

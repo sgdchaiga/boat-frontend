@@ -1616,7 +1616,7 @@ function AppContent() {
       case 'reports_pos_cash_collections':
         return <PosCashCollectionsReportPage />;
       case 'reports_room_billing':
-        return <RoomBillingReportPage />;
+        return <RoomBillingReportPage onNavigate={navigate} readOnly={access.readOnly} />;
       case 'reports_manufacturing_daily_production':
         return <ManufacturingDailyProductionReportPage />;
       case 'inventory_stock_adjustments':
