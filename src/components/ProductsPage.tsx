@@ -18,6 +18,7 @@ import { effectiveStockMovementInOut } from "../lib/stockMovementEffective";
 import { businessDayRangeForDateString, businessTodayISO } from "../lib/timezone";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
+import { SearchableCombobox } from "./common/SearchableCombobox";
 
 type Product = Database["public"]["Tables"]["products"]["Row"];
 type Department = Database["public"]["Tables"]["departments"]["Row"];
@@ -152,12 +153,36 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [products, setProducts] = useState<Product[]>([]);
   const [balanceByProduct, setBalanceByProduct] = useState<Record<string, number>>({});
   const [glAccounts, setGlAccounts] = useState<GlAccountOption[]>([]);
+  const [schoolSubvotes, setSchoolSubvotes] = useState<Array<{ id: string; label: string; accountId: string | null }>>([]);
+  const [subvoteError, setSubvoteError] = useState("");
+  const [selectedSubvoteId, setSelectedSubvoteId] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    setSchoolSubvotes([]);
+    setSelectedSubvoteId("");
+    setSubvoteError("");
+    if (user?.business_type !== "school" || !orgId) return;
+    void Promise.all([
+      supabase.from("school_budget_votes").select("id,vote_code,vote_name").eq("organization_id", orgId).eq("is_active", true),
+      supabase.from("school_budget_subvotes").select("id,vote_id,subvote_code,subvote_name,default_gl_account_id").eq("organization_id", orgId).eq("is_active", true).order("subvote_code"),
+    ]).then(([votes, subvotes]) => {
+      if (cancelled) return;
+      if (votes.error || subvotes.error) { setSubvoteError("Could not load subvotes. You can search the chart of accounts below."); return; }
+      setSchoolSubvotes((subvotes.data || []).map((subvote) => {
+        const vote = votes.data?.find((row) => row.id === subvote.vote_id);
+        return { id: subvote.id, accountId: subvote.default_gl_account_id, label: `${vote ? `${vote.vote_code} — ${vote.vote_name} / ` : ""}${subvote.subvote_code} — ${subvote.subvote_name}` };
+      }));
+    });
+    return () => { cancelled = true; };
+  }, [orgId, user?.business_type]);
   const [departments, setDepartments] = useState<Department[]>([]);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [itemKind, setItemKind] = useState<ItemKind>("product");
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => { setSelectedSubvoteId(""); }, [modalOpen, editingProduct?.id]);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -1040,48 +1065,52 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Sales (income) account</label>
-                      <select
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                      <SearchableCombobox
                         value={formData.income_account}
-                        onChange={(e) => setFormData({ ...formData, income_account: e.target.value })}
-                      >
-                        <option value="">Automatic (recommended)</option>
-                        {glAccounts.map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {[acc.account_code, acc.account_name].filter(Boolean).join(" â€” ") || "Unnamed account"}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(id) => setFormData((previous) => ({ ...previous, income_account: id }))}
+                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" — ") || "Unnamed account" }))}
+                        emptyOption={{ label: "Automatic (recommended)" }}
+                        placeholder="Type account name or code…"
+                        inputAriaLabel="Sales (income) account"
+                        disabled={readOnly}
+                      />
                     </div>
+                    {user?.business_type === "school" && <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1">Choose cost account from a subvote</label>
+                      <SearchableCombobox value={selectedSubvoteId} onChange={(id) => {
+                        setSelectedSubvoteId(id);
+                        const subvote = schoolSubvotes.find((row) => row.id === id);
+                        if (subvote?.accountId && glAccounts.some((account) => account.id === subvote.accountId)) {
+                          setFormData((previous) => ({ ...previous, purchases_account: subvote.accountId! }));
+                        }
+                      }} options={schoolSubvotes.map((row) => ({ id: row.id, label: row.label }))} placeholder="Type vote or subvote name…" inputAriaLabel="School subvote for item cost account" disabled={readOnly} />
+                      <p className="mt-1 text-xs text-slate-500">Selecting a mapped subvote fills the purchases / cost account saved on this item.</p>
+                      {subvoteError && <p className="mt-1 text-xs text-red-700">{subvoteError}</p>}
+                      {selectedSubvoteId && !glAccounts.some((account) => account.id === schoolSubvotes.find((row) => row.id === selectedSubvoteId)?.accountId) && <p className="mt-1 text-xs text-amber-700">This subvote has no active mapped account. Ask your accountant to map it, or select an account below. The existing account has not changed.</p>}
+                    </div>}
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Purchases / cost account</label>
-                      <select
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                      <SearchableCombobox
                         value={formData.purchases_account}
-                        onChange={(e) => setFormData({ ...formData, purchases_account: e.target.value })}
-                      >
-                        <option value="">Automatic (recommended)</option>
-                        {glAccounts.map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {[acc.account_code, acc.account_name].filter(Boolean).join(" â€” ") || "Unnamed account"}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(id) => setFormData((previous) => ({ ...previous, purchases_account: id }))}
+                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" — ") || "Unnamed account" }))}
+                        emptyOption={{ label: "Automatic (recommended)" }}
+                        placeholder="Type account name or code…"
+                        inputAriaLabel="Purchases / cost account"
+                        disabled={readOnly}
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-slate-700 mb-1">Stock (inventory) account</label>
-                      <select
-                        className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
+                      <SearchableCombobox
                         value={formData.stock_account}
-                        onChange={(e) => setFormData({ ...formData, stock_account: e.target.value })}
-                      >
-                        <option value="">Automatic (recommended)</option>
-                        {glAccounts.map((acc) => (
-                          <option key={acc.id} value={acc.id}>
-                            {[acc.account_code, acc.account_name].filter(Boolean).join(" â€” ") || "Unnamed account"}
-                          </option>
-                        ))}
-                      </select>
+                        onChange={(id) => setFormData((previous) => ({ ...previous, stock_account: id }))}
+                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" — ") || "Unnamed account" }))}
+                        emptyOption={{ label: "Automatic (recommended)" }}
+                        placeholder="Type account name or code…"
+                        inputAriaLabel="Stock (inventory) account"
+                        disabled={readOnly}
+                      />
                     </div>
                   </div>
                 ) : null}
