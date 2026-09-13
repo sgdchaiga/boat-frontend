@@ -1547,6 +1547,8 @@ function AppContent() {
             readOnly={access.readOnly}
             highlightPaymentId={pageState?.highlightPaymentId as string | undefined}
             openRecordPayment={Boolean(pageState?.openRecordPayment)}
+            initialHotelCustomerId={pageState?.hotelCustomerId as string | undefined}
+            initialStayId={pageState?.paymentStayId as string | undefined}
           />
         );
       case 'cash_receipts':

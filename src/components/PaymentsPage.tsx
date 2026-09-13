@@ -40,6 +40,8 @@ interface PaymentsPageProps {
   openRecordPayment?: boolean;
   /** Customer selected by a rental invoice; allocations are still chosen explicitly. */
   initialCustomerId?: string;
+  initialHotelCustomerId?: string;
+  initialStayId?: string;
 }
 
 type PaymentSortKey = "customer" | "transaction_id" | "amount" | "payment_method" | "payment_status" | "paid_at";
@@ -153,7 +155,7 @@ async function enrichPaymentsWithCustomerLabels(
   }));
 }
 
-export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordPayment = false, initialCustomerId }: PaymentsPageProps) {
+export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordPayment = false, initialCustomerId, initialHotelCustomerId, initialStayId }: PaymentsPageProps) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!user?.isSuperAdmin;
@@ -170,6 +172,12 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
   const [customerKey, setCustomerKey] = useState("");
   useEffect(() => { if (initialCustomerId) setCustomerKey(`rc:${initialCustomerId}`); }, [initialCustomerId]);
   const [paymentStayId, setPaymentStayId] = useState("");
+  useEffect(() => {
+    if (!initialHotelCustomerId || !initialStayId) return;
+    setCustomerKey(`hc:${initialHotelCustomerId}`);
+    setPaymentStayId(initialStayId);
+    setShowRecordPayment(true);
+  }, [initialHotelCustomerId, initialStayId]);
   const [paymentAmount, setPaymentAmount] = useState("");
   const [allocationInputs, setAllocationInputs] = useState<Record<string, string>>({});
   const [outstandingInvoices, setOutstandingInvoices] = useState<OutstandingInvoice[]>([]);
@@ -1309,8 +1317,9 @@ export function PaymentsPage({ readOnly = false, highlightPaymentId, openRecordP
 
             <div className="space-y-3">
               <p className="text-sm text-slate-600">
-                Link the payment to a <strong>customer</strong>. Optionally attach an <strong>active stay</strong> for hotel guests, and split the
-                amount across open <strong>retail invoices</strong>.
+                {initialStayId && paymentStayId === initialStayId
+                  ? "The guest and room are already selected. Use the room balance below, or enter the amount received, then choose the payment method and save."
+                  : "Select the customer. For a room payment, select the guest's stay so the payment reduces the correct room bill."}
               </p>
 
               <div>

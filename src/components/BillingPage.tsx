@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Receipt, Plus, X, ArrowUp, ArrowDown, ArrowUpDown, Moon, Pencil } from "lucide-react";
 import { supabase } from "../lib/supabase";
 import { useAuth } from "../contexts/AuthContext";
@@ -9,16 +9,14 @@ import {
   type ActiveStayOption,
   type BillingWithCustomer,
   type BillingRangePreset,
-  BILLING_RANGE_STORAGE_KEY,
   billingRangeToDates,
   guestDisplayName,
-  parseBillingRangePreset,
 } from "../lib/billingShared";
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 
 interface BillingPageProps {
-  onNavigate?: (page: string) => void;
+  onNavigate?: (page: string, state?: Record<string, unknown>) => void;
   readOnly?: boolean;
   focusStayId?: string;
 }
@@ -58,10 +56,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   const [savingEdit, setSavingEdit] = useState(false);
 
   const [billingSort, setBillingSort] = useState<{ key: BillingSortKey; dir: "asc" | "desc" } | null>(null);
-  const [billingRange, setBillingRange] = useState<BillingRangePreset>(() => {
-    if (typeof window === "undefined") return "all";
-    return parseBillingRangePreset(window.localStorage.getItem(BILLING_RANGE_STORAGE_KEY));
-  });
+  const [billingRange, setBillingRange] = useState<BillingRangePreset>("all");
   const [nightAuditBusy, setNightAuditBusy] = useState(false);
   const [nightAuditOverrideDate, setNightAuditOverrideDate] = useState("");
   const [nightAuditBanner, setNightAuditBanner] = useState<string | null>(null);
@@ -70,16 +65,10 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   const [savingAuditSchedule, setSavingAuditSchedule] = useState(false);
   const [folioStayId, setFolioStayId] = useState(focusStayId || "");
   const [groupByRoomDay, setGroupByRoomDay] = useState(true);
-  const handledFocusStayRef = useRef("");
   const { from: billingDateFrom, to: billingDateTo } = useMemo(
     () => billingRangeToDates(billingRange),
     [billingRange]
   );
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(BILLING_RANGE_STORAGE_KEY, billingRange);
-  }, [billingRange]);
 
   const filteredBillings = useMemo(() => {
     return billings.filter((b) => {
@@ -98,16 +87,9 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   }, [billings, billingDateFrom, billingDateTo, folioStayId]);
 
   useEffect(() => {
-    if (!focusStayId || loading || handledFocusStayRef.current === focusStayId) return;
-    handledFocusStayRef.current = focusStayId;
-    setFolioStayId(focusStayId);
-    const folioCharges = billings.filter((row) => row.stay_id === focusStayId);
-    if (folioCharges.length === 1) openEditBilling(folioCharges[0]);
-    if (folioCharges.length === 0) {
-      setChargeStayId(focusStayId);
-      setShowAddCharge(true);
-    }
-  }, [focusStayId, loading, billings]);
+    setFolioStayId(focusStayId || "");
+    setBillingRange("all");
+  }, [focusStayId]);
 
   const sortedBillings = useMemo(() => {
     if (!billingSort) return filteredBillings;
@@ -222,6 +204,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
   }, [orgId]);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
       setLoadError(null);
       if (!orgId && !superAdmin) {
@@ -231,7 +214,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         return;
       }
       const stayRows = await fetchAllPages((from, to) => filterByOrganizationId(
-        supabase.from("stays").select("id, room_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
+        supabase.from("stays").select("id, room_id, property_customer_id, actual_check_in, actual_check_out, rooms(room_number), hotel_customers(first_name, last_name)")
           .order("actual_check_in", { ascending: false }).order("id", { ascending: false }).range(from, to),
         orgId, superAdmin
       ));
@@ -501,6 +484,8 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         </div>
 
         <div className="flex flex-wrap gap-2 justify-end">
+          <button type="button" onClick={() => void fetchData()} className="border border-slate-300 bg-white px-4 py-2 rounded-lg hover:bg-slate-50">Refresh charges</button>
+          {onNavigate && <button type="button" onClick={() => onNavigate("payments")} className="border border-slate-300 bg-white px-4 py-2 rounded-lg hover:bg-slate-50">Payments</button>}
           <button
             type="button"
             onClick={() => void runNightAudit()}
@@ -598,12 +583,11 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
         </div>
         <p className="text-2xl font-bold">{totalBilling.toFixed(2)}</p>
         {billingDateFilterActive && <p className="text-xs text-slate-500 mt-1">Total for selected range</p>}
-        {!billingDateFilterActive && billings.length >= 500 && (
-          <p className="text-xs text-amber-700 mt-1">Showing the latest 500 charges. Select a date range for older records.</p>
-        )}
+        <p className="text-xs text-slate-500 mt-1">{filteredBillings.length} charge{filteredBillings.length === 1 ? "" : "s"} shown</p>
       </div>
 
       <div className="flex flex-wrap items-center justify-end gap-3 border-b border-slate-200 mb-4 pb-2">
+        {(folioStayId || billingDateFilterActive) && <button type="button" onClick={() => { setFolioStayId(""); setBillingRange("all"); }} className="text-sm text-brand-700 underline">Show all charges</button>}
         <label className="flex items-center gap-2 text-xs text-slate-600">
           <span>View</span>
           <select value={groupByRoomDay ? "room_day" : "all"} onChange={(e) => setGroupByRoomDay(e.target.value === "room_day")} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
@@ -637,7 +621,7 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
       {sortedBillings.length === 0 ? (
         <p className="text-slate-500 py-8 text-center border rounded-lg bg-slate-50">
           {billings.length === 0
-            ? "No charges yet."
+            ? billingDateFilterActive ? "No charges in this posting date range. Choose Show all charges to see the full billing history." : "No charges found. Refresh charges to reload the billing history."
             : "No charges in this range. Change the date range or choose All dates."}
         </p>
       ) : (
@@ -689,6 +673,9 @@ export function BillingPage({ onNavigate, readOnly = false, focusStayId }: Billi
                 <td className="p-3 text-sm capitalize">{b.auto_charge_source ?? "manual"}</td>
                 <td className="p-3">{new Date(b.charged_at).toLocaleDateString()}</td>
                 <td className="p-3">
+                  {!readOnly && onNavigate && activeStays.find((stay) => stay.id === b.stay_id)?.property_customer_id && (
+                    <button type="button" onClick={() => onNavigate("payments", { openRecordPayment: true, hotelCustomerId: activeStays.find((stay) => stay.id === b.stay_id)?.property_customer_id, paymentStayId: b.stay_id })} className="mb-2 block rounded bg-brand-700 px-2 py-1 text-xs text-white">Receive payment</button>
+                  )}
                   <button
                     type="button"
                     onClick={() => openEditBilling(b)}

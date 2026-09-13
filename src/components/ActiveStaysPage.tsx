@@ -346,6 +346,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                   <Printer className="w-5 h-5" />
                   Print Bill
                 </button>
+                {onNavigate && stay.property_customer_id && <button type="button" onClick={() => onNavigate("payments", { openRecordPayment: true, hotelCustomerId: stay.property_customer_id, paymentStayId: stay.id })} className="px-4 py-2 bg-brand-700 text-white rounded-lg">Receive payment</button>}
                 <button
                   onClick={() => openCheckout(stay)}
                   disabled={processingId === stay.id}
@@ -401,7 +402,7 @@ export function ActiveStaysPage({ highlightGuestId, onNavigate }: ActiveStaysPag
                   Edit customer
                 </button>
                 <button type="button" onClick={() => { setCheckoutStay(stay); setCheckoutDate(stay.actual_check_out?.slice(0,10) || ""); }} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Correct checkout date</button>
-                {onNavigate ? <button type="button" onClick={() => onNavigate("billing", { focusStayId: stay.id })} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">Edit bill</button> : null}
+                {onNavigate ? <button type="button" onClick={() => onNavigate("billing", { focusStayId: stay.id })} className="px-3 py-2 border border-slate-300 rounded-lg hover:bg-slate-50 text-sm">View bill / receive payment</button> : null}
               </div>
             ))}
           </div>
