@@ -3,6 +3,7 @@ import {
   ChevronDown,
   ChevronRight,
   ChevronUp,
+  Download,
   Edit,
   Plus,
   Save,
@@ -20,6 +21,7 @@ import { businessDayRangeForDateString, businessTodayISO } from "../lib/timezone
 import { ReadOnlyNotice } from "./common/ReadOnlyNotice";
 import { PageNotes } from "./common/PageNotes";
 import { SearchableCombobox } from "./common/SearchableCombobox";
+import { downloadCsv } from "../lib/accountingReportExport";
 
 type Product = Database["public"]["Tables"]["products"]["Row"];
 type Department = Database["public"]["Tables"]["departments"]["Row"];
@@ -163,11 +165,11 @@ const ITEM_LIST_COLUMNS: Array<{ key: ItemListColumn; label: string }> = [
   { key: "status", label: "Status" },
 ];
 
-const DEFAULT_ITEM_LIST_COLUMNS: ItemListColumn[] = ["department", "subvote", "purchasesGl", "stock", "buyPrice", "sellPrice", "profit", "status"];
+const DEFAULT_ITEM_LIST_COLUMNS: ItemListColumn[] = ["department", "stock", "buyPrice", "sellPrice", "profit", "status"];
 
 function loadItemListColumns(): ItemListColumn[] {
   try {
-    const saved = JSON.parse(localStorage.getItem("boat.items.visible_columns") ?? "[]") as string[];
+    const saved = JSON.parse(localStorage.getItem("boat.items.visible_columns.v2") ?? "[]") as string[];
     const valid = saved.filter((key): key is ItemListColumn => ITEM_LIST_COLUMNS.some((column) => column.key === key));
     return valid.length ? valid : DEFAULT_ITEM_LIST_COLUMNS;
   } catch {
@@ -244,7 +246,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const urlEditProductOpenedRef = useRef<string | null>(null);
 
   useEffect(() => {
-    localStorage.setItem("boat.items.visible_columns", JSON.stringify(visibleColumns));
+    localStorage.setItem("boat.items.visible_columns.v2", JSON.stringify(visibleColumns));
   }, [visibleColumns]);
 
   useEffect(() => {
@@ -609,6 +611,27 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     url.searchParams.set("productId", productId);
     window.location.assign(`${url.pathname}?${url.searchParams.toString()}${url.hash}`);
   };
+  const exportItems = () => {
+    const header = ["Item", ...visibleColumns.map((key) => ITEM_LIST_COLUMNS.find((column) => column.key === key)?.label ?? key)];
+    const rows = sortedProducts.map((product) => {
+      const margin = marginFromPrices(product.cost_price, product.sales_price);
+      const values: Record<ItemListColumn, string | number> = {
+        department: getDepartmentName(product.department_id ?? null),
+        type: product.manufacturing_item_type ? MANUFACTURING_ITEM_TYPE_LABELS[product.manufacturing_item_type as Exclude<ManufacturingItemType, "">] || product.manufacturing_item_type : "—",
+        uom: product.unit_of_measure || "unit",
+        subvote: productSubvote(product),
+        purchasesGl: productAccount(product.purchases_account),
+        stockGl: productAccount(product.stock_account),
+        stock: product.track_inventory !== false ? fmtQty(balanceByProduct[product.id] ?? 0) : "—",
+        buyPrice: Number(product.cost_price ?? 0),
+        sellPrice: Number(product.sales_price ?? 0),
+        profit: margin ? fmtMoney(margin.amount) : "—",
+        status: product.active ? "Active" : "Inactive",
+      };
+      return [product.name, ...visibleColumns.map((key) => values[key])];
+    });
+    downloadCsv("item_list.csv", [header, ...rows]);
+  };
 
   const formMargin = marginFromPrices(formData.cost_price, formData.sales_price);
   const showFormMargin =
@@ -708,15 +731,20 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
           </div>
           <p className="text-sm text-slate-500 mt-1">Products you sell or buy</p>
         </div>
-        <button
-          type="button"
-          onClick={openNewItem}
-          disabled={readOnly}
-          className="inline-flex items-center gap-2 bg-brand-700 hover:bg-brand-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium"
-        >
-          <Plus className="w-5 h-5" />
-          Add item
-        </button>
+        <div className="flex items-center gap-2">
+          <button type="button" onClick={exportItems} className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 font-medium text-slate-700 hover:bg-slate-50" title="Export the currently filtered item list as CSV">
+            <Download className="h-5 w-5" /> Export
+          </button>
+          <button
+            type="button"
+            onClick={openNewItem}
+            disabled={readOnly}
+            className="inline-flex items-center gap-2 bg-brand-700 hover:bg-brand-800 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium"
+          >
+            <Plus className="w-5 h-5" />
+            Add item
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-3 mb-4">
