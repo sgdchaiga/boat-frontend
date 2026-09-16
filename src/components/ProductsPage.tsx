@@ -6,6 +6,7 @@ import {
   Edit,
   Plus,
   Save,
+  Settings2,
   X,
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -123,7 +124,7 @@ function fmtMoney(n: number) {
 }
 
 function fmtQty(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(Number(n))) return "â€”";
+  if (n == null || !Number.isFinite(Number(n))) return "—";
   const v = Number(n);
   return Number.isInteger(v) ? String(v) : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
@@ -145,6 +146,34 @@ function profitSortValue(p: Product): number | null {
 
 type ItemsSortKey = "name" | "profit";
 type ItemsSortDir = "asc" | "desc";
+
+type ItemListColumn = "department" | "type" | "uom" | "subvote" | "purchasesGl" | "stockGl" | "stock" | "buyPrice" | "sellPrice" | "profit" | "status";
+
+const ITEM_LIST_COLUMNS: Array<{ key: ItemListColumn; label: string }> = [
+  { key: "department", label: "Department" },
+  { key: "type", label: "Type" },
+  { key: "uom", label: "UOM" },
+  { key: "subvote", label: "Subvote" },
+  { key: "purchasesGl", label: "Purchases GL" },
+  { key: "stockGl", label: "Stock GL" },
+  { key: "stock", label: "Stock" },
+  { key: "buyPrice", label: "Buy price" },
+  { key: "sellPrice", label: "Sell price" },
+  { key: "profit", label: "Profit" },
+  { key: "status", label: "Status" },
+];
+
+const DEFAULT_ITEM_LIST_COLUMNS: ItemListColumn[] = ["department", "subvote", "purchasesGl", "stock", "buyPrice", "sellPrice", "profit", "status"];
+
+function loadItemListColumns(): ItemListColumn[] {
+  try {
+    const saved = JSON.parse(localStorage.getItem("boat.items.visible_columns") ?? "[]") as string[];
+    const valid = saved.filter((key): key is ItemListColumn => ITEM_LIST_COLUMNS.some((column) => column.key === key));
+    return valid.length ? valid : DEFAULT_ITEM_LIST_COLUMNS;
+  } catch {
+    return DEFAULT_ITEM_LIST_COLUMNS;
+  }
+}
 
 export default function ProductsPage({ readOnly = false }: ProductsPageProps = {}) {
   const { user, isSuperAdmin } = useAuth();
@@ -208,9 +237,15 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [manufacturingTypeFilter, setManufacturingTypeFilter] = useState("all");
   const [sortKey, setSortKey] = useState<ItemsSortKey>("name");
   const [sortDir, setSortDir] = useState<ItemsSortDir>("asc");
+  const [visibleColumns, setVisibleColumns] = useState<ItemListColumn[]>(loadItemListColumns);
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [serviceConsumables, setServiceConsumables] = useState<ServiceConsumableDraft[]>([]);
   const saveProductInFlightRef = useRef(false);
   const urlEditProductOpenedRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem("boat.items.visible_columns", JSON.stringify(visibleColumns));
+  }, [visibleColumns]);
 
   useEffect(() => {
     void loadAll();
@@ -560,9 +595,19 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   }
 
   const getDepartmentName = (departmentId: string | null) => {
-    if (!departmentId) return "â€”";
+    if (!departmentId) return "—";
     const dep = departments.find((d) => d.id === departmentId);
-    return dep?.name || "â€”";
+    return dep?.name || "—";
+  };
+  const subvoteById = useMemo(() => new Map(schoolSubvotes.map((subvote) => [subvote.id, subvote.label])), [schoolSubvotes]);
+  const accountById = useMemo(() => new Map(glAccounts.map((account) => [account.id, `${account.account_code} - ${account.account_name}`])), [glAccounts]);
+  const productSubvote = (product: Product) => subvoteById.get((product as Product & { school_subvote_id?: string | null }).school_subvote_id ?? "") ?? "—";
+  const productAccount = (accountId: string | null | undefined) => accountById.get(accountId ?? "") ?? "—";
+  const openMovementReport = (productId: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("page", "reports_stock_movement");
+    url.searchParams.set("productId", productId);
+    window.location.assign(`${url.pathname}?${url.searchParams.toString()}${url.hash}`);
   };
 
   const formMargin = marginFromPrices(formData.cost_price, formData.sales_price);
@@ -577,7 +622,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
         items (medicines, gloves, etc.).
       </p>
       {serviceConsumables.length === 0 ? (
-        <p className="text-xs text-slate-500">No consumables linked yet â€” optional.</p>
+        <p className="text-xs text-slate-500">No consumables linked yet — optional.</p>
       ) : (
         <div className="space-y-2">
           {serviceConsumables.map((row) => (
@@ -593,7 +638,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                     )
                   }
                 >
-                  <option value="">Select productâ€¦</option>
+                  <option value="">Select product…</option>
                   {products
                     .filter(
                       (p) => p.active !== false && p.id !== editingProduct?.id && p.track_inventory !== false
@@ -654,7 +699,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
             <h1 className="text-3xl font-bold text-slate-900">Items</h1>
             <PageNotes ariaLabel="Items help">
               <p>
-                Items you sell or buy â€” simplified pricing and stock. Default accounts map from your chart; open{" "}
+                Items you sell or buy — simplified pricing and stock. Default accounts map from your chart; open{" "}
                 <strong className="font-medium text-slate-800">Advanced</strong> only if your accountant chose custom GL mappings.
                 For <strong className="font-medium text-slate-800">services</strong>, you can link medicines or consumables so each sale
                 automatically deducts their stock on the POS.
@@ -709,6 +754,22 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
             ))}
           </select>
         )}
+        <div className="relative">
+          <button type="button" onClick={() => setShowColumnPicker((value) => !value)} className="inline-flex h-10 items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50" aria-expanded={showColumnPicker}>
+            <Settings2 className="h-4 w-4" /> Columns
+          </button>
+          {showColumnPicker && (
+            <div className="absolute right-0 z-20 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-2 shadow-lg">
+              <p className="px-2 pb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">Show columns</p>
+              {ITEM_LIST_COLUMNS.map((column) => (
+                <label key={column.key} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-slate-50">
+                  <input type="checkbox" checked={visibleColumns.includes(column.key)} onChange={() => setVisibleColumns((current) => current.includes(column.key) ? current.filter((key) => key !== column.key) : [...current, column.key])} />
+                  {column.label}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
@@ -732,13 +793,16 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   ) : null}
                 </button>
               </th>
-              <th className="text-left p-3 whitespace-nowrap">Department</th>
-              <th className="text-left p-3 whitespace-nowrap">Type</th>
-              <th className="text-left p-3 whitespace-nowrap">UOM</th>
-              <th className="text-right p-3 whitespace-nowrap">Stock</th>
-              <th className="text-right p-3 whitespace-nowrap">Buy price</th>
-              <th className="text-right p-3 whitespace-nowrap">Sell price</th>
-              <th className="text-right p-3 whitespace-nowrap">
+              {visibleColumns.includes("department") && <th className="text-left p-3 whitespace-nowrap">Department</th>}
+              {visibleColumns.includes("type") && <th className="text-left p-3 whitespace-nowrap">Type</th>}
+              {visibleColumns.includes("uom") && <th className="text-left p-3 whitespace-nowrap">UOM</th>}
+              {visibleColumns.includes("subvote") && <th className="text-left p-3 whitespace-nowrap">Subvote</th>}
+              {visibleColumns.includes("purchasesGl") && <th className="text-left p-3 whitespace-nowrap">Purchases GL</th>}
+              {visibleColumns.includes("stockGl") && <th className="text-left p-3 whitespace-nowrap">Stock GL</th>}
+              {visibleColumns.includes("stock") && <th className="text-right p-3 whitespace-nowrap">Stock</th>}
+              {visibleColumns.includes("buyPrice") && <th className="text-right p-3 whitespace-nowrap">Buy price</th>}
+              {visibleColumns.includes("sellPrice") && <th className="text-right p-3 whitespace-nowrap">Sell price</th>}
+              {visibleColumns.includes("profit") && <th className="text-right p-3 whitespace-nowrap">
                 <button
                   type="button"
                   onClick={() => onSortHeader("profit")}
@@ -754,8 +818,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                     )
                   ) : null}
                 </button>
-              </th>
-              <th className="text-left p-3 whitespace-nowrap">Status</th>
+              </th>}
+              {visibleColumns.includes("status") && <th className="text-left p-3 whitespace-nowrap">Status</th>}
               <th className="text-right p-3">Actions</th>
             </tr>
           </thead>
@@ -774,39 +838,44 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
 
               return (
                 <tr key={product.id} className={`border-t border-slate-100 ${isLow ? "bg-amber-50/60" : ""}`}>
-                  <td className="p-3 font-medium max-w-[14rem] truncate" title={product.name}>
+                  <td className="p-3 font-medium max-w-[14rem] truncate" title={`Open movements for ${product.name}`}>
+                    <button type="button" onClick={() => openMovementReport(product.id)} className="max-w-full truncate text-left text-brand-800 hover:underline focus:outline-none focus:ring-2 focus:ring-brand-400 rounded">
                     {product.name}
+                    </button>
                   </td>
-                  <td className="p-3 text-slate-600">{getDepartmentName(product.department_id ?? null)}</td>
-                  <td className="p-3 text-slate-600">
+                  {visibleColumns.includes("department") && <td className="p-3 text-slate-600">{getDepartmentName(product.department_id ?? null)}</td>}
+                  {visibleColumns.includes("type") && <td className="p-3 text-slate-600">
                     {product.manufacturing_item_type
                       ? MANUFACTURING_ITEM_TYPE_LABELS[product.manufacturing_item_type as Exclude<ManufacturingItemType, "">] || product.manufacturing_item_type
-                      : "â€”"}
-                  </td>
-                  <td className="p-3 text-slate-600">{product.unit_of_measure || "unit"}</td>
-                  <td className="p-3 text-right tabular-nums">
+                      : "—"}
+                  </td>}
+                  {visibleColumns.includes("uom") && <td className="p-3 text-slate-600">{product.unit_of_measure || "unit"}</td>}
+                  {visibleColumns.includes("subvote") && <td className="max-w-[20rem] truncate p-3 text-slate-600" title={productSubvote(product)}>{productSubvote(product)}</td>}
+                  {visibleColumns.includes("purchasesGl") && <td className="max-w-[15rem] truncate p-3 text-slate-600" title={productAccount(product.purchases_account)}>{productAccount(product.purchases_account)}</td>}
+                  {visibleColumns.includes("stockGl") && <td className="max-w-[15rem] truncate p-3 text-slate-600" title={productAccount(product.stock_account)}>{productAccount(product.stock_account)}</td>}
+                  {visibleColumns.includes("stock") && <td className="p-3 text-right tabular-nums">
                     {track ? (
                       <span className={isLow ? "text-amber-900 font-medium" : ""}>
                         {fmtQty(bal ?? 0)}
-                        {isLow ? <span className="ml-1.5 text-amber-800 text-xs font-normal whitespace-nowrap">âš  Low</span> : null}
+                        {isLow ? <span className="ml-1.5 text-amber-800 text-xs font-normal whitespace-nowrap">⚠ Low</span> : null}
                       </span>
                     ) : (
-                      <span className="text-slate-400">â€”</span>
+                      <span className="text-slate-400">—</span>
                     )}
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{fmtMoney(Number(product.cost_price ?? 0))}</td>
-                  <td className="p-3 text-right tabular-nums">{fmtMoney(Number(product.sales_price ?? 0))}</td>
-                  <td className="p-3 text-right tabular-nums text-slate-800">
+                  </td>}
+                  {visibleColumns.includes("buyPrice") && <td className="p-3 text-right tabular-nums">{fmtMoney(Number(product.cost_price ?? 0))}</td>}
+                  {visibleColumns.includes("sellPrice") && <td className="p-3 text-right tabular-nums">{fmtMoney(Number(product.sales_price ?? 0))}</td>}
+                  {visibleColumns.includes("profit") && <td className="p-3 text-right tabular-nums text-slate-800">
                     {m ? (
                       <>
                         {fmtMoney(m.amount)}
                         <span className="text-slate-500 text-xs ml-1 whitespace-nowrap">(+{m.pct.toFixed(0)}%)</span>
                       </>
                     ) : (
-                      "â€”"
+                      "—"
                     )}
-                  </td>
-                  <td className="p-3">
+                  </td>}
+                  {visibleColumns.includes("status") && <td className="p-3">
                     <span
                       className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
                         product.active ? "bg-emerald-100 text-emerald-800" : "bg-slate-200 text-slate-700"
@@ -814,7 +883,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                     >
                       {product.active ? "Active" : "Inactive"}
                     </span>
-                  </td>
+                  </td>}
                   <td className="p-3">
                     <div className="flex items-center justify-end gap-2">
                       <button
@@ -1017,9 +1086,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 max-w-xs"
                         value={formData.reorder_level}
                         onChange={(e) => setFormData({ ...formData, reorder_level: e.target.value })}
-                        placeholder="Optional â€” warn when at or below this qty"
+                        placeholder="Optional — warn when at or below this qty"
                       />
-                      <p className="text-xs text-slate-500 mt-1">Youâ€™ll see a warning in the list when stock is at or below this level.</p>
+                      <p className="text-xs text-slate-500 mt-1">You’ll see a warning in the list when stock is at or below this level.</p>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -1063,7 +1132,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                         value={formData.department_id}
                         onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
                       >
-                        <option value="">â€”</option>
+                        <option value="">—</option>
                         {departments.map((dep) => (
                           <option key={dep.id} value={dep.id}>
                             {dep.name}
