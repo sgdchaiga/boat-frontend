@@ -123,7 +123,7 @@ function fmtMoney(n: number) {
 }
 
 function fmtQty(n: number | null | undefined): string {
-  if (n == null || !Number.isFinite(Number(n))) return "—";
+  if (n == null || !Number.isFinite(Number(n))) return "â€”";
   const v = Number(n);
   return Number.isInteger(v) ? String(v) : v.toLocaleString(undefined, { maximumFractionDigits: 2 });
 }
@@ -153,7 +153,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [products, setProducts] = useState<Product[]>([]);
   const [balanceByProduct, setBalanceByProduct] = useState<Record<string, number>>({});
   const [glAccounts, setGlAccounts] = useState<GlAccountOption[]>([]);
-  const [schoolSubvotes, setSchoolSubvotes] = useState<Array<{ id: string; label: string; accountId: string | null }>>([]);
+  const [schoolSubvotes, setSchoolSubvotes] = useState<Array<{ id: string; voteId: string; label: string; accountId: string | null }>>([]);
   const [subvoteError, setSubvoteError] = useState("");
   const [selectedSubvoteId, setSelectedSubvoteId] = useState("");
   useEffect(() => {
@@ -170,7 +170,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       if (votes.error || subvotes.error) { setSubvoteError("Could not load subvotes. You can search the chart of accounts below."); return; }
       setSchoolSubvotes((subvotes.data || []).map((subvote) => {
         const vote = votes.data?.find((row) => row.id === subvote.vote_id);
-        return { id: subvote.id, accountId: subvote.default_gl_account_id, label: `${vote ? `${vote.vote_code} � ${vote.vote_name} / ` : ""}${subvote.subvote_code} � ${subvote.subvote_name}` };
+        return { id: subvote.id, voteId: subvote.vote_id, accountId: subvote.default_gl_account_id, label: `${vote ? `${vote.vote_code} — ${vote.vote_name} / ` : ""}${subvote.subvote_code} — ${subvote.subvote_name}` };
       }));
     });
     return () => { cancelled = true; };
@@ -181,8 +181,6 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [itemKind, setItemKind] = useState<ItemKind>("product");
   const [showAdvanced, setShowAdvanced] = useState(false);
-
-  useEffect(() => { setSelectedSubvoteId(""); }, [modalOpen, editingProduct?.id]);
 
   const [formData, setFormData] = useState({
     name: "",
@@ -195,11 +193,15 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
     income_account: "",
     stock_account: "",
     purchases_account: "",
+    school_vote_id: "",
+    school_subvote_id: "",
     purchasable: true,
     saleable: true,
     track_inventory: true,
     active: true,
   });
+
+  useEffect(() => { setSelectedSubvoteId(formData.school_subvote_id); }, [modalOpen, editingProduct?.id]);
 
   const [search, setSearch] = useState("");
   const [departmentFilter, setDepartmentFilter] = useState("all");
@@ -340,6 +342,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       income_account: "",
       stock_account: "",
       purchases_account: "",
+      school_vote_id: "",
+      school_subvote_id: "",
       purchasable: true,
       saleable: true,
       track_inventory: true,
@@ -370,6 +374,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       income_account: product.income_account ?? "",
       stock_account: product.stock_account ?? "",
       purchases_account: product.purchases_account ?? "",
+      school_vote_id: (product as Product & { school_vote_id?: string | null }).school_vote_id ?? "",
+      school_subvote_id: (product as Product & { school_subvote_id?: string | null }).school_subvote_id ?? "",
       purchasable: product.purchasable ?? true,
       saleable: product.saleable ?? true,
       track_inventory: track,
@@ -441,6 +447,8 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
       income_account: incomeId,
       stock_account: stockId,
       purchases_account: purchasesId,
+      school_vote_id: formData.school_vote_id || null,
+      school_subvote_id: formData.school_subvote_id || null,
       purchasable: formData.purchasable,
       saleable: formData.saleable,
       track_inventory: trackStock,
@@ -552,9 +560,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
   }
 
   const getDepartmentName = (departmentId: string | null) => {
-    if (!departmentId) return "—";
+    if (!departmentId) return "â€”";
     const dep = departments.find((d) => d.id === departmentId);
-    return dep?.name || "—";
+    return dep?.name || "â€”";
   };
 
   const formMargin = marginFromPrices(formData.cost_price, formData.sales_price);
@@ -569,7 +577,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
         items (medicines, gloves, etc.).
       </p>
       {serviceConsumables.length === 0 ? (
-        <p className="text-xs text-slate-500">No consumables linked yet — optional.</p>
+        <p className="text-xs text-slate-500">No consumables linked yet â€” optional.</p>
       ) : (
         <div className="space-y-2">
           {serviceConsumables.map((row) => (
@@ -585,7 +593,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                     )
                   }
                 >
-                  <option value="">Select product…</option>
+                  <option value="">Select productâ€¦</option>
                   {products
                     .filter(
                       (p) => p.active !== false && p.id !== editingProduct?.id && p.track_inventory !== false
@@ -646,7 +654,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
             <h1 className="text-3xl font-bold text-slate-900">Items</h1>
             <PageNotes ariaLabel="Items help">
               <p>
-                Items you sell or buy — simplified pricing and stock. Default accounts map from your chart; open{" "}
+                Items you sell or buy â€” simplified pricing and stock. Default accounts map from your chart; open{" "}
                 <strong className="font-medium text-slate-800">Advanced</strong> only if your accountant chose custom GL mappings.
                 For <strong className="font-medium text-slate-800">services</strong>, you can link medicines or consumables so each sale
                 automatically deducts their stock on the POS.
@@ -773,17 +781,17 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                   <td className="p-3 text-slate-600">
                     {product.manufacturing_item_type
                       ? MANUFACTURING_ITEM_TYPE_LABELS[product.manufacturing_item_type as Exclude<ManufacturingItemType, "">] || product.manufacturing_item_type
-                      : "—"}
+                      : "â€”"}
                   </td>
                   <td className="p-3 text-slate-600">{product.unit_of_measure || "unit"}</td>
                   <td className="p-3 text-right tabular-nums">
                     {track ? (
                       <span className={isLow ? "text-amber-900 font-medium" : ""}>
                         {fmtQty(bal ?? 0)}
-                        {isLow ? <span className="ml-1.5 text-amber-800 text-xs font-normal whitespace-nowrap">⚠ Low</span> : null}
+                        {isLow ? <span className="ml-1.5 text-amber-800 text-xs font-normal whitespace-nowrap">âš  Low</span> : null}
                       </span>
                     ) : (
-                      <span className="text-slate-400">—</span>
+                      <span className="text-slate-400">â€”</span>
                     )}
                   </td>
                   <td className="p-3 text-right tabular-nums">{fmtMoney(Number(product.cost_price ?? 0))}</td>
@@ -795,7 +803,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                         <span className="text-slate-500 text-xs ml-1 whitespace-nowrap">(+{m.pct.toFixed(0)}%)</span>
                       </>
                     ) : (
-                      "—"
+                      "â€”"
                     )}
                   </td>
                   <td className="p-3">
@@ -1009,9 +1017,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                         className="w-full border border-slate-300 rounded-lg px-3 py-2 max-w-xs"
                         value={formData.reorder_level}
                         onChange={(e) => setFormData({ ...formData, reorder_level: e.target.value })}
-                        placeholder="Optional — warn when at or below this qty"
+                        placeholder="Optional â€” warn when at or below this qty"
                       />
-                      <p className="text-xs text-slate-500 mt-1">You’ll see a warning in the list when stock is at or below this level.</p>
+                      <p className="text-xs text-slate-500 mt-1">Youâ€™ll see a warning in the list when stock is at or below this level.</p>
                     </div>
                   ) : (
                     <div className="space-y-3">
@@ -1055,7 +1063,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                         value={formData.department_id}
                         onChange={(e) => setFormData({ ...formData, department_id: e.target.value })}
                       >
-                        <option value="">—</option>
+                        <option value="">â€”</option>
                         {departments.map((dep) => (
                           <option key={dep.id} value={dep.id}>
                             {dep.name}
@@ -1080,9 +1088,12 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                       <SearchableCombobox value={selectedSubvoteId} onChange={(id) => {
                         setSelectedSubvoteId(id);
                         const subvote = schoolSubvotes.find((row) => row.id === id);
-                        if (subvote?.accountId && glAccounts.some((account) => account.id === subvote.accountId)) {
-                          setFormData((previous) => ({ ...previous, purchases_account: subvote.accountId! }));
-                        }
+                        setFormData((previous) => ({
+                          ...previous,
+                          school_vote_id: subvote?.voteId || "",
+                          school_subvote_id: id,
+                          ...(subvote?.accountId && glAccounts.some((account) => account.id === subvote.accountId) ? { purchases_account: subvote.accountId } : {}),
+                        }));
                       }} options={schoolSubvotes.map((row) => ({ id: row.id, label: row.label }))} placeholder="Type vote or subvote name." inputAriaLabel="School subvote for item cost account" disabled={readOnly} />
                       <p className="mt-1 text-xs text-slate-500">Selecting a mapped subvote fills the purchases / cost account saved on this item.</p>
                       {subvoteError && <p className="mt-1 text-xs text-red-700">{subvoteError}</p>}
