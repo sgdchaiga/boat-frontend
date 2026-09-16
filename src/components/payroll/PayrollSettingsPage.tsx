@@ -163,6 +163,13 @@ export function PayrollSettingsPage({ readOnly }: Props) {
               bands={row.paye_tax_bands ?? DEFAULT_PAYE_TAX_BANDS}
               onChange={(paye_tax_bands) => setRow((current) => ({ ...current, paye_tax_bands }))}
             />
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-950">
+              <span className="font-semibold">Income above 10,000,000:</span>{" "}
+              PAYE = 33,750 + 30% × (income − 485,000) + 10% × (income − 10,000,000).{" "}
+              <button type="button" className="ml-2 font-semibold underline" onClick={() => setRow((current) => ({ ...current, paye_tax_bands: DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band })) }))}>
+                Apply prescribed PAYE bands
+              </button>
+            </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               <Field label="NSSF employee %" value={row.nssf_employee_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employee_rate_pct: n === "" ? undefined : n }))} />
               <Field label="NSSF employer %" value={row.nssf_employer_rate_pct} onChange={(n) => setRow((r) => ({ ...r, nssf_employer_rate_pct: n === "" ? undefined : n }))} />
