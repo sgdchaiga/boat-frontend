@@ -20,6 +20,7 @@ type ProfileRow = {
   staff_id: string;
   employee_code: string | null;
   department: string | null;
+  payroll_cost_classification_id?: string | null;
   job_title: string | null;
   base_salary: number;
   housing_allowance: number;
@@ -38,6 +39,7 @@ type ProfileRow = {
   other_allowances?: unknown;
   is_on_payroll: boolean;
 };
+type CostClassification = { id: string; name: string };
 
 type Props = { readOnly?: boolean; mode?: "employees" | "salary" };
 
@@ -52,6 +54,7 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
   const [savingId, setSavingId] = useState<string | null>(null);
   const [addingEmployee, setAddingEmployee] = useState(false);
   const [success, setSuccess] = useState("");
+  const [costClassifications, setCostClassifications] = useState<CostClassification[]>([]);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -60,17 +63,19 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
     }
     setLoading(true);
     setErr(null);
-    const [sRes, pRes] = await Promise.all([
+    const [sRes, pRes, cRes] = await Promise.all([
       supabase.from("staff").select("id,full_name,email,role").eq("organization_id", orgId).order("full_name"),
       supabase.from("payroll_employee_profiles").select("*").eq("organization_id", orgId),
+      supabase.from("payroll_cost_classifications").select("id,name").eq("organization_id", orgId).order("name"),
     ]);
-    setErr(sRes.error?.message || pRes.error?.message || null);
+    setErr(sRes.error?.message || pRes.error?.message || cRes.error?.message || null);
     setStaff((sRes.data as StaffRow[]) || []);
     const map: Record<string, ProfileRow> = {};
     for (const p of (pRes.data as ProfileRow[]) || []) {
       map[p.staff_id] = p;
     }
     setProfiles(map);
+    setCostClassifications((cRes.data as CostClassification[]) || []);
     setLoading(false);
   }, [orgId]);
 
@@ -90,6 +95,7 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
       staff_id: staffId,
       employee_code: merged.employee_code ?? null,
       department: merged.department ?? null,
+      payroll_cost_classification_id: merged.payroll_cost_classification_id ?? null,
       job_title: merged.job_title ?? null,
       base_salary: parsePayrollMoney(merged.base_salary ?? 0),
       housing_allowance: parsePayrollMoney(merged.housing_allowance ?? 0),
@@ -162,6 +168,7 @@ export function PayrollStaffPage({ readOnly, mode = "employees" }: Props) {
                 profile={p}
                 mode={mode}
                 businessType={user?.business_type}
+                costClassifications={costClassifications}
                 disabled={readOnly || !payrollAccess.canPrepare}
                 saving={savingId === s.id}
                 onSave={(d) => void saveProfile(s.id, d)}
@@ -187,6 +194,7 @@ function salaryFieldToInputValue(
 function StaffSalaryCard({
   staff,
   businessType,
+  costClassifications,
   profile,
   mode,
   disabled,
@@ -195,6 +203,7 @@ function StaffSalaryCard({
 }: {
   staff: StaffRow;
   businessType?: string | null;
+  costClassifications: CostClassification[];
   profile?: ProfileRow;
   mode: "employees" | "salary";
   disabled?: boolean;
@@ -203,6 +212,7 @@ function StaffSalaryCard({
 }) {
   const [code, setCode] = useState(() => profile?.employee_code ?? "");
   const [dept, setDept] = useState(() => profile?.department ?? "");
+  const [costClassificationId, setCostClassificationId] = useState(() => profile?.payroll_cost_classification_id ?? "");
   const [job, setJob] = useState(() => profile?.job_title ?? "");
   const [base, setBase] = useState(() => salaryFieldToInputValue(profile, "base_salary"));
   const [housing, setHousing] = useState(() => salaryFieldToInputValue(profile, "housing_allowance"));
@@ -223,6 +233,7 @@ function StaffSalaryCard({
   useEffect(() => {
     setCode(profile?.employee_code ?? "");
     setDept(profile?.department ?? "");
+    setCostClassificationId(profile?.payroll_cost_classification_id ?? "");
     setJob(profile?.job_title ?? "");
     setBase(salaryFieldToInputValue(profile, "base_salary"));
     setHousing(salaryFieldToInputValue(profile, "housing_allowance"));
@@ -285,6 +296,16 @@ function StaffSalaryCard({
           disabled={disabled}
           onChange={(e) => setDept(e.target.value)}
         />
+        <select
+          className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+          value={costClassificationId}
+          disabled={disabled}
+          onChange={(e) => setCostClassificationId(e.target.value)}
+          title="Determines the salary expense GL; department remains a reporting field."
+        >
+          <option value="">Payroll cost class (default GL)</option>
+          {costClassifications.map((classification) => <option key={classification.id} value={classification.id}>{classification.name}</option>)}
+        </select>
         <input
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
           placeholder="Job title"
@@ -351,6 +372,7 @@ function StaffSalaryCard({
           onSave(mode === "employees" ? {
             employee_code: code || null,
             department: dept || null,
+            payroll_cost_classification_id: costClassificationId || null,
             job_title: job || null,
             staff_type: staffType || null, date_joined: dateJoined || null, bank_name: bankName || null, bank_account_number: bankAccount || null, mobile_money_number: mobileMoney || null, payment_method: paymentMethod, tin: tin || null, nssf_number: nssfNumber || null,
             is_on_payroll: onPayroll,

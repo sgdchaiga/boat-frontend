@@ -1,5 +1,7 @@
 import { Suspense, lazy, useState, useEffect, type ComponentType, type ReactNode } from 'react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ManufacturingVersionProvider } from './contexts/ManufacturingVersionContext';
+import { ManufacturingV2Only } from './components/manufacturing/ManufacturingVersionedPages';
 import { AppProvider } from './contexts/AppContext';
 import type { LoanReportTabId } from './components/sacco/SaccoLoanReports';
 import { getModuleAccess, isPageAllowedForBusinessType, pageToModuleId } from './lib/moduleAccess';
@@ -175,10 +177,13 @@ const FixedAssetsPage = lazyNamed(() => import('./components/fixedAssets/FixedAs
 const AdminStockAdjustmentsPage = lazyNamed(() => import('./components/admin/AdminStockAdjustmentsPage'), 'AdminStockAdjustmentsPage');
 const StoreRequisitionsPage = lazyNamed(() => import('./components/inventory/StoreRequisitionsPage'), 'StoreRequisitionsPage');
 const StockBalancesPage = lazyNamed(() => import('./components/inventory/StockBalancesPage'), 'StockBalancesPage');
-const ManufacturingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingPage'), 'ManufacturingPage');
+const ManufacturingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingVersionedPages'), 'ManufacturingPage');
 const ManufacturingBomPage = lazyNamed(() => import('./components/manufacturing/ManufacturingBomPage'), 'ManufacturingBomPage');
-const ManufacturingWorkOrdersPage = lazyNamed(() => import('./components/manufacturing/ManufacturingWorkOrdersPage'), 'ManufacturingWorkOrdersPage');
-const ManufacturingProductionEntriesPage = lazyNamed(() => import('./components/manufacturing/ManufacturingProductionEntriesPage'), 'ManufacturingProductionEntriesPage');
+const ManufacturingWorkOrdersPage = lazyNamed(() => import('./components/manufacturing/ManufacturingVersionedPages'), 'ManufacturingWorkOrdersPage');
+const ManufacturingOperationsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingOperationsPage'), 'ManufacturingOperationsPage');
+const ManufacturingJobCardsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingJobCardsPage'), 'ManufacturingJobCardsPage');
+const ManufacturingQualityPage = lazyNamed(() => import('./components/manufacturing/ManufacturingQualityPage'), 'ManufacturingQualityPage');
+const ManufacturingProductionEntriesPage = lazyNamed(() => import('./components/manufacturing/ManufacturingVersionedPages'), 'ManufacturingProductionEntriesPage');
 const ManufacturingCostingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingCostingPage'), 'ManufacturingCostingPage');
 const ManufacturingAccountingReportsPage = lazyNamed(() => import('./components/manufacturing/ManufacturingAccountingReportsPage'), 'ManufacturingAccountingReportsPage');
 const CostAllocationPage = lazyNamed(() => import('./components/accounting/CostAllocationPage'), 'CostAllocationPage');
@@ -1638,6 +1643,12 @@ function AppContent() {
         return <ManufacturingBomPage readOnly={access.readOnly} />;
       case 'manufacturing_work_orders':
         return <ManufacturingWorkOrdersPage readOnly={access.readOnly} />;
+      case 'manufacturing_operations':
+        return <ManufacturingV2Only><ManufacturingOperationsPage readOnly={access.readOnly} /></ManufacturingV2Only>;
+      case 'manufacturing_job_cards':
+        return <ManufacturingV2Only><ManufacturingJobCardsPage readOnly={access.readOnly} /></ManufacturingV2Only>;
+      case 'manufacturing_quality':
+        return <ManufacturingV2Only><ManufacturingQualityPage readOnly={access.readOnly} /></ManufacturingV2Only>;
       case 'manufacturing_production_entries':
         return <ManufacturingProductionEntriesPage readOnly={access.readOnly} simpleMode={pageState?.manufacturingMode === 'simple'} />;
       case 'manufacturing_costing':
@@ -1809,7 +1820,7 @@ function AppContent() {
 function App() {
   return (
     <AuthProvider>
-      <AppContent />
+      <ManufacturingVersionProvider><AppContent /></ManufacturingVersionProvider>
     </AuthProvider>
   );
 }

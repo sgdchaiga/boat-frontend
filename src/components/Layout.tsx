@@ -57,6 +57,7 @@ import { practicePageAllowList } from '@/lib/practiceRoleAccess';
 import { buildRoleNavigation, getRoleBasedNavMenuTitle, hasRoleScopedNavigation } from '@/lib/roleNavigation';
 import { normalizeNavRoleKey } from '@/lib/navRoleExperience';
 import { buildSimpleOrgNavigation } from '@/lib/simpleOrgNavigation';
+import { useManufacturingVersion } from '@/contexts/ManufacturingVersionContext';
 import { isSidebarLeafActive } from '@/lib/navSidebarActiveLeaf';
 import {
   getSimpleOrgReportHubCategories,
@@ -360,6 +361,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const allowHotelAssessment =
     (businessType === "hotel" || businessType === "mixed") && user?.enable_hotel_assessment !== false;
   const allowManufacturing = user?.enable_manufacturing !== false;
+  const { version: manufacturingVersion } = useManufacturingVersion();
 
   const saccoSystemCashbookNav = Boolean(
     isSuperAdmin ||
@@ -387,6 +389,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         allowPayroll,
         allowCommunications,
         allowManufacturing,
+        manufacturingVersion,
         allowBudget,
         allowInventory: user?.enable_inventory !== false,
         allowFixedAssets: enableFixedAssets,
@@ -450,6 +453,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.role,
       isSuperAdmin,
       advancedPmsEnabled,
+      manufacturingVersion,
     ]
   );
 

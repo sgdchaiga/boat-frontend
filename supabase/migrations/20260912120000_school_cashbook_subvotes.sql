@@ -2,18 +2,22 @@
 -- Keep posting-time labels so renamed subvotes do not rewrite historical cashbooks.
 BEGIN;
 ALTER TABLE public.general_business_cashbook_entries
-  ADD COLUMN school_vote_id uuid REFERENCES public.school_budget_votes(id) ON DELETE RESTRICT,
-  ADD COLUMN school_subvote_id uuid REFERENCES public.school_budget_subvotes(id) ON DELETE RESTRICT,
-  ADD COLUMN school_vote_label text,
-  ADD COLUMN school_subvote_label text,
-  ADD CONSTRAINT school_cashbook_dimension_pair CHECK (
-    (school_vote_id IS NULL AND school_subvote_id IS NULL AND school_vote_label IS NULL AND school_subvote_label IS NULL)
-    OR (school_vote_id IS NOT NULL AND school_subvote_id IS NOT NULL AND school_vote_label IS NOT NULL AND school_subvote_label IS NOT NULL)
-  );
-CREATE INDEX school_cashbook_subvote_date ON public.general_business_cashbook_entries
+  ADD COLUMN IF NOT EXISTS school_vote_id uuid REFERENCES public.school_budget_votes(id) ON DELETE RESTRICT,
+  ADD COLUMN IF NOT EXISTS school_subvote_id uuid REFERENCES public.school_budget_subvotes(id) ON DELETE RESTRICT,
+  ADD COLUMN IF NOT EXISTS school_vote_label text,
+  ADD COLUMN IF NOT EXISTS school_subvote_label text;
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname='school_cashbook_dimension_pair' AND conrelid='public.general_business_cashbook_entries'::regclass) THEN
+    ALTER TABLE public.general_business_cashbook_entries ADD CONSTRAINT school_cashbook_dimension_pair CHECK (
+      (school_vote_id IS NULL AND school_subvote_id IS NULL AND school_vote_label IS NULL AND school_subvote_label IS NULL)
+      OR (school_vote_id IS NOT NULL AND school_subvote_id IS NOT NULL AND school_vote_label IS NOT NULL AND school_subvote_label IS NOT NULL)
+    );
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS school_cashbook_subvote_date ON public.general_business_cashbook_entries
   (organization_id, school_subvote_id, transaction_date) WHERE school_subvote_id IS NOT NULL;
 
-CREATE FUNCTION public.validate_school_cashbook_dimensions() RETURNS trigger
+CREATE OR REPLACE FUNCTION public.validate_school_cashbook_dimensions() RETURNS trigger
 LANGUAGE plpgsql SET search_path=public AS $$
 BEGIN
   IF TG_OP='UPDATE' THEN
@@ -34,6 +38,7 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+DROP TRIGGER IF EXISTS validate_school_cashbook_dimensions ON public.general_business_cashbook_entries;
 CREATE TRIGGER validate_school_cashbook_dimensions BEFORE INSERT OR UPDATE
 ON public.general_business_cashbook_entries FOR EACH ROW EXECUTE FUNCTION public.validate_school_cashbook_dimensions();
 

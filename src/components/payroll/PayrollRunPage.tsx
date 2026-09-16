@@ -18,7 +18,7 @@ import {
   computeLoanDeductionForStaff,
   type PayrollLoanRow,
 } from "@/lib/payrollLoanWriteDown";
-import { postPayrollRunToJournal, type PayrollGlIds, type PayrollRunTotals } from "@/lib/payrollPostAccounting";
+import { postPayrollRunToJournal, type PayrollGlIds, type PayrollRunTotals, type PayrollSalaryAllocation } from "@/lib/payrollPostAccounting";
 import type { PayslipDetail } from "@/lib/payrollPayslipPdf";
 import { downloadAllPayslipsPdf, downloadPayslipPdf } from "@/lib/payrollPayslipPdf";
 import { PAYROLL_PAGE } from "@/lib/payrollPages";
@@ -29,6 +29,7 @@ import { logPayrollAudit } from "@/lib/payrollAudit";
 type PeriodRow = { id: string; label: string; period_start: string; period_end: string };
 type ProfileRow = {
   staff_id: string;
+  payroll_cost_classification_id?: string | null;
   base_salary: number;
   housing_allowance: number;
   transport_allowance: number;
@@ -516,6 +517,25 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       salariesPayableGlAccountId: s.salaries_payable_gl_account_id || "",
       staffLoanReceivableGlAccountId: s.staff_loan_receivable_gl_account_id,
     };
+    const [{ data: profiles, error: profilesError }, { data: classifications, error: classificationsError }] = await Promise.all([
+      supabase.from("payroll_employee_profiles").select("staff_id,payroll_cost_classification_id").eq("organization_id", orgId),
+      supabase.from("payroll_cost_classifications").select("id,name,salary_expense_gl_account_id").eq("organization_id", orgId),
+    ]);
+    if (profilesError || classificationsError) {
+      setErr(profilesError?.message || classificationsError?.message || "Could not load payroll cost classifications.");
+      setBusy(false);
+      return;
+    }
+    const classificationById = new Map((classifications || []).map((c) => [c.id, c]));
+    const profileByStaffId = new Map((profiles || []).map((p) => [p.staff_id, p]));
+    const allocationMap = new Map<string, PayrollSalaryAllocation>();
+    for (const line of lines) {
+      const classification = classificationById.get(profileByStaffId.get(line.staff_id)?.payroll_cost_classification_id || "");
+      const glAccountId = classification?.salary_expense_gl_account_id || gl.salaryExpenseGlAccountId;
+      const label = classification ? `Gross salaries and wages — ${classification.name}` : "Gross salaries and wages";
+      const current = allocationMap.get(glAccountId);
+      allocationMap.set(glAccountId, { glAccountId, amount: (current?.amount || 0) + Number(line.gross_pay), label });
+    }
     const period = periods.find((p) => p.id === periodId);
     const { journalEntryId, error: postErr } = await postPayrollRunToJournal({
       organizationId: orgId,
@@ -525,6 +545,7 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       createdBy: user.id,
       totals,
       gl,
+      salaryAllocations: [...allocationMap.values()],
     });
     if (postErr || !journalEntryId) {
       setErr(postErr || "Post failed");

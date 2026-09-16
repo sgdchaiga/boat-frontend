@@ -18,9 +18,16 @@ export type PayrollRunTotals = {
   totalNet: number;
 };
 
+export type PayrollSalaryAllocation = {
+  glAccountId: string;
+  amount: number;
+  label: string;
+};
+
 export function buildPayrollJournalLines(
   totals: PayrollRunTotals,
-  gl: PayrollGlIds
+  gl: PayrollGlIds,
+  salaryAllocations?: PayrollSalaryAllocation[]
 ): { gl_account_id: string; debit: number; credit: number; line_description: string }[] {
   const lines: { gl_account_id: string; debit: number; credit: number; line_description: string }[] = [];
   const g = totals.totalGross;
@@ -32,12 +39,18 @@ export function buildPayrollJournalLines(
 
   // Keep gross salaries and the employer's statutory cost visible as separate
   // expenses on the income statement.
-  lines.push({
-    gl_account_id: gl.salaryExpenseGlAccountId,
-    debit: round2(g),
-    credit: 0,
-    line_description: "Gross salaries and wages",
-  });
+  const allocations = salaryAllocations?.length
+    ? salaryAllocations
+    : [{ glAccountId: gl.salaryExpenseGlAccountId, amount: g, label: "Gross salaries and wages" }];
+  for (const allocation of allocations) {
+    if (allocation.amount <= 0) continue;
+    lines.push({
+      gl_account_id: allocation.glAccountId,
+      debit: round2(allocation.amount),
+      credit: 0,
+      line_description: allocation.label,
+    });
+  }
 
   if (nssfEr > 0) {
     lines.push({
@@ -102,6 +115,7 @@ export async function postPayrollRunToJournal(params: {
   createdBy: string;
   totals: PayrollRunTotals;
   gl: PayrollGlIds;
+  salaryAllocations?: PayrollSalaryAllocation[];
 }): Promise<{ journalEntryId: string | null; error: string | null }> {
   const { totals, gl } = params;
   if (
@@ -117,7 +131,7 @@ export async function postPayrollRunToJournal(params: {
     return { journalEntryId: null, error: "Configure staff loan receivable GL or clear loan deductions." };
   }
 
-  const lines = buildPayrollJournalLines(totals, gl);
+  const lines = buildPayrollJournalLines(totals, gl, params.salaryAllocations);
   const bal = journalLinesBalance(lines);
   if (!bal.ok) {
     return {

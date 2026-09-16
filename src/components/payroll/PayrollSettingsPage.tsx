@@ -9,6 +9,7 @@ import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { DEFAULT_PAYE_TAX_BANDS, normalizePayeTaxBands, validatePayeTaxBands, type PayeTaxBand } from "@/lib/payrollCalculation";
 
 type GlAcc = { id: string; account_code: string; account_name: string };
+type CostClassRow = { id?: string; code: string; name: string; salary_expense_gl_account_id: string | null };
 
 type SettingsRow = {
   organization_id: string;
@@ -41,6 +42,7 @@ export function PayrollSettingsPage({ readOnly }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [costClasses, setCostClasses] = useState<CostClassRow[]>([]);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -48,11 +50,12 @@ export function PayrollSettingsPage({ readOnly }: Props) {
       return;
     }
     setLoading(true);
-    const [gRes, sRes] = await Promise.all([
+    const [gRes, sRes, cRes] = await Promise.all([
       supabase.from("gl_accounts").select("*").order("account_code"),
       supabase.from("payroll_org_settings").select("*").eq("organization_id", orgId).maybeSingle(),
+      supabase.from("payroll_cost_classifications").select("id,code,name,salary_expense_gl_account_id").eq("organization_id", orgId).order("name"),
     ]);
-    setErr(gRes.error?.message || sRes.error?.message || null);
+    setErr(gRes.error?.message || sRes.error?.message || cRes.error?.message || null);
     const normalizedGl = filterGlAccountsForBusinessType(
       normalizeGlAccountRows((gRes.data || []) as unknown[]),
       user?.business_type
@@ -64,6 +67,7 @@ export function PayrollSettingsPage({ readOnly }: Props) {
     setGl(normalizedGl as GlAcc[]);
     const savedSettings = (sRes.data as SettingsRow | null) || null;
     setRow(savedSettings ? { ...savedSettings, paye_tax_bands: normalizePayeTaxBands(savedSettings.paye_tax_bands) } : { paye_tax_bands: DEFAULT_PAYE_TAX_BANDS.map((band) => ({ ...band })) });
+    setCostClasses((cRes.data as CostClassRow[]) || []);
     setLoading(false);
   }, [orgId, user?.business_type]);
 
@@ -104,7 +108,13 @@ export function PayrollSettingsPage({ readOnly }: Props) {
       staff_loan_receivable_gl_account_id: row.staff_loan_receivable_gl_account_id || null,
     };
     const { error } = await supabase.from("payroll_org_settings").upsert(payload, { onConflict: "organization_id" });
-    if (error) setErr(error.message);
+    if (error) { setErr(error.message); setSaving(false); return; }
+    const classes = costClasses.filter((item) => item.code.trim() && item.name.trim());
+    const { error: classError } = await supabase.from("payroll_cost_classifications").upsert(
+      classes.map((item) => ({ ...item, organization_id: orgId, code: item.code.trim(), name: item.name.trim() })),
+      { onConflict: "organization_id,code" }
+    );
+    if (classError) setErr(classError.message);
     setSaving(false);
     load();
   };
@@ -216,6 +226,21 @@ export function PayrollSettingsPage({ readOnly }: Props) {
               onChange={(id) => setRow((r) => ({ ...r, staff_loan_receivable_gl_account_id: id }))}
               optional
             />
+          </section>
+          <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
+            <div>
+              <h2 className="font-semibold text-slate-800">Payroll cost classes</h2>
+              <p className="mt-1 text-sm text-slate-600">Department is for reporting. A cost class routes an employee’s gross salary to its own expense GL; employees without one use the Salary expense default above.</p>
+            </div>
+            {costClasses.map((item, index) => (
+              <div key={item.id || `new-${index}`} className="grid grid-cols-1 sm:grid-cols-[120px_1fr_1fr] gap-2">
+                <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="Code" value={item.code} onChange={(e) => setCostClasses((items) => items.map((row, i) => i === index ? { ...row, code: e.target.value } : row))} />
+                <input className="border border-slate-300 rounded-lg px-3 py-2 text-sm" placeholder="e.g. Direct labour" value={item.name} onChange={(e) => setCostClasses((items) => items.map((row, i) => i === index ? { ...row, name: e.target.value } : row))} />
+                <GlSelect label="" value={item.salary_expense_gl_account_id} gl={gl} optional onChange={(id) => setCostClasses((items) => items.map((row, i) => i === index ? { ...row, salary_expense_gl_account_id: id } : row))} />
+              </div>
+            ))}
+            <button type="button" className="text-sm px-3 py-1.5 border rounded-lg bg-white" onClick={() => setCostClasses((items) => [...items, { code: "", name: "", salary_expense_gl_account_id: null }])}>Add cost class</button>
+            {costClasses.length === 0 && <p className="text-xs text-slate-500">Common examples: Direct labour, Production overhead, Administrative salaries, Selling salaries.</p>}
           </section>
         </fieldset>
         <button

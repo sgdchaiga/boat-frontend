@@ -1068,9 +1068,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                       <SearchableCombobox
                         value={formData.income_account}
                         onChange={(id) => setFormData((previous) => ({ ...previous, income_account: id }))}
-                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" — ") || "Unnamed account" }))}
+                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" - ") || "Unnamed account" }))}
                         emptyOption={{ label: "Automatic (recommended)" }}
-                        placeholder="Type account name or code…"
+                        placeholder="Type account name or code."
                         inputAriaLabel="Sales (income) account"
                         disabled={readOnly}
                       />
@@ -1083,7 +1083,7 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                         if (subvote?.accountId && glAccounts.some((account) => account.id === subvote.accountId)) {
                           setFormData((previous) => ({ ...previous, purchases_account: subvote.accountId! }));
                         }
-                      }} options={schoolSubvotes.map((row) => ({ id: row.id, label: row.label }))} placeholder="Type vote or subvote name…" inputAriaLabel="School subvote for item cost account" disabled={readOnly} />
+                      }} options={schoolSubvotes.map((row) => ({ id: row.id, label: row.label }))} placeholder="Type vote or subvote name." inputAriaLabel="School subvote for item cost account" disabled={readOnly} />
                       <p className="mt-1 text-xs text-slate-500">Selecting a mapped subvote fills the purchases / cost account saved on this item.</p>
                       {subvoteError && <p className="mt-1 text-xs text-red-700">{subvoteError}</p>}
                       {selectedSubvoteId && !glAccounts.some((account) => account.id === schoolSubvotes.find((row) => row.id === selectedSubvoteId)?.accountId) && <p className="mt-1 text-xs text-amber-700">This subvote has no active mapped account. Ask your accountant to map it, or select an account below. The existing account has not changed.</p>}
@@ -1093,9 +1093,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                       <SearchableCombobox
                         value={formData.purchases_account}
                         onChange={(id) => setFormData((previous) => ({ ...previous, purchases_account: id }))}
-                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" — ") || "Unnamed account" }))}
+                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" - ") || "Unnamed account" }))}
                         emptyOption={{ label: "Automatic (recommended)" }}
-                        placeholder="Type account name or code…"
+                        placeholder="Type account name or code."
                         inputAriaLabel="Purchases / cost account"
                         disabled={readOnly}
                       />
@@ -1105,9 +1105,9 @@ export default function ProductsPage({ readOnly = false }: ProductsPageProps = {
                       <SearchableCombobox
                         value={formData.stock_account}
                         onChange={(id) => setFormData((previous) => ({ ...previous, stock_account: id }))}
-                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" — ") || "Unnamed account" }))}
+                        options={glAccounts.map((account) => ({ id: account.id, label: [account.account_code, account.account_name].filter(Boolean).join(" - ") || "Unnamed account" }))}
                         emptyOption={{ label: "Automatic (recommended)" }}
-                        placeholder="Type account name or code…"
+                        placeholder="Type account name or code."
                         inputAriaLabel="Stock (inventory) account"
                         disabled={readOnly}
                       />

@@ -39,6 +39,7 @@ export type BuildSimpleOrgNavArgs = {
   allowPayroll: boolean;
   allowCommunications: boolean;
   allowManufacturing: boolean;
+  manufacturingVersion?: 1 | 2;
   allowBudget: boolean;
   allowInventory?: boolean;
   allowFixedAssets?: boolean;
@@ -203,6 +204,11 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
           { name: "Overview", page: "manufacturing" },
           { name: "Recipes / BOM", page: "manufacturing_bom" },
           { name: "Production orders", page: "manufacturing_work_orders" },
+          ...(args.manufacturingVersion === 2 ? [
+            { name: "Work centres & routings", page: "manufacturing_operations" },
+            { name: "Job cards", page: "manufacturing_job_cards" },
+            { name: "Lots & quality", page: "manufacturing_quality" },
+          ] : []),
           { name: "Production entries", page: "manufacturing_production_entries" },
           { name: "Costing", page: "manufacturing_costing" },
           { name: "WIP report", page: "manufacturing_wip_report" },
@@ -393,6 +399,11 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
             { name: "Overview", page: "manufacturing" },
             { name: "Recipes / BOM", page: "manufacturing_bom" },
             { name: "Production orders", page: "manufacturing_work_orders" },
+            ...(args.manufacturingVersion === 2 ? [
+              { name: "Work centres & routings", page: "manufacturing_operations" },
+              { name: "Job cards", page: "manufacturing_job_cards" },
+              { name: "Lots & quality", page: "manufacturing_quality" },
+            ] : []),
             { name: "Production entries", page: "manufacturing_production_entries" },
             { name: "Costing", page: "manufacturing_costing" },
             { name: "WIP report", page: "manufacturing_wip_report" },
