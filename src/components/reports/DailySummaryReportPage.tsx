@@ -47,6 +47,7 @@ type VendorPaymentRow = {
   created_at: string | null;
   vendors?: { name?: string | null } | null;
 };
+type PayrollPaymentDayRow = { id: string; staff_id: string; amount: number; payment_method: string; paid_at: string; payment_reference: string | null; staff?: { full_name?: string | null } | null };
 
 type StockMoveRow = {
   id: string;
@@ -129,6 +130,7 @@ export function DailySummaryReportPage() {
 
   const [billsDay, setBillsDay] = useState<BillRow[]>([]);
   const [vendorPayDay, setVendorPayDay] = useState<VendorPaymentRow[]>([]);
+  const [payrollPaymentsDay, setPayrollPaymentsDay] = useState<PayrollPaymentDayRow[]>([]);
 
   const [stockMoves, setStockMoves] = useState<StockMoveRow[]>([]);
   const [invoiceStockLinesDay, setInvoiceStockLinesDay] = useState<InvoiceStockLineDay[]>([]);
@@ -150,6 +152,7 @@ export function DailySummaryReportPage() {
         setPaymentsDay([]);
         setBillsDay([]);
         setVendorPayDay([]);
+        setPayrollPaymentsDay([]);
         setStockMoves([]);
         setInvoiceStockLinesDay([]);
         setExpensesRows([]);
@@ -254,6 +257,10 @@ export function DailySummaryReportPage() {
         orgId,
         superAdmin
       );
+      const payrollPaymentsQ = filterByOrganizationId(
+        supabase.from("payroll_payments").select("id,staff_id,amount,payment_method,paid_at,payment_reference,staff:staff_id(full_name)").eq("status", "paid").gte("paid_at", fromStr).lt("paid_at", toStr).order("paid_at", { ascending: true }),
+        orgId, superAdmin
+      );
 
       const [
         invRes,
@@ -267,6 +274,7 @@ export function DailySummaryReportPage() {
         billingRes,
         kitchenRes,
         expRes,
+        payrollPaymentsRes,
       ] = await Promise.all([
         invQ,
         payAllQ,
@@ -279,6 +287,7 @@ export function DailySummaryReportPage() {
         billingQ,
         kitchenQ,
         expensesQ,
+        payrollPaymentsQ,
       ]);
 
       if (invRes.error) throw invRes.error;
@@ -293,6 +302,7 @@ export function DailySummaryReportPage() {
       if (billingRes.error) console.warn("[Daily summary] billing:", billingRes.error.message);
       if (kitchenRes.error) console.warn("[Daily summary] kitchen_orders:", kitchenRes.error.message);
       if (expRes.error) console.warn("[Daily summary] expenses:", expRes.error.message);
+      if (payrollPaymentsRes.error) console.warn("[Daily summary] payroll payments:", payrollPaymentsRes.error.message);
 
       const allInv = (invRes.data || []) as InvoiceRow[];
       const dateKey = issueDateKey(reportDate);
@@ -396,6 +406,7 @@ export function DailySummaryReportPage() {
       setRetailPosTotal(rPos);
 
       setExpensesRows((expRes.data || []) as ExpenseRow[]);
+      setPayrollPaymentsDay((payrollPaymentsRes.data || []) as unknown as PayrollPaymentDayRow[]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to load report.";
       setError(msg);
@@ -404,6 +415,7 @@ export function DailySummaryReportPage() {
       setPaymentsDay([]);
       setBillsDay([]);
       setVendorPayDay([]);
+      setPayrollPaymentsDay([]);
       setStockMoves([]);
       setInvoiceStockLinesDay([]);
       setExpensesRows([]);
@@ -437,6 +449,10 @@ export function DailySummaryReportPage() {
   const debtorTotal = useMemo(
     () => debtorAndOther.reduce((s, p) => s + Number(p.amount ?? 0), 0),
     [debtorAndOther]
+  );
+  const payrollPaymentsTotal = useMemo(
+    () => payrollPaymentsDay.reduce((sum, payment) => sum + Number(payment.amount || 0), 0),
+    [payrollPaymentsDay]
   );
 
   const purchaseTotals = useMemo(() => {
@@ -805,6 +821,13 @@ export function DailySummaryReportPage() {
                   )}
                 </tbody>
               </table>
+            </div>
+            <h3 className="mt-6 text-sm font-semibold text-slate-800 mb-2">Payroll payments</h3>
+            <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div className="border-b border-slate-100 px-3 py-2 text-xs text-slate-500">Total paid: <strong className="text-slate-800">{formatMoney(payrollPaymentsTotal)}</strong></div>
+              <table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="text-left p-2">Employee</th><th className="text-right p-2">Amount</th><th className="text-left p-2">Method</th><th className="text-left p-2">Reference</th></tr></thead><tbody>
+                {payrollPaymentsDay.length === 0 ? <tr><td colSpan={4} className="p-4 text-center text-slate-500">No payroll payments this day.</td></tr> : payrollPaymentsDay.map((payment) => <tr key={payment.id} className="border-t border-slate-100"><td className="p-2">{payment.staff?.full_name || payment.staff_id}</td><td className="p-2 text-right">{formatMoney(Number(payment.amount || 0))}</td><td className="p-2">{formatPaymentMethodLabel(payment.payment_method)}</td><td className="p-2 text-xs">{payment.payment_reference || "—"}</td></tr>)}
+              </tbody></table>
             </div>
           </section>
 

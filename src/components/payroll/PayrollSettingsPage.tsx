@@ -29,6 +29,9 @@ type SettingsRow = {
   nssf_payable_gl_account_id: string | null;
   salaries_payable_gl_account_id: string | null;
   staff_loan_receivable_gl_account_id: string | null;
+  payroll_bank_payment_gl_account_id: string | null;
+  payroll_mobile_money_payment_gl_account_id: string | null;
+  payroll_cash_payment_gl_account_id: string | null;
 };
 
 type Props = { readOnly?: boolean };
@@ -106,6 +109,9 @@ export function PayrollSettingsPage({ readOnly }: Props) {
       nssf_payable_gl_account_id: row.nssf_payable_gl_account_id || null,
       salaries_payable_gl_account_id: row.salaries_payable_gl_account_id || null,
       staff_loan_receivable_gl_account_id: row.staff_loan_receivable_gl_account_id || null,
+      payroll_bank_payment_gl_account_id: row.payroll_bank_payment_gl_account_id || null,
+      payroll_mobile_money_payment_gl_account_id: row.payroll_mobile_money_payment_gl_account_id || null,
+      payroll_cash_payment_gl_account_id: row.payroll_cash_payment_gl_account_id || null,
     };
     const { error } = await supabase.from("payroll_org_settings").upsert(payload, { onConflict: "organization_id" });
     if (error) { setErr(error.message); setSaving(false); return; }
@@ -233,6 +239,13 @@ export function PayrollSettingsPage({ readOnly }: Props) {
               onChange={(id) => setRow((r) => ({ ...r, staff_loan_receivable_gl_account_id: id }))}
               optional
             />
+            <div className="border-t border-slate-100 pt-3 space-y-2">
+              <p className="text-sm font-medium text-slate-700">Payroll payment accounts</p>
+              <p className="text-xs text-slate-500">When an employee is marked Paid, BOAT debits Salaries Payable and credits the selected account.</p>
+              <GlSelect label="Bank payments" value={row.payroll_bank_payment_gl_account_id} gl={gl} onChange={(id) => setRow((r) => ({ ...r, payroll_bank_payment_gl_account_id: id }))} />
+              <GlSelect label="Mobile-money payments" value={row.payroll_mobile_money_payment_gl_account_id} gl={gl} onChange={(id) => setRow((r) => ({ ...r, payroll_mobile_money_payment_gl_account_id: id }))} />
+              <GlSelect label="Cash payments" value={row.payroll_cash_payment_gl_account_id} gl={gl} onChange={(id) => setRow((r) => ({ ...r, payroll_cash_payment_gl_account_id: id }))} />
+            </div>
           </section>
           <section className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
             <div>
