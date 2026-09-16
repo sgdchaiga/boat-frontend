@@ -156,7 +156,7 @@ export function PayrollSettingsPage({ readOnly }: Props) {
                 <li>Else if J8 &lt; 335,000 → (J8 − 235,000) × 10%</li>
                 <li>Else if J8 &lt; 410,000 → (J8 − 335,000) × 20% + 10,000</li>
                 <li>Else if J8 ≤ 10,000,000 → (J8 − 410,000) × 30% + 25,000</li>
-                <li>Else → (J8 − 410,000) × 30% + 25,000 + (J8 − 10,000,000) × 10%</li>
+                <li>Else → 33,750 + (J8 − 485,000) × 30% + (J8 − 10,000,000) × 10%</li>
               </ul>
             </div>
             <PayeBandsEditor

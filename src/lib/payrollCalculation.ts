@@ -28,7 +28,9 @@ export const DEFAULT_PAYE_TAX_BANDS: PayeTaxBand[] = [
   { lower: 235_000, upper: 335_000, ratePct: 10, minimumTax: 0 },
   { lower: 335_000, upper: 410_000, ratePct: 20, minimumTax: 10_000 },
   { lower: 410_000, upper: 10_000_000, ratePct: 30, minimumTax: 25_000 },
-  { lower: 10_000_000, upper: null, ratePct: 40, minimumTax: 2_902_000 },
+  // Above 10m: 33,750 + 30% × (income − 485,000) + 10% × (income − 10,000,000).
+  // The tax accumulated at 10m is 2,888,250; only the additional 10% applies after that.
+  { lower: 10_000_000, upper: null, ratePct: 10, minimumTax: 2_888_250 },
 ];
 
 export function normalizePayeTaxBands(value: unknown): PayeTaxBand[] {
@@ -120,7 +122,7 @@ export function computePAYE(taxableIncome: number, s: PayrollStatutoryInput): nu
 
 /**
  * PAYE on **gross pay** (Excel J8), matching:
- * `IF(J8>10000000,(J8-410000)*30%+25000+(J8-10000000)*10%,
+ * `IF(J8>10000000,33750+(J8-485000)*30%+(J8-10000000)*10%,
  *   IF(J8>=410000,(J8-410000)*30%+25000,
  *   IF(J8>=335000,(J8-335000)*20%+10000,
  *   IF(J8>=235000,(J8-235000)*10%,0))))`
