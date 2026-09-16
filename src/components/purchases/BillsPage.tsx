@@ -1774,12 +1774,18 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                   Approved bill: Super Admin changes update the bill and repost the payable journal.
                 </p>
               )}
-              <div>
-                <label className="block text-sm font-medium mb-1">Vendor *</label>
-                <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100">
-                  <option value="">Select vendor</option>
-                  {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                </select>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(10rem,0.5fr)]">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Vendor *</label>
+                  <select value={vendorId} onChange={(e) => setVendorId(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100">
+                    <option value="">Select vendor</option>
+                    {vendors.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Invoice Number</label>
+                  <input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="Manual invoice no." />
+                </div>
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Amount *</label>
@@ -1792,10 +1798,6 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
               <div>
                 <label className="block text-sm font-medium mb-1">Due Date</label>
                 <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full border rounded-lg px-3 py-2" />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Invoice Number</label>
-                <input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="Supplier/manual invoice number" />
               </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Description</label>

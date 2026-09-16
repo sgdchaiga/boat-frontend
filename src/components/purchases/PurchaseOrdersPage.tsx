@@ -1355,24 +1355,26 @@ const approvedAt = new Date().toISOString();
             </div>
 
             <div className="space-y-6 flex-1 min-h-0 overflow-y-auto">
-              <section>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Supplier</label>
-                <select
-                  value={vendorId}
-                  onChange={(e) => setVendorId(e.target.value)}
-                  className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-base"
-                >
-                  <option value="">Select supplier</option>
-                  {vendors.map((v) => (
-                    <option key={v.id} value={v.id}>
-                      {v.name}
-                    </option>
-                  ))}
-               </select>
-              </section>
-              <section>
-                <label className="block text-sm font-medium mb-1">LPO Number</label>
-                <input value={lpoNumber} onChange={(e) => setLpoNumber(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="Client/manual LPO number" />
+              <section className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,0.45fr)]">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">Supplier</label>
+                  <select
+                    value={vendorId}
+                    onChange={(e) => setVendorId(e.target.value)}
+                    className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-base"
+                  >
+                    <option value="">Select supplier</option>
+                    {vendors.map((v) => (
+                      <option key={v.id} value={v.id}>
+                        {v.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1">LPO Number</label>
+                  <input value={lpoNumber} onChange={(e) => setLpoNumber(e.target.value)} className="w-full border-2 border-slate-200 rounded-xl px-4 py-3 text-base" placeholder="Manual LPO number" />
+                </div>
               </section>
 
               {!simpleMode && (
