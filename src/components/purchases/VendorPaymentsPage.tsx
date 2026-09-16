@@ -42,6 +42,7 @@ type OutstandingBill = {
   bill_date: string | null;
   due_date: string | null;
   description: string | null;
+  invoice_number: string | null;
   vendors?: { name: string } | null;
 };
 
@@ -112,7 +113,7 @@ export function VendorPaymentsPage({
     try {
       const { data: bills, error: bErr } = await supabase
         .from("bills")
-        .select("id, amount, due_date, bill_date, description, approved_at, status, vendors(name)")
+        .select("id, amount, due_date, bill_date, description, invoice_number, approved_at, status, vendors(name)")
         .eq("vendor_id", venId)
         .order("bill_date", { ascending: false });
       if (bErr) throw bErr;
@@ -122,6 +123,7 @@ export function VendorPaymentsPage({
         due_date: string | null;
         bill_date: string | null;
         description: string | null;
+        invoice_number: string | null;
         approved_at: string | null;
         status: string | null;
         vendors?: { name: string } | null;
@@ -178,6 +180,7 @@ export function VendorPaymentsPage({
           bill_date: b.bill_date,
           due_date: b.due_date,
           description: b.description,
+          invoice_number: b.invoice_number,
           vendors: b.vendors,
         });
       }
@@ -832,7 +835,7 @@ export function VendorPaymentsPage({
                       <thead className="bg-slate-50">
                         <tr>
                           <th className="text-left p-2 font-medium">Bill date</th>
-                          <th className="text-left p-2 font-medium">Description</th>
+                          <th className="text-left p-2 font-medium">Invoice No.</th>
                           <th className="text-right p-2 font-medium">Balance</th>
                           <th className="text-right p-2 font-medium w-32">Apply</th>
                         </tr>
@@ -843,8 +846,8 @@ export function VendorPaymentsPage({
                             <td className="p-2 whitespace-nowrap">
                               {b.bill_date ? new Date(b.bill_date).toLocaleDateString() : "—"}
                             </td>
-                            <td className="p-2 max-w-[200px] truncate" title={b.description || undefined}>
-                              {b.description || "—"}
+                            <td className="p-2 max-w-[200px] truncate" title={b.invoice_number || b.description || undefined}>
+                              {b.invoice_number || b.description || "—"}
                             </td>
                             <td className="p-2 text-right tabular-nums">{b.balance.toFixed(2)}</td>
                             <td className="p-2 text-right">

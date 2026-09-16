@@ -92,6 +92,7 @@ interface PurchaseOrderItem extends LineItem {
 
 interface PurchaseOrder {
   id: string;
+  lpo_number?: string | null;
   vendor_id?: string | null;
   department_id?: string | null;
   order_date?: string | null;
@@ -243,6 +244,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const [vendorId, setVendorId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
+  const [lpoNumber, setLpoNumber] = useState("");
 
   useEffect(() => {
     if (!orgId || String(user?.business_type || "").toLowerCase() !== "school") return void setBudgetPriceByName(new Map());
@@ -317,6 +319,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
         const localOrders = ((ordersRes.rows || []) as Array<Record<string, unknown>>).map((row) => ({
           id: String(row.id || ""),
           vendor_id: (row.vendor_id as string | null) ?? null,
+          lpo_number: (row.lpo_number as string | null) ?? null,
           department_id: (row.department_id as string | null) ?? null,
           order_date: (row.order_date as string | null) ?? null,
           status: (row.status as string | null) ?? "pending",
@@ -502,6 +505,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     setVendorId("");
     setDepartmentId("");
     setOrderDate(new Date().toISOString().slice(0, 10));
+    setLpoNumber("");
     setLineItems([{ product_id: "", description: "", cost_price: 0, quantity: 1 }]);
     setAdvancedOpen(false);
   };
@@ -569,6 +573,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     setVendorId(o.vendor_id || "");
     setDepartmentId(o.department_id || "");
     setOrderDate(o.order_date || new Date().toISOString().slice(0, 10));
+    setLpoNumber(o.lpo_number || "");
     const items = (o.purchase_order_items || []).map((i) => ({
       product_id: (i as { product_id?: string }).product_id || "",
       description: i.description || "",
@@ -637,6 +642,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
                 vendor_id: vendorId,
                 department_id: departmentId || null,
                 order_date: orderDate,
+                lpo_number: lpoNumber.trim() || null,
                 status: editingOrder.status || "pending",
                 total_amount: total,
                 organization_id: effectiveOrg,
@@ -655,6 +661,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
                 vendor_id: vendorId,
                 department_id: departmentId || null,
                 order_date: orderDate,
+                lpo_number: lpoNumber.trim() || null,
                 status: "pending",
                 total_amount: total,
                 organization_id: effectiveOrg,
@@ -688,6 +695,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
             vendor_id: vendorId,
             department_id: departmentId || null,
             order_date: orderDate,
+            lpo_number: lpoNumber.trim() || null,
             total_amount: total,
             status: "pending",
             rejection_reason: null,
@@ -714,6 +722,7 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
             vendor_id: vendorId,
             department_id: departmentId || null,
             order_date: orderDate,
+            lpo_number: lpoNumber.trim() || null,
             status: "pending",
             total_amount: total,
           })
@@ -1112,7 +1121,7 @@ const approvedAt = new Date().toISOString();
       ) : (
         <div className="space-y-3">
           {displayedOrders.length === 0 && <p className="text-center text-slate-500 py-12 bg-white rounded-xl border border-slate-200">{isSchool ? "No purchase orders match the selected filters." : "No purchases recorded yet."}</p>}
-          {isSchool && filteredOrders.length > 0 && <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block"><table className="w-full text-sm"><thead className="bg-slate-50"><tr>{["PO No.","Date","Supplier","Department","Order Total","Approval","Delivery / Billing","Payment","Actions"].map((heading) => <th key={heading} className="p-3 text-left font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{filteredOrders.map((o) => <tr key={o.id} className="border-t border-slate-100 hover:bg-slate-50/70"><td className="p-3 font-mono text-xs">PO-{o.id.slice(0,8).toUpperCase()}</td><td className="p-3 whitespace-nowrap">{o.order_date ? new Date(o.order_date).toLocaleDateString() : "—"}</td><td className="p-3 font-medium text-slate-900">{o.vendors?.name || "—"}</td><td className="p-3">{o.departments?.name || "Central"}</td><td className="p-3 text-right font-semibold tabular-nums">{formatMoney(Number(o.total_amount || 0), currency)}</td><td className="p-3 capitalize">{o.status === "pending" ? "Pending approval" : o.status || "Draft"}</td><td className="p-3">{billsByPoId[o.id] ? "Bill recorded" : o.status === "approved" ? "Awaiting receipt" : "Not started"}</td><td className="p-3">{billsByPoId[o.id] ? "Unpaid" : "Not billed"}</td><td className="p-3"><button type="button" onClick={() => void openView(o)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-white"><Eye className="h-4 w-4"/>View Order</button></td></tr>)}</tbody></table></div>}
+          {isSchool && filteredOrders.length > 0 && <div className="hidden overflow-x-auto rounded-xl border border-slate-200 bg-white lg:block"><table className="w-full text-sm"><thead className="bg-slate-50"><tr>{["LPO No.","System PO No.","Date","Supplier","Department","Order Total","Approval","Delivery / Billing","Payment","Actions"].map((heading) => <th key={heading} className="p-3 text-left font-semibold text-slate-700">{heading}</th>)}</tr></thead><tbody>{filteredOrders.map((o) => <tr key={o.id} className="border-t border-slate-100 hover:bg-slate-50/70"><td className="p-3 font-mono text-xs">{o.lpo_number || "—"}</td><td className="p-3 font-mono text-xs">PO-{o.id.slice(0,8).toUpperCase()}</td><td className="p-3 whitespace-nowrap">{o.order_date ? new Date(o.order_date).toLocaleDateString() : "—"}</td><td className="p-3 font-medium text-slate-900">{o.vendors?.name || "—"}</td><td className="p-3">{o.departments?.name || "Central"}</td><td className="p-3 text-right font-semibold tabular-nums">{formatMoney(Number(o.total_amount || 0), currency)}</td><td className="p-3 capitalize">{o.status === "pending" ? "Pending approval" : o.status || "Draft"}</td><td className="p-3">{billsByPoId[o.id] ? "Bill recorded" : o.status === "approved" ? "Awaiting receipt" : "Not started"}</td><td className="p-3">{billsByPoId[o.id] ? "Unpaid" : "Not billed"}</td><td className="p-3"><button type="button" onClick={() => void openView(o)} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2.5 py-1.5 font-medium text-slate-700 hover:bg-white"><Eye className="h-4 w-4"/>View Order</button></td></tr>)}</tbody></table></div>}
           {displayedOrders.map((o) => (
             <div
               key={o.id}
@@ -1234,7 +1243,8 @@ const approvedAt = new Date().toISOString();
               </button>
             </div>
             <div className="space-y-2 text-sm">
-              {isSchool && <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase order</p><p className="mt-1 font-mono font-semibold text-slate-900">PO-{viewOrder.id.slice(0,8).toUpperCase()}</p></div>}
+               {isSchool && <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase order</p><p className="mt-1 font-mono font-semibold text-slate-900">PO-{viewOrder.id.slice(0,8).toUpperCase()}</p></div>}
+               {viewOrder.lpo_number && <p><span className="text-slate-500">LPO number</span><br /><span className="font-mono font-medium text-slate-900">{viewOrder.lpo_number}</span></p>}
               <p>
                 <span className="text-slate-500">Supplier</span>
                 <br />
@@ -1358,7 +1368,11 @@ const approvedAt = new Date().toISOString();
                       {v.name}
                     </option>
                   ))}
-                </select>
+               </select>
+              </section>
+              <section>
+                <label className="block text-sm font-medium mb-1">LPO Number</label>
+                <input value={lpoNumber} onChange={(e) => setLpoNumber(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="Client/manual LPO number" />
               </section>
 
               {!simpleMode && (

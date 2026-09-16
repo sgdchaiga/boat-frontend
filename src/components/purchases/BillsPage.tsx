@@ -26,6 +26,7 @@ import { HotelCashPurchaseModal } from "./HotelCashPurchaseModal";
 
 interface Bill {
   id: string;
+  invoice_number?: string | null;
   vendor_id?: string | null;
   bill_date?: string | null;
   due_date?: string | null;
@@ -253,6 +254,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
   const [dueDate, setDueDate] = useState("");
   const [amount, setAmount] = useState("");
   const [description, setDescription] = useState("");
+  const [invoiceNumber, setInvoiceNumber] = useState("");
   const [saving, setSaving] = useState(false);
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
@@ -755,6 +757,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
     setDueDate(bill.due_date || bDate);
     setAmount(String(bill.amount ?? ""));
     setDescription(bill.description || "");
+    setInvoiceNumber(bill.invoice_number || "");
     setShowModal(true);
   };
 
@@ -767,6 +770,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
     setDueDate(bill.due_date || bDate);
     setAmount(String(bill.amount ?? ""));
     setDescription(bill.description || "");
+    setInvoiceNumber("");
     setCloneItemDrafts([]);
     if (bill.purchase_order_id) {
       const { data, error } = await supabase
@@ -1129,8 +1133,9 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
     doc.setFont("helvetica", "normal");
     doc.text(`Bill date: ${billDateStr}`, margin, y);
     doc.text(`Due date: ${dueDateStr}`, margin, y + 5);
-    if (detailBill.description) doc.text(`Ref: ${detailBill.description}`, margin, y + 10);
-    y += (detailBill.description ? 18 : 12);
+    if (detailBill.invoice_number) doc.text(`Invoice no.: ${detailBill.invoice_number}`, margin, y + 10);
+    if (detailBill.description) doc.text(`Ref: ${detailBill.description}`, margin, y + (detailBill.invoice_number ? 15 : 10));
+    y += detailBill.invoice_number && detailBill.description ? 23 : (detailBill.invoice_number || detailBill.description ? 18 : 12);
 
     // ----- Items table -----
     doc.setFontSize(10);
@@ -1254,6 +1259,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
     setDueDate(today);
     setAmount("");
     setDescription("");
+    setInvoiceNumber("");
   };
 
   const handleSave = async () => {
@@ -1276,6 +1282,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
         due_date: dueDate || billDateVal,
         amount: amt,
         description: description.trim() || null,
+        invoice_number: invoiceNumber.trim() || null,
       };
       if (editingBill) {
         const approvedEdit = isBillApproved(editingBill);
@@ -1304,6 +1311,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                 due_date: editingBill.due_date,
                 amount: editingBill.amount ?? null,
                 description: editingBill.description ?? null,
+                invoice_number: editingBill.invoice_number ?? null,
               })
               .eq("id", editingBill.id);
             throw repostError;
@@ -1510,6 +1518,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
               <tr>
                 {visibleColumns.date && <th className="text-left p-3">Date</th>}
                 {visibleColumns.vendor && <th className="text-left p-3">Vendor</th>}
+                {visibleColumns.description && <th className="text-left p-3">Invoice No.</th>}
                 {visibleColumns.description && <th className="text-left p-3">Description</th>}
                 {visibleColumns.dueDate && <th className="text-left p-3">Due Date</th>}
                 {visibleColumns.status && <th className="text-left p-3">Status</th>}
@@ -1528,6 +1537,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                 >
                   {visibleColumns.date && <td className="p-3">{b.bill_date ? new Date(b.bill_date).toLocaleDateString() : "—"}</td>}
                   {visibleColumns.vendor && <td className="p-3">{b.vendors?.name || "—"}</td>}
+                  {visibleColumns.description && <td className="p-3 font-mono text-xs">{b.invoice_number || "—"}</td>}
                   {visibleColumns.description && <td className="p-3">
                     <button
                       type="button"
@@ -1784,8 +1794,12 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                 <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full border rounded-lg px-3 py-2" />
               </div>
               <div>
+                <label className="block text-sm font-medium mb-1">Invoice Number</label>
+                <input value={invoiceNumber} onChange={(e) => setInvoiceNumber(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="Supplier/manual invoice number" />
+              </div>
+              <div>
                 <label className="block text-sm font-medium mb-1">Description</label>
-                <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="e.g. Invoice #1234" />
+                <input value={description} onChange={(e) => setDescription(e.target.value)} disabled={Boolean(editingBill && isBillApproved(editingBill) && !isOrgSuperAdmin)} className="w-full border rounded-lg px-3 py-2 disabled:bg-slate-100" placeholder="What was received" />
               </div>
               {!editingBill && cloneItemDrafts.length > 0 && <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><strong>Stock to receive:</strong> {cloneItemDrafts[0].quantity} × {cloneItemDrafts[0].description}. Stock will be added when this GRN/Bill is approved.</div>}
             </div>
@@ -1840,7 +1854,8 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
               </div>
             )}
             <div className="space-y-3 text-sm mb-4">
-              <p><span className="font-medium text-slate-500">Vendor:</span> {detailBill.vendors?.name || "—"}</p>
+               <p><span className="font-medium text-slate-500">Vendor:</span> {detailBill.vendors?.name || "—"}</p>
+               <p><span className="font-medium text-slate-500">Invoice number:</span> <span className="font-mono">{detailBill.invoice_number || "—"}</span></p>
               <p><span className="font-medium text-slate-500">Date:</span> {detailBill.bill_date ? new Date(detailBill.bill_date).toLocaleDateString() : "—"}</p>
               <p><span className="font-medium text-slate-500">Due date:</span> {detailBill.due_date ? new Date(detailBill.due_date).toLocaleDateString() : "—"}</p>
               <p><span className="font-medium text-slate-500">Status:</span> {formatBillStatusLabel(detailBill.status)}</p>
