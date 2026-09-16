@@ -241,6 +241,9 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
   const [showModal, setShowModal] = useState(false);
   const [viewOrder, setViewOrder] = useState<PurchaseOrder | null>(null);
   const [editingOrder, setEditingOrder] = useState<PurchaseOrder | null>(null);
+  const [editingLpo, setEditingLpo] = useState(false);
+  const [lpoDraft, setLpoDraft] = useState("");
+  const [savingLpo, setSavingLpo] = useState(false);
   const [vendorId, setVendorId] = useState("");
   const [departmentId, setDepartmentId] = useState("");
   const [orderDate, setOrderDate] = useState(new Date().toISOString().slice(0, 10));
@@ -583,6 +586,32 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     setLineItems(items.length ? items : [{ product_id: "", description: "", cost_price: 0, quantity: 1 }]);
     setAdvancedOpen(!simpleMode);
     setShowModal(true);
+  };
+
+  const saveLpoNumber = async () => {
+    if (!viewOrder || readOnly || savingLpo) return;
+    setSavingLpo(true);
+    const nextLpo = lpoDraft.trim() || null;
+    try {
+      if (isLocalDesktopMode && desktopApi.isAvailable()) {
+        await desktopApi.localUpdate({
+          table: "purchase_orders",
+          filters: [{ column: "id", operator: "eq", value: viewOrder.id }],
+          patch: { lpo_number: nextLpo },
+        });
+      } else {
+        const { error } = await supabase.from("purchase_orders").update({ lpo_number: nextLpo }).eq("id", viewOrder.id);
+        if (error) throw error;
+      }
+      const updated = { ...viewOrder, lpo_number: nextLpo };
+      setViewOrder(updated);
+      setOrders((current) => current.map((order) => (order.id === updated.id ? { ...order, lpo_number: nextLpo } : order)));
+      setEditingLpo(false);
+    } catch (error) {
+      alert(error instanceof Error ? `Could not update LPO number: ${error.message}` : "Could not update LPO number.");
+    } finally {
+      setSavingLpo(false);
+    }
   };
 
   const handleSave = async () => {
@@ -1244,7 +1273,43 @@ const approvedAt = new Date().toISOString();
             </div>
             <div className="space-y-2 text-sm">
                {isSchool && <div className="rounded-lg bg-slate-50 p-3"><p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase order</p><p className="mt-1 font-mono font-semibold text-slate-900">PO-{viewOrder.id.slice(0,8).toUpperCase()}</p></div>}
-               {viewOrder.lpo_number && <p><span className="text-slate-500">LPO number</span><br /><span className="font-mono font-medium text-slate-900">{viewOrder.lpo_number}</span></p>}
+               {isSchool && (
+                 <div>
+                   <div className="mb-1 flex items-center justify-between gap-3">
+                     <span className="text-slate-500">LPO number</span>
+                     {!readOnly && !editingLpo && (
+                       <button
+                         type="button"
+                         onClick={() => { setLpoDraft(viewOrder.lpo_number || ""); setEditingLpo(true); }}
+                         className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                       >
+                         Edit LPO number
+                       </button>
+                     )}
+                   </div>
+                   {editingLpo ? (
+                     <div className="flex flex-wrap items-center gap-2">
+                       <input
+                         value={lpoDraft}
+                         onChange={(event) => setLpoDraft(event.target.value)}
+                         onKeyDown={(event) => { if (event.key === "Enter") void saveLpoNumber(); if (event.key === "Escape") setEditingLpo(false); }}
+                         autoFocus
+                         aria-label="LPO number"
+                         placeholder="Manual LPO number"
+                         className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm"
+                       />
+                       <button type="button" onClick={() => void saveLpoNumber()} disabled={savingLpo} className="rounded-lg bg-teal-700 px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                         {savingLpo ? "Saving…" : "Save"}
+                       </button>
+                       <button type="button" onClick={() => setEditingLpo(false)} disabled={savingLpo} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700">
+                         Cancel
+                       </button>
+                     </div>
+                   ) : (
+                     <p className="font-mono font-medium text-slate-900">{viewOrder.lpo_number || "—"}</p>
+                   )}
+                 </div>
+               )}
               <p>
                 <span className="text-slate-500">Supplier</span>
                 <br />
