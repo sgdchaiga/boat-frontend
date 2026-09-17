@@ -15,8 +15,12 @@ interface Row {
   product_name: string;
   location: string;
   openingQty: number;
-  /** Purchases / GRN / vendor receipts in period (not transfers or positive adjustments). */
+  /** All stock added through an external purchase or completed production in the period. */
   receivedQty: number;
+  /** Stock received from suppliers / GRNs in the period. */
+  purchasedQty: number;
+  /** Finished goods received from completed production in the period. */
+  producedQty: number;
   /** opening + received */
   totalOsRec: number;
   /** Sale movements (POS etc.) in period. */
@@ -43,6 +47,7 @@ interface DailyRow {
   location: string;
   openingQty: number;
   purchasesQty: number;
+  producedQty: number;
   salesQty: number;
   /** Adjustment outs minus ins; positive means stock was reduced. */
   adjustmentsQty: number;
@@ -76,6 +81,7 @@ export function StockMovementReportPage() {
     const st = String(sourceType || "").toLowerCase();
     if (!st) return null;
     if (["bill", "grn", "purchase", "vendor_bill", "vendor_payment"].includes(st)) return "purchases_bills";
+    if (st === "manufacturing_production") return "manufacturing_production_entries";
     if (st === "sale") return "transactions";
     if (st === "transfer") return "inventory_store_requisitions";
     if (st === "adjustment") return "inventory_stock_adjustments";
@@ -135,6 +141,8 @@ export function StockMovementReportPage() {
         periodInQty: number;
         periodOutQty: number;
         receivedQty: number;
+        purchasedQty: number;
+        producedQty: number;
         salesQty: number;
         salesAmount: number;
         rejectsQty: number;
@@ -164,6 +172,8 @@ export function StockMovementReportPage() {
         note.includes("purchase")
       );
     };
+    const isProductionReceipt = (m: any): boolean =>
+      String(m.source_type || "").toLowerCase() === "manufacturing_production";
 
     // Pre-fill missing unit_cost using last known cost or product cost_price
     const costPriceByProduct = new Map<string, number>();
@@ -234,6 +244,8 @@ export function StockMovementReportPage() {
           periodInQty: 0,
           periodOutQty: 0,
           receivedQty: 0,
+          purchasedQty: 0,
+          producedQty: 0,
           salesQty: 0,
           salesAmount: 0,
           rejectsQty: 0,
@@ -268,12 +280,14 @@ export function StockMovementReportPage() {
 
         const stLower = String(m.source_type || "").toLowerCase();
 
-        if (isPurchaseMovement(m) && qiEff > 0) {
+        if ((isPurchaseMovement(m) || isProductionReceipt(m)) && qiEff > 0) {
           row.receivedQty += qiEff;
+          if (isPurchaseMovement(m)) row.purchasedQty += qiEff;
+          if (isProductionReceipt(m)) row.producedQty += qiEff;
           const sourcePage = sourceTypeToPage(stLower);
-          row.receivedSourceTypes.add(stLower);
-          if (m.source_id) row.receivedSourceIds.add(String(m.source_id));
-          if (!row.receivedSourcePageCandidate && sourcePage) {
+          if (isPurchaseMovement(m)) row.receivedSourceTypes.add(stLower);
+          if (isPurchaseMovement(m) && m.source_id) row.receivedSourceIds.add(String(m.source_id));
+          if (isPurchaseMovement(m) && !row.receivedSourcePageCandidate && sourcePage) {
             row.receivedSourcePageCandidate = sourcePage;
             row.receivedSourceIdCandidate = m.source_id ? String(m.source_id) : null;
           }
@@ -324,6 +338,8 @@ export function StockMovementReportPage() {
           location: r.location,
           openingQty: r.openingQty,
           receivedQty: r.receivedQty,
+          purchasedQty: r.purchasedQty,
+          producedQty: r.producedQty,
           totalOsRec,
           salesQty: r.salesQty,
           salesAmount: r.salesAmount,
@@ -349,7 +365,7 @@ export function StockMovementReportPage() {
     const openingByKey = new Map<string, number>();
     const dailyMovementByKey = new Map<
       string,
-      { purchasesQty: number; salesQty: number; adjustmentsQty: number; otherNetQty: number }
+      { purchasesQty: number; producedQty: number; salesQty: number; adjustmentsQty: number; otherNetQty: number }
     >();
     allMoves.forEach((m: any) => {
       const pid = String(m.product_id || "");
@@ -367,12 +383,14 @@ export function StockMovementReportPage() {
       const dayKey = `${productLocationKey}::${toBusinessDateString(mvDate)}`;
       const bucket = dailyMovementByKey.get(dayKey) || {
         purchasesQty: 0,
+        producedQty: 0,
         salesQty: 0,
         adjustmentsQty: 0,
         otherNetQty: 0,
       };
       const sourceType = String(m.source_type || "").toLowerCase();
       if (isPurchaseMovement(m) && inQty > 0) bucket.purchasesQty += inQty;
+      else if (isProductionReceipt(m) && inQty > 0) bucket.producedQty += inQty;
       else if (sourceType === "sale" && outQty > 0) bucket.salesQty += outQty;
       else if (sourceType === "adjustment") bucket.adjustmentsQty += outQty - inQty;
       else bucket.otherNetQty += netQty;
@@ -386,12 +404,13 @@ export function StockMovementReportPage() {
       dateKeys.forEach((date) => {
         const movement = dailyMovementByKey.get(`${productLocationKey}::${date}`) || {
           purchasesQty: 0,
+          producedQty: 0,
           salesQty: 0,
           adjustmentsQty: 0,
           otherNetQty: 0,
         };
         const openingQty = balance;
-        balance = openingQty + movement.purchasesQty - movement.salesQty - movement.adjustmentsQty + movement.otherNetQty;
+        balance = openingQty + movement.purchasesQty + movement.producedQty - movement.salesQty - movement.adjustmentsQty + movement.otherNetQty;
         dailyResult.push({ date, product_id, location, openingQty, ...movement, closingQty: balance });
       });
     });
@@ -420,6 +439,7 @@ export function StockMovementReportPage() {
           location: selectedLocation || "All locations",
           openingQty: 0,
           purchasesQty: 0,
+          producedQty: 0,
           salesQty: 0,
           adjustmentsQty: 0,
           otherNetQty: 0,
@@ -427,6 +447,7 @@ export function StockMovementReportPage() {
         };
         current.openingQty += row.openingQty;
         current.purchasesQty += row.purchasesQty;
+        current.producedQty += row.producedQty;
         current.salesQty += row.salesQty;
         current.adjustmentsQty += row.adjustmentsQty;
         current.otherNetQty += row.otherNetQty;
@@ -447,15 +468,15 @@ export function StockMovementReportPage() {
     ];
     const sections = [{
       title: "Stock Movement",
-      headers: ["Location", "Product", "Opening stock", "Received", "Total (OS+Rec)", "Sales", "Sales amount", "Adjustments", "Closing stock"],
-      data: filteredRows.map((r) => [r.location, r.product_name, r.openingQty, r.receivedQty, r.totalOsRec, r.salesQty, r.salesAmount, r.rejectsQty, r.closingQty]),
-      widths: [22, 40, 18, 16, 20, 16, 20, 18, 18],
+      headers: ["Location", "Product", "Opening stock", "External purchases", "Produced", "Total stock in", "Total available", "Sales", "Sales amount", "Adjustments", "Closing stock"],
+      data: filteredRows.map((r) => [r.location, r.product_name, r.openingQty, r.purchasedQty, r.producedQty, r.receivedQty, r.totalOsRec, r.salesQty, r.salesAmount, r.rejectsQty, r.closingQty]),
+      widths: [22, 40, 18, 18, 16, 18, 20, 16, 20, 18, 18],
     }];
     if (selectedProductId) sections.push({
       title: "Daily Movement",
-      headers: ["Date", "Opening", "Purchases", "Sales", "Adjustments", "Other net movements", "Closing balance"],
-      data: selectedDailyRows.map((r) => [r.date, r.openingQty, r.purchasesQty, r.salesQty, r.adjustmentsQty, r.otherNetQty, r.closingQty]),
-      widths: [16, 18, 18, 18, 18, 24, 20],
+      headers: ["Date", "Opening", "External purchases", "Produced", "Sales", "Adjustments", "Other net movements", "Closing balance"],
+      data: selectedDailyRows.map((r) => [r.date, r.openingQty, r.purchasesQty, r.producedQty, r.salesQty, r.adjustmentsQty, r.otherNetQty, r.closingQty]),
+      widths: [16, 18, 18, 16, 18, 18, 24, 20],
     });
     const filename = `stock_movement_${toBusinessDateString(from)}_${toBusinessDateString(new Date(to.getTime() - 1))}`;
     if (format === "xlsx") {
@@ -509,8 +530,7 @@ export function StockMovementReportPage() {
             <h1 className="text-3xl font-bold text-slate-900">Stock Movement</h1>
             <PageNotes ariaLabel="Stock movement help">
               <p>
-                <strong>Received</strong> is stock from purchases / GRN. <strong>Total (OS+Rec)</strong> is opening plus
-                received. <strong>Sales</strong> is POS sale quantity. <strong>Sales amount</strong> is sales qty ×
+                <strong>Produced</strong> is finished stock received from completed production. <strong>External purchases</strong> is stock received through supplier bills / GRNs. <strong>Total stock in</strong> combines both sources, and <strong>Total available</strong> is opening stock plus total stock in. <strong>Sales</strong> is POS sale quantity. <strong>Sales amount</strong> is sales qty ×
                 product list price (excludes discounts). <strong>Adjustments</strong> is net adjustment quantity (outs − ins) for the period; positive means net stock
                 lost.{" "}
                 <strong>Closing</strong> includes transfers and all other movements.
@@ -586,12 +606,13 @@ export function StockMovementReportPage() {
               <h2 className="font-semibold text-slate-900">Daily movement: {selectedProductName}</h2>
               <p className="text-xs text-slate-500">Each closing balance carries forward as the next day's opening balance.</p>
             </div>
-            <table className="w-full text-sm min-w-[760px]">
+            <table className="w-full text-sm min-w-[880px]">
               <thead className="bg-slate-50">
                 <tr>
                   <th className="p-3 text-left">Date</th>
                   <th className="p-3 text-right">Opening</th>
-                  <th className="p-3 text-right">Purchases</th>
+                  <th className="p-3 text-right">External purchases</th>
+                  <th className="p-3 text-right">Produced</th>
                   <th className="p-3 text-right">Sales</th>
                   <th className="p-3 text-right">Adjustments</th>
                   <th className="p-3 text-right">Other net movements</th>
@@ -604,6 +625,7 @@ export function StockMovementReportPage() {
                     <td className="p-3 whitespace-nowrap">{new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "2-digit", year: "numeric", timeZone: "Africa/Kampala" }).format(new Date(`${row.date}T12:00:00Z`))}</td>
                     <td className="p-3 text-right tabular-nums">{row.openingQty.toFixed(2)}</td>
                     <td className="p-3 text-right tabular-nums">{row.purchasesQty.toFixed(2)}</td>
+                    <td className="p-3 text-right tabular-nums">{row.producedQty.toFixed(2)}</td>
                     <td className="p-3 text-right tabular-nums">{row.salesQty.toFixed(2)}</td>
                     <td className="p-3 text-right tabular-nums">{row.adjustmentsQty.toFixed(2)}</td>
                     <td className="p-3 text-right tabular-nums">{row.otherNetQty.toFixed(2)}</td>
@@ -611,21 +633,23 @@ export function StockMovementReportPage() {
                   </tr>
                 ))}
                 {selectedDailyRows.length === 0 && (
-                  <tr><td colSpan={7} className="p-6 text-center text-slate-500">No stock ledger exists for this item.</td></tr>
+                  <tr><td colSpan={8} className="p-6 text-center text-slate-500">No stock ledger exists for this item.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         )}
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-          <table className="w-full text-sm min-w-[960px]">
+          <table className="w-full text-sm min-w-[1160px]">
             <thead className="bg-slate-50">
               <tr>
                 <th className="p-3 text-left">Location</th>
                 <th className="p-3 text-left">Product</th>
                 <th className="p-3 text-right">Opening stock</th>
-                <th className="p-3 text-right">Received</th>
-                <th className="p-3 text-right">Total (OS+Rec)</th>
+                <th className="p-3 text-right">External purchases</th>
+                <th className="p-3 text-right">Produced</th>
+                <th className="p-3 text-right">Total stock in</th>
+                <th className="p-3 text-right">Total available</th>
                 <th className="p-3 text-right">Sales</th>
                 <th className="p-3 text-right">Sales amount</th>
                 <th className="p-3 text-right">Adjustments</th>
@@ -639,7 +663,7 @@ export function StockMovementReportPage() {
                   <td className="p-3">{r.product_name}</td>
                   <td className="p-3 text-right tabular-nums">{r.openingQty.toFixed(2)}</td>
                   <td className="p-3 text-right tabular-nums">
-                    {r.receivedSourcePage && r.receivedQty > 0 ? (
+                    {r.receivedSourcePage && r.purchasedQty > 0 ? (
                       <a
                         href={pageHref(
                           r.receivedSourcePage,
@@ -662,12 +686,14 @@ export function StockMovementReportPage() {
                             : "Open source module in new tab"
                         }
                       >
-                        {r.receivedQty.toFixed(2)}
+                        {r.purchasedQty.toFixed(2)}
                       </a>
                     ) : (
-                      r.receivedQty.toFixed(2)
+                      r.purchasedQty.toFixed(2)
                     )}
                   </td>
+                  <td className="p-3 text-right tabular-nums">{r.producedQty.toFixed(2)}</td>
+                  <td className="p-3 text-right tabular-nums">{r.receivedQty.toFixed(2)}</td>
                   <td className="p-3 text-right tabular-nums">{r.totalOsRec.toFixed(2)}</td>
                   <td className="p-3 text-right tabular-nums">
                     {r.salesSourcePage && r.salesQty > 0 ? (
@@ -729,7 +755,7 @@ export function StockMovementReportPage() {
               ))}
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="p-6 text-center text-slate-500">
+                  <td colSpan={11} className="p-6 text-center text-slate-500">
                     No stock movements in this period.
                   </td>
                 </tr>
