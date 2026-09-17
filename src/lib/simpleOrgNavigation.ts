@@ -271,7 +271,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
   const moneyIn: NavChild[] = [
     { name: "Receive money", page: "cash_receipts" },
     { name: "Customer payments", page: "payments" },
-    ...(isHotelOrMixed ? [{ name: "Invoices", page: "retail_credit_invoices" as const }] : []),
+    ...(isHotelOrMixed || businessType === "manufacturing" ? [{ name: "Invoices", page: "retail_credit_invoices" as const }] : []),
     ...(isHotelOrMixed ? [{ name: "Guest billing", page: "billing" as const }] : []),
     ...(isHotelOrMixed ? [{ name: "Room reconciliation", page: "reports_room_billing" as const }] : []),
     { name: transactionsMoneyInLabel, page: "transactions" },
