@@ -20,6 +20,8 @@ import {
   unlockActiveAccessSession,
   validatePin,
   generateStaffCode,
+  hashLocalCredential,
+  verifyLocalCredential,
   type LocalAuthAccount,
   type LocalAccessSession,
 } from "@/lib/localAuthStore";
@@ -1093,15 +1095,19 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     if (!seed?.email || !seed.password) return accounts;
     const email = seed.email.trim().toLowerCase();
     const now = new Date().toISOString();
+    const passwordCredential = await hashLocalCredential(seed.password);
+    const pinCredential = await hashLocalCredential(seed.pin || "1234");
     const next: LocalAuthAccount = {
       id: crypto.randomUUID(),
       email,
-      password: seed.password,
+      password_hash: passwordCredential.hash,
+      password_salt: passwordCredential.salt,
       full_name: seed.full_name?.trim() || "School Administrator",
       role: (seed.role || "admin") as UserRole,
       phone: seed.phone || "",
       staff_code: seed.staff_code || generateStaffCode(seed.full_name || "School Administrator", email, []),
-      pin: seed.pin || "1234",
+      pin_hash: pinCredential.hash,
+      pin_salt: pinCredential.salt,
       pin_set_at: now,
       pin_changed_at: now,
       pin_change_required: true,
@@ -1316,8 +1322,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const signIn = async (email: string, password: string) => {
     if (IS_LOCAL_AUTH_MODE) {
       const account = readLocalAccounts().find((a) => a.email.toLowerCase() === email.trim().toLowerCase());
-      if (!account || account.password !== password) {
-        return { error: new Error("Invalid email or password") };
+      if (!account) return { error: new Error("Invalid email or password") };
+      const passwordCheck = await verifyLocalCredential(password, account.password_hash, account.password_salt, account.password);
+      if (!passwordCheck.valid) return { error: new Error("Invalid email or password") };
+      if (passwordCheck.needsUpgrade) {
+        const credential = await hashLocalCredential(password);
+        const upgraded = { ...account, password_hash: credential.hash, password_salt: credential.salt };
+        delete upgraded.password;
+        writeLocalAccounts(readLocalAccounts().map((item) => item.id === account.id ? upgraded : item));
       }
       writeLocalSessionEmail(account.email);
       await ensureLocalSqliteStaffRow(account);
@@ -1372,18 +1384,25 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       return { error: null };
     }
     const account = readLocalAccounts().find((a) => normalizeStaffCode(a.staff_code || "") === code);
-    if (!account || !account.pin) {
+    if (!account || (!account.pin && !account.pin_hash)) {
       return { error: new Error("Invalid staff code or PIN") };
     }
     if (account.pin_locked_until && new Date(account.pin_locked_until).getTime() > Date.now()) {
       return { error: new Error(`PIN locked until ${new Date(account.pin_locked_until).toLocaleTimeString()}.`) };
     }
-    if (account.pin !== enteredPin) {
+    const pinCheck = await verifyLocalCredential(enteredPin, account.pin_hash, account.pin_salt, account.pin);
+    if (!pinCheck.valid) {
       const failure = recordPinFailure(account.id);
       if (failure.lockedUntil) {
         return { error: new Error(`Too many failed attempts. PIN locked until ${new Date(failure.lockedUntil).toLocaleTimeString()}.`) };
       }
       return { error: new Error(`Invalid staff code or PIN. ${Math.max(0, 5 - failure.attempts)} attempts remaining.`) };
+    }
+    if (pinCheck.needsUpgrade) {
+      const credential = await hashLocalCredential(enteredPin);
+      const upgraded = { ...account, pin_hash: credential.hash, pin_salt: credential.salt };
+      delete upgraded.pin;
+      writeLocalAccounts(readLocalAccounts().map((item) => item.id === account.id ? upgraded : item));
     }
     clearPinFailures(account.id);
     writeLocalSessionEmail(account.email);
@@ -1409,10 +1428,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       if (accounts.some((a) => a.email.toLowerCase() === normalizedEmail)) {
         return { error: new Error("An account with this email already exists on this computer.") };
       }
+      const credential = await hashLocalCredential(password);
       const next: LocalAuthAccount = {
         id: crypto.randomUUID(),
         email: normalizedEmail,
-        password,
+        password_hash: credential.hash,
+        password_salt: credential.salt,
         full_name: fullName.trim(),
         role,
         phone: phone || "",
@@ -1483,8 +1504,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const unlockWithPin = async (pin: string) => {
     if (!IS_LOCAL_AUTH_MODE || !user?.id) return { error: new Error("No locked local session found.") };
     const account = readLocalAccounts().find((a) => a.id === user.id);
-    if (!account?.pin) return { error: new Error("This user does not have a PIN. Switch user and sign in with password.") };
-    if (account.pin !== normalizePin(pin)) {
+    if (!account || (!account.pin && !account.pin_hash)) return { error: new Error("This user does not have a PIN. Switch user and sign in with password.") };
+    const pinCheck = await verifyLocalCredential(normalizePin(pin), account.pin_hash, account.pin_salt, account.pin);
+    if (!pinCheck.valid) {
       const failure = recordPinFailure(account.id);
       if (failure.lockedUntil) return { error: new Error(`Too many failed attempts. PIN locked until ${new Date(failure.lockedUntil).toLocaleTimeString()}.`) };
       return { error: new Error("Incorrect PIN.") };
@@ -1504,11 +1526,17 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
     const accounts = readLocalAccounts();
     const account = accounts.find((a) => a.id === user.id);
     if (!account) return { error: new Error("Local staff account not found.") };
-    if (account.pin && account.pin !== normalizePin(currentPin)) return { error: new Error("Current PIN is incorrect.") };
+    if (account.pin || account.pin_hash) {
+      const currentCheck = await verifyLocalCredential(normalizePin(currentPin), account.pin_hash, account.pin_salt, account.pin);
+      if (!currentCheck.valid) return { error: new Error("Current PIN is incorrect.") };
+    }
     const changedAt = new Date().toISOString();
+    const credential = await hashLocalCredential(normalizePin(newPin));
     writeLocalAccounts(accounts.map((a) => (a.id === user.id ? {
       ...a,
-      pin: normalizePin(newPin),
+      pin_hash: credential.hash,
+      pin_salt: credential.salt,
+      pin: undefined,
       pin_set_at: a.pin_set_at ?? changedAt,
       pin_changed_at: changedAt,
       pin_change_required: false,
@@ -1522,7 +1550,8 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const approveWithSupervisorPin = async (pin: string) => {
     if (!IS_LOCAL_AUTH_MODE) return { error: new Error("Supervisor PIN approval is available in desktop local mode.") };
     const supervisorRoles = new Set(["admin", "manager", "accountant"]);
-    const account = readLocalAccounts().find((a) => a.pin === normalizePin(pin) && supervisorRoles.has(String(a.role || "").toLowerCase()));
+    const supervisorCandidates = readLocalAccounts().filter((a) => supervisorRoles.has(String(a.role || "").toLowerCase()));
+    const account = (await Promise.all(supervisorCandidates.map(async (candidate) => ({ candidate, check: await verifyLocalCredential(normalizePin(pin), candidate.pin_hash, candidate.pin_salt, candidate.pin) })))).find(({ check }) => check.valid)?.candidate;
     if (!account) return { error: new Error("Supervisor PIN was not approved.") };
     return { error: null, supervisor: await buildLocalAuthUserWithTenant(account) };
   };

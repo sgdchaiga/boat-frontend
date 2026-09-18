@@ -8,7 +8,7 @@ import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { fetchOrganizationMembers } from "@/lib/orgMembership";
 import { desktopApi } from "@/lib/desktopApi";
 import { boatApi, isDesktopApiDataMode } from "@/lib/boatApi";
-import { generateStaffCode, normalizePin, normalizeStaffCode, readLocalAccounts, validatePin, writeLocalAccounts } from "@/lib/localAuthStore";
+import { generateStaffCode, hashLocalCredential, normalizePin, normalizeStaffCode, readLocalAccounts, validatePin, writeLocalAccounts } from "@/lib/localAuthStore";
 
 type Staff = Database["public"]["Tables"]["staff"]["Row"];
 type OrgRoleType = Database["public"]["Tables"]["organization_role_types"]["Row"];
@@ -132,13 +132,14 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
     void fetchAll();
   }, [fetchAll]);
 
-  const syncLocalAccountProfile = (staffId: string, patch: Partial<{ full_name: string; phone: string; role: string; staff_code: string; pin: string; pin_change_required: boolean }>) => {
+  const syncLocalAccountProfile = async (staffId: string, patch: Partial<{ full_name: string; phone: string; role: string; staff_code: string; pin: string; pin_change_required: boolean }>) => {
     if (!useLocalDesktopNewStaff) return;
     const accounts = readLocalAccounts();
     const idx = accounts.findIndex((a) => a.id === staffId);
     if (idx < 0) return;
     const next = [...accounts];
     const current = next[idx];
+    const pinCredential = patch.pin !== undefined ? await hashLocalCredential(normalizePin(patch.pin)) : null;
     next[idx] = {
       ...current,
       ...(patch.full_name !== undefined ? { full_name: patch.full_name } : {}),
@@ -146,7 +147,9 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
       ...(patch.role !== undefined ? { role: patch.role } : {}),
       ...(patch.staff_code !== undefined ? { staff_code: normalizeStaffCode(patch.staff_code) } : {}),
       ...(patch.pin !== undefined ? {
-        pin: normalizePin(patch.pin),
+        pin_hash: pinCredential!.hash,
+        pin_salt: pinCredential!.salt,
+        pin: undefined,
         pin_set_at: current.pin_set_at ?? new Date().toISOString(),
         pin_changed_at: new Date().toISOString(),
         pin_failed_attempts: 0,
@@ -287,7 +290,7 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         alert(error.message);
         return;
       }
-      syncLocalAccountProfile(editingStaff.id, {
+      await syncLocalAccountProfile(editingStaff.id, {
         full_name: fullName.trim(),
         phone: phone.trim(),
         role,
@@ -331,14 +334,18 @@ export function AdminUsersPage({ onOpenPermissions }: AdminUsersPageProps = {}) 
         }
         const newId = crypto.randomUUID();
         const createdAt = new Date().toISOString();
+        const passwordCredential = await hashLocalCredential(password);
+        const pinCredential = pin.trim() ? await hashLocalCredential(normalizePin(pin)) : null;
         const newAccount = {
           id: newId,
           email: normalizedEmail,
-          password,
+          password_hash: passwordCredential.hash,
+          password_salt: passwordCredential.salt,
           staff_code: code,
           ...(pin.trim()
             ? {
-                pin: normalizePin(pin),
+                pin_hash: pinCredential!.hash,
+                pin_salt: pinCredential!.salt,
                 pin_set_at: createdAt,
                 pin_changed_at: createdAt,
                 pin_change_required: forcePinChange,

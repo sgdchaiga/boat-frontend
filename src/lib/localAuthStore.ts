@@ -14,9 +14,14 @@ export const PIN_FORCE_CHANGE_DAYS = 90;
 export type LocalAuthAccount = {
   id: string;
   email: string;
-  password: string;
+  /** Legacy plaintext values are retained only long enough to upgrade an existing local account. */
+  password?: string;
+  password_hash?: string;
+  password_salt?: string;
   staff_code?: string;
   pin?: string;
+  pin_hash?: string;
+  pin_salt?: string;
   pin_set_at?: string;
   pin_changed_at?: string;
   pin_change_required?: boolean;
@@ -28,6 +33,36 @@ export type LocalAuthAccount = {
   hospitality_branch_id?: string | null;
   created_at: string;
 };
+
+const HASH_ITERATIONS = 310_000;
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function base64ToBytes(value: string): Uint8Array {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (char) => char.charCodeAt(0));
+}
+
+async function deriveHash(secret: string, salt: Uint8Array): Promise<string> {
+  const material = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt, iterations: HASH_ITERATIONS, hash: "SHA-256" }, material, 256);
+  return bytesToBase64(new Uint8Array(bits));
+}
+
+/** Hashes local-only credentials; secrets are never written back to local storage. */
+export async function hashLocalCredential(secret: string): Promise<{ hash: string; salt: string }> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return { hash: await deriveHash(secret, salt), salt: bytesToBase64(salt) };
+}
+
+export async function verifyLocalCredential(secret: string, hash?: string, salt?: string, legacy?: string): Promise<{ valid: boolean; needsUpgrade: boolean }> {
+  if (hash && salt) return { valid: (await deriveHash(secret, base64ToBytes(salt))) === hash, needsUpgrade: false };
+  return { valid: !!legacy && secret === legacy, needsUpgrade: !!legacy && secret === legacy };
+}
 
 export type LocalAccessSession = {
   id: string;
@@ -188,7 +223,7 @@ export function incrementActiveAccessTransactions(count = 1): void {
 }
 
 export function isPinChangeDue(account: LocalAuthAccount): boolean {
-  if (!account.pin) return false;
+  if (!account.pin && !account.pin_hash) return false;
   if (account.pin_change_required) return true;
   const changedAt = account.pin_changed_at || account.pin_set_at;
   if (!changedAt) return true;

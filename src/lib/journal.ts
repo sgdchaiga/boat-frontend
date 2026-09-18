@@ -417,7 +417,7 @@ type StockAdjustmentMovementForJournal = {
   quantity_out: number | null;
   unit_cost: number | null;
   note: string | null;
-  products?: { name?: string | null; cost_price?: number | null; department_id?: string | null } | null;
+  products?: { name?: string | null; cost_price?: number | null; department_id?: string | null; stock_account?: string | null } | null;
 };
 
 type StockAdjustmentReason =
@@ -497,12 +497,15 @@ function resolveStockAdjustmentLineAccounts(args: {
   deltaQty: number;
   departmentId: string | null;
   context: Awaited<ReturnType<typeof loadStockAdjustmentGlContext>>;
+  productInventoryGlAccountId: string | null;
   legacyInventoryGlAccountId: string | null;
   legacyPurchasesGlAccountId: string | null;
 }): { debitGlAccountId: string | null; creditGlAccountId: string | null; label: string; missingAccountMessage?: string } {
-  const { reason, deltaQty, departmentId, context, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
+  const { reason, deltaQty, departmentId, context, productInventoryGlAccountId, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
   const departmentGl = departmentId ? context.deptGlMap.get(departmentId) : null;
-  const departmentStock = departmentGl?.stock ?? legacyInventoryGlAccountId ?? context.defaults.purchasesInventory ?? context.defaults.posInvKitchen ?? context.defaults.posInvBar ?? null;
+  // A material may legitimately have its own inventory control account (for example,
+  // Steel Wire Inventory) instead of sharing the department's generic production stock account.
+  const departmentStock = productInventoryGlAccountId ?? departmentGl?.stock ?? legacyInventoryGlAccountId ?? context.defaults.purchasesInventory ?? context.defaults.posInvKitchen ?? context.defaults.posInvBar ?? null;
   const payableOrCash = context.defaults.payable ?? context.defaults.cash ?? null;
   const departmentExpense =
     departmentGl?.purchases ??
@@ -543,7 +546,7 @@ function resolveStockAdjustmentLineAccounts(args: {
     account([/finished\s+goods?.*inventory/i, /finished\s+goods?.*stock/i], ["asset"]) ??
     departmentStock;
 
-  if (departmentId && !departmentGl?.stock && reason !== "production_issue" && reason !== "production_receipt") {
+  if (departmentId && !departmentGl?.stock && !productInventoryGlAccountId && reason !== "production_issue" && reason !== "production_receipt") {
     return {
       debitGlAccountId: null,
       creditGlAccountId: null,
@@ -644,7 +647,7 @@ export async function createJournalForStockAdjustment(
   const { data: movements, error } = await filterByOrganizationId(
     supabase
       .from("product_stock_movements")
-      .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price,department_id)")
+       .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price,department_id,stock_account)")
       .eq("source_type", "adjustment")
       .eq("source_id", sourceId)
       .order("movement_date", { ascending: true }),
@@ -679,9 +682,10 @@ export async function createJournalForStockAdjustment(
     const accountPair = resolveStockAdjustmentLineAccounts({
       reason: classifyStockAdjustmentReason(movement.note, deltaQty),
       deltaQty,
-      departmentId: movement.products?.department_id ? String(movement.products.department_id) : null,
-      context: glContext,
-      legacyInventoryGlAccountId: accounts.inventoryGlAccountId,
+       departmentId: movement.products?.department_id ? String(movement.products.department_id) : null,
+       context: glContext,
+       productInventoryGlAccountId: movement.products?.stock_account?.trim() || null,
+       legacyInventoryGlAccountId: accounts.inventoryGlAccountId,
       legacyPurchasesGlAccountId: accounts.stockGainLossGlAccountId,
     });
     if (!accountPair.debitGlAccountId || !accountPair.creditGlAccountId) {
