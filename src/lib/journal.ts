@@ -833,7 +833,8 @@ export async function reverseJournalEntriesByReference(
   referenceType: JournalReferenceType,
   referenceId: string,
   createdBy: string | null,
-  reason: string
+  reason: string,
+  options?: { entryDate?: string }
 ): Promise<{ ok: true; reversed: number } | { ok: false; error: string }> {
   const orgId = await resolveOrganizationId();
   const { data: entries, error: entryError } = await filterByOrganizationId(
@@ -847,6 +848,9 @@ export async function reverseJournalEntriesByReference(
     false
   );
   if (entryError) return { ok: false, error: entryError.message };
+  const reversalDate = /^\d{4}-\d{2}-\d{2}$/.test(options?.entryDate || "")
+    ? String(options?.entryDate)
+    : businessTodayISO();
 
   let reversed = 0;
   for (const entry of (entries || []) as Array<{ id: string; entry_date: string; description: string }>) {
@@ -870,7 +874,7 @@ export async function reverseJournalEntriesByReference(
       .eq("journal_entry_id", entry.id);
     if (lineError) return { ok: false, error: lineError.message };
     const result = await createJournalEntry({
-      entry_date: businessTodayISO(),
+       entry_date: reversalDate,
       description: `Reversal: ${entry.description} (${reason})`,
       reference_type: "manual",
       reference_id: entry.id,

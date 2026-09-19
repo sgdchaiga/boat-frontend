@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Clock } from "lucide-react";
 import { supabase } from "../lib/supabase";
-import { computeRangeInTimezone, type DateRangeKey } from "../lib/timezone";
+import { computeRangeInTimezone, toBusinessDateString, type DateRangeKey } from "../lib/timezone";
 import { useAuth } from "../contexts/AuthContext";
 import { filterByOrganizationId } from "../lib/supabaseOrgFilter";
 import {
@@ -385,6 +385,9 @@ export function RetailPosOrdersPage() {
     if (!ok) return;
     try {
       setReversingOrderId(order.id);
+      // Reversals of historical POS orders must affect the same business day as the order,
+      // rather than the day an administrator happens to reopen and reverse it.
+      const reversalDate = toBusinessDateString(new Date(order.sale_at));
       const { data: payRows, error: payErr } = await filterByOrganizationId(
         supabase
           .from("payments")
@@ -400,7 +403,8 @@ export function RetailPosOrdersPage() {
         "pos",
         order.id,
         user?.id ?? null,
-        `Retail POS order ${order.id.slice(0, 8)} cancelled`
+        `Retail POS order ${order.id.slice(0, 8)} cancelled`,
+        { entryDate: reversalDate }
       );
       if (!journalReversal.ok) throw new Error(journalReversal.error);
 
@@ -441,7 +445,7 @@ export function RetailPosOrdersPage() {
           product_id: line.product_id,
           source_type: "adjustment",
           source_id: order.id,
-          movement_date: new Date().toISOString(),
+          movement_date: `${reversalDate}T12:00:00.000Z`,
           quantity_in: Number(line.quantity || 0),
           quantity_out: 0,
           note: `POS reversal for order ${order.id.slice(0, 8)}`,

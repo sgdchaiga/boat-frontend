@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, Pencil, Plus, Trash2, X } from "lucide-react";
+import { Check, History, Pencil, Plus, Trash2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import {
   createJournalForExpenseWithLines,
@@ -458,6 +458,15 @@ interface Expense {
   cancellation_reason?: string | null;
 }
 
+type ExpenseAuditRecord = {
+  id: string;
+  action: "expense_updated" | "line_added" | "line_changed" | "line_removed";
+  before_data: Record<string, unknown> | null;
+  after_data: Record<string, unknown> | null;
+  created_at: string;
+  staff?: { full_name?: string | null; email?: string | null } | null;
+};
+
 type LineDraft = {
   school_subvote_id?: string;
   key: string;
@@ -666,6 +675,10 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const [schoolBudgetError, setSchoolBudgetError] = useState<string | null>(null);
   const [approvalEnabled, setApprovalEnabled] = useState(true);
   const [approvalWorkingId, setApprovalWorkingId] = useState<string | null>(null);
+  const [auditExpenseId, setAuditExpenseId] = useState<string | null>(null);
+  const [auditRows, setAuditRows] = useState<ExpenseAuditRecord[]>([]);
+  const [auditLoading, setAuditLoading] = useState(false);
+  const [auditError, setAuditError] = useState<string | null>(null);
 
   const orgId = user?.organization_id ?? null;
   const canApproveSpendMoney = ["admin", "manager", "accountant"].includes(user?.role || "");
@@ -1558,6 +1571,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           vat_amount: number;
         };
         const net = Number(l.amount) || 0;
+        const quantity = Math.max(0, Number(l.quantity ?? 1)) || 1;
         const vat = Number(l.vat_amount) || 0;
         if (net > 0 && vat > 0) {
           inferredRate = Math.round((vat / net) * 10000) / 100;
@@ -1594,8 +1608,11 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           school_subvote_id: (lr as { school_subvote_id?: string }).school_subvote_id || "",
           expense_gl_account_id: l.expense_gl_account_id,
           source_cash_gl_account_id: l.source_cash_gl_account_id,
-          amount: net > 0 ? String(net) : "",
-          quantity: String(Number(l.quantity ?? 1) || 1),
+          // expense_lines.amount is the saved total for the whole line.  The
+          // editor input is a unit rate, so convert it before its totals code
+          // applies the quantity again.
+          amount: net > 0 ? String(round2(net / quantity)) : "",
+          quantity: String(quantity),
           vat_enabled: vat > 0,
           vat_gl_account_id: l.vat_gl_account_id ?? "",
           comment: l.comment ?? "",
@@ -1627,13 +1644,16 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                 comment: string | null;
               };
               const net = Number(l.amount) || 0;
+              const quantity = Math.max(0, Number(l.quantity ?? 1)) || 1;
               const vat = Number(l.vat_amount) || 0;
               if (vat > 0) anyVat = true;
               return {
                 key: randomUuid(),
                 item: (l.comment || "").trim(),
-                quantity: String(Number(l.quantity ?? 1) || 1),
-                amount: net > 0 ? String(net) : "",
+                quantity: String(quantity),
+                // Keep the simple editor's rate field consistent with the
+                // stored total-line amount as well.
+                amount: net > 0 ? String(round2(net / quantity)) : "",
                 payment_method: inferPaymentMethodFromGlId(l.source_cash_gl_account_id, cashSourceOptions),
                 category: inferCategoryFromExpenseGl(l.expense_gl_account_id, expenseGlOptions),
                 school_subvote_id: (lr as { school_subvote_id?: string }).school_subvote_id || "",
@@ -1655,6 +1675,29 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
       setEditingExpenseId(null);
     } finally {
       setEditModalLoading(false);
+    }
+  };
+
+  const openAuditTrail = async (expenseId: string) => {
+    setAuditExpenseId(expenseId);
+    setAuditRows([]);
+    setAuditError(null);
+    setAuditLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from("expense_audit_log")
+        .select("id,action,before_data,after_data,created_at,staff:actor_staff_id(full_name,email)")
+        .eq("expense_id", expenseId)
+        .order("created_at", { ascending: false });
+      if (error) throw error;
+      setAuditRows((data || []) as ExpenseAuditRecord[]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unable to load the audit trail.";
+      setAuditError(/expense_audit_log|does not exist|schema cache/i.test(message)
+        ? "The expense audit trail is not available yet. Apply migration 20260919100000_expense_edit_audit_trail.sql, then reload."
+        : message);
+    } finally {
+      setAuditLoading(false);
     }
   };
 
@@ -1947,6 +1990,14 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                     >
                       <Pencil className="w-3.5 h-3.5" />
                       Edit
+                    </button><button
+                      type="button"
+                      onClick={() => void openAuditTrail(e.id)}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                      title="View audit trail"
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      Audit
                     </button></div>
                   </td>
                   {expenseAttachmentsSupported ? (
@@ -2512,6 +2563,18 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {auditExpenseId && (
+        <div className="fixed inset-0 z-[101] flex items-center justify-center bg-black/50 p-4" onClick={() => setAuditExpenseId(null)}>
+          <div className="max-h-[80vh] w-full max-w-3xl overflow-y-auto rounded-xl bg-white p-5 shadow-xl" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div><h2 className="text-lg font-bold text-slate-900">Expense audit trail</h2><p className="text-xs text-slate-500">Each record shows the value before and after a future change.</p></div>
+              <button type="button" onClick={() => setAuditExpenseId(null)} className="rounded p-2 hover:bg-slate-100" aria-label="Close audit trail"><X className="h-5 w-5" /></button>
+            </div>
+            {auditLoading ? <p className="text-slate-600">Loading audit trail…</p> : auditError ? <p role="alert" className="text-sm text-rose-700">{auditError}</p> : auditRows.length === 0 ? <p className="text-sm text-slate-600">No audit events exist for this expense yet. Changes made before the audit migration cannot be recovered.</p> : <ol className="space-y-3">{auditRows.map((row) => <li key={row.id} className="rounded-lg border border-slate-200 p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><span className="font-semibold text-slate-800">{row.action.replace(/_/g, " ")}</span><span className="text-slate-500">{new Date(row.created_at).toLocaleString()} · {row.staff?.full_name || row.staff?.email || "System"}</span></div><details className="mt-2"><summary className="cursor-pointer text-xs font-medium text-blue-700">View before / after values</summary><div className="mt-2 grid gap-2 md:grid-cols-2"><pre className="overflow-x-auto rounded bg-rose-50 p-2 text-[11px]">{JSON.stringify(row.before_data, null, 2) || "—"}</pre><pre className="overflow-x-auto rounded bg-emerald-50 p-2 text-[11px]">{JSON.stringify(row.after_data, null, 2) || "—"}</pre></div></details></li>)}</ol>}
           </div>
         </div>
       )}
