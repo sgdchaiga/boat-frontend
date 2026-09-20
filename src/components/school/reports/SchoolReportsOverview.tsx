@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { computeReportRange, type DateRangeKey } from "@/lib/reportsDateRange";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type SchoolStats = {
   feeCollected: number;
@@ -88,20 +89,15 @@ export function SchoolReportsOverview({ onNavigate }: Props) {
     setRangeFrom(fromIso);
     setRangeTo(toIso);
 
-    const [payRes, invRes, studRes] = await Promise.all([
-      supabase.from("school_payments").select("amount").eq("organization_id", orgId).gte("paid_at", fromIso).lt("paid_at", toIso),
-      supabase
-        .from("student_invoices")
-        .select("total_due, amount_paid, status")
-        .eq("organization_id", orgId)
-        .neq("status", "cancelled"),
+    const [payments, invoices, studRes] = await Promise.all([
+      fetchAllPages<{ amount?: number }>((start, end) => supabase.from("school_payments").select("amount").eq("organization_id", orgId).gte("paid_at", fromIso).lt("paid_at", toIso).range(start, end)),
+      fetchAllPages<{ total_due?: number; amount_paid?: number }>((start, end) => supabase
+        .from("student_invoices").select("total_due, amount_paid").eq("organization_id", orgId).neq("status", "cancelled").range(start, end)),
       supabase.from("students").select("id", { count: "exact", head: true }).eq("organization_id", orgId).eq("status", "active"),
     ]);
 
-    const payments = payRes.data || [];
-    const feeCollected = payments.reduce((s, p) => s + Number((p as { amount?: number }).amount ?? 0), 0);
+    const feeCollected = payments.reduce((s, p) => s + Number(p.amount ?? 0), 0);
 
-    const invoices = (invRes.data || []) as { total_due?: number; amount_paid?: number }[];
     const outstandingBalance = invoices.reduce((sum, inv) => {
       const due = Number(inv.total_due ?? 0) - Number(inv.amount_paid ?? 0);
       return sum + Math.max(0, due);

@@ -1,10 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download } from "lucide-react";
 import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { computeReportRange, type DateRangeKey } from "@/lib/reportsDateRange";
+import { fetchAllPages } from "@/lib/supabasePagination";
+import { toBusinessDateString } from "@/lib/timezone";
 
 type DayRow = { day: string; cash: number; mobile: number; total: number };
 
@@ -30,20 +33,15 @@ export function SchoolDailyCashReportPage({ readOnly: _readOnly }: Props) {
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
 
-    const { data, error } = await supabase
-      .from("school_payments")
-      .select("amount,method,paid_at")
-      .eq("organization_id", orgId)
-      .in("method", ["cash", "mobile_money"])
-      .gte("paid_at", fromIso)
-      .lt("paid_at", toIso)
-      .order("paid_at", { ascending: true });
-
-    setErr(error?.message ?? null);
-    const list = (data || []) as { amount: number; method: string; paid_at: string }[];
+    try {
+      const list = await fetchAllPages<{ amount: number; method: string; paid_at: string }>((start, end) => supabase
+        .from("school_payments").select("amount,method,paid_at").eq("organization_id", orgId)
+        .in("method", ["cash", "mobile_money"]).gte("paid_at", fromIso).lt("paid_at", toIso)
+        .order("paid_at", { ascending: true }).range(start, end));
+      setErr(null);
     const byDay = new Map<string, { cash: number; mobile: number }>();
     for (const p of list) {
-      const d = new Date(p.paid_at).toISOString().slice(0, 10);
+      const d = toBusinessDateString(p.paid_at);
       const cur = byDay.get(d) || { cash: 0, mobile: 0 };
       const amt = Number(p.amount ?? 0);
       if (p.method === "cash") cur.cash += amt;
@@ -51,15 +49,18 @@ export function SchoolDailyCashReportPage({ readOnly: _readOnly }: Props) {
       byDay.set(d, cur);
     }
     const sorted = [...byDay.entries()].sort(([a], [b]) => a.localeCompare(b));
-    setRows(
+      setRows(
       sorted.map(([day, v]) => ({
         day,
         cash: v.cash,
         mobile: v.mobile,
         total: v.cash + v.mobile,
       }))
-    );
-    setLoading(false);
+      );
+    } catch (error) {
+      setRows([]);
+      setErr(error instanceof Error ? error.message : "Failed to load daily cash.");
+    } finally { setLoading(false); }
   }, [orgId, dateRange, customFrom, customTo]);
 
   useEffect(() => {
@@ -72,13 +73,13 @@ export function SchoolDailyCashReportPage({ readOnly: _readOnly }: Props) {
     const doc = new jsPDF();
     doc.setFontSize(14);
     doc.text("Daily cash report (cash + mobile money)", 14, 18);
-    let y = 30;
-    rows.forEach((r) => {
-      doc.text(`${r.day}  cash ${r.cash.toFixed(2)}  mobile ${r.mobile.toFixed(2)}  total ${r.total.toFixed(2)}`, 14, y);
-      y += 7;
-    });
-    doc.text(`Grand total: ${grand.toFixed(2)}`, 14, y + 4);
+    autoTable(doc, { startY: 26, head: [["Date", "Cash", "Mobile money", "Total"]], body: rows.map((r) => [r.day, r.cash.toFixed(2), r.mobile.toFixed(2), r.total.toFixed(2)]), foot: [["Grand total", "", "", grand.toFixed(2)]], styles: { fontSize: 8 } });
     doc.save("school_daily_cash.pdf");
+  };
+  const exportCsv = () => {
+    const csv = [["date", "cash", "mobile_money", "total"], ...rows.map((r) => [r.day, r.cash, r.mobile, r.total])].map((row) => row.join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a"); anchor.href = url; anchor.download = "school_daily_cash.csv"; anchor.click(); URL.revokeObjectURL(url);
   };
 
   const maxDay = useMemo(() => Math.max(...rows.map((r) => r.total), 1), [rows]);
@@ -99,9 +100,7 @@ export function SchoolDailyCashReportPage({ readOnly: _readOnly }: Props) {
           </div>
           <p className="text-sm text-slate-600 mt-1">Physical cash and mobile collections — not bank transfers.</p>
         </div>
-        <button type="button" onClick={exportPdf} className="app-btn-primary">
-          <Download className="w-4 h-4" /> PDF
-        </button>
+        <div className="flex gap-2"><button type="button" onClick={exportPdf} disabled={loading || !!err} className="app-btn-primary"><Download className="w-4 h-4" /> PDF</button><button type="button" onClick={exportCsv} disabled={loading || !!err} className="app-btn-secondary"><Download className="w-4 h-4" /> CSV</button></div>
       </div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-6 flex flex-wrap gap-3 items-center">

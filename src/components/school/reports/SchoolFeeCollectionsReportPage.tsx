@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { computeReportRange, type DateRangeKey } from "@/lib/reportsDateRange";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -80,38 +81,35 @@ export function SchoolFeeCollectionsReportPage({ readOnly: _readOnly }: Props) {
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
 
-    const [sRes, cRes] = await Promise.all([
-      supabase
-        .from("students")
+    const [studentsResult, cRes] = await Promise.all([
+      fetchAllPages<StudentOpt>((start, end) => supabase.from("students")
         .select("id,first_name,last_name,admission_number,school_pay_number,class_id,class_name")
-        .eq("organization_id", orgId)
-        .order("last_name"),
+        .eq("organization_id", orgId).order("last_name").range(start, end)),
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
     ]);
-    if (sRes.error || cRes.error) {
-      setErr(sRes.error?.message || cRes.error?.message || null);
+    if (cRes.error) {
+      setErr(cRes.error.message);
       setLoading(false);
       return;
     }
-    setStudents((sRes.data as StudentOpt[]) || []);
+    setStudents(studentsResult);
     setClasses((cRes.data as ClassOpt[]) || []);
 
-    let q = supabase
-      .from("school_payments")
-      .select("id,amount,paid_at,method,reference,student_id")
-      .eq("organization_id", orgId)
-      .gte("paid_at", fromIso)
-      .lt("paid_at", toIso)
-      .order("paid_at", { ascending: false });
+    let list: PayRow[];
+    try {
+      list = await fetchAllPages<PayRow>((start, end) => {
+        let q = supabase.from("school_payments").select("id,amount,paid_at,method,reference,student_id")
+          .eq("organization_id", orgId).gte("paid_at", fromIso).lt("paid_at", toIso).order("paid_at", { ascending: false }).range(start, end);
+        if (methodFilter) q = q.eq("method", methodFilter);
+        if (studentId) q = q.eq("student_id", studentId);
+        return q;
+      });
+      setErr(null);
+    } catch (error) {
+      setPayments([]); setErr(error instanceof Error ? error.message : "Failed to load fee collections."); setLoading(false); return;
+    }
 
-    if (methodFilter) q = q.eq("method", methodFilter);
-    if (studentId) q = q.eq("student_id", studentId);
-
-    const { data, error } = await q;
-    setErr(error?.message || null);
-    let list = (data as PayRow[]) || [];
-
-    const studs = (sRes.data as StudentOpt[]) || [];
+    const studs = studentsResult;
     const clsList = (cRes.data as ClassOpt[]) || [];
     const studMap = new Map(studs.map((s) => [s.id, s]));
 

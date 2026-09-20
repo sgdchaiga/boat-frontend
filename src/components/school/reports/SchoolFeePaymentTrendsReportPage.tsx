@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { TrendingUp } from "lucide-react";
+import { Download, TrendingUp } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { computeReportRange, type DateRangeKey } from "@/lib/reportsDateRange";
+import { fetchAllPages } from "@/lib/supabasePagination";
+import { toBusinessDateString } from "@/lib/timezone";
 
 type MonthRow = { key: string; label: string; total: number; count: number };
 
@@ -29,19 +31,12 @@ export function SchoolFeePaymentTrendsReportPage({ readOnly: _readOnly }: Props)
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
 
-    const { data, error } = await supabase
-      .from("school_payments")
-      .select("amount,paid_at")
-      .eq("organization_id", orgId)
-      .gte("paid_at", fromIso)
-      .lt("paid_at", toIso);
-
-    setErr(error?.message ?? null);
-    const list = (data || []) as { amount: number; paid_at: string }[];
+    let list: { amount: number; paid_at: string }[];
+    try { list = await fetchAllPages((start, end) => supabase.from("school_payments").select("amount,paid_at").eq("organization_id", orgId).gte("paid_at", fromIso).lt("paid_at", toIso).range(start, end)); setErr(null); }
+    catch (error) { setRows([]); setErr(error instanceof Error ? error.message : "Failed to load payment trends."); setLoading(false); return; }
     const byMonth = new Map<string, { total: number; count: number }>();
     for (const p of list) {
-      const d = new Date(p.paid_at);
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+      const key = toBusinessDateString(p.paid_at).slice(0, 7);
       const cur = byMonth.get(key) || { total: 0, count: 0 };
       cur.total += Number(p.amount ?? 0);
       cur.count += 1;
@@ -63,6 +58,7 @@ export function SchoolFeePaymentTrendsReportPage({ readOnly: _readOnly }: Props)
   }, [load]);
 
   const max = useMemo(() => Math.max(...rows.map((r) => r.total), 1), [rows]);
+  const exportCsv = () => { const csv = [["month", "collections", "payments"], ...rows.map((row) => [row.key, row.total, row.count])].map((row) => row.join(",")).join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const a = document.createElement("a"); a.href = url; a.download = "school_fee_payment_trends.csv"; a.click(); URL.revokeObjectURL(url); };
 
   if (!orgId) {
     return <p className="p-6 text-slate-600">Select an organization.</p>;
@@ -96,6 +92,7 @@ export function SchoolFeePaymentTrendsReportPage({ readOnly: _readOnly }: Props)
             <input type="date" className="border rounded-lg px-2 py-2 text-sm" value={customTo} onChange={(e) => setCustomTo(e.target.value)} />
           </>
         )}
+        <button type="button" onClick={exportCsv} disabled={loading || !!err} className="app-btn-secondary"><Download className="w-4 h-4" /> CSV</button>
       </div>
 
       {err && <p className="text-red-600 text-sm mb-4">{err}</p>}

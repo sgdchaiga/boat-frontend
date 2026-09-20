@@ -1,3 +1,5 @@
+import { computeRangeInTimezone } from "@/lib/timezone";
+
 export type DateRangeKey =
   | "today"
   | "yesterday"
@@ -13,6 +15,10 @@ export type DateRangeKey =
 
 /** Inclusive start, exclusive end [from, to) in local time semantics matching the original Reports page. */
 export function computeReportRange(key: DateRangeKey, customFrom: string, customTo: string): { from: Date; to: Date } {
+  // School reports must follow the organisation's operating day, rather than
+  // whichever timezone happens to be set on the staff member's device.
+  return computeRangeInTimezone(key, customFrom, customTo);
+  /* Legacy browser-local implementation retained below for reference.
   const today = new Date();
   const startOfDay = (d: Date) => {
     const x = new Date(d);
@@ -105,5 +111,5 @@ export function computeReportRange(key: DateRangeKey, customFrom: string, custom
     }
   }
 
-  return { from, to };
+  return { from, to }; */
 }

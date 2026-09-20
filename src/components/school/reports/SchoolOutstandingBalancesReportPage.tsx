@@ -153,7 +153,7 @@ export function SchoolOutstandingBalancesReportPage({ readOnly: _readOnly }: Pro
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-bold text-slate-900">School Defaulters</h1>
+          <h1 className="text-2xl font-bold text-slate-900">Outstanding fee balances</h1>
           <PageNotes ariaLabel="Outstanding">
             <p>Non-cancelled student invoices where amount paid is below total due.</p>
           </PageNotes>

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
-import { BookOpen } from "lucide-react";
+import { BookOpen, Download } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type Row = {
   academic_year: string;
@@ -21,6 +22,8 @@ export function SchoolTermPerformanceReportPage({ readOnly: _readOnly }: Props) 
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const [year, setYear] = useState("");
+  const [term, setTerm] = useState("");
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -28,13 +31,9 @@ export function SchoolTermPerformanceReportPage({ readOnly: _readOnly }: Props) 
       return;
     }
     setLoading(true);
-    const { data, error } = await supabase
-      .from("student_invoices")
-      .select("academic_year,term_name,total_due,amount_paid,status")
-      .eq("organization_id", orgId)
-      .neq("status", "cancelled");
-
-    setErr(error?.message ?? null);
+    let data: { academic_year: string; term_name: string; total_due?: number; amount_paid?: number }[];
+    try { data = await fetchAllPages((start, end) => supabase.from("student_invoices").select("academic_year,term_name,total_due,amount_paid").eq("organization_id", orgId).neq("status", "cancelled").range(start, end)); setErr(null); }
+    catch (error) { setErr(error instanceof Error ? error.message : "Failed to load term performance."); setRows([]); setLoading(false); return; }
     const map = new Map<string, Row>();
     for (const inv of data || []) {
       const r = inv as {
@@ -75,6 +74,13 @@ export function SchoolTermPerformanceReportPage({ readOnly: _readOnly }: Props) 
   if (!orgId) {
     return <p className="p-6 text-slate-600">Select an organization.</p>;
   }
+  const years = [...new Set(rows.map((row) => row.academic_year))].sort().reverse();
+  const terms = [...new Set(rows.map((row) => row.term_name))].sort();
+  const visibleRows = rows.filter((row) => (!year || row.academic_year === year) && (!term || row.term_name === term));
+  const exportCsv = () => {
+    const csv = [["academic_year", "term", "invoices", "invoiced", "collected", "outstanding", "collection_percent"], ...visibleRows.map((r) => [r.academic_year, r.term_name, r.invoice_count, r.invoiced, r.collected, r.outstanding, r.invoiced ? (r.collected / r.invoiced * 100).toFixed(1) : "0.0"])].map((row) => row.join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const a = document.createElement("a"); a.href = url; a.download = "school_term_performance.csv"; a.click(); URL.revokeObjectURL(url);
+  };
 
   return (
     <div className="min-h-[calc(100vh-4rem)] p-6 md:p-8 bg-gradient-to-br from-slate-50 to-indigo-50/20">
@@ -87,9 +93,9 @@ export function SchoolTermPerformanceReportPage({ readOnly: _readOnly }: Props) 
           </p>
         </PageNotes>
       </div>
-      <p className="text-sm text-slate-600 mb-6 flex items-center gap-2">
+      <div className="mb-6 flex flex-wrap items-center gap-2"><p className="text-sm text-slate-600 flex items-center gap-2">
         <BookOpen className="w-4 h-4" /> Based on invoice academic year / term fields.
-      </p>
+      </p><select value={year} onChange={(e) => setYear(e.target.value)} className="rounded-lg border px-3 py-2 text-sm"><option value="">All years</option>{years.map((value) => <option key={value}>{value}</option>)}</select><select value={term} onChange={(e) => setTerm(e.target.value)} className="rounded-lg border px-3 py-2 text-sm"><option value="">All terms</option>{terms.map((value) => <option key={value}>{value}</option>)}</select><button type="button" onClick={exportCsv} disabled={loading} className="app-btn-secondary"><Download className="w-4 h-4" /> CSV</button></div>
 
       {err && <p className="text-red-600 text-sm mb-4">{err}</p>}
 
@@ -110,7 +116,7 @@ export function SchoolTermPerformanceReportPage({ readOnly: _readOnly }: Props) 
               </tr>
             </thead>
             <tbody>
-              {rows.map((r) => {
+              {visibleRows.map((r) => {
                 const pct = r.invoiced > 0 ? (r.collected / r.invoiced) * 100 : 0;
                 return (
                   <tr key={`${r.academic_year}-${r.term_name}`} className="border-b border-slate-100">
@@ -126,7 +132,7 @@ export function SchoolTermPerformanceReportPage({ readOnly: _readOnly }: Props) 
               })}
             </tbody>
           </table>
-          {rows.length === 0 && <p className="p-6 text-slate-500 text-sm">No invoice data yet.</p>}
+          {visibleRows.length === 0 && <p className="p-6 text-slate-500 text-sm">No invoice data matches the selected filters.</p>}
         </div>
       )}
     </div>

@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDownRight, ArrowUpRight } from "lucide-react";
+import { ArrowDownRight, ArrowUpRight, Download } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { computeReportRange, type DateRangeKey } from "@/lib/reportsDateRange";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type Props = { readOnly?: boolean };
 
@@ -28,18 +29,22 @@ export function SchoolIncomeExpenditureReportPage({ readOnly: _readOnly }: Props
     const fromIso = from.toISOString();
     const toIso = to.toISOString();
     const fromDate = from.toISOString().slice(0, 10);
-    const toDate = to.toISOString().slice(0, 10);
-
-    const [payRes, expRes] = await Promise.all([
-      supabase.from("school_payments").select("amount").eq("organization_id", orgId).gte("paid_at", fromIso).lt("paid_at", toIso),
-      supabase.from("expenses").select("amount").eq("organization_id", orgId).gte("expense_date", fromDate).lte("expense_date", toDate),
-    ]);
-
-    setErr(payRes.error?.message || expRes.error?.message || null);
-    const paySum = (payRes.data || []).reduce((s, p) => s + Number((p as { amount?: number }).amount ?? 0), 0);
-    const expSum = (expRes.data || []).reduce((s, e) => s + Number((e as { amount?: number }).amount ?? 0), 0);
-    setIncome(paySum);
-    setExpenditure(expSum);
+    // `to` is exclusive; expense_date is a calendar date, so compare to the
+    // final included date rather than including the following business day.
+    const lastIncludedDate = new Date(to.getTime() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    try {
+      const [payments, expenses] = await Promise.all([
+        fetchAllPages<{ amount?: number }>((start, end) => supabase.from("school_payments").select("amount").eq("organization_id", orgId).gte("paid_at", fromIso).lt("paid_at", toIso).range(start, end)),
+        fetchAllPages<{ amount?: number }>((start, end) => supabase.from("expenses").select("amount").eq("organization_id", orgId).gte("expense_date", fromDate).lte("expense_date", lastIncludedDate).range(start, end)),
+      ]);
+      setErr(null);
+      const paySum = payments.reduce((s, p) => s + Number(p.amount ?? 0), 0);
+      const expSum = expenses.reduce((s, e) => s + Number(e.amount ?? 0), 0);
+      setIncome(paySum);
+      setExpenditure(expSum);
+    } catch (error) {
+      setIncome(0); setExpenditure(0); setErr(error instanceof Error ? error.message : "Failed to load the cash summary.");
+    }
     setLoading(false);
   }, [orgId, dateRange, customFrom, customTo]);
 
@@ -48,6 +53,7 @@ export function SchoolIncomeExpenditureReportPage({ readOnly: _readOnly }: Props
   }, [load]);
 
   const net = useMemo(() => income - expenditure, [income, expenditure]);
+  const exportCsv = () => { const csv = `metric,amount\nfee_collections,${income}\nrecorded_expenses,${expenditure}\nnet,${net}\n`; const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const a = document.createElement("a"); a.href = url; a.download = "school_cash_fee_summary.csv"; a.click(); URL.revokeObjectURL(url); };
 
   if (!orgId) {
     return <p className="p-6 text-slate-600">Select an organization.</p>;
@@ -56,7 +62,7 @@ export function SchoolIncomeExpenditureReportPage({ readOnly: _readOnly }: Props
   return (
     <div className="min-h-[calc(100vh-4rem)] p-6 md:p-8 bg-gradient-to-br from-slate-50 to-indigo-50/20">
       <div className="flex flex-wrap items-center gap-2 mb-2">
-        <h1 className="text-2xl font-bold text-slate-900">Income &amp; expenditure</h1>
+            <h1 className="text-2xl font-bold text-slate-900">Fee collections &amp; expenditure</h1>
         <PageNotes ariaLabel="I&E">
           <p>
             <strong>Income</strong> is all fee payments recorded in the period. <strong>Expenditure</strong> is the sum of expense entries (Purchases → Expenses)
@@ -64,7 +70,7 @@ export function SchoolIncomeExpenditureReportPage({ readOnly: _readOnly }: Props
           </p>
         </PageNotes>
       </div>
-      <p className="text-sm text-slate-600 mb-6">Cash-style view for school operations.</p>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-2"><p className="text-sm text-slate-600">Cash-style view: fee payments and recorded expenses only. Use the Income Statement for complete ledger income.</p><button type="button" onClick={exportCsv} disabled={loading || !!err} className="app-btn-secondary"><Download className="w-4 h-4" /> CSV</button></div>
 
       <div className="bg-white rounded-xl border border-slate-200 p-4 mb-6 flex flex-wrap gap-3 items-center">
         <select
