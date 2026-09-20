@@ -1051,12 +1051,12 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         const invoice = rows.find((row) => row.id === editingId);
         if (!invoice) return null;
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" onClick={cancelEdit}>
+          <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-950/45 p-4 sm:items-center" onClick={cancelEdit}>
             <section
               role="dialog"
               aria-modal="true"
               aria-labelledby="edit-student-invoice-title"
-              className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-2xl"
+              className="my-auto max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-xl bg-white p-5 shadow-2xl"
               onClick={(event) => event.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
