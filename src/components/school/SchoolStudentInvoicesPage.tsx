@@ -68,6 +68,7 @@ type InvRow = {
 };
 
 type InvEditDraft = {
+  line_items: FeeLine[];
   discount_amount: string;
   scholarship_amount: string;
   status: string;
@@ -603,6 +604,9 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const startEdit = (r: InvRow) => {
     setEditingId(r.id);
     setEditDraft({
+      line_items: Array.isArray(r.line_items) && r.line_items.length > 0
+        ? r.line_items.map((line) => ({ ...line, amount: Number(line.amount) || 0 }))
+        : [{ code: "FEE_CHARGE", label: "Fee charge", amount: Number(r.subtotal) || 0 }],
       discount_amount: moneyDraftFromDb(r.discount_amount),
       scholarship_amount: moneyDraftFromDb(r.scholarship_amount),
       status: INV_STATUS.includes(r.status as (typeof INV_STATUS)[number]) ? r.status : "sent",
@@ -620,7 +624,11 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const row = rows.find((x) => x.id === editingId);
     if (!row) return;
 
-    const subtotal = Number(row.subtotal) || 0;
+    const line_items = editDraft.line_items.map((line) => ({
+      ...line,
+      amount: Math.max(0, Number(line.amount) || 0),
+    }));
+    const subtotal = line_items.reduce((sum, line) => sum + Number(line.amount || 0), 0);
     const disc = Number(editDraft.discount_amount) || 0;
     const burs = Number(row.bursary_amount) || 0;
     const schol = Number(editDraft.scholarship_amount) || 0;
@@ -642,6 +650,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         const updated = await updateSchoolRow<InvRow>("invoices", orgId, editingId, {
           discount_amount: disc,
           scholarship_amount: schol,
+          subtotal,
+          line_items,
           total_due,
           status,
           notes: editDraft.notes.trim() || null,
@@ -661,6 +671,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       .update({
         discount_amount: disc,
         scholarship_amount: schol,
+        subtotal,
+        line_items,
         total_due,
         status,
         notes: editDraft.notes.trim() || null,
@@ -981,64 +993,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                 </td>
               </tr>
             ) : (
-              filteredRows.map((r) =>
-                editingId === r.id && editDraft ? (
-                  <tr key={r.id} className="border-b border-slate-100 bg-indigo-50/40">
-                    <td className="p-2" colSpan={11}>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2 py-1 text-xs text-slate-600 mb-2">
-                        <span className="md:col-span-3 font-mono text-slate-800">{r.invoice_number}</span>
-                        <span>
-                          Subtotal (fixed): {Number(r.subtotal).toLocaleString()} · Bursary (from page): {Number(r.bursary_amount).toLocaleString()} · Paid: {Number(r.amount_paid).toLocaleString()}
-                        </span>
-                      </div>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-                        <input
-                          type="number"
-                          className="border border-slate-300 rounded-md px-2 py-1.5 text-sm"
-                          value={editDraft.discount_amount}
-                          onChange={(e) => setEditDraft((d) => (d ? { ...d, discount_amount: e.target.value } : d))}
-                          placeholder="Discount"
-                        />
-                        <input
-                          type="number"
-                          className="border border-slate-300 rounded-md px-2 py-1.5 text-sm"
-                          value={editDraft.scholarship_amount}
-                          onChange={(e) => setEditDraft((d) => (d ? { ...d, scholarship_amount: e.target.value } : d))}
-                          placeholder="Scholarship"
-                        />
-                        <select
-                          className="border border-slate-300 rounded-md px-2 py-1.5 text-sm md:col-span-3"
-                          value={editDraft.status}
-                          onChange={(e) => setEditDraft((d) => (d ? { ...d, status: e.target.value } : d))}
-                        >
-                          {INV_STATUS.map((s) => (
-                            <option key={s} value={s}>
-                              {s}
-                            </option>
-                          ))}
-                        </select>
-                        <textarea
-                          className="border border-slate-300 rounded-md px-2 py-1.5 text-sm md:col-span-3 min-h-[48px]"
-                          value={editDraft.notes}
-                          onChange={(e) => setEditDraft((d) => (d ? { ...d, notes: e.target.value } : d))}
-                          placeholder="Notes"
-                        />
-                        <div className="md:col-span-3 flex justify-end gap-2">
-                          <button type="button" onClick={saveEdit} className="px-3 py-1.5 text-xs font-medium bg-slate-900 text-white rounded-md">
-                            Save
-                          </button>
-                          <button
-                            type="button"
-                            onClick={cancelEdit}
-                            className="px-3 py-1.5 text-xs font-medium text-slate-700 border border-slate-300 rounded-md"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                ) : (
+              filteredRows.map((r) => (
                   <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                     <td className="p-3 font-mono text-slate-800">
                       {r.invoice_number}
@@ -1087,12 +1042,81 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                       </div>
                     </td>
                   </tr>
-                )
-              )
+              ))
             )}
           </tbody>
         </table>
       </div>
+      {editingId && editDraft && (() => {
+        const invoice = rows.find((row) => row.id === editingId);
+        if (!invoice) return null;
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" onClick={cancelEdit}>
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="edit-student-invoice-title"
+              className="w-full max-w-2xl rounded-xl bg-white p-5 shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+                <div>
+                  <h2 id="edit-student-invoice-title" className="text-lg font-bold text-slate-900">Edit student invoice</h2>
+                  <p className="mt-1 font-mono text-xs text-slate-600">{invoice.invoice_number}</p>
+                </div>
+                <button type="button" onClick={cancelEdit} className="rounded-md px-2 py-1 text-slate-500 hover:bg-slate-100 hover:text-slate-800" aria-label="Close edit invoice dialog">×</button>
+              </div>
+              <div className="mt-4 rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
+                <p><span className="font-medium">Student:</span> {studentLabel(invoice.student_id)}</p>
+                <p className="mt-1">Bursary: {Number(invoice.bursary_amount).toLocaleString()} · Paid: {Number(invoice.amount_paid).toLocaleString()}</p>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <fieldset className="sm:col-span-2">
+                  <legend className="text-sm font-medium text-slate-700">Fee charges</legend>
+                  <p className="mt-1 text-xs text-slate-500">Update the amount for each charge. The invoice total is recalculated when you save.</p>
+                  <div className="mt-2 space-y-2">
+                    {editDraft.line_items.map((line, index) => (
+                      <label key={`${line.code || line.label || "charge"}-${index}`} className="flex items-center gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        <span className="min-w-0 flex-1 truncate">{line.label || line.code || "Fee charge"}</span>
+                        <input
+                          type="number"
+                          min="0"
+                          className="w-36 rounded-md border border-slate-300 bg-white px-3 py-1.5 text-right text-sm"
+                          value={line.amount ?? 0}
+                          onChange={(event) => setEditDraft((draft) => draft ? {
+                            ...draft,
+                            line_items: draft.line_items.map((item, itemIndex) => itemIndex === index ? { ...item, amount: event.target.value === "" ? 0 : Number(event.target.value) } : item),
+                          } : draft)}
+                          aria-label={`${line.label || line.code || "Fee charge"} amount`}
+                        />
+                      </label>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-right text-sm font-semibold text-slate-800">Fee charges total: {editDraft.line_items.reduce((sum, line) => sum + Math.max(0, Number(line.amount) || 0), 0).toLocaleString()}</p>
+                </fieldset>
+                <label className="text-sm font-medium text-slate-700">Discount
+                  <input type="number" min="0" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={editDraft.discount_amount} onChange={(e) => setEditDraft((draft) => (draft ? { ...draft, discount_amount: e.target.value } : draft))} />
+                </label>
+                <label className="text-sm font-medium text-slate-700">Scholarship
+                  <input type="number" min="0" className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={editDraft.scholarship_amount} onChange={(e) => setEditDraft((draft) => (draft ? { ...draft, scholarship_amount: e.target.value } : draft))} />
+                </label>
+                <label className="text-sm font-medium text-slate-700 sm:col-span-2">Status
+                  <select className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={editDraft.status} onChange={(e) => setEditDraft((draft) => (draft ? { ...draft, status: e.target.value } : draft))}>
+                    {INV_STATUS.map((status) => <option key={status} value={status}>{status}</option>)}
+                  </select>
+                </label>
+                <label className="text-sm font-medium text-slate-700 sm:col-span-2">Notes
+                  <textarea className="mt-1 min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={editDraft.notes} onChange={(e) => setEditDraft((draft) => (draft ? { ...draft, notes: e.target.value } : draft))} placeholder="Reason for this adjustment" />
+                </label>
+              </div>
+              <div className="mt-5 flex justify-end gap-3">
+                <button type="button" onClick={cancelEdit} className="app-btn-secondary">Cancel</button>
+                <button type="button" onClick={() => void saveEdit()} className="app-btn-primary">Save changes</button>
+              </div>
+            </section>
+          </div>
+        );
+      })()}
       </section>}
     </div>
   );
