@@ -15,6 +15,7 @@ type Plan = {
 };
 
 type BusinessTypeRow = { id: string; code: string; name: string };
+type PlanFeatureRow = { plan_id: string; feature_code: string; enabled: boolean };
 
 /** Standard tier columns (must match `subscription_plans.code` for each business type). */
 const PLAN_TIER_COLUMNS = [
@@ -36,6 +37,8 @@ const emptyForm = (businessTypeCode: string) => ({
 export function PlatformPlansPage() {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [businessTypes, setBusinessTypes] = useState<BusinessTypeRow[]>([]);
+  const [controlCentrePlanIds, setControlCentrePlanIds] = useState<Set<string>>(new Set());
+  const [updatingFeaturePlanId, setUpdatingFeaturePlanId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"edit" | "add" | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -47,10 +50,12 @@ export function PlatformPlansPage() {
 
   const loadPlans = useCallback(async () => {
     setLoading(true);
-    const [plansRes, btRes] = await Promise.all([
+    const [plansRes, btRes, featuresRes] = await Promise.all([
       supabase.from("subscription_plans").select("*").order("sort_order"),
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (supabase as any).from("business_types").select("id,code,name,sort_order").order("sort_order", { ascending: true }),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (supabase as any).from("subscription_plan_features").select("plan_id,feature_code,enabled").eq("feature_code", "control_centre"),
     ]);
     if (plansRes.error) console.error(plansRes.error);
     const list = ((plansRes.data as Plan[]) || []).slice().sort((a, b) => {
@@ -59,6 +64,17 @@ export function PlatformPlansPage() {
       return (a.sort_order ?? 0) - (b.sort_order ?? 0);
     });
     setPlans(list);
+    if (!featuresRes.error) {
+      setControlCentrePlanIds(
+        new Set(
+          ((featuresRes.data as PlanFeatureRow[] | null) ?? [])
+            .filter((feature) => feature.enabled)
+            .map((feature) => feature.plan_id),
+        ),
+      );
+    } else {
+      console.error(featuresRes.error);
+    }
     if (!btRes.error && btRes.data?.length) {
       setBusinessTypes(btRes.data as BusinessTypeRow[]);
     } else {
@@ -108,6 +124,26 @@ export function PlatformPlansPage() {
     const m = parseFloat(form.price_monthly);
     if (!Number.isFinite(m)) return;
     setForm((f) => ({ ...f, price_yearly: String((Math.round(m * 12 * 100) / 100).toFixed(2)) }));
+  };
+
+  const toggleControlCentre = async (planId: string, enabled: boolean) => {
+    setUpdatingFeaturePlanId(planId);
+    setErr(null);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (supabase as any)
+      .from("subscription_plan_features")
+      .upsert({ plan_id: planId, feature_code: "control_centre", enabled }, { onConflict: "plan_id,feature_code" });
+    setUpdatingFeaturePlanId(null);
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+    setControlCentrePlanIds((current) => {
+      const next = new Set(current);
+      if (enabled) next.add(planId);
+      else next.delete(planId);
+      return next;
+    });
   };
 
   const handleSave = async () => {
@@ -212,6 +248,7 @@ export function PlatformPlansPage() {
           Add plan
         </button>
       </div>
+      {err && <p className="mb-4 text-sm text-red-600">{err}</p>}
 
       <div className="mb-10 overflow-x-auto rounded-xl border border-slate-200 bg-white shadow-sm">
         <table className="w-full min-w-[640px] text-sm text-left">
@@ -311,6 +348,19 @@ export function PlatformPlansPage() {
                       <p className="text-xs text-slate-400 mt-2">Sort order: {p.sort_order}</p>
                     </div>
                     <div className="flex items-start gap-3 shrink-0">
+                      <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer select-none pt-1">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-300 text-brand-800 focus:ring-brand-700"
+                          checked={controlCentrePlanIds.has(p.id)}
+                          disabled={updatingFeaturePlanId === p.id}
+                          onChange={(event) => toggleControlCentre(p.id, event.target.checked)}
+                        />
+                        <span className="leading-tight">
+                          BOAT Control Centre
+                          <span className="block text-xs text-slate-500">Enable for this plan</span>
+                        </span>
+                      </label>
                       <div className="text-right">
                         <p className="text-xl font-bold text-slate-900">{Number(p.price_monthly).toFixed(2)}</p>
                         <p className="text-xs text-slate-500">/ month</p>
