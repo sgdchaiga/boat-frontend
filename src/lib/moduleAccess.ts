@@ -239,6 +239,8 @@ export function getModuleAccess(input: {
   enableControlCentre?: boolean;
   /** Control Centre is currently restricted to platform super administrators. */
   isSuperAdmin?: boolean;
+  /** Organization-level Super Admin role. */
+  userRole?: string | null;
   /** School org: superuser toggles for BOAT-linked areas (ignored for non-school). */
   schoolEnableReports?: boolean;
   schoolEnableFixedDeposit?: boolean;
@@ -268,6 +270,7 @@ export function getModuleAccess(input: {
     enablePurchases,
     enableControlCentre,
     isSuperAdmin,
+    userRole,
     schoolEnableReports,
     schoolEnableFixedDeposit,
     schoolEnableAccounting,
@@ -452,8 +455,8 @@ export function getModuleAccess(input: {
   }
 
   if (moduleId === "control_centre") {
-    if (isSuperAdmin !== true) {
-      return { visible: false, readOnly: true, blockedReason: "BOAT Control Centre is currently limited to platform super administrators." };
+    if (isSuperAdmin !== true && userRole !== "super_admin") {
+      return { visible: false, readOnly: true, blockedReason: "BOAT Control Centre is currently limited to Super Admins." };
     }
     if (enableControlCentre !== true) {
       return { visible: false, readOnly: true, blockedReason: "BOAT Control Centre is not enabled for this organization." };

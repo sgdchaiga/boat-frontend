@@ -19,6 +19,16 @@ const numberFrom = (value: string) => {
   const parsed = Number(normalized);
   return Number.isFinite(parsed) ? parsed : null;
 };
+/** Accept a simple count calculation such as `2 + 5 - 1`; never evaluate arbitrary JavaScript. */
+const quantityExpressionFrom = (value: string) => {
+  const raw = String(value ?? "").replace(/,/g, "").trim();
+  if (!raw) return null;
+  const term = "(?:\\d+(?:\\.\\d+)?|\\.\\d+)";
+  if (!new RegExp(`^[+-]?\\s*${term}(?:\\s*[+-]\\s*${term})*$`).test(raw)) return null;
+  const result = (raw.match(new RegExp(`[+-]?\\s*${term}`, "g")) || [])
+    .reduce((sum, part) => sum + Number(part.replace(/\s/g, "")), 0);
+  return Number.isFinite(result) ? result : null;
+};
 const detectHeader = (headers: string[], aliases: string[], patterns: RegExp[], exclusions: RegExp[] = []) =>
   aliases.find((alias) => headers.includes(alias)) ||
   headers.find((header) => patterns.some((pattern) => pattern.test(header)) && !exclusions.some((pattern) => pattern.test(header))) ||
@@ -56,6 +66,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [physicalDrafts, setPhysicalDrafts] = useState<Record<string, string>>({});
   const pendingLineSaves = useRef(new Map<string, number>());
 
   const loadTakes = useCallback(async (selectedClient: string) => {
@@ -85,7 +96,7 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
   }, [orgId]);
 
   const loadLines = useCallback(async (selectedTake: string) => {
-    if (!selectedTake) { setLines([]); return; }
+    if (!selectedTake) { setLines([]); setPhysicalDrafts({}); return; }
     const result = await db.from("practice_stock_take_items").select("*").eq("stock_take_id", selectedTake).order("item_name");
     const cacheKey = `boat.practice.stocktake.${selectedTake}`;
     if (result.error) {
@@ -341,6 +352,27 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
     pendingLineSaves.current.set(lineId, timer);
   };
 
+  const editPhysicalExpression = (lineId: string, expression: string) => {
+    setPhysicalDrafts((current) => ({ ...current, [lineId]: expression }));
+    if (expression.trim() === "") {
+      updatePhysical(lineId, null);
+      return;
+    }
+    const value = quantityExpressionFrom(expression);
+    if (value != null) updatePhysical(lineId, value);
+  };
+
+  const finishPhysicalExpression = (line: StockLine) => {
+    const expression = physicalDrafts[line.id];
+    if (expression == null) return;
+    const value = quantityExpressionFrom(expression);
+    if (value == null && expression.trim() !== "") {
+      setMessage("Physical count accepts numbers and + or - only, for example 2 + 5.");
+      setPhysicalDrafts((current) => ({ ...current, [line.id]: line.physical_qty == null ? "" : String(line.physical_qty) }));
+      return;
+    }
+    setPhysicalDrafts((current) => ({ ...current, [line.id]: value == null ? "" : String(value) }));
+  };
   const scanBarcode = () => {
     const key = matchKey(barcode);
     const found = lines.find((line) => matchKey(line.barcode) === key || matchKey(line.item_code) === key);
@@ -441,8 +473,8 @@ export function PracticeStockTakePage({ readOnly = false }: { readOnly?: boolean
       </div>
       {selectedTake?.status === "submitted" && <div className="grid gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 md:grid-cols-3"><input className={input} value={inventoryAccount} onChange={(event) => setInventoryAccount(event.target.value)} placeholder="Inventory account"/><input className={input} value={gainLossAccount} onChange={(event) => setGainLossAccount(event.target.value)} placeholder="Stock gain/loss account"/><button className="app-btn-primary" disabled={readOnly || saving || !inventoryAccount.trim() || !gainLossAccount.trim()} onClick={() => void approveAndPost()}><ShieldCheck className="h-4 w-4"/> Approve & post adjustment</button><p className="text-xs text-amber-800 md:col-span-3">Shortage: Dr Stock Gain/Loss, Cr Inventory. Surplus: Dr Inventory, Cr Stock Gain/Loss. Posts to the client practice journal, not the firm ledger.</p></div>}
       {reportView === "department" && <div className="rounded-xl border bg-white p-4"><h3 className="font-semibold">Department variance report</h3><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{departmentSummary.map(([name, value]) => <Metric key={name} label={name} value={value.toLocaleString("en-UG", { maximumFractionDigits: 2 })}/>)}</div></div>}
-      <div className="space-y-3 md:hidden">{filtered.map((line) => { const variance = line.physical_qty == null ? null : line.physical_qty - line.system_qty; return <div key={line.id} className="rounded-xl border bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{line.item_name}</p><p className="text-xs text-slate-500">{line.item_code || line.barcode || "No code"} · {line.category || "Uncategorised"}</p></div>{!blindCount && <span className="text-xs text-slate-500">System {line.system_qty}</span>}</div><label className="mt-3 block text-xs text-slate-600">Physical count<input className="mt-1 w-full rounded-lg border px-3 py-3 text-lg" type="number" step="any" value={line.physical_qty ?? ""} disabled={readOnly || selectedTake?.status !== "draft"} onChange={(event) => updatePhysical(line.id, event.target.value === "" ? null : Number(event.target.value))}/></label><div className="mt-2 flex justify-between text-xs"><span>Counter: {line.counted_by_name || user?.email || "Not counted"}</span>{!blindCount && <span className={variance != null && variance < 0 ? "text-rose-700" : "text-emerald-700"}>Variance {variance ?? "—"}</span>}</div></div>; })}</div>
-      <div className="overflow-auto rounded-xl border bg-white"><div className="border-b p-4"><h2 className="font-semibold">{selectedTake?.title}</h2><p className="text-xs text-slate-500">{clients.find((client) => client.id === clientId)?.name} · {selectedTake?.stock_date} · System stock from {selectedTake?.source_file || "uploaded file"}</p></div><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Code</th><th className="p-3 text-left">Item</th><th className="p-3 text-left">Category</th><th className="p-3 text-right">System</th><th className="p-3 text-right">Physical</th><th className="p-3 text-right">Variance</th><th className="p-3 text-right">Variance value</th></tr></thead><tbody>{filtered.map((line) => { const variance = line.physical_qty == null ? null : line.physical_qty - line.system_qty; return <tr key={line.id} className={`border-t ${variance != null && variance < 0 ? "bg-rose-50" : variance != null && variance > 0 ? "bg-emerald-50" : ""}`}><td className="p-3 text-slate-500">{line.item_code || "—"}</td><td className="p-3 font-medium">{line.item_name}<p className="text-xs font-normal text-slate-400">{line.unit || ""}</p></td><td className="p-3">{line.category || "—"}</td><td className="p-3 text-right tabular-nums">{line.system_qty}</td><td className="p-2 text-right"><input className="w-28 rounded-lg border px-2 py-1.5 text-right tabular-nums" type="number" step="any" value={line.physical_qty ?? ""} disabled={readOnly || selectedTake?.status !== "draft"} onChange={(event) => updatePhysical(line.id, event.target.value === "" ? null : Number(event.target.value))}/></td><td className="p-3 text-right font-semibold tabular-nums">{variance == null ? "—" : variance}</td><td className="p-3 text-right tabular-nums">{variance == null ? "—" : (variance * line.unit_cost).toLocaleString("en-UG", { maximumFractionDigits: 2 })}</td></tr>; })}</tbody><tfoot><tr className="border-t-2 bg-slate-50 font-semibold"><td className="p-3" colSpan={5}>Filtered report totals</td><td className="p-3 text-right">{filteredVarianceQty}</td><td className="p-3 text-right">{filteredVarianceValue.toLocaleString("en-UG", { maximumFractionDigits: 2 })}</td></tr></tfoot></table>{!loading && !filtered.length && <p className="p-8 text-center text-sm text-slate-500">No stock lines match the filters.</p>}</div>
+      <div className="space-y-3 md:hidden">{filtered.map((line) => { const variance = line.physical_qty == null ? null : line.physical_qty - line.system_qty; return <div key={line.id} className="rounded-xl border bg-white p-4"><div className="flex items-start justify-between gap-3"><div><p className="font-semibold">{line.item_name}</p><p className="text-xs text-slate-500">{line.item_code || line.barcode || "No code"} · {line.category || "Uncategorised"}</p></div>{!blindCount && <span className="text-xs text-slate-500">System {line.system_qty}</span>}</div><label className="mt-3 block text-xs text-slate-600">Physical count<input className="mt-1 w-full rounded-lg border px-3 py-3 text-lg" type="text" inputMode="decimal" value={physicalDrafts[line.id] ?? line.physical_qty ?? ""} placeholder="2 + 5" title="You can enter a calculation such as 2 + 5" disabled={readOnly || selectedTake?.status !== "draft"} onChange={(event) => editPhysicalExpression(line.id, event.target.value)} onBlur={() => finishPhysicalExpression(line)}/></label><div className="mt-2 flex justify-between text-xs"><span>Counter: {line.counted_by_name || user?.email || "Not counted"}</span>{!blindCount && <span className={variance != null && variance < 0 ? "text-rose-700" : "text-emerald-700"}>Variance {variance ?? "—"}</span>}</div></div>; })}</div>
+      <div className="overflow-auto rounded-xl border bg-white"><div className="border-b p-4"><h2 className="font-semibold">{selectedTake?.title}</h2><p className="text-xs text-slate-500">{clients.find((client) => client.id === clientId)?.name} · {selectedTake?.stock_date} · System stock from {selectedTake?.source_file || "uploaded file"}</p></div><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-3 text-left">Code</th><th className="p-3 text-left">Item</th><th className="p-3 text-left">Category</th><th className="p-3 text-right">System</th><th className="p-3 text-right">Physical</th><th className="p-3 text-right">Variance</th><th className="p-3 text-right">Variance value</th></tr></thead><tbody>{filtered.map((line) => { const variance = line.physical_qty == null ? null : line.physical_qty - line.system_qty; return <tr key={line.id} className={`border-t ${variance != null && variance < 0 ? "bg-rose-50" : variance != null && variance > 0 ? "bg-emerald-50" : ""}`}><td className="p-3 text-slate-500">{line.item_code || "—"}</td><td className="p-3 font-medium">{line.item_name}<p className="text-xs font-normal text-slate-400">{line.unit || ""}</p></td><td className="p-3">{line.category || "—"}</td><td className="p-3 text-right tabular-nums">{line.system_qty}</td><td className="p-2 text-right"><input className="w-28 rounded-lg border px-2 py-1.5 text-right tabular-nums" type="text" inputMode="decimal" value={physicalDrafts[line.id] ?? line.physical_qty ?? ""} placeholder="2 + 5" title="You can enter a calculation such as 2 + 5" disabled={readOnly || selectedTake?.status !== "draft"} onChange={(event) => editPhysicalExpression(line.id, event.target.value)} onBlur={() => finishPhysicalExpression(line)}/></td><td className="p-3 text-right font-semibold tabular-nums">{variance == null ? "—" : variance}</td><td className="p-3 text-right tabular-nums">{variance == null ? "—" : (variance * line.unit_cost).toLocaleString("en-UG", { maximumFractionDigits: 2 })}</td></tr>; })}</tbody><tfoot><tr className="border-t-2 bg-slate-50 font-semibold"><td className="p-3" colSpan={5}>Filtered report totals</td><td className="p-3 text-right">{filteredVarianceQty}</td><td className="p-3 text-right">{filteredVarianceValue.toLocaleString("en-UG", { maximumFractionDigits: 2 })}</td></tr></tfoot></table>{!loading && !filtered.length && <p className="p-8 text-center text-sm text-slate-500">No stock lines match the filters.</p>}</div>
       </>}
       {workspaceTab === "reports" && <VarianceReportPanel reportView={reportView} setReportView={setReportView} rows={filtered} departments={departmentSummary} download={downloadReport}/>} 
       {workspaceTab === "adjustments" && (selectedTake?.status === "submitted" ? <div className="grid gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 md:grid-cols-3"><input className={input} value={inventoryAccount} onChange={(event) => setInventoryAccount(event.target.value)} placeholder="Inventory account"/><input className={input} value={gainLossAccount} onChange={(event) => setGainLossAccount(event.target.value)} placeholder="Stock gain/loss account"/><button className="app-btn-primary" disabled={readOnly || saving} onClick={() => void approveAndPost()}><ShieldCheck className="h-4 w-4"/> Approve & post adjustment</button><p className="text-xs text-amber-800 md:col-span-3">Shortage: Dr Stock Gain/Loss, Cr Inventory. Surplus: Dr Inventory, Cr Stock Gain/Loss.</p></div> : <div className="rounded-xl border bg-white p-8 text-center text-sm text-slate-500">This stock take has no adjustment awaiting approval.</div>)}

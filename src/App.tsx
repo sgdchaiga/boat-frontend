@@ -980,6 +980,7 @@ function AppContent() {
            enablePurchases: user?.enable_purchases !== false,
            enableControlCentre: user?.enable_control_centre === true,
            isSuperAdmin: user?.isSuperAdmin === true,
+           userRole: user?.role,
            schoolEnableReports: user?.school_enable_reports === true,
           schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
           schoolEnableAccounting: user?.school_enable_accounting === true,

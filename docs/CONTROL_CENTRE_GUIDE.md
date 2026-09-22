@@ -4,15 +4,15 @@ The BOAT Control Centre is a shared register for operational, revenue and cash-c
 
 ## 1. Who uses it
 
-- **Platform super administrators** currently have exclusive access during the rollout and enable it for subscription plans.
+- **Super Admins** currently have exclusive access during the rollout and enable it for subscription plans.
 - Organization administrators, managers, internal controllers and other users cannot currently open the Control Centre.
-- A future page-access release will allow platform super administrators and organization administrators to grant access to selected users, beginning with organization administrators.
+- A future page-access release will allow Super Admins and organization administrators to grant access to selected users, beginning with organization administrators.
 
 ## 2. Enable it for an organization
 
 Control Centre is a feature on a subscription plan. It is not a business type.
 
-1. Sign in as a platform super administrator.
+1. Sign in as a Super Admin.
 2. Open **Subscription plans**.
 3. Find the plan used by the organization (for example, the Hotel Professional plan).
 4. Select **BOAT Control Centre — Enable for this plan**.
@@ -96,7 +96,7 @@ Confirm all of the following:
 
 1. The organization has an active or trial subscription.
 2. The organization’s plan has **BOAT Control Centre** enabled in Subscription plans.
-3. The user is a platform super administrator. Other roles are intentionally excluded during the initial rollout.
+3. The user is a Super Admin. Other roles are intentionally excluded during the initial rollout.
 4. The user has refreshed their session by signing out and in again.
 
 ### The page says it could not load the Control Centre
