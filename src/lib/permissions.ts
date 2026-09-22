@@ -18,6 +18,10 @@ export const PERMISSION_KEYS = [
   "budget_prepare",
   "budget_review",
   "budget_approve",
+  "control_view",
+  "control_manage_exception",
+  "control_manage_action",
+  "control_manage_rule",
 ] as const;
 
 export type PermissionKey = (typeof PERMISSION_KEYS)[number];
@@ -25,7 +29,7 @@ export type PermissionKey = (typeof PERMISSION_KEYS)[number];
 export type PermissionDef = {
   key: PermissionKey;
   label: string;
-  group: "Approvals" | "Payroll" | "Sales Operations" | "Inventory" | "Accounting";
+  group: "Approvals" | "Payroll" | "Sales Operations" | "Inventory" | "Accounting" | "Control Centre";
   description: string;
 };
 
@@ -47,6 +51,10 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: "budget_prepare", label: "Budget preparation", group: "Accounting", description: "Create, edit and submit budgets." },
   { key: "budget_review", label: "Budget review", group: "Accounting", description: "Review submitted budgets and request corrections." },
   { key: "budget_approve", label: "Budget approval", group: "Accounting", description: "Approve, activate, revise and close budgets." },
+  { key: "control_view", label: "Control Centre view", group: "Control Centre", description: "View organization control exceptions and audit records." },
+  { key: "control_manage_exception", label: "Manage exceptions", group: "Control Centre", description: "Assign, investigate, review and resolve control exceptions." },
+  { key: "control_manage_action", label: "Manage actions", group: "Control Centre", description: "Create and complete corrective actions." },
+  { key: "control_manage_rule", label: "Manage control rules", group: "Control Centre", description: "Configure thresholds and activate control rules." },
 ];
 
 const CACHE_KEY = "boat.permissions.snapshot.v2";
@@ -303,6 +311,9 @@ function roleDefaultAllows(permission: PermissionKey, roleKey: string): boolean 
   if (permission === "budget_prepare") return ["admin","manager","accountant","bursar","department_head"].includes(roleKey);
   if (permission === "budget_review") return ["admin","manager","accountant","bursar","headteacher"].includes(roleKey);
   if (permission === "budget_approve") return ["admin","manager","headteacher","director"].includes(roleKey);
+  if (permission === "control_view" || permission === "control_manage_exception" || permission === "control_manage_action" || permission === "control_manage_rule") {
+    return ["super_admin", "admin", "manager", "internal_controller"].includes(roleKey);
+  }
   return false;
 }
 

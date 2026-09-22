@@ -70,6 +70,7 @@ const SelfServiceOnboardingPage = lazyNamed(() => import('./components/SelfServi
 const OnboardingChecklist = lazyNamed(() => import('./components/OnboardingChecklist'), 'OnboardingChecklist');
 const Layout = lazyNamed(() => import('./components/Layout'), 'Layout');
 const DesktopServerConnectionPage = lazyNamed(() => import('./components/system/DesktopServerConnectionPage'), 'DesktopServerConnectionPage');
+const ControlCentrePage = lazyNamed(() => import('./components/control-centre/ControlCentrePage'), 'ControlCentrePage');
 const SaccoSavingsStatementsPage = lazy(() => import('./components/sacco/SaccoSavingsStatementsPage'));
 
 const Dashboard = lazyNamed(() => import('./components/Dashboard'), 'Dashboard');
@@ -977,6 +978,7 @@ function AppContent() {
           enableAccounting: user?.enable_accounting !== false,
           enableInventory: user?.enable_inventory !== false,
           enablePurchases: user?.enable_purchases !== false,
+          enableControlCentre: user?.enable_control_centre === true,
           schoolEnableReports: user?.school_enable_reports === true,
           schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
           schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -1035,6 +1037,8 @@ function AppContent() {
     }
 
     switch (currentPage) {
+      case 'control_centre':
+        return <ControlCentrePage />;
       case 'platform_overview':
         return <PlatformOverviewPage />;
       case 'platform_organizations':

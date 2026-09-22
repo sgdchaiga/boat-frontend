@@ -41,7 +41,8 @@ export type ModuleId =
   | "communications"
   | "boat_connect"
   | "agent"
-  | "hotel_assessment";
+  | "hotel_assessment"
+  | "control_centre";
 
 type ModuleAudience =
   | "hotel"
@@ -109,6 +110,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   boat_connect: "both",
   agent: "both",
   hotel_assessment: "hotel",
+  control_centre: "both",
 };
 
 const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
@@ -150,6 +152,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   boat_connect: true,
   agent: false,
   hotel_assessment: false,
+  control_centre: true,
 };
 
 export function isBusinessEligible(audience: ModuleAudience, businessType?: BusinessType | null): boolean {
@@ -232,6 +235,8 @@ export function getModuleAccess(input: {
   enableReconciliation?: boolean;
   enableInventory?: boolean;
   enablePurchases?: boolean;
+  /** Premium Control Centre entitlement. */
+  enableControlCentre?: boolean;
   /** School org: superuser toggles for BOAT-linked areas (ignored for non-school). */
   schoolEnableReports?: boolean;
   schoolEnableFixedDeposit?: boolean;
@@ -259,6 +264,7 @@ export function getModuleAccess(input: {
     enableReconciliation,
     enableInventory,
     enablePurchases,
+    enableControlCentre,
     schoolEnableReports,
     schoolEnableFixedDeposit,
     schoolEnableAccounting,
@@ -442,6 +448,10 @@ export function getModuleAccess(input: {
     };
   }
 
+  if (moduleId === "control_centre" && enableControlCentre !== true) {
+    return { visible: false, readOnly: true, blockedReason: "BOAT Control Centre is not enabled for this organization." };
+  }
+
   if (!MODULE_REQUIRES_SUBSCRIPTION[moduleId]) {
     return { visible: true, readOnly: false };
   }
@@ -622,6 +632,7 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
 }
 
 export function pageToModuleId(page: string): ModuleId | null {
+  if (page.startsWith("control_centre")) return "control_centre";
   if (page === "financial_modelling_studio") return null;
   if (page === "asset_verification") return "asset_verification";
   if (page === "image_document_converter") return null;

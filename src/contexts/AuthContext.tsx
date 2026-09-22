@@ -47,7 +47,8 @@ export type UserRole =
   | "barman"
   | "hotel_operations_assistant"
   | "cashier"
-  | "storekeeper";
+  | "storekeeper"
+  | "internal_controller";
 
 export type BusinessType =
   | "hotel"
@@ -78,6 +79,7 @@ export const ROLE_LABELS: Record<UserRole, string> = {
   hotel_operations_assistant: "Hotel Operations Assistant",
   cashier: "Cashier",
   storekeeper: "Storekeeper",
+  internal_controller: "Internal Controller / Auditor",
 };
 
 interface AuthUser {
@@ -125,6 +127,8 @@ interface AuthUser {
   enable_budget?: boolean;
   /** Platform: Treasury module toggle. */
   enable_treasury?: boolean;
+  /** Premium BOAT Control Centre entitlement. */
+  enable_control_centre?: boolean;
   enable_reconciliation?: boolean;
   /** Platform: Agent Hub module toggle. */
   enable_agent?: boolean;
@@ -311,6 +315,7 @@ type TenantProfile = {
   enable_payroll: boolean;
   enable_budget: boolean;
   enable_treasury: boolean;
+  enable_control_centre: boolean;
   enable_reconciliation: boolean;
   enable_agent: boolean;
   enable_assistant: boolean;
@@ -408,6 +413,7 @@ function localTenantDefaults(): TenantProfile {
     enable_payroll: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_PAYROLL, true),
     enable_budget: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BUDGET, true),
     enable_treasury: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_TREASURY, true),
+    enable_control_centre: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_CONTROL_CENTRE, true),
     enable_reconciliation: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_RECONCILIATION, true),
     enable_agent: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_AGENT, true),
     enable_assistant: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_ASSISTANT, false),
@@ -575,6 +581,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     enable_payroll: true,
     enable_budget: true,
     enable_treasury: true,
+    enable_control_centre: false,
     enable_reconciliation: true,
     enable_agent: true,
     enable_assistant: false,
@@ -618,7 +625,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       return empty;
     }
 
-    const [{ data: orgRow, error: orgError }, { data: subRows, error: subError }] = await Promise.all([
+    const [{ data: orgRow, error: orgError }, { data: subRows, error: subError }, { data: controlCentreEnabled, error: featureError }] = await Promise.all([
       supabase
         .from("organizations")
         .select(
@@ -632,9 +639,11 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
         .eq("organization_id", organization_id)
         .order("created_at", { ascending: false })
         .limit(1),
+      supabase.rpc("has_organization_feature", { p_organization_id: organization_id, p_feature_code: "control_centre" }),
     ]);
     if (orgError) throw orgError;
     if (subError) throw subError;
+    if (featureError && !IS_LOCAL_AUTH_MODE) throw featureError;
 
     const sub = (subRows || [])[0] as
       | {
@@ -710,6 +719,9 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_payroll: org?.enable_payroll !== false,
       enable_budget: org?.enable_budget !== false,
       enable_treasury: org?.enable_treasury !== false,
+      enable_control_centre: IS_LOCAL_AUTH_MODE
+        ? parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_CONTROL_CENTRE, true)
+        : controlCentreEnabled === true,
       enable_reconciliation: org?.enable_reconciliation !== false,
       enable_agent: org?.enable_agent !== false,
       enable_assistant: org?.enable_assistant === true,

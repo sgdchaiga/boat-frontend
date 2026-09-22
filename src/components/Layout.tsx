@@ -1316,6 +1316,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     const navigation = businessType !== 'accounting_practice' && enableAssetVerification
       ? [...baseNavigation, { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' }]
       : baseNavigation;
+    if (user?.enable_control_centre === true) {
+      navigation.push({ name: 'Control Centre', icon: Shield, page: 'control_centre' });
+    }
     const seenPages = new Set<string>();
 
     return navigation.filter((item) => {
@@ -1485,6 +1488,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         enableAccounting: user?.enable_accounting !== false,
         enableInventory: user?.enable_inventory !== false,
         enablePurchases: user?.enable_purchases !== false,
+        enableControlCentre: user?.enable_control_centre === true,
         schoolEnableReports: user?.school_enable_reports === true,
         schoolEnableFixedDeposit: user?.school_enable_fixed_deposit === true,
         schoolEnableAccounting: user?.school_enable_accounting === true,
@@ -1499,6 +1503,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       user?.enable_accounting,
       user?.enable_inventory,
       user?.enable_purchases,
+      user?.enable_control_centre,
       user?.enable_fixed_assets,
       user?.enable_asset_verification,
       user?.enable_treasury,
