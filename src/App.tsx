@@ -266,6 +266,7 @@ const SchoolIncomeExpenditureReportPage = lazyNamed(() => import('./components/s
 const SchoolFeePaymentTrendsReportPage = lazyNamed(() => import('./components/school/reports/SchoolFeePaymentTrendsReportPage'), 'SchoolFeePaymentTrendsReportPage');
 const SchoolTopDefaultersReportPage = lazyNamed(() => import('./components/school/reports/SchoolTopDefaultersReportPage'), 'SchoolTopDefaultersReportPage');
 const SchoolTermPerformanceReportPage = lazyNamed(() => import('./components/school/reports/SchoolTermPerformanceReportPage'), 'SchoolTermPerformanceReportPage');
+const SchoolFeesPerformanceReportPage = lazyNamed(() => import('./components/school/reports/SchoolFeesPerformanceReportPage'), 'SchoolFeesPerformanceReportPage');
 const VslaDashboardPage = lazyNamed(() => import('./components/vsla/VslaDashboardPage'), 'VslaDashboardPage');
 const VslaMembersPage = lazyNamed(() => import('./components/vsla/VslaMembersPage'), 'VslaMembersPage');
 const VslaSavingsPage = lazyNamed(() => import('./components/vsla/VslaSavingsPage'), 'VslaSavingsPage');
@@ -1598,6 +1599,8 @@ function AppContent() {
         return <SchoolTopDefaultersReportPage readOnly={access.readOnly} />;
       case 'reports_school_term_performance':
         return <SchoolTermPerformanceReportPage readOnly={access.readOnly} />;
+      case 'reports_school_fees_performance':
+        return <SchoolFeesPerformanceReportPage />;
       case 'reports_daily_sales':
         return <DailySalesReportPage />;
       case 'reports_daily_summary':

@@ -713,6 +713,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "reports_stock_summary",
     "reports_stock_adjustments",
     "reports_school_fee_collections",
+    "reports_school_fees_performance",
     "reports_school_outstanding",
     "reports_school_enrollment",
     "reports_school_daily_cash",

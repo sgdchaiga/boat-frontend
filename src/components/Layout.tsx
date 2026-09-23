@@ -872,6 +872,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             group: 'Fees & billing',
             items: [
               { name: 'Fee collections', page: 'reports_school_fee_collections' },
+              { name: 'Fees performance', page: 'reports_school_fees_performance' },
               { name: 'School Defaulters', page: 'reports_school_outstanding' },
               { name: 'Daily cash', page: 'reports_school_daily_cash' },
               { name: 'Income & expenditure', page: 'reports_school_income_expenditure' },
