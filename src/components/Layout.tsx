@@ -693,6 +693,21 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
             } as NavItem,
           ]
         : []),
+      ...(enablePayroll
+        ? [
+            {
+              name: "Payroll",
+              icon: Wallet,
+              children: [
+                { name: "Overview", page: PAYROLL_PAGE.hub },
+                { name: "Staff & salaries", page: PAYROLL_PAGE.staff },
+                { name: "Payroll periods", page: PAYROLL_PAGE.periods },
+                { name: "Process payroll", page: PAYROLL_PAGE.run },
+                { name: "Settings & GL", page: PAYROLL_PAGE.settings },
+              ],
+            } as NavItem,
+          ]
+        : []),
       {
         name: "Reports",
         icon: BarChart3,
@@ -741,6 +756,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       saccoCanApprove,
       saccoIsLoanOfficer,
       saccoIsTeller,
+      enablePayroll,
       saccoPermissionsNav,
       saccoSystemCashbookNav,
     ]
