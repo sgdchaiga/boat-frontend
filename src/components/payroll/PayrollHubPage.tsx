@@ -83,7 +83,7 @@ export function PayrollHubPage({ onNavigate }: Props) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-start gap-2">
           <div><h1 className="text-2xl font-bold tracking-tight text-slate-900">Payroll Overview</h1><p className="mt-1 text-sm text-slate-600">Monitor payroll costs, processing progress and employee payments.</p></div>
-          <PayrollGuide guideId="hub" />
+          <PayrollGuide guideId="hub" businessType={user?.business_type} showLabel />
         </div>
         <button type="button" onClick={() => onNavigate(PAYROLL_PAGE.run)} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3.5 py-2 text-sm font-medium text-white hover:bg-slate-800"><Calculator className="h-4 w-4" />Process payroll</button>
       </div>

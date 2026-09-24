@@ -3,8 +3,7 @@ $output = 'C:\Projects\BOAT\schoolpay-students-extracted.csv'
 
 $headers = @(
   'payment_code', 'suite_code', 'first_name', 'last_name', 'class_code',
-  'student_email', 'student_phone', 'source_first_name', 'source_last_name',
-  'source_value_3', 'class', 'stream', 'day_boarding', 'gender'
+  'student_email', 'student_phone'
 )
 
 $html = Get-Content -LiteralPath $source -Raw
@@ -16,7 +15,10 @@ $records = foreach ($row in [regex]::Matches($html, '(?is)<tr\b[^>]*>(.*?)</tr>'
     }
   )
 
-  if ($cells.Count -ge 7 -and $cells[0] -match '^\d{8,}$') {
+  # The source headings define only the first seven fields.  It also contains
+  # unnamed columns (1, 2, 3, Class, Stream, Day_Boarding, Gender); exporting
+  # those beside the student name makes them look like a second student.
+  if ($cells.Count -ge $headers.Count -and $cells[0] -match '^\d{8,}$') {
     $record = [ordered]@{}
     for ($index = 0; $index -lt $headers.Count; $index++) {
       $value = if ($index -lt $cells.Count) { $cells[$index] } else { '' }

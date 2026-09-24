@@ -103,6 +103,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   });
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<InvEditDraft | null>(null);
+  const [cancellingInvoiceId, setCancellingInvoiceId] = useState<string | null>(null);
   const [classes, setClasses] = useState<ClassOpt[]>([]);
   const [bulk, setBulk] = useState({
     fee_structure_id: "",
@@ -619,6 +620,52 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     setEditDraft(null);
   };
 
+  const cancelInvoice = async (invoice: InvRow) => {
+    if (readOnly || cancellingInvoiceId || invoice.status === "cancelled") return;
+    if (Number(invoice.amount_paid) > 0) {
+      setErr("This invoice has recorded payments and cannot be cancelled. Reverse, refund, or reallocate the payment first.");
+      return;
+    }
+    if (!window.confirm(`Cancel invoice ${invoice.invoice_number}? It will be removed from active student statements and its invoice accounting entry will be reversed.`)) return;
+
+    const orgId = user?.organization_id;
+    if (!orgId) return;
+    setErr(null);
+    setCancellingInvoiceId(invoice.id);
+    try {
+      let updated: InvRow;
+      if (canUseSchoolApi()) {
+        updated = await updateSchoolRow<InvRow>("invoices", orgId, invoice.id, {
+          status: "cancelled",
+          staff_user_id: user?.id ?? null,
+        });
+      } else {
+        const { data, error } = await supabase
+          .from("student_invoices")
+          .update({ status: "cancelled" })
+          .eq("organization_id", orgId)
+          .eq("id", invoice.id)
+          .select("*")
+          .single();
+        if (error) throw error;
+        updated = data as InvRow;
+      }
+      const { journalMessage } = await syncStudentInvoiceAccounting({
+        organizationId: orgId,
+        staffUserId: user?.id ?? null,
+        invoice: updated,
+      });
+      if (journalMessage) throw new Error(`Invoice was cancelled, but its GL entry could not be reversed: ${journalMessage}`);
+
+      setRows((current) => current.map((row) => row.id === updated.id ? updated : row));
+      if (editingId === invoice.id) cancelEdit();
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Failed to cancel invoice.");
+    } finally {
+      setCancellingInvoiceId(null);
+    }
+  };
+
   const saveEdit = async () => {
     if (readOnly || !editingId || !editDraft) return;
     const row = rows.find((x) => x.id === editingId);
@@ -1030,15 +1077,28 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                         <button type="button" onClick={() => printInvoice(r, true)} className="text-xs font-medium text-amber-700">Demand note</button>
                         <button type="button" onClick={() => printStatement(r.student_id)} className="text-xs font-medium text-emerald-700">Statement</button>
                         <button type="button" onClick={() => setExpandedInvoiceId((id) => id === r.id ? null : r.id)} className="text-xs font-medium text-violet-700">{expandedInvoiceId === r.id ? "Hide fees" : "Drill down"}</button>
-                      {!readOnly && (
-                        <button
-                          type="button"
-                          onClick={() => startEdit(r)}
-                          className="text-xs font-medium text-indigo-700 hover:text-indigo-900"
-                        >
-                          Edit
-                        </button>
-                      )}
+                       {!readOnly && (
+                        <>
+                          {r.status !== "cancelled" && (
+                            <button
+                              type="button"
+                              onClick={() => void cancelInvoice(r)}
+                              disabled={cancellingInvoiceId === r.id}
+                              className="text-xs font-medium text-rose-700 hover:text-rose-900 disabled:cursor-not-allowed disabled:opacity-50"
+                              title={Number(r.amount_paid) > 0 ? "Payments must be reversed, refunded, or reallocated before cancellation." : "Cancel this whole invoice"}
+                            >
+                              {cancellingInvoiceId === r.id ? "Cancelling…" : "Cancel entry"}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => startEdit(r)}
+                            className="text-xs font-medium text-indigo-700 hover:text-indigo-900"
+                          >
+                            Edit
+                          </button>
+                        </>
+                       )}
                       </div>
                     </td>
                   </tr>
@@ -1109,9 +1169,22 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                   <textarea className="mt-1 min-h-24 w-full rounded-md border border-slate-300 px-3 py-2 text-sm" value={editDraft.notes} onChange={(e) => setEditDraft((draft) => (draft ? { ...draft, notes: e.target.value } : draft))} placeholder="Reason for this adjustment" />
                 </label>
               </div>
-              <div className="mt-5 flex justify-end gap-3">
-                <button type="button" onClick={cancelEdit} className="app-btn-secondary">Cancel</button>
-                <button type="button" onClick={() => void saveEdit()} className="app-btn-primary">Save changes</button>
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+                {invoice.status !== "cancelled" && (
+                  <button
+                    type="button"
+                    onClick={() => void cancelInvoice(invoice)}
+                    disabled={cancellingInvoiceId === invoice.id}
+                    className="rounded-md border border-rose-300 px-3 py-2 text-sm font-medium text-rose-700 hover:bg-rose-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    title={Number(invoice.amount_paid) > 0 ? "Payments must be reversed, refunded, or reallocated before cancellation." : "Cancel this whole invoice"}
+                  >
+                    {cancellingInvoiceId === invoice.id ? "Cancelling…" : "Cancel whole entry"}
+                  </button>
+                )}
+                <div className="ml-auto flex gap-3">
+                  <button type="button" onClick={cancelEdit} className="app-btn-secondary">Close</button>
+                  <button type="button" onClick={() => void saveEdit()} className="app-btn-primary">Save changes</button>
+                </div>
               </div>
             </section>
           </div>

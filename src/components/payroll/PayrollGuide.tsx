@@ -180,14 +180,34 @@ const GUIDE_META: Record<PayrollGuideId, { ariaLabel: string; body: ReactNode }>
   },
 };
 
-type Props = { guideId: PayrollGuideId };
+const SACCO_HUB_GUIDE = (
+  <>
+    <p><strong>SACCO payroll user guide</strong></p>
+    <p>Complete these steps in order for every pay cycle. Save changes before calculating the run.</p>
+    <ol className="list-decimal pl-5 space-y-1">
+      <li><strong>Check access</strong> — an administrator assigns who can prepare, approve, and post payroll under Approval rights.</li>
+      <li><strong>Employees</strong> — add staff and mark only eligible staff as <strong>On payroll</strong>.</li>
+      <li><strong>Salary Structure</strong> — enter each employee&apos;s basic salary, allowances, and recurring deductions.</li>
+      <li><strong>Settings &amp; Accounting</strong> — confirm PAYE and NSSF settings, working days, and the relevant GL accounts before posting.</li>
+      <li><strong>Payroll Periods</strong> — create the dated month or pay cycle you are about to process.</li>
+      <li><strong>Process Payroll</strong> — prepare the run, calculate it, and review every payslip. Recalculating replaces draft lines for that period.</li>
+      <li><strong>Review &amp; Approve</strong> — record exceptions and have an authorized approver approve the calculated run.</li>
+      <li><strong>Payments</strong> — prepare the payment schedule, record payment references, and mark each employee paid after payment is complete.</li>
+      <li><strong>Statutory Deductions</strong> — prepare PAYE and NSSF remittances and record the amounts paid.</li>
+      <li><strong>Reports &amp; Audit Trail</strong> — use reports for management and compliance review; the audit trail records every key action.</li>
+    </ol>
+    <p>Posting locks the payroll run and creates its accounting entries. Correct any employee, salary, or settings issue before posting; use a new period for the next cycle.</p>
+  </>
+);
+
+type Props = { guideId: PayrollGuideId; businessType?: string | null; showLabel?: boolean };
 
 /** Hidden until opened: same UX as PageNotes, with a book icon and payroll-specific copy per screen. */
-export function PayrollGuide({ guideId }: Props) {
+export function PayrollGuide({ guideId, businessType, showLabel = false }: Props) {
   const g = GUIDE_META[guideId];
   return (
-    <PageNotes ariaLabel={g.ariaLabel} variant="guide">
-      {g.body}
+    <PageNotes ariaLabel={businessType === "sacco" && guideId === "hub" ? "SACCO payroll user guide" : g.ariaLabel} variant="guide" triggerLabel={showLabel ? "Payroll user guide" : undefined}>
+      {businessType === "sacco" && guideId === "hub" ? SACCO_HUB_GUIDE : g.body}
     </PageNotes>
   );
 }

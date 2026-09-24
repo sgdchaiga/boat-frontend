@@ -8,6 +8,8 @@ export type PageNotesProps = {
   ariaLabel?: string;
   /** "help" = ?, "comment" = message, "guide" = book (longer module guides) */
   variant?: "help" | "comment" | "guide";
+  /** Optional visible trigger text for guides that should be easy to discover. */
+  triggerLabel?: string;
   className?: string;
 };
 
@@ -15,7 +17,7 @@ export type PageNotesProps = {
  * Hides help / notes behind a small icon; opens a floating panel on click (Escape or click outside to close).
  * Use variant "guide" for longer module guides (e.g. payroll).
  */
-export function PageNotes({ children, ariaLabel = "Page notes", variant = "help", className = "" }: PageNotesProps) {
+export function PageNotes({ children, ariaLabel = "Page notes", variant = "help", triggerLabel, className = "" }: PageNotesProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -76,9 +78,10 @@ export function PageNotes({ children, ariaLabel = "Page notes", variant = "help"
           title={variant === "guide" ? "Open guide" : variant === "help" ? "Help" : "Notes"}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
-          className="rounded-full p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-800 transition shrink-0"
+          className={triggerLabel ? "inline-flex items-center gap-1 rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100 hover:text-slate-900 transition shrink-0" : "rounded-full p-1 text-slate-500 hover:bg-slate-200 hover:text-slate-800 transition shrink-0"}
         >
           <Icon className="w-4 h-4" strokeWidth={2} />
+          {triggerLabel && <span>{triggerLabel}</span>}
         </button>
       </div>
       {open &&
