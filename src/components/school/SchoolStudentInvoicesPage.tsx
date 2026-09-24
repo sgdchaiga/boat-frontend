@@ -150,6 +150,19 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const printInvoice = (invoice: InvRow, demandNote = false) => {
     const student = students.find((s) => s.id === invoice.student_id);
     const name = student ? `${student.first_name} ${student.last_name}` : studentLabel(invoice.student_id);
+    if (invoice.status === "cancelled") {
+      if (demandNote) {
+        setErr("A demand note cannot be printed for a cancelled invoice.");
+        return;
+      }
+      printDocument(`Cancelled invoice ${invoice.invoice_number}`, `
+        <h1>SCHOOL FEES INVOICE — CANCELLED</h1>
+        <div class="muted">${invoice.invoice_number}</div>
+        <div class="meta"><strong>Student:</strong> ${name}<br><strong>SchoolPay code:</strong> ${student?.school_pay_number || "—"}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}<br>
+        <strong>Term:</strong> ${invoice.academic_year} · ${invoice.term_name}</div>
+        <p><strong>This entire fee charge was cancelled. No balance is payable on this invoice.</strong></p>`);
+      return;
+    }
     const balance = Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid));
     printDocument(demandNote ? `Demand note ${invoice.invoice_number}` : `Invoice ${invoice.invoice_number}`, `
       <h1>${demandNote ? "SCHOOL FEES DEMAND NOTE" : "SCHOOL FEES INVOICE"}</h1>
@@ -194,7 +207,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       residency: student?.is_boarding === true ? "Boarding" : student?.is_boarding === false ? "Day" : "—",
       year: invoice.academic_year, term: invoice.term_name,
       issueDate: invoice.issue_date || "", dueDate: invoice.due_date || "",
-      due: Number(invoice.total_due), paid: Number(invoice.amount_paid),
+      due: invoice.status === "cancelled" ? "—" : Number(invoice.total_due), paid: Number(invoice.amount_paid),
       balance: invoice.status === "cancelled" ? "—" : Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid)),
       status: invoice.status,
     };
@@ -1067,14 +1080,14 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                     <td className="p-3 text-slate-700">
                       {r.academic_year} · {r.term_name}
                     </td>
-                    <td className="p-3 text-right text-slate-900">{Number(r.total_due).toLocaleString()}</td>
+                    <td className="p-3 text-right text-slate-900">{r.status === "cancelled" ? "—" : Number(r.total_due).toLocaleString()}</td>
                     <td className="p-3 text-right text-slate-600">{Number(r.amount_paid).toLocaleString()}</td>
                     <td className="p-3 text-right font-medium text-slate-900">{r.status === "cancelled" ? "—" : Math.max(0, Number(r.total_due) - Number(r.amount_paid)).toLocaleString()}</td>
                     <td className="p-3 capitalize text-slate-600">{r.status}</td>
                     <td className="p-3 text-right">
                       <div className="flex flex-wrap justify-end gap-2">
                         <button type="button" onClick={() => printInvoice(r)} className="text-xs font-medium text-sky-700">Invoice</button>
-                        <button type="button" onClick={() => printInvoice(r, true)} className="text-xs font-medium text-amber-700">Demand note</button>
+                        {r.status !== "cancelled" && <button type="button" onClick={() => printInvoice(r, true)} className="text-xs font-medium text-amber-700">Demand note</button>}
                         <button type="button" onClick={() => printStatement(r.student_id)} className="text-xs font-medium text-emerald-700">Statement</button>
                         <button type="button" onClick={() => setExpandedInvoiceId((id) => id === r.id ? null : r.id)} className="text-xs font-medium text-violet-700">{expandedInvoiceId === r.id ? "Hide fees" : "Drill down"}</button>
                        {!readOnly && (
