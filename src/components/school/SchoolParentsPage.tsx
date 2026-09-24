@@ -118,8 +118,8 @@ export function SchoolParentsPage({ readOnly }: Props) {
     if (canUseSchoolApi()) {
       try {
         await updateSchoolRow<ParentRow>("parents", user?.organization_id || "", editingId, payload);
+        setRows((current) => current.map((parent) => parent.id === editingId ? { ...parent, ...payload } : parent));
         cancelEdit();
-        load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to update parent.");
       }
@@ -131,8 +131,8 @@ export function SchoolParentsPage({ readOnly }: Props) {
       .eq("id", editingId);
     if (error) setErr(error.message);
     else {
+      setRows((current) => current.map((parent) => parent.id === editingId ? { ...parent, ...payload } : parent));
       cancelEdit();
-      load();
     }
   };
 

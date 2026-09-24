@@ -134,8 +134,8 @@ export function StudentsListPage() {
     if (canUseSchoolApi() && user?.organization_id) {
       try {
         await updateSchoolRow<StudentRow>("students", user.organization_id, editingId, payload);
+        setRows((current) => current.map((student) => student.id === editingId ? normalizeStudentCase({ ...student, ...payload }) : student));
         cancelEdit();
-        await load();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to update student.");
       } finally {
@@ -150,8 +150,8 @@ export function StudentsListPage() {
     if (saveErr) {
       setError(saveErr.message);
     } else {
+      setRows((current) => current.map((student) => student.id === editingId ? normalizeStudentCase({ ...student, ...payload }) : student));
       cancelEdit();
-      await load();
     }
     setSaving(false);
   };
@@ -268,7 +268,7 @@ export function StudentsListPage() {
         const { error: statusErr } = await supabase.from("students").update({ status: "left" }).eq("id", row.id);
         if (statusErr) throw statusErr;
       }
-      await load();
+      setRows((current) => current.map((student) => student.id === row.id ? { ...student, status: "left" } : student));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to update student status.");
     }

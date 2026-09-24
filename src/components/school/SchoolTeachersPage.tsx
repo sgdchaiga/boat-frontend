@@ -164,8 +164,8 @@ export function SchoolTeachersPage({ readOnly }: Props) {
 
     if (error) setErr(error.message);
     else {
+      setRows((current) => current.map((teacher) => teacher.id === editingId ? { ...teacher, ...editDraft, department: departments.find((department) => department.id === editDraft.department_id) } : teacher));
       cancelEdit();
-      load();
     }
   };
 

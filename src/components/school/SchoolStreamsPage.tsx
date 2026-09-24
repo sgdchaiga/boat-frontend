@@ -122,8 +122,8 @@ export function SchoolStreamsPage({ readOnly }: Props) {
     if (canUseSchoolApi()) {
       try {
         await updateSchoolRow<Row>("streams", user?.organization_id || "", editingId, payload);
+        setRows((current) => current.map((row) => row.id === editingId ? { ...row, ...payload } : row));
         cancelEdit();
-        load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to update stream.");
       }
@@ -135,8 +135,8 @@ export function SchoolStreamsPage({ readOnly }: Props) {
       .eq("id", editingId);
     if (error) setErr(error.message);
     else {
+      setRows((current) => current.map((row) => row.id === editingId ? { ...row, ...payload } : row));
       cancelEdit();
-      load();
     }
   };
 
