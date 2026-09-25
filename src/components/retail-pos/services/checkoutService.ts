@@ -69,6 +69,16 @@ export async function collectMobileMoneyPayments({
   for (const line of pending) {
     const network = line.method === "mtn_mobile_money" ? "mtn" : "airtel";
     const txRef = `${saleId}-${line.id}`;
+    // Bind the provider reference to the already-posted pending tender before
+    // asking the customer to approve.  A callback can now reconcile precisely
+    // even when two tenders have the same method and amount.
+    const { error: bindError } = await supabase.rpc("bind_mobile_money_attempt", {
+      p_sale_id: saleId,
+      p_payment_method: line.method,
+      p_amount: line.amount,
+      p_tx_ref: txRef,
+    });
+    if (bindError) throw new Error(bindError.message || "Could not prepare mobile money payment.");
     const functionName = gatewayProvider === "dpo" ? "dpo-mobile-money" : "flutterwave-mobile-money";
     const { data, error } = await supabase.functions.invoke(functionName, {
       body: {

@@ -1378,12 +1378,17 @@ export function RetailPOSPage({
     const ctx = prepareCheckout();
     if (!ctx) return;
     let didSucceed = false;
+    let saleRecorded = false;
     let saleCustomer = ctx.saleCustomer;
     try {
       if (!useDesktopLocalMode && !navigator.onLine) throw new Error("offline");
       saleCustomer = await ensureLocalRetailCustomer(saleCustomer);
-      const verifiedTenders = await handlePayments(ctx);
-      await handleOnlineSale(ctx, saleCustomer, verifiedTenders);
+      // Persist a pending sale before requesting approval from the customer's
+      // handset. This prevents a late provider callback from collecting money
+      // against a sale that was never recorded locally.
+      await handleOnlineSale(ctx, saleCustomer, ctx.tenders);
+      saleRecorded = true;
+      await handlePayments(ctx);
       refreshOfflineQueueCount();
       toast({ title: L.saleCompletedToast });
       incrementActiveAccessTransactions();
@@ -1399,6 +1404,18 @@ export function RetailPOSPage({
           handleOfflineFallback(ctx, saleCustomer);
           didSucceed = true;
         }
+      } else if (saleRecorded && ctx.shouldUseStkPush) {
+        // The sale is deliberately retained as pending/failed for reconciliation.
+        // Do not leave the cart open: a second checkout would create a second sale
+        // while the customer may still approve the original prompt.
+        toast({
+          title: "Sale saved; payment needs review",
+          description: error instanceof Error ? error.message : "Check the mobile money reconciliation queue before retrying.",
+        });
+        setPaymentFeedbackStatus("failed");
+        setPaymentFeedbackMessage("Sale saved with mobile payment pending review");
+        setRetryPendingTenders([]);
+        didSucceed = true;
       } else if (ctx.shouldUseStkPush && error instanceof Error && error.message === "payment_timeout") {
         const cancelledPending = ctx.tenders.filter((p) => p.status === "pending").map((p) => ({ method: p.method, amount: p.amount }));
         setPaymentLines((prev) => prev.filter((p) => p.status !== "pending"));
