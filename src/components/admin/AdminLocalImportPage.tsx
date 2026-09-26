@@ -204,7 +204,14 @@ export function AdminLocalImportPage() {
     if (!first) return [];
     const ws = wb.Sheets[first];
     const rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(ws, { defval: "" });
-    return rows.map(normalizeRow);
+    return rows.map(normalizeRow).map((row) => {
+      // Accept the dedicated SchoolPay update template while preserving the
+      // standard school-student bulk-update format.
+      if (mode === "update" && entity === "school-students" && asText(row.corrected_schoolpay_code)) {
+        return { ...row, school_pay_number: row.corrected_schoolpay_code };
+      }
+      return row;
+    });
   };
 
   const importProducts = async (rows: ParsedRow[]) => {
@@ -701,11 +708,15 @@ export function AdminLocalImportPage() {
       const pendingSchoolPay = new Map<string, string>();
       const pendingLearners = new Map<string, string>();
 
-      for (const [index, row] of rows.entries()) {
-        const admission = asText(row.admission_number);
-        if (!admission) throw new Error(`Row ${index + 2}: admission_number is required for student updates.`);
-        const current = byAdmission.get(admission.toLowerCase());
-        if (!current) throw new Error(`Row ${index + 2}: admission number ${admission} was not found in this organization.`);
+        for (const [index, row] of rows.entries()) {
+          const admission = asText(row.admission_number);
+          if (!admission) throw new Error(`Row ${index + 2}: admission_number is required for student updates.`);
+          const current = byAdmission.get(admission.toLowerCase());
+          if (!current) throw new Error(`Row ${index + 2}: admission number ${admission} was not found in this organization.`);
+          const suppliedCurrentSchoolPay = asText(row.current_system_schoolpay_code);
+          if (suppliedCurrentSchoolPay && suppliedCurrentSchoolPay !== asText(current.school_pay_number)) {
+            throw new Error(`Row ${index + 2}: current_system_schoolpay_code does not match BOAT. Refresh the template before applying this update.`);
+          }
         const recordId = asText(current.id);
         if (seenRecordIds.has(recordId)) throw new Error(`Row ${index + 2}: admission number ${admission} is repeated in this file.`);
         seenRecordIds.add(recordId);
@@ -848,6 +859,35 @@ export function AdminLocalImportPage() {
     }
   };
 
+  const downloadSchoolPayUpdateTemplate = async () => {
+    if (entity !== "school-students") return;
+    setRunning(true);
+    setMessage(null);
+    try {
+      const organizationId = requireOrganizationId();
+      const records = await fetchAllPages<Record<string, unknown>>((from, to) => supabase.from("students")
+        .select("admission_number,first_name,other_names,last_name,school_pay_number")
+        .eq("organization_id", organizationId).order("admission_number").range(from, to));
+      const rows = records.map((student) => ({
+        admission_number: asText(student.admission_number),
+        student_name: [student.first_name, student.other_names, student.last_name].map(asText).filter(Boolean).join(" "),
+        current_system_schoolpay_code: asText(student.school_pay_number),
+        corrected_schoolpay_code: "",
+        update_status: "Pending",
+        review_notes: "",
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "SchoolPay updates");
+      XLSX.writeFile(wb, "schoolpay-code-update-template.xlsx");
+      setMessage(`Downloaded ${rows.length} student record(s). Enter corrected_schoolpay_code only for records that need correction, then upload the file to preview updates.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to download the SchoolPay update template.");
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const runImport = async () => {
     setMessage(null);
     if (!file) {
@@ -966,7 +1006,7 @@ export function AdminLocalImportPage() {
         {entity === "school-purchases" ? <p className="text-xs text-amber-700">Imported supplier bills are saved as pending approval and are not posted until approved.</p> : null}
         {entity === "school-payments" ? <p className="text-xs text-amber-700">Use approved bill IDs. Each payment posts through the normal supplier-payment journal workflow.</p> : null}
         {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected. Payee, cheque_number and voucher_number are optional. Format cheque and voucher numbers as text to preserve leading zeros. If payee is blank, vendor_name is used.</p> : null}
-      </> : <p className="text-xs text-amber-700">Download current records first. Keep {entity === "school-students" ? "admission_number" : "id"} unchanged. Blank cells are ignored; use {CLEAR_VALUE} to clear an optional field.</p>}
+      </> : <p className="text-xs text-amber-700">Keep {entity === "school-students" ? "admission_number" : "id"} unchanged. For SchoolPay corrections, use the SchoolPay update template and enter only corrected_schoolpay_code. Blank cells are ignored; use {CLEAR_VALUE} to clear an optional field.</p>}
 
       <div className="flex items-center gap-3">
         {mode === "import" ? <>
@@ -975,6 +1015,7 @@ export function AdminLocalImportPage() {
           <button type="button" className="app-btn-primary" disabled={running} onClick={() => void runImport()}>{running ? "Importing..." : "Import File"}</button>
         </> : <>
           <button type="button" className="app-btn-secondary" disabled={running} onClick={() => void downloadCurrentRecords()}>Download Current Records</button>
+          {entity === "school-students" && <button type="button" className="app-btn-secondary" disabled={running} onClick={() => void downloadSchoolPayUpdateTemplate()}>Download SchoolPay Update Template</button>}
           <button type="button" className="app-btn-secondary" disabled={running || !file} onClick={() => void previewUpdates()}>{running ? "Checking..." : "Preview Updates"}</button>
           <button type="button" className="app-btn-primary" disabled={running || !updatePreview.length} onClick={() => void applyUpdates()}>{running ? "Updating..." : `Apply ${updatePreview.length} Update(s)`}</button>
         </>}
