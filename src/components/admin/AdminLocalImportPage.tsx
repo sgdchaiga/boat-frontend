@@ -37,6 +37,7 @@ type UpdatePreviewRow = {
   matchLabel: string;
   changes: Record<string, unknown>;
   changeLabels: string[];
+  releaseSchoolPayOwnerIds?: string[];
 };
 
 const STUDENT_UPDATE_FIELDS = ["first_name", "other_names", "last_name", "gender", "class_name", "stream", "day_boarding", "status", "date_of_birth", "school_pay_number", "learner_id", "notes"] as const;
@@ -781,7 +782,11 @@ export function AdminLocalImportPage() {
       for (const [newSchoolPay, proposal] of proposedSchoolPay) {
         const currentOwner = schoolPayOwners.get(newSchoolPay);
         if (currentOwner && currentOwner !== proposal.recordId && !releasingSchoolPay.has(newSchoolPay)) {
-          throw new Error(`Row ${proposal.rowNumber}: school_pay_number ${newSchoolPay} belongs to another student who is not being updated in this file.`);
+          const preview = previews.find((item) => item.recordId === proposal.recordId);
+          if (preview) {
+            preview.releaseSchoolPayOwnerIds = [...new Set([...(preview.releaseSchoolPayOwnerIds || []), currentOwner])];
+            preview.changeLabels.push(`Reassign SchoolPay code ${newSchoolPay} from its current owner`);
+          }
         }
       }
       return previews;
@@ -849,11 +854,15 @@ export function AdminLocalImportPage() {
     // violate the unique SchoolPay constraint during sequential updates.
     const needsCodeRelease = schoolPayChanges.length > 0;
     if (needsCodeRelease) {
-      for (const item of schoolPayChanges) {
-        const result = await supabase.from("students").update({ school_pay_number: null }).eq("organization_id", organizationId).eq("id", item.recordId).select("id").maybeSingle();
+      const recordIdsToRelease = new Set([
+        ...schoolPayChanges.map((item) => item.recordId),
+        ...schoolPayChanges.flatMap((item) => item.releaseSchoolPayOwnerIds || []),
+      ]);
+      for (const recordId of recordIdsToRelease) {
+        const result = await supabase.from("students").update({ school_pay_number: null }).eq("organization_id", organizationId).eq("id", recordId).select("id").maybeSingle();
         if (result.error || !result.data) {
           setRunning(false);
-          setMessage(`${item.matchLabel}: unable to release the current SchoolPay code. No further updates were applied.`);
+          setMessage("Unable to release a SchoolPay code. No further updates were applied.");
           return;
         }
       }
