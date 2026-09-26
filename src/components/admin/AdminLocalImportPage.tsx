@@ -207,8 +207,10 @@ export function AdminLocalImportPage() {
     return rows.map(normalizeRow).map((row) => {
       // Accept the dedicated SchoolPay update template while preserving the
       // standard school-student bulk-update format.
-      if (mode === "update" && entity === "school-students" && asText(row.corrected_schoolpay_code)) {
-        return { ...row, school_pay_number: row.corrected_schoolpay_code };
+      if (mode === "update" && entity === "school-students") {
+        const correctedCode = asText(row.corrected_schoolpay_code || row.correct_schoolpay_code);
+        const currentCode = asText(row.current_system_schoolpay_code || row.wrong_schoolpay_code);
+        if (correctedCode) return { ...row, school_pay_number: correctedCode, current_system_schoolpay_code: currentCode };
       }
       return row;
     });
@@ -705,7 +707,8 @@ export function AdminLocalImportPage() {
       const byAdmission = new Map(students.map((student) => [asText(student.admission_number).toLowerCase(), student]));
       const schoolPayOwners = new Map(students.filter((student) => asText(student.school_pay_number)).map((student) => [asText(student.school_pay_number).toLowerCase(), asText(student.id)]));
       const learnerOwners = new Map(students.filter((student) => asText(student.learner_id)).map((student) => [asText(student.learner_id).toLowerCase(), asText(student.id)]));
-      const pendingSchoolPay = new Map<string, string>();
+      const proposedSchoolPay = new Map<string, { recordId: string; rowNumber: number }>();
+      const releasingSchoolPay = new Set<string>();
       const pendingLearners = new Map<string, string>();
 
         for (const [index, row] of rows.entries()) {
@@ -753,7 +756,7 @@ export function AdminLocalImportPage() {
           }
         }
 
-        for (const [field, owners, pending] of [["school_pay_number", schoolPayOwners, pendingSchoolPay], ["learner_id", learnerOwners, pendingLearners]] as const) {
+        for (const [field, owners, pending] of [["learner_id", learnerOwners, pendingLearners]] as const) {
           const value = changes[field];
           if (typeof value !== "string" || !value) continue;
           const key = value.toLowerCase();
@@ -763,7 +766,22 @@ export function AdminLocalImportPage() {
           if (pendingOwner && pendingOwner !== recordId) throw new Error(`Row ${index + 2}: ${field} ${value} is repeated for different students in this file.`);
           pending.set(key, recordId);
         }
+        const newSchoolPay = changes.school_pay_number;
+        if (typeof newSchoolPay === "string" && newSchoolPay) {
+          const key = newSchoolPay.toLowerCase();
+          const existingProposal = proposedSchoolPay.get(key);
+          if (existingProposal && existingProposal.recordId !== recordId) throw new Error(`Row ${index + 2}: school_pay_number ${newSchoolPay} is repeated for different students in this file.`);
+          proposedSchoolPay.set(key, { recordId, rowNumber: index + 2 });
+          const oldSchoolPay = asText(current.school_pay_number).toLowerCase();
+          if (oldSchoolPay) releasingSchoolPay.add(oldSchoolPay);
+        }
         if (labels.length) previews.push({ rowNumber: index + 2, recordId, matchLabel: admission, changes, changeLabels: labels });
+      }
+      for (const [newSchoolPay, proposal] of proposedSchoolPay) {
+        const currentOwner = schoolPayOwners.get(newSchoolPay);
+        if (currentOwner && currentOwner !== proposal.recordId && !releasingSchoolPay.has(newSchoolPay)) {
+          throw new Error(`Row ${proposal.rowNumber}: school_pay_number ${newSchoolPay} belongs to another student who is not being updated in this file.`);
+        }
       }
       return previews;
     }
@@ -823,6 +841,22 @@ export function AdminLocalImportPage() {
     let changed = 0;
     const failures: string[] = [];
     const table = entity === "school-students" ? "students" : "vendors";
+    const schoolPayChanges = entity === "school-students"
+      ? updatePreview.filter((item) => typeof item.changes.school_pay_number === "string" && item.changes.school_pay_number)
+      : [];
+    // Clear changing codes first so swaps and longer code rotations do not
+    // violate the unique SchoolPay constraint during sequential updates.
+    const needsCodeRelease = schoolPayChanges.length > 0;
+    if (needsCodeRelease) {
+      for (const item of schoolPayChanges) {
+        const result = await supabase.from("students").update({ school_pay_number: null }).eq("organization_id", organizationId).eq("id", item.recordId).select("id").maybeSingle();
+        if (result.error || !result.data) {
+          setRunning(false);
+          setMessage(`${item.matchLabel}: unable to release the current SchoolPay code. No further updates were applied.`);
+          return;
+        }
+      }
+    }
     for (const item of updatePreview) {
       const result = await supabase.from(table).update(item.changes).eq("organization_id", organizationId).eq("id", item.recordId).select("id").maybeSingle();
       if (result.error || !result.data) failures.push(`${item.matchLabel}: ${result.error?.message || "record was not updated"}`);
