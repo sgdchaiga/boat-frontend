@@ -716,17 +716,17 @@ export function AdminLocalImportPage() {
           if (!admission) throw new Error(`Row ${index + 2}: admission_number is required for student updates.`);
           const current = byAdmission.get(admission.toLowerCase());
           if (!current) throw new Error(`Row ${index + 2}: admission number ${admission} was not found in this organization.`);
+          const recordId = asText(current.id);
+          if (seenRecordIds.has(recordId)) throw new Error(`Row ${index + 2}: admission number ${admission} is repeated in this file.`);
+          seenRecordIds.add(recordId);
+          const changes: Record<string, unknown> = {};
+          const labels: string[] = [];
           const suppliedCurrentSchoolPay = asText(row.current_system_schoolpay_code);
           if (suppliedCurrentSchoolPay && suppliedCurrentSchoolPay !== asText(current.school_pay_number)) {
-            throw new Error(`Row ${index + 2}: current_system_schoolpay_code does not match BOAT. Refresh the template before applying this update.`);
+            labels.push(`Template current code ${suppliedCurrentSchoolPay} differs from BOAT ${asText(current.school_pay_number) || "(blank)"}; applying the corrected code`);
           }
-        const recordId = asText(current.id);
-        if (seenRecordIds.has(recordId)) throw new Error(`Row ${index + 2}: admission number ${admission} is repeated in this file.`);
-        seenRecordIds.add(recordId);
-        const changes: Record<string, unknown> = {};
-        const labels: string[] = [];
-
-        for (const field of STUDENT_UPDATE_FIELDS) {
+          
+          for (const field of STUDENT_UPDATE_FIELDS) {
           const raw = asText(row[field]);
           if (!raw) continue;
           let column: string = field;
