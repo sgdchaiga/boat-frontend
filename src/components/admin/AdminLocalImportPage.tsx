@@ -711,8 +711,9 @@ export function AdminLocalImportPage() {
       const releasingSchoolPay = new Set<string>();
       const pendingLearners = new Map<string, string>();
 
-        for (const [index, row] of rows.entries()) {
-          const admission = asText(row.admission_number);
+      for (const [index, row] of rows.entries()) {
+        if (!Object.values(row).some((value) => asText(value))) continue;
+        const admission = asText(row.admission_number);
           if (!admission) throw new Error(`Row ${index + 2}: admission_number is required for student updates.`);
           const current = byAdmission.get(admission.toLowerCase());
           if (!current) throw new Error(`Row ${index + 2}: admission number ${admission} was not found in this organization.`);
