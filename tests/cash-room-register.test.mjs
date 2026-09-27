@@ -6,6 +6,7 @@ const page = await readFile(new URL("../src/components/CashRoomRegisterPage.tsx"
 const migration = await readFile(new URL("../supabase/migrations/20260815120000_cash_room_register.sql", import.meta.url), "utf8");
 const multiOrgAuthorization = await readFile(new URL("../supabase/migrations/20260824120000_cash_room_register_multi_org_authorization.sql", import.meta.url), "utf8");
 const nav = await readFile(new URL("../src/lib/simpleOrgNavigation.ts", import.meta.url), "utf8");
+const moduleAccess = await readFile(new URL("../src/lib/moduleAccess.ts", import.meta.url), "utf8");
 
 test("cash room register shows all open stays and protects reservation check-ins", () => {
   assert.match(page, /actual_check_out/);
@@ -22,6 +23,10 @@ test("cash room register permits an authorized member of the selected organizati
   assert.match(migration, /om\.user_id=v_actor AND om\.organization_id=v_org AND om\.is_active=true/);
   assert.match(multiOrgAuthorization, /save_cash_room_register_entry\(uuid,text,date,numeric,boolean,text\)/);
   assert.match(multiOrgAuthorization, /organization_members om/);
+});
+
+test("cash room register is unavailable outside hotel workspaces", () => {
+  assert.match(moduleAccess, /const HOTEL_EXCLUSIVE_PAGE_IDS[\s\S]*"cash_room_register"/);
 });
 
 test("cash register posts occupancy, daily bill, discount and default cash payment", () => {

@@ -93,6 +93,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const [fees, setFees] = useState<FeeOpt[]>([]);
   const [bursaries, setBursaries] = useState<BursaryOpt[]>([]);
   const [specialFees, setSpecialFees] = useState<SpecialFeeOpt[]>([]);
+  const [schoolPeriod, setSchoolPeriod] = useState(() => ({
+    academicYear: typeof window === "undefined" ? String(new Date().getFullYear()) : localStorage.getItem("boat.school.academic_year") || String(new Date().getFullYear()),
+    term: typeof window === "undefined" ? "Term 1" : localStorage.getItem("boat.school.term") || "Term 1",
+  }));
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -284,6 +288,18 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     load();
   }, [load]);
 
+  useEffect(() => {
+    const syncSchoolPeriod = (event?: Event) => {
+      const detail = (event as CustomEvent<{ academicYear?: string; term?: string }> | undefined)?.detail;
+      setSchoolPeriod({
+        academicYear: detail?.academicYear || localStorage.getItem("boat.school.academic_year") || String(new Date().getFullYear()),
+        term: detail?.term || localStorage.getItem("boat.school.term") || "Term 1",
+      });
+    };
+    window.addEventListener("boat-school-period-change", syncSchoolPeriod);
+    return () => window.removeEventListener("boat-school-period-change", syncSchoolPeriod);
+  }, []);
+
   const applicableLines = (fi: FeeOpt | undefined, isBoarding: boolean): FeeLine[] => {
     const lines = fi?.line_items as FeeLine[] | null;
     if (!Array.isArray(lines)) return [];
@@ -308,6 +324,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   };
 
   const bulkFee = useMemo(() => fees.find((f) => f.id === bulk.fee_structure_id), [fees, bulk.fee_structure_id]);
+  const activePeriodFees = useMemo(
+    () => fees.filter((fee) => fee.academic_year === schoolPeriod.academicYear && fee.term_name === schoolPeriod.term),
+    [fees, schoolPeriod]
+  );
   const selectedFee = useMemo(() => fees.find((f) => f.id === form.fee_structure_id), [fees, form.fee_structure_id]);
   const selectedStudent = useMemo(() => students.find((s) => s.id === form.student_id), [students, form.student_id]);
   const autoBursaryAmount = useMemo(() => {
@@ -357,11 +377,12 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     if (!form.student_id) return;
     const st = students.find((s) => s.id === form.student_id);
     if (!st) return;
-    const matching = fees.find((f) => matchesFeeStructureClass(st, f));
-    if (matching && form.fee_structure_id !== matching.id) {
-      setForm((prev) => ({ ...prev, fee_structure_id: matching.id }));
+    if (activePeriodFees.some((fee) => fee.id === form.fee_structure_id)) return;
+    const matching = activePeriodFees.find((fee) => matchesFeeStructureClass(st, fee));
+    if (form.fee_structure_id !== (matching?.id ?? "")) {
+      setForm((prev) => ({ ...prev, fee_structure_id: matching?.id ?? "" }));
     }
-  }, [form.student_id, form.fee_structure_id, fees, students]);
+  }, [activePeriodFees, form.student_id, form.fee_structure_id, students]);
 
   const bulkCandidates = students.filter((student) => student.status === "active" && matchesClassFilter(student, bulk.class_id)
     && (!bulk.match_fee_class || !bulkFee?.class_id || matchesFeeStructureClass(student, bulkFee)));
@@ -863,7 +884,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <SearchableCombobox
             value={form.student_id}
-            onChange={(id) => setForm((f) => ({ ...f, student_id: id }))}
+            onChange={(id) => setForm((f) => ({ ...f, student_id: id, fee_structure_id: "" }))}
             options={students.map((s) => ({ id: s.id, label: `${s.first_name} ${s.last_name} — ${s.admission_number}` }))}
             placeholder="Type student name or admission number…"
             inputAriaLabel="Search student for term charges"
@@ -875,7 +896,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
             onChange={(e) => setForm((f) => ({ ...f, fee_structure_id: e.target.value }))}
           >
             <option value="">Fee structure</option>
-            {fees.map((f) => (
+            {activePeriodFees.map((f) => (
               <option key={f.id} value={f.id}>
                 {f.class_name} · {f.academic_year} {f.term_name}
               </option>

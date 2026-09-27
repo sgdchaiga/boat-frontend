@@ -504,6 +504,7 @@ const HOTEL_EXCLUSIVE_PAGE_IDS = new Set([
   "housekeeping",
   "hotel_rooms_setup",
   "hotel_advanced_pms",
+  "cash_room_register",
   "billing",
   "hotel_pos_waiter",
   "hotel_pos_kitchen_bar",
