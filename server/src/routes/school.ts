@@ -187,7 +187,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
     orderBy: "paid_at DESC, created_at DESC",
     name: "payments",
     insertable: [],
-    patchable: ["method", "bank_gl_account_id"],
+    patchable: ["method", "bank_gl_account_id", "bank_payment_source"],
   },
   receipts: {
     table: "school_receipts",
@@ -712,8 +712,8 @@ async function recordSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body:
 
   return app.prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRawUnsafe(
-      `INSERT INTO public.school_payments (organization_id, student_id, amount, method, reference, paid_at, invoice_allocations)
-       VALUES ($1::uuid, $2::uuid, $3::numeric, $4, $5, $6::timestamptz, $7::jsonb)
+       `INSERT INTO public.school_payments (organization_id, student_id, amount, method, reference, paid_at, invoice_allocations, bank_payment_source)
+        VALUES ($1::uuid, $2::uuid, $3::numeric, $4, $5, $6::timestamptz, $7::jsonb, $8)
        RETURNING *`,
       organizationId,
       studentId,
@@ -721,7 +721,8 @@ async function recordSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body:
       method,
       reference,
       now,
-      JSON.stringify(allocations)
+       JSON.stringify(allocations),
+       ["bank", "transfer"].includes(method) ? String(body.bank_payment_source || "bank_slip") : null
     );
     const payment = Array.isArray(paymentRows) ? paymentRows[0] : null;
     if (!payment?.id) throw new Error("Failed to record payment.");

@@ -30,6 +30,7 @@ type PayRow = {
   receipt_number?: string | null;
   receipt_issued_at?: string | null;
   bank_gl_account_id?: string | null;
+  bank_payment_source?: "schoolpay" | "bank_slip" | null;
 };
 type BankAccount = { id: string; account_code: string; account_name: string; account_type: string; category?: string | null };
 
@@ -77,6 +78,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<string[]>([]);
   const [bulkMethod, setBulkMethod] = useState<SchoolPaymentMethod>("cash");
   const [bulkBankAccountId, setBulkBankAccountId] = useState("");
+  const [bulkBankPaymentSource, setBulkBankPaymentSource] = useState<"schoolpay" | "bank_slip">("bank_slip");
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
@@ -84,6 +86,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     invoice_id: "",
     amount: "",
     method: "cash" as SchoolPaymentMethod,
+    bank_payment_source: "bank_slip" as "schoolpay" | "bank_slip",
   });
 
   useEffect(() => {
@@ -339,6 +342,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           invoice_id: form.invoice_id || null,
           amount: amt,
           method: form.method,
+          bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
           staff_user_id: user?.id ?? null,
         });
         const payment = result.data.payment;
@@ -515,6 +519,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         student_id: form.student_id,
         amount: amt,
         method: form.method,
+        bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
         reference: autoRef,
         invoice_allocations: allocations,
       })
@@ -587,7 +592,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 100));
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
-    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash" });
+    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip" });
   };
 
   const openPrintReceipt = async (payment: PayRow) => {
@@ -660,7 +665,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setBulkUpdating(true);
     setBulkMessage(null);
     setErr(null);
-    const patch = { method: bulkMethod, bank_gl_account_id: needsBankAccount ? bulkBankAccountId : null };
+    const patch = { method: bulkMethod, bank_gl_account_id: needsBankAccount ? bulkBankAccountId : null, bank_payment_source: needsBankAccount ? bulkBankPaymentSource : null };
     let updated = 0;
     const failures: string[] = [];
     for (const id of selectedPaymentIds) {
@@ -779,10 +784,12 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <select value={bulkMethod} onChange={(event) => setBulkMethod(event.target.value as SchoolPaymentMethod)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
             {SCHOOL_PAYMENT_METHODS.filter((method) => enabledMethods.includes(method.code)).map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}
           </select>
+          {(form.method === "bank" || form.method === "transfer") && <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={form.bank_payment_source} onChange={(e) => setForm((f) => ({ ...f, bank_payment_source: e.target.value as "schoolpay" | "bank_slip" }))}><option value="bank_slip">Direct bank slip</option><option value="schoolpay">SchoolPay to bank</option></select>}
           {(bulkMethod === "bank" || bulkMethod === "transfer") && <select value={bulkBankAccountId} onChange={(event) => setBulkBankAccountId(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
             <option value="">Select receiving bank account</option>
             {bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}
           </select>}
+          {(bulkMethod === "bank" || bulkMethod === "transfer") && <select value={bulkBankPaymentSource} onChange={(event) => setBulkBankPaymentSource(event.target.value as "schoolpay" | "bank_slip")} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="bank_slip">Direct bank slip</option><option value="schoolpay">SchoolPay to bank</option></select>}
           <button type="button" onClick={() => void applyBulkPaymentEdit()} disabled={bulkUpdating || selectedPaymentIds.length === 0} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{bulkUpdating ? "Updating…" : `Update selected (${selectedPaymentIds.length})`}</button>
         </div>
         {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}

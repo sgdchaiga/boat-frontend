@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -216,18 +217,15 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
             </option>
           ))}
         </select>
-        <select
-          className="border border-slate-300 rounded-lg px-3 py-2 text-sm lg:col-span-1"
+        <SearchableCombobox
           value={filters.studentId}
-          onChange={(e) => setFilters((f) => ({ ...f, studentId: e.target.value }))}
-        >
-          <option value="">All students</option>
-          {students.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.admission_number} — {s.first_name} {s.last_name}
-            </option>
-          ))}
-        </select>
+          onChange={(studentId) => setFilters((f) => ({ ...f, studentId }))}
+          options={students.map((s) => ({ id: s.id, label: `${s.admission_number} — ${s.first_name} ${s.last_name}${s.school_pay_number ? ` · SchoolPay: ${s.school_pay_number}` : ""}` }))}
+          emptyOption={{ label: "All students" }}
+          placeholder="Type a student name or number…"
+          inputAriaLabel="Filter collections by student"
+          clearable
+        />
         <select
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
           value={filters.classId}
