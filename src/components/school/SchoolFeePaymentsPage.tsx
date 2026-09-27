@@ -173,11 +173,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       return;
     }
     const existingReferences = new Set(((existingResult.data as Array<{ reference: string | null }> | null) || []).map((payment) => payment.reference).filter((reference): reference is string => !!reference));
-    for (const [index, row] of validRows.entries()) {
-      setImportProgress({ completed: index, total: validRows.length });
-      if (existingReferences.has(row.reference)) { skipped += 1; setImportProgress({ completed: index + 1, total: validRows.length }); continue; }
+    let completed = 0;
+    const processRow = async (row: SchoolPayImportRow) => {
+      if (existingReferences.has(row.reference)) { skipped += 1; return; }
+      // Reserve the reference before awaiting so duplicate rows in concurrent queues cannot both post.
+      existingReferences.add(row.reference);
       const invoiceResult = await supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId).eq("student_id", row.student!.id).neq("status", "cancelled").order("created_at", { ascending: true });
-      if (invoiceResult.error) { setImportMessage(`Row ${row.row}: ${invoiceResult.error.message}`); setImporting(false); return; }
+      if (invoiceResult.error) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: invoiceResult.error.message } : item)); return; }
       let remaining = row.amount;
       const allocations: PaymentSlice[] = [];
       const invoiceUpdates: Array<{ id: string; total: number; paid: number }> = [];
@@ -191,21 +193,37 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           remaining = round2(remaining - applied);
         }
       }
-      if (!allocations.length) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); setImportProgress({ completed: index + 1, total: validRows.length }); continue; }
+      if (!allocations.length) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); return; }
       if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
       const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: paymentMethod, bank_gl_account_id: schoolPayImportBankAccountId || null, bank_payment_source: schoolPayImportBankAccountId ? "schoolpay" : null, reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: "Bulk imported from SchoolPay" }).select("id").single();
-      if (paymentResult.error) { setImportMessage(`Row ${row.row}: ${paymentResult.error.message}`); setImporting(false); return; }
+      if (paymentResult.error) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: paymentResult.error.message } : item)); return; }
       const updateResults = await Promise.all(invoiceUpdates.map((invoice) => supabase.from("student_invoices").update({ amount_paid: invoice.paid, status: invoice.paid >= invoice.total ? "paid" : "partial" }).eq("id", invoice.id)));
       const updateError = updateResults.find((result) => result.error)?.error;
-      if (updateError) { setImportMessage(`Row ${row.row}: ${updateError.message}`); setImporting(false); return; }
+      if (updateError) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: updateError.message } : item)); return; }
       await Promise.all([
         postSchoolFeePaymentAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, paymentId: paymentResult.data.id, amount: row.amount, method: paymentMethod, paidAt: row.paidAt, studentId: row.student!.id, bankGlAccountId: schoolPayImportBankAccountId || null }),
         supabase.from("school_receipts").insert({ school_payment_id: paymentResult.data.id, receipt_number: `SP-${row.reference}`, delivery_channels: ["school_pay"] }),
       ]);
       imported += 1;
-      existingReferences.add(row.reference);
-      setImportProgress({ completed: index + 1, total: validRows.length });
-    }
+    };
+    // Different students run in parallel; rows for one student remain ordered so allocations cannot race.
+    const queues = [...validRows.reduce((groups, row) => {
+      const key = row.student!.id;
+      groups.set(key, [...(groups.get(key) || []), row]);
+      return groups;
+    }, new Map<string, SchoolPayImportRow[]>()).values()];
+    const workers = Array.from({ length: Math.min(4, queues.length) }, async () => {
+      while (queues.length) {
+        const queue = queues.shift();
+        if (!queue) return;
+        for (const row of queue) {
+          try { await processRow(row); }
+          catch (error) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: error instanceof Error ? error.message : "Import failed" } : item)); }
+          finally { completed += 1; setImportProgress({ completed, total: validRows.length }); }
+        }
+      }
+    });
+    await Promise.all(workers);
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
     setImporting(false);
     setImportProgress({ completed: validRows.length, total: validRows.length });
