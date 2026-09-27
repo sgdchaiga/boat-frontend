@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { SearchableCombobox } from "@/components/common/SearchableCombobox";
+import { Download } from "lucide-react";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -173,6 +174,31 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   const clearFilters = () =>
     setFilters({ dateFrom: "", dateTo: "", method: "", studentId: "", classId: "" });
 
+  const exportCollections = () => {
+    const quote = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+    const header = ["Paid at", "Student", "Admission number", "SchoolPay code", "Class", "Method", "Amount", "Reference"];
+    const data = payments.map((payment) => {
+      const student = studentById.get(payment.student_id);
+      return [
+        payment.paid_at,
+        student ? `${student.first_name} ${student.last_name}` : "",
+        student?.admission_number || "",
+        student?.school_pay_number || "",
+        classLabelForStudent(student),
+        methodLabel(payment.method),
+        Number(payment.amount),
+        payment.reference || "",
+      ];
+    });
+    const csv = [header, ...data].map((row) => row.map(quote).join(",")).join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = "school-statements-and-collections.csv";
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -183,6 +209,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
             method, student, or class. Class uses the student&apos;s catalog link or stored class name.
           </p>
         </PageNotes>
+        <button type="button" onClick={exportCollections} disabled={loading || payments.length === 0} className="ml-auto inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"><Download className="h-4 w-4" /> Export CSV</button>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
 

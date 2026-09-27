@@ -74,6 +74,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [importRows, setImportRows] = useState<SchoolPayImportRow[]>([]);
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [schoolPayImportBankAccountId, setSchoolPayImportBankAccountId] = useState("");
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<string[]>([]);
   const [bulkMethod, setBulkMethod] = useState<SchoolPaymentMethod>("cash");
@@ -150,6 +151,10 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     const orgId = user?.organization_id;
     const validRows = importRows.filter((row) => !row.error && row.student);
     if (!orgId || !validRows.length || importing) return;
+    if (schoolPayImportBankAccountId && !bankAccounts.some((account) => account.id === schoolPayImportBankAccountId)) {
+      setImportMessage("Select a valid receiving bank account for this SchoolPay batch.");
+      return;
+    }
     if (canUseSchoolApi()) {
       setImportMessage("Bulk SchoolPay upload requires the database-backed school connection.");
       return;
@@ -157,8 +162,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setImporting(true);
     let imported = 0;
     let skipped = 0;
+    const paymentMethod = schoolPayImportBankAccountId ? "bank" : "school_pay";
     for (const row of validRows) {
-      const duplicate = await supabase.from("school_payments").select("id").eq("organization_id", orgId).eq("method", "school_pay").eq("reference", row.reference).maybeSingle();
+      const duplicate = await supabase.from("school_payments").select("id").eq("organization_id", orgId).eq("reference", row.reference).maybeSingle();
       if (duplicate.data) { skipped += 1; continue; }
       const invoiceResult = await supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId).eq("student_id", row.student!.id).neq("status", "cancelled").order("created_at", { ascending: true });
       if (invoiceResult.error) { setImportMessage(`Row ${row.row}: ${invoiceResult.error.message}`); setImporting(false); return; }
@@ -177,13 +183,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       if (!allocations.length) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); continue; }
       if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
-      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "school_pay", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: "Bulk imported from SchoolPay" }).select("id").single();
+      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: paymentMethod, bank_gl_account_id: schoolPayImportBankAccountId || null, bank_payment_source: schoolPayImportBankAccountId ? "schoolpay" : null, reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: "Bulk imported from SchoolPay" }).select("id").single();
       if (paymentResult.error) { setImportMessage(`Row ${row.row}: ${paymentResult.error.message}`); setImporting(false); return; }
       const updateResults = await Promise.all(invoiceUpdates.map((invoice) => supabase.from("student_invoices").update({ amount_paid: invoice.paid, status: invoice.paid >= invoice.total ? "paid" : "partial" }).eq("id", invoice.id)));
       const updateError = updateResults.find((result) => result.error)?.error;
       if (updateError) { setImportMessage(`Row ${row.row}: ${updateError.message}`); setImporting(false); return; }
       await Promise.all([
-        postSchoolFeePaymentAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, paymentId: paymentResult.data.id, amount: row.amount, method: "school_pay", paidAt: row.paidAt, studentId: row.student!.id }),
+        postSchoolFeePaymentAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, paymentId: paymentResult.data.id, amount: row.amount, method: paymentMethod, paidAt: row.paidAt, studentId: row.student!.id, bankGlAccountId: schoolPayImportBankAccountId || null }),
         supabase.from("school_receipts").insert({ school_payment_id: paymentResult.data.id, receipt_number: `SP-${row.reference}`, delivery_channels: ["school_pay"] }),
       ]);
       imported += 1;
@@ -727,6 +733,10 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800"><Upload className="h-4 w-4"/> Choose SchoolPay file<input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={(event) => { void parseSchoolPayFile(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label>
             </div>
           </div>
+          <label className="block max-w-md text-sm font-medium text-slate-700">Receiving bank for this SchoolPay batch (optional)
+            <select value={schoolPayImportBankAccountId} onChange={(event) => setSchoolPayImportBankAccountId(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">Keep as SchoolPay (no bank account)</option>{bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}</select>
+            <span className="mt-1 block text-xs font-normal text-slate-600">Choose a bank to save each import as <strong>Bank · SchoolPay to bank</strong>. Leave blank for a regular SchoolPay payment.</span>
+          </label>
           {importMessage && <p className="text-sm text-slate-700" role="status">{importMessage}</p>}
           {importRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">SchoolPay code</th><th className="p-2 text-left">Student</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Transaction reference</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{importRows.map((row) => <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="p-2">{row.schoolPayCode || "—"}</td><td className="p-2">{row.student ? `${row.student.first_name} ${row.student.last_name}` : "—"}</td><td className="p-2 text-right">{row.amount > 0 ? row.amount.toLocaleString() : "—"}</td><td className="p-2">{row.reference || "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready"}</td></tr>)}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{importRows.filter((row) => !row.error).length} ready · {importRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void importSchoolPayRows()} disabled={importing || !importRows.some((row) => !row.error)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{importing ? "Importing…" : "Import ready payments"}</button></div></div>}
         </div>
