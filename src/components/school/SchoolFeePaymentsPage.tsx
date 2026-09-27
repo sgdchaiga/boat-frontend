@@ -10,7 +10,7 @@ import { buildSchoolFeesAutoReference } from "@/lib/autoReference";
 import { postSchoolFeePaymentAccounting } from "@/lib/schoolFeeJournal";
 import { randomUuid } from "@/lib/randomUuid";
 import { boatApi } from "@/lib/boatApi";
-import { canUseSchoolApi, listSchoolRows } from "@/lib/schoolApiData";
+import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 import { DEFAULT_SCHOOL_PAYMENT_METHODS, SCHOOL_PAYMENT_METHODS, normalizeSchoolPaymentMethods, type SchoolPaymentMethod } from "@/lib/schoolPaymentMethods";
 
 type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null };
@@ -29,7 +29,9 @@ type PayRow = {
   student_id: string;
   receipt_number?: string | null;
   receipt_issued_at?: string | null;
+  bank_gl_account_id?: string | null;
 };
+type BankAccount = { id: string; account_code: string; account_name: string; account_type: string; category?: string | null };
 
 type Props = {
   readOnly?: boolean;
@@ -71,6 +73,12 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [importRows, setImportRows] = useState<SchoolPayImportRow[]>([]);
   const [importing, setImporting] = useState(false);
   const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [selectedPaymentIds, setSelectedPaymentIds] = useState<string[]>([]);
+  const [bulkMethod, setBulkMethod] = useState<SchoolPaymentMethod>("cash");
+  const [bulkBankAccountId, setBulkBankAccountId] = useState("");
+  const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
@@ -215,6 +223,23 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setRows((pRes.data as PayRow[]) || []);
     setStudents((sRes.data as StudentOpt[]) || []);
     setLoading(false);
+  }, [user?.organization_id]);
+
+  useEffect(() => {
+    if (!user?.organization_id) {
+      setBankAccounts([]);
+      return;
+    }
+    void supabase
+      .from("gl_accounts")
+      .select("id,account_code,account_name,account_type,category")
+      .eq("organization_id", user.organization_id)
+      .eq("account_type", "asset")
+      .order("account_code")
+      .then(({ data }) => {
+        const accounts = ((data as BankAccount[] | null) || []).filter((account) => /bank/i.test(`${account.account_name} ${account.category || ""}`));
+        setBankAccounts(accounts);
+      });
   }, [user?.organization_id]);
 
   useEffect(() => {
@@ -623,6 +648,58 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     );
   };
 
+  const applyBulkPaymentEdit = async () => {
+    const orgId = user?.organization_id;
+    if (!orgId || selectedPaymentIds.length === 0 || bulkUpdating) return;
+    const needsBankAccount = bulkMethod === "bank" || bulkMethod === "transfer";
+    if (needsBankAccount && !bulkBankAccountId) {
+      setErr("Select the bank account receiving these payments.");
+      return;
+    }
+    if (!window.confirm(`Update ${selectedPaymentIds.length} payment${selectedPaymentIds.length === 1 ? "" : "s"} to ${SCHOOL_PAYMENT_METHODS.find((item) => item.code === bulkMethod)?.label || bulkMethod}?`)) return;
+    setBulkUpdating(true);
+    setBulkMessage(null);
+    setErr(null);
+    const patch = { method: bulkMethod, bank_gl_account_id: needsBankAccount ? bulkBankAccountId : null };
+    let updated = 0;
+    const failures: string[] = [];
+    for (const id of selectedPaymentIds) {
+      try {
+        let payment: PayRow;
+        if (canUseSchoolApi()) {
+          payment = await updateSchoolRow<PayRow>("payments", orgId, id, patch);
+        } else {
+          const result = await supabase.from("school_payments").update(patch).eq("organization_id", orgId).eq("id", id).select("*").single();
+          if (result.error) throw result.error;
+          payment = result.data as PayRow;
+          const accounting = await postSchoolFeePaymentAccounting({
+            organizationId: orgId,
+            staffUserId: user?.id ?? null,
+            paymentId: payment.id,
+            amount: Number(payment.amount),
+            method: payment.method,
+            paidAt: payment.paid_at,
+            studentId: payment.student_id,
+            bankGlAccountId: payment.bank_gl_account_id,
+          });
+          if (accounting.journalMessage) throw new Error(accounting.journalMessage);
+        }
+        setRows((current) => current.map((row) => row.id === id ? { ...row, ...payment } : row));
+        updated += 1;
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : `Payment ${id} could not be updated.`);
+      }
+    }
+    setSelectedPaymentIds([]);
+    setBulkUpdating(false);
+    setBulkMessage(`Updated ${updated} payment${updated === 1 ? "" : "s"}${failures.length ? `; ${failures.length} failed.` : "."}`);
+    if (failures.length) setErr(failures[0]);
+  };
+
+  const togglePaymentSelection = (id: string) => {
+    setSelectedPaymentIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  };
+
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -696,10 +773,26 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         </div>
         </>
       )}
+      {!readOnly && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
+        <div><h2 className="font-semibold text-slate-900">Bulk edit payment routing</h2><p className="mt-1 text-sm text-slate-600">Select recorded payments below, then change their method and, for bank or transfer payments, the bank account that received the money. The related accounting entries are reposted.</p></div>
+        <div className="grid gap-3 md:grid-cols-3">
+          <select value={bulkMethod} onChange={(event) => setBulkMethod(event.target.value as SchoolPaymentMethod)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            {SCHOOL_PAYMENT_METHODS.filter((method) => enabledMethods.includes(method.code)).map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}
+          </select>
+          {(bulkMethod === "bank" || bulkMethod === "transfer") && <select value={bulkBankAccountId} onChange={(event) => setBulkBankAccountId(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+            <option value="">Select receiving bank account</option>
+            {bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}
+          </select>}
+          <button type="button" onClick={() => void applyBulkPaymentEdit()} disabled={bulkUpdating || selectedPaymentIds.length === 0} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{bulkUpdating ? "Updating…" : `Update selected (${selectedPaymentIds.length})`}</button>
+        </div>
+        {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
+        {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
+      </section>}
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
+              {!readOnly && <th className="w-10 p-3"><input type="checkbox" aria-label="Select all payments" checked={rows.length > 0 && selectedPaymentIds.length === rows.length} onChange={(event) => setSelectedPaymentIds(event.target.checked ? rows.map((row) => row.id) : [])} /></th>}
               <th className="text-left p-3 font-semibold text-slate-700">When</th>
               <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
@@ -713,19 +806,20 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={6} className="p-6 text-slate-500">
+                <td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={6} className="p-6 text-slate-500">
+                <td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
             ) : (
               rows.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
+                   {!readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${r.reference || r.id}`} checked={selectedPaymentIds.includes(r.id)} onChange={() => togglePaymentSelection(r.id)} /></td>}
                   <td className="p-3 text-slate-700">{new Date(r.paid_at).toLocaleString()}</td>
                   <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
                   <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>

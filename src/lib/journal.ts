@@ -1664,9 +1664,11 @@ export async function createJournalForSchoolInvoiceAccrual(
 function resolveSchoolFeeReceiptGl(
   method: string,
   acc: Awaited<ReturnType<typeof getDefaultGlAccounts>>,
-  walletClearingId: string | null | undefined
+  walletClearingId: string | null | undefined,
+  bankGlAccountId?: string | null
 ): string | null {
   const m = (method || "").toLowerCase();
+  if ((m === "bank" || m === "transfer") && bankGlAccountId) return bankGlAccountId;
   if (m === "wallet") return walletClearingId ?? acc.cash;
   if (m === "mobile_money") return acc.posMtnMobileMoney ?? acc.cash;
   if (m === "bank" || m === "transfer") return acc.posBank ?? acc.cash;
@@ -1685,11 +1687,12 @@ export async function createJournalForSchoolFeePayment(
   createdBy: string | null,
   organizationId: string,
   basis: "accrual" | "cash",
-  studentId: string | null
+  studentId: string | null,
+  bankGlAccountId?: string | null
 ): Promise<JournalPostResult> {
   const acc = await getDefaultGlAccounts();
   const j = await resolveJournalAccountSettings(organizationId);
-  const receiptGl = resolveSchoolFeeReceiptGl(paymentMethod, acc, j.wallet_clearing_id);
+  const receiptGl = resolveSchoolFeeReceiptGl(paymentMethod, acc, j.wallet_clearing_id, bankGlAccountId);
   const date = toBusinessDateString(paidAt);
   const dims = studentId ? { student_id: studentId } : null;
   if (!receiptGl) {

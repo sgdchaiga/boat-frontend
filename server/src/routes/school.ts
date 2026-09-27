@@ -187,7 +187,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
     orderBy: "paid_at DESC, created_at DESC",
     name: "payments",
     insertable: [],
-    patchable: [],
+    patchable: ["method", "bank_gl_account_id"],
   },
   receipts: {
     table: "school_receipts",
@@ -533,13 +533,15 @@ async function postPaymentAccounting(
   db: DbClient,
   organizationId: string,
   staffUserId: string | null,
-  payment: { id: string; amount: unknown; method: string; paid_at: unknown; student_id: string | null }
+  payment: { id: string; amount: unknown; method: string; paid_at: unknown; student_id: string | null; bank_gl_account_id?: string | null }
 ) {
   await retireJournalByReference(db, organizationId, "school_payment", payment.id, staffUserId);
   const amount = round2(Number(payment.amount) || 0);
   if (amount <= 0) return null;
   const gl = await resolveSchoolGl(db, organizationId);
-  const receiptGl = receiptGlForMethod(payment.method, gl);
+  const receiptGl = (payment.method === "bank" || payment.method === "transfer") && payment.bank_gl_account_id
+    ? payment.bank_gl_account_id
+    : receiptGlForMethod(payment.method, gl);
   if (!receiptGl) {
     throw new Error("Missing cash/bank/mobile money GL for school fee receipt. Configure Accounting -> Journal account settings.");
   }
@@ -837,6 +839,14 @@ async function patchRow(
       if (row?.id) {
         await postInvoiceAccounting(db, organizationId, normalizeStaffUserId(body.staff_user_id), row as InvoiceForAccounting);
       }
+      return row;
+    });
+  }
+  if (resource.table === "school_payments") {
+    return app.prisma.$transaction(async (tx) => {
+      const db = tx as unknown as DbClient;
+      const row = await updateRecord(db);
+      if (row?.id) await postPaymentAccounting(db, organizationId, normalizeStaffUserId(body.staff_user_id), row);
       return row;
     });
   }

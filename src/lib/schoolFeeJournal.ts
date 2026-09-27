@@ -67,8 +67,9 @@ export async function postSchoolFeePaymentAccounting(opts: {
   method: string;
   paidAt: string;
   studentId: string;
+  bankGlAccountId?: string | null;
 }): Promise<{ journalMessage?: string }> {
-  const { organizationId, staffUserId, paymentId, amount, method, paidAt, studentId } = opts;
+  const { organizationId, staffUserId, paymentId, amount, method, paidAt, studentId, bankGlAccountId } = opts;
   const basis = await getSchoolAccountingBasis(organizationId);
   await deleteJournalEntryByReference("school_payment", paymentId);
   const amt = Math.round(Number(amount) * 100) / 100;
@@ -83,7 +84,8 @@ export async function postSchoolFeePaymentAccounting(opts: {
     staffUserId,
     organizationId,
     basis,
-    studentId
+    studentId,
+    bankGlAccountId
   );
   if (!jr.ok) {
     return { journalMessage: jr.error };
