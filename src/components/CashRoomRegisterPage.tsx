@@ -44,6 +44,7 @@ function describeSaveError(error: unknown): string {
 export function CashRoomRegisterPage() {
   const { user } = useAuth();
   const orgId = user?.organization_id;
+  const isSchoolWorkspace = String(user?.business_type || "").toLowerCase() === "school";
   const [registerDate, setRegisterDate] = useState(businessTodayISO());
   const [rows, setRows] = useState<RoomRow[]>([]);
   const [customers, setCustomers] = useState<Array<{ id: string; name: string }>>([]);
@@ -57,6 +58,7 @@ export function CashRoomRegisterPage() {
   const [discountFilter, setDiscountFilter] = useState<"all" | "with" | "without">("all");
 
   const load = useCallback(async () => {
+    if (isSchoolWorkspace) { setRows([]); setLoading(false); return; }
     if (!orgId) { setRows([]); setLoading(false); return; }
     setLoading(true);
     const broadStartDate = new Date(`${registerDate}T00:00:00.000Z`); broadStartDate.setUTCDate(broadStartDate.getUTCDate() - 1);
@@ -114,7 +116,7 @@ export function CashRoomRegisterPage() {
       };
     });
     setRows(next); setLoading(false);
-  }, [orgId, registerDate]);
+  }, [isSchoolWorkspace, orgId, registerDate]);
 
   useEffect(() => { void load(); }, [load]);
   const update = (roomId: string, patch: Partial<RoomRow>) => setRows((current) => current.map((row) => row.id === roomId ? { ...row, ...patch } : row));
@@ -184,6 +186,7 @@ export function CashRoomRegisterPage() {
   };
 
   if (loading) return <div className="p-6">Loading cash room register...</div>;
+  if (isSchoolWorkspace) return <div className="mx-auto max-w-2xl p-6 lg:p-8"><div className="rounded-xl border border-amber-200 bg-amber-50 p-5"><h1 className="text-xl font-bold text-amber-950">Cash Room Register is not available for schools</h1><p className="mt-2 text-sm text-amber-900">This register is for hotel room occupancy and cash stays. Use Students &amp; Billing for school fee charges, payments, and statements.</p></div></div>;
   return <div className="p-6 md:p-8">
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
       <div><div className="flex items-center gap-2"><BedDouble className="h-7 w-7 text-emerald-700"/><h1 className="text-3xl font-bold">Cash Room Register</h1></div><p className="mt-2 text-sm text-slate-600">One entry records one room-day. Record every occupied date separately for multi-day guests.</p></div>

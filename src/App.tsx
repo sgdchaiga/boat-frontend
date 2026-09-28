@@ -582,6 +582,15 @@ function AppContent() {
     });
   };
 
+  // Hotel room operations must not be reachable from school, SACCO, or other workspaces,
+  // including through an old bookmark or manually edited URL.
+  useEffect(() => {
+    const businessType = String(user?.business_type || "").toLowerCase();
+    if (currentPage !== "cash_room_register" || businessType === "hotel" || businessType === "mixed") return;
+    setCurrentPage(businessType === "school" ? SCHOOL_PAGE.dashboard : "dashboard");
+    setPageState({});
+  }, [currentPage, user?.business_type]);
+
   useEffect(() => {
     if (typeof window === "undefined") return;
     const url = new URL(window.location.href);
