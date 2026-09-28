@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -67,6 +67,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   const [classes, setClasses] = useState<ClassOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+  const loadRevision = useRef(0);
   const [filters, setFilters] = useState<Filters>({
     dateFrom: "",
     dateTo: "",
@@ -93,10 +94,11 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   };
 
   const load = useCallback(async () => {
+    const revision = ++loadRevision.current;
     setLoading(true);
     const orgId = user?.organization_id;
     if (!orgId) {
-      setLoading(false);
+      if (revision === loadRevision.current) setLoading(false);
       return;
     }
 
@@ -109,12 +111,12 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
     ]);
     if (sRes.error || cRes.error) {
-      setErr(sRes.error?.message || cRes.error?.message || null);
-      setLoading(false);
+      if (revision === loadRevision.current) {
+        setErr(sRes.error?.message || cRes.error?.message || null);
+        setLoading(false);
+      }
       return;
     }
-    setStudents((sRes.data as StudentOpt[]) || []);
-    setClasses((cRes.data as ClassOpt[]) || []);
 
     let q = supabase
       .from("school_payments")
@@ -130,7 +132,10 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     if (filters.studentId) q = q.eq("student_id", filters.studentId);
 
     const { data, error } = await q;
+    if (revision !== loadRevision.current) return;
     setErr(error?.message || null);
+    setStudents((sRes.data as StudentOpt[]) || []);
+    setClasses((cRes.data as ClassOpt[]) || []);
     let list = (data as PayRow[]) || [];
 
     const studs = (sRes.data as StudentOpt[]) || [];
@@ -149,8 +154,10 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       });
     }
 
-    setPayments(list);
-    setLoading(false);
+    if (revision === loadRevision.current) {
+      setPayments(list);
+      setLoading(false);
+    }
   }, [user?.organization_id, filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId]);
 
   useEffect(() => {
