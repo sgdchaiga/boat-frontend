@@ -72,6 +72,9 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const loadRevision = useRef(0);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
+  const [totalPayments, setTotalPayments] = useState(0);
   const [filters, setFilters] = useState<Filters>({
     dateFrom: "",
     dateTo: "",
@@ -96,6 +99,10 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     }
     return s.class_name?.trim() || "—";
   };
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId]);
 
   const load = useCallback(async () => {
     const revision = ++loadRevision.current;
@@ -122,9 +129,32 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       return;
     }
 
+    const studs = (sRes.data as StudentOpt[]) || [];
+    const clsList = (cRes.data as ClassOpt[]) || [];
+    let matchingStudentIds: string[] | null = null;
+    if (filters.classId) {
+      const selectedClass = clsList.find((item) => item.id === filters.classId);
+      const selectedClassName = selectedClass?.name?.trim().toLowerCase() ?? "";
+      matchingStudentIds = studs
+        .filter((student) => student.class_id === filters.classId || (selectedClassName && (student.class_name ?? "").trim().toLowerCase() === selectedClassName))
+        .map((student) => student.id);
+    }
+
+    if (matchingStudentIds && matchingStudentIds.length === 0) {
+      if (revision === loadRevision.current) {
+        setStudents(studs);
+        setClasses(clsList);
+        setPayments([]);
+        setTotalPayments(0);
+        setErr(null);
+        setLoading(false);
+      }
+      return;
+    }
+
     let q = supabase
       .from("school_payments")
-      .select("id,amount,paid_at,method,reference,student_id,bank_gl_account_id")
+      .select("id,amount,paid_at,method,reference,student_id,bank_gl_account_id", { count: "exact" })
       .eq("organization_id", orgId)
       .order("paid_at", { ascending: false });
 
@@ -134,35 +164,21 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     if (end) q = q.lte("paid_at", end.toISOString());
     if (filters.method) q = q.eq("method", filters.method);
     if (filters.studentId) q = q.eq("student_id", filters.studentId);
+    if (matchingStudentIds) q = q.in("student_id", matchingStudentIds);
 
-    const { data, error } = await q;
+    const startIndex = (page - 1) * pageSize;
+    const { data, error, count } = await q.range(startIndex, startIndex + pageSize - 1);
     if (revision !== loadRevision.current) return;
     setErr(error?.message || null);
-    setStudents((sRes.data as StudentOpt[]) || []);
-    setClasses((cRes.data as ClassOpt[]) || []);
-    let list = (data as PayRow[]) || [];
-
-    const studs = (sRes.data as StudentOpt[]) || [];
-    const clsList = (cRes.data as ClassOpt[]) || [];
-    const studMap = new Map(studs.map((s) => [s.id, s]));
-
-    if (filters.classId) {
-      const c = clsList.find((x) => x.id === filters.classId);
-      const name = c?.name?.trim().toLowerCase() ?? "";
-      list = list.filter((p) => {
-        const st = studMap.get(p.student_id);
-        if (!st) return false;
-        if (st.class_id === filters.classId) return true;
-        if (name && (st.class_name ?? "").trim().toLowerCase() === name) return true;
-        return false;
-      });
-    }
+    setStudents(studs);
+    setClasses(clsList);
 
     if (revision === loadRevision.current) {
-      setPayments(list);
+      setPayments((data as PayRow[]) || []);
+      setTotalPayments(count || 0);
       setLoading(false);
     }
-  }, [user?.organization_id, filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId]);
+  }, [user?.organization_id, filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId, page, pageSize]);
 
   useEffect(() => {
     load();
@@ -214,6 +230,10 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     anchor.click();
     URL.revokeObjectURL(url);
   };
+
+  const totalPages = Math.max(1, Math.ceil(totalPayments / pageSize));
+  const pageStart = totalPayments === 0 ? 0 : (page - 1) * pageSize + 1;
+  const pageEnd = Math.min(page * pageSize, totalPayments);
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
@@ -295,11 +315,11 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
 
       <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 flex flex-wrap gap-6 text-sm">
         <div>
-          <span className="text-slate-500">Payments in view: </span>
-          <span className="font-semibold text-slate-900">{payments.length}</span>
+          <span className="text-slate-500">Showing: </span>
+          <span className="font-semibold text-slate-900">{pageStart.toLocaleString()}–{pageEnd.toLocaleString()} of {totalPayments.toLocaleString()}</span>
         </div>
         <div>
-          <span className="text-slate-500">Total collected: </span>
+          <span className="text-slate-500">Page total: </span>
           <span className="font-semibold text-slate-900">{grandTotal.toLocaleString()}</span>
         </div>
         <div className="flex flex-wrap gap-x-4 gap-y-1">
@@ -369,6 +389,18 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
             )}
           </tbody>
         </table>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
+        <label className="flex items-center gap-2 text-slate-700">Entries per page
+          <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
+            {[25, 50, 75, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}
+          </select>
+        </label>
+        <div className="flex items-center gap-2">
+          <span className="text-slate-600">Page {Math.min(page, totalPages)} of {totalPages}</span>
+          <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page <= 1 || loading} className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Previous</button>
+          <button type="button" onClick={() => setPage((current) => Math.min(totalPages, current + 1))} disabled={page >= totalPages || loading} className="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50">Next</button>
+        </div>
       </div>
     </div>
   );
