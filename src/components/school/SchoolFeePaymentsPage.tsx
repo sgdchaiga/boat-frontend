@@ -4,6 +4,7 @@ import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
+import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 import { SchoolFeeReceiptPreviewModal } from "@/components/school/SchoolFeeReceiptPreviewModal";
 import { schoolFeeReceiptDetailFromPayment, type SchoolFeeReceiptDetail } from "@/lib/schoolFeeReceipt";
 import { buildSchoolFeesAutoReference } from "@/lib/autoReference";
@@ -881,7 +882,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         <div className="grid gap-3 md:grid-cols-5">
           <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          <select aria-label="Filter payments by student" value={paymentFilters.studentId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, studentId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All students</option>{students.map((student) => <option key={student.id} value={student.id}>{student.admission_number} — {student.first_name} {student.last_name}</option>)}</select>
+          <SearchableCombobox
+            value={paymentFilters.studentId}
+            onChange={(studentId) => setPaymentFilters((filters) => ({ ...filters, studentId }))}
+            options={students.map((student) => ({ id: student.id, label: `${student.admission_number} — ${student.first_name} ${student.last_name}${student.school_pay_number ? ` · SchoolPay: ${student.school_pay_number}` : ""}` }))}
+            emptyOption={{ label: "All students" }}
+            placeholder="Type a student name or number…"
+            inputAriaLabel="Filter payments by student"
+            clearable
+          />
           <select aria-label="Filter payments by class" value={paymentFilters.className} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, className: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All classes</option>{[...new Set(students.map((student) => student.class_name).filter((className): className is string => Boolean(className)))].sort().map((className) => <option key={className} value={className}>{className}</option>)}</select>
           <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
         </div>
