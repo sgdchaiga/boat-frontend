@@ -261,15 +261,17 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       return;
     }
+    let paymentsQuery = supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(1000);
+    if (paymentFilters.studentId) paymentsQuery = paymentsQuery.eq("student_id", paymentFilters.studentId);
     const [pRes, sRes] = await Promise.all([
-      supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(100),
+      paymentsQuery,
       supabase.from("students").select("id,first_name,last_name,admission_number,class_name,school_pay_number").eq("organization_id", orgId).order("last_name"),
     ]);
     setErr(pRes.error?.message || sRes.error?.message || null);
     setRows((pRes.data as PayRow[]) || []);
     setStudents((sRes.data as StudentOpt[]) || []);
     setLoading(false);
-  }, [user?.organization_id]);
+  }, [user?.organization_id, paymentFilters.studentId]);
 
   useEffect(() => {
     if (!user?.organization_id) {
@@ -633,7 +635,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         return;
       }
     }
-    setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 100));
+    setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 1000));
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
     setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip" });
   };
