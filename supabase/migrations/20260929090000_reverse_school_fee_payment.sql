@@ -9,6 +9,9 @@ DECLARE
   allocation jsonb;
   restored numeric(18,2);
 BEGIN
+  IF NOT public.caller_is_org_super_admin_for(p_organization_id) THEN
+    RAISE EXCEPTION 'Only a super admin can reverse school fee payments.';
+  END IF;
   SELECT * INTO payment_row FROM public.school_payments WHERE id = p_payment_id AND organization_id = p_organization_id FOR UPDATE;
   IF NOT FOUND THEN RAISE EXCEPTION 'Fee payment was not found.'; END IF;
   FOR allocation IN SELECT value FROM jsonb_array_elements(COALESCE(payment_row.invoice_allocations, '[]'::jsonb)) LOOP

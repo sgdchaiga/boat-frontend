@@ -60,6 +60,7 @@ function normalizeFeeLines(lines: FeeLine[] | null | undefined): Array<{ code: s
 
 export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoiceId }: Props) {
   const { user } = useAuth();
+  const canBulkReverse = user?.isSuperAdmin === true;
   const [rows, setRows] = useState<PayRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const [invoices, setInvoices] = useState<InvOpt[]>([]);
@@ -864,7 +865,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           </select>}
           {(bulkMethod === "bank" || bulkMethod === "transfer") && <select value={bulkBankPaymentSource} onChange={(event) => setBulkBankPaymentSource(event.target.value as "schoolpay" | "bank_slip")} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="bank_slip">Direct bank slip</option><option value="schoolpay">SchoolPay to bank</option></select>}
           <button type="button" onClick={() => void applyBulkPaymentEdit()} disabled={bulkUpdating || selectedPaymentIds.length === 0} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{bulkUpdating ? "Updating…" : `Update selected (${selectedPaymentIds.length})`}</button>
-          <button type="button" onClick={() => void reverseSelectedPayments()} disabled={bulkReversing || selectedPaymentIds.length === 0} className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50">{bulkReversing ? "Reversing…" : `Reverse selected (${selectedPaymentIds.length})`}</button>
+          {canBulkReverse && <button type="button" onClick={() => void reverseSelectedPayments()} disabled={bulkReversing || selectedPaymentIds.length === 0} className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50">{bulkReversing ? "Reversing…" : `Reverse selected (${selectedPaymentIds.length})`}</button>}
         </div>
         {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
@@ -885,6 +886,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               {!readOnly && <th className="w-10 p-3"><input type="checkbox" aria-label="Select all filtered payments" checked={visiblePayments.length > 0 && visiblePayments.every((row) => selectedPaymentIds.includes(row.id))} onChange={(event) => setSelectedPaymentIds(event.target.checked ? [...new Set([...selectedPaymentIds, ...visiblePayments.map((row) => row.id)])] : selectedPaymentIds.filter((id) => !visiblePayments.some((row) => row.id === id)))} /></th>}
               <th className="text-left p-3 font-semibold text-slate-700">When</th>
               <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Student</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
@@ -897,13 +899,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={(readOnly ? 6 : 7) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 7 : 8) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : visiblePayments.length === 0 ? (
               <tr>
-                <td colSpan={(readOnly ? 6 : 7) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 7 : 8) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
@@ -912,7 +914,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                    {!readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${r.reference || r.id}`} checked={selectedPaymentIds.includes(r.id)} onChange={() => togglePaymentSelection(r.id)} /></td>}
                   <td className="p-3 text-slate-700">{new Date(r.paid_at).toLocaleString()}</td>
-                  <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
+                   <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
+                   <td className="p-3 text-slate-700">{(() => { const student = students.find((item) => item.id === r.student_id); return student ? `${student.first_name} ${student.last_name}` : "—"; })()}</td>
                   <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
                    <td className="p-3 capitalize text-slate-600">
                     {r.method === "wallet" ? "Wallet" : r.method.replace("_", " ")}
