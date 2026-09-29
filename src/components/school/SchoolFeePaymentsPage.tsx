@@ -83,6 +83,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkBankAccountId, setBulkBankAccountId] = useState("");
   const [bulkBankPaymentSource, setBulkBankPaymentSource] = useState<"schoolpay" | "bank_slip">("bank_slip");
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [bulkUpdateProgress, setBulkUpdateProgress] = useState({ completed: 0, total: 0 });
   const [bulkReversing, setBulkReversing] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState({ studentId: "", className: "", method: "", from: "", to: "" });
@@ -703,13 +704,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       return;
     }
     if (!window.confirm(`Update ${selectedPaymentIds.length} payment${selectedPaymentIds.length === 1 ? "" : "s"} to ${SCHOOL_PAYMENT_METHODS.find((item) => item.code === bulkMethod)?.label || bulkMethod}?`)) return;
+    const paymentIds = [...selectedPaymentIds];
     setBulkUpdating(true);
+    setBulkUpdateProgress({ completed: 0, total: paymentIds.length });
     setBulkMessage(null);
     setErr(null);
     const patch = { method: bulkMethod, bank_gl_account_id: needsBankAccount ? bulkBankAccountId : null, bank_payment_source: needsBankAccount ? bulkBankPaymentSource : null };
     let updated = 0;
     const failures: string[] = [];
-    for (const id of selectedPaymentIds) {
+    for (const id of paymentIds) {
       try {
         let payment: PayRow;
         if (canUseSchoolApi()) {
@@ -734,6 +737,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         updated += 1;
       } catch (error) {
         failures.push(error instanceof Error ? error.message : `Payment ${id} could not be updated.`);
+      } finally {
+        setBulkUpdateProgress((progress) => ({ ...progress, completed: progress.completed + 1 }));
       }
     }
     setSelectedPaymentIds([]);
@@ -869,6 +874,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           {canBulkReverse && <button type="button" onClick={() => void reverseSelectedPayments()} disabled={bulkReversing || selectedPaymentIds.length === 0} className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50">{bulkReversing ? "Reversing…" : `Reverse selected (${selectedPaymentIds.length})`}</button>}
         </div>
         {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
+        {bulkUpdating && bulkUpdateProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Updating selected payments…</span><span>{bulkUpdateProgress.completed} of {bulkUpdateProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(bulkUpdateProgress.completed / bulkUpdateProgress.total * 100)}%` }} /></div></div>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
