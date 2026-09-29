@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Download, Printer, Upload } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
@@ -83,6 +83,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkBankPaymentSource, setBulkBankPaymentSource] = useState<"schoolpay" | "bank_slip">("bank_slip");
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [paymentFilters, setPaymentFilters] = useState({ studentId: "", method: "", from: "", to: "" });
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
@@ -742,6 +743,14 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setSelectedPaymentIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
 
+  const visiblePayments = useMemo(() => rows.filter((payment) => {
+    const day = String(payment.paid_at || "").slice(0, 10);
+    return (!paymentFilters.studentId || payment.student_id === paymentFilters.studentId)
+      && (!paymentFilters.method || payment.method === paymentFilters.method)
+      && (!paymentFilters.from || day >= paymentFilters.from)
+      && (!paymentFilters.to || day <= paymentFilters.to);
+  }), [rows, paymentFilters]);
+
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
       <div className="flex flex-wrap items-center gap-2">
@@ -837,15 +846,25 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
+      <section className="rounded-xl border border-slate-200 bg-white p-4">
+        <div className="grid gap-3 md:grid-cols-4">
+          <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          <select aria-label="Filter payments by student" value={paymentFilters.studentId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, studentId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All students</option>{students.map((student) => <option key={student.id} value={student.id}>{student.admission_number} — {student.first_name} {student.last_name}</option>)}</select>
+          <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
+        </div>
+        <div className="mt-3 flex items-center gap-3"><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", method: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></div>
+      </section>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
-              {!readOnly && <th className="w-10 p-3"><input type="checkbox" aria-label="Select all payments" checked={rows.length > 0 && selectedPaymentIds.length === rows.length} onChange={(event) => setSelectedPaymentIds(event.target.checked ? rows.map((row) => row.id) : [])} /></th>}
+              {!readOnly && <th className="w-10 p-3"><input type="checkbox" aria-label="Select all filtered payments" checked={visiblePayments.length > 0 && visiblePayments.every((row) => selectedPaymentIds.includes(row.id))} onChange={(event) => setSelectedPaymentIds(event.target.checked ? [...new Set([...selectedPaymentIds, ...visiblePayments.map((row) => row.id)])] : selectedPaymentIds.filter((id) => !visiblePayments.some((row) => row.id === id)))} /></th>}
               <th className="text-left p-3 font-semibold text-slate-700">When</th>
               <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
               <th className="text-right p-3 font-semibold text-slate-700 whitespace-nowrap print:hidden min-w-[7rem]">
                 Receipt
@@ -855,27 +874,28 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">
+                <td colSpan={readOnly ? 7 : 8} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
-            ) : rows.length === 0 ? (
+            ) : visiblePayments.length === 0 ? (
               <tr>
-                <td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">
+                <td colSpan={readOnly ? 7 : 8} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
             ) : (
-              rows.map((r) => (
+              visiblePayments.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                    {!readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${r.reference || r.id}`} checked={selectedPaymentIds.includes(r.id)} onChange={() => togglePaymentSelection(r.id)} /></td>}
                   <td className="p-3 text-slate-700">{new Date(r.paid_at).toLocaleString()}</td>
                   <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
                   <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
-                  <td className="p-3 capitalize text-slate-600">
+                   <td className="p-3 capitalize text-slate-600">
                     {r.method === "wallet" ? "Wallet" : r.method.replace("_", " ")}
-                  </td>
-                  <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
+                   </td>
+                   <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>
+                   <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
                   <td className="p-3 text-right whitespace-nowrap print:hidden min-w-[7rem]">
                     <button
                       type="button"

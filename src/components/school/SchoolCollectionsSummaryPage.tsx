@@ -23,7 +23,9 @@ type PayRow = {
   reference: string | null;
   paid_at: string;
   student_id: string;
+  bank_gl_account_id?: string | null;
 };
+type BankAccount = { id: string; account_name: string; account_code: string };
 
 const METHODS = ["cash", "mobile_money", "bank", "transfer", "other"] as const;
 const METHOD_LABEL: Record<(typeof METHODS)[number], string> = {
@@ -65,6 +67,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   const [payments, setPayments] = useState<PayRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const [classes, setClasses] = useState<ClassOpt[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const loadRevision = useRef(0);
@@ -120,7 +123,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
 
     let q = supabase
       .from("school_payments")
-      .select("id,amount,paid_at,method,reference,student_id")
+      .select("id,amount,paid_at,method,reference,student_id,bank_gl_account_id")
       .eq("organization_id", orgId)
       .order("paid_at", { ascending: false });
 
@@ -163,6 +166,11 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!user?.organization_id) return;
+    void supabase.from("gl_accounts").select("id,account_name,account_code").eq("organization_id", user.organization_id).then(({ data }) => setBankAccounts((data as BankAccount[]) || []));
+  }, [user?.organization_id]);
 
   const totalsByMethod = useMemo(() => {
     const m = new Map<string, number>();
@@ -314,6 +322,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
               <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
             </tr>
@@ -321,13 +330,13 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={7} className="p-6 text-slate-500">
+                <td colSpan={8} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : payments.length === 0 ? (
               <tr>
-                <td colSpan={7} className="p-6 text-slate-500">
+                <td colSpan={8} className="p-6 text-slate-500">
                   No payments match the current filters.
                 </td>
               </tr>
@@ -349,6 +358,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
                   <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{st?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-600">{classLabelForStudent(st)}</td>
                     <td className="p-3 text-slate-800 capitalize">{methodLabel(r.method)}</td>
+                    <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>
                     <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
                     <td className="p-3 text-slate-600 font-mono text-xs">{r.reference?.trim() || "—"}</td>
                   </tr>
