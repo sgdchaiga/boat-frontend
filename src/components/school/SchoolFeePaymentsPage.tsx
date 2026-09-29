@@ -13,7 +13,7 @@ import { boatApi } from "@/lib/boatApi";
 import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 import { DEFAULT_SCHOOL_PAYMENT_METHODS, SCHOOL_PAYMENT_METHODS, normalizeSchoolPaymentMethods, type SchoolPaymentMethod } from "@/lib/schoolPaymentMethods";
 
-type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null };
+type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string; class_name?: string | null; school_pay_number?: string | null };
 type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; created_at?: string; student_id?: string; status?: string };
 type FeeLine = { code?: string; label?: string; amount?: number; priority?: number };
 type FeeStructure = { id: string; line_items: FeeLine[] | null };
@@ -85,7 +85,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkReversing, setBulkReversing] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
-  const [paymentFilters, setPaymentFilters] = useState({ studentId: "", method: "", from: "", to: "" });
+  const [paymentFilters, setPaymentFilters] = useState({ studentId: "", className: "", method: "", from: "", to: "" });
   const [showBankColumn, setShowBankColumn] = useState(true);
   const [form, setForm] = useState({
     student_id: "",
@@ -261,7 +261,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     const [pRes, sRes] = await Promise.all([
       supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(100),
-      supabase.from("students").select("id,first_name,last_name,admission_number,school_pay_number").eq("organization_id", orgId).order("last_name"),
+      supabase.from("students").select("id,first_name,last_name,admission_number,class_name,school_pay_number").eq("organization_id", orgId).order("last_name"),
     ]);
     setErr(pRes.error?.message || sRes.error?.message || null);
     setRows((pRes.data as PayRow[]) || []);
@@ -769,10 +769,11 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const visiblePayments = useMemo(() => rows.filter((payment) => {
     const day = String(payment.paid_at || "").slice(0, 10);
     return (!paymentFilters.studentId || payment.student_id === paymentFilters.studentId)
+      && (!paymentFilters.className || students.find((student) => student.id === payment.student_id)?.class_name === paymentFilters.className)
       && (!paymentFilters.method || payment.method === paymentFilters.method)
       && (!paymentFilters.from || day >= paymentFilters.from)
       && (!paymentFilters.to || day <= paymentFilters.to);
-  }), [rows, paymentFilters]);
+  }), [rows, students, paymentFilters]);
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">
@@ -871,13 +872,14 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <select aria-label="Filter payments by student" value={paymentFilters.studentId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, studentId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All students</option>{students.map((student) => <option key={student.id} value={student.id}>{student.admission_number} — {student.first_name} {student.last_name}</option>)}</select>
+          <select aria-label="Filter payments by class" value={paymentFilters.className} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, className: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All classes</option>{[...new Set(students.map((student) => student.class_name).filter((className): className is string => Boolean(className)))].sort().map((className) => <option key={className} value={className}>{className}</option>)}</select>
           <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
         </div>
-        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", method: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
+        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
       </section>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
@@ -887,6 +889,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               <th className="text-left p-3 font-semibold text-slate-700">When</th>
               <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Class</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
@@ -899,13 +902,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={(readOnly ? 7 : 8) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 8 : 9) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : visiblePayments.length === 0 ? (
               <tr>
-                <td colSpan={(readOnly ? 7 : 8) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 8 : 9) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
@@ -914,8 +917,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                    {!readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${r.reference || r.id}`} checked={selectedPaymentIds.includes(r.id)} onChange={() => togglePaymentSelection(r.id)} /></td>}
                   <td className="p-3 text-slate-700">{new Date(r.paid_at).toLocaleString()}</td>
-                   <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
-                   <td className="p-3 text-slate-700">{(() => { const student = students.find((item) => item.id === r.student_id); return student ? `${student.first_name} ${student.last_name}` : "—"; })()}</td>
+                    <td className="p-3 font-mono text-slate-700">{students.find((student) => student.id === r.student_id)?.school_pay_number || "—"}</td>
+                    <td className="p-3 text-slate-700">{(() => { const student = students.find((item) => item.id === r.student_id); return student ? `${student.first_name} ${student.last_name}` : "—"; })()}</td>
+                    <td className="p-3 text-slate-700">{students.find((student) => student.id === r.student_id)?.class_name || "—"}</td>
                   <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
                    <td className="p-3 capitalize text-slate-600">
                     {r.method === "wallet" ? "Wallet" : r.method.replace("_", " ")}
