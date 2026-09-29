@@ -68,6 +68,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const [classes, setClasses] = useState<ClassOpt[]>([]);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [showBankColumn, setShowBankColumn] = useState(true);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const loadRevision = useRef(0);
@@ -225,6 +226,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
           </p>
         </PageNotes>
         <button type="button" onClick={exportCollections} disabled={loading || payments.length === 0} className="ml-auto inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"><Download className="h-4 w-4" /> Export CSV</button>
+        <label className="text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
 
@@ -322,7 +324,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
               <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>
+              {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
             </tr>
@@ -330,13 +332,13 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={8} className="p-6 text-slate-500">
+                <td colSpan={showBankColumn ? 8 : 7} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : payments.length === 0 ? (
               <tr>
-                <td colSpan={8} className="p-6 text-slate-500">
+                <td colSpan={showBankColumn ? 8 : 7} className="p-6 text-slate-500">
                   No payments match the current filters.
                 </td>
               </tr>
@@ -358,7 +360,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
                   <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{st?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-600">{classLabelForStudent(st)}</td>
                     <td className="p-3 text-slate-800 capitalize">{methodLabel(r.method)}</td>
-                    <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>
+                    {showBankColumn && <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>}
                     <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
                     <td className="p-3 text-slate-600 font-mono text-xs">{r.reference?.trim() || "—"}</td>
                   </tr>

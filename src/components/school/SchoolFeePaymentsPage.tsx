@@ -84,6 +84,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState({ studentId: "", method: "", from: "", to: "" });
+  const [showBankColumn, setShowBankColumn] = useState(true);
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
@@ -853,7 +854,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <select aria-label="Filter payments by student" value={paymentFilters.studentId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, studentId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All students</option>{students.map((student) => <option key={student.id} value={student.id}>{student.admission_number} — {student.first_name} {student.last_name}</option>)}</select>
           <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
         </div>
-        <div className="mt-3 flex items-center gap-3"><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", method: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></div>
+        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", method: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
       </section>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
@@ -864,7 +865,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>
+              {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
               <th className="text-right p-3 font-semibold text-slate-700 whitespace-nowrap print:hidden min-w-[7rem]">
                 Receipt
@@ -874,13 +875,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={readOnly ? 7 : 8} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 6 : 7) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : visiblePayments.length === 0 ? (
               <tr>
-                <td colSpan={readOnly ? 7 : 8} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 6 : 7) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
@@ -894,7 +895,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                    <td className="p-3 capitalize text-slate-600">
                     {r.method === "wallet" ? "Wallet" : r.method.replace("_", " ")}
                    </td>
-                   <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>
+                   {showBankColumn && <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>}
                    <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
                   <td className="p-3 text-right whitespace-nowrap print:hidden min-w-[7rem]">
                     <button
