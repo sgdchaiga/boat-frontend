@@ -73,7 +73,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   const [err, setErr] = useState<string | null>(null);
   const loadRevision = useRef(0);
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
+  const [pageSize, setPageSize] = useState(500);
   const [totalPayments, setTotalPayments] = useState(0);
   const [filters, setFilters] = useState<Filters>({
     dateFrom: "",
@@ -393,7 +393,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
         <label className="flex items-center gap-2 text-slate-700">Entries per page
           <select value={pageSize} onChange={(event) => { setPageSize(Number(event.target.value)); setPage(1); }} className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm">
-            {[25, 50, 75, 100, 200].map((size) => <option key={size} value={size}>{size}</option>)}
+            {[25, 50, 75, 100, 200, 500].map((size) => <option key={size} value={size}>{size}</option>)}
           </select>
         </label>
         <div className="flex items-center gap-2">
