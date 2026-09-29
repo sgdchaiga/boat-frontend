@@ -87,7 +87,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkUpdateProgress, setBulkUpdateProgress] = useState({ completed: 0, total: 0 });
   const [bulkReversing, setBulkReversing] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
-  const [paymentFilters, setPaymentFilters] = useState({ studentId: "", className: "", method: "", from: "", to: "" });
+  const [paymentFilters, setPaymentFilters] = useState({ studentId: "", className: "", method: "", bankAccountId: "", from: "", to: "" });
   const [showBankColumn, setShowBankColumn] = useState(true);
   const [form, setForm] = useState({
     student_id: "",
@@ -715,7 +715,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     const patch = { method: bulkMethod, bank_gl_account_id: needsBankAccount ? bulkBankAccountId : null, bank_payment_source: needsBankAccount ? bulkBankPaymentSource : null };
     let updated = 0;
     const failures: string[] = [];
-    for (const id of paymentIds) {
+    const updateOne = async (id: string) => {
       try {
         let payment: PayRow;
         if (canUseSchoolApi()) {
@@ -743,6 +743,11 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       } finally {
         setBulkUpdateProgress((progress) => ({ ...progress, completed: progress.completed + 1 }));
       }
+    };
+    // A small concurrency limit substantially reduces waiting time without overwhelming the API or database.
+    const concurrentUpdates = 6;
+    for (let offset = 0; offset < paymentIds.length; offset += concurrentUpdates) {
+      await Promise.all(paymentIds.slice(offset, offset + concurrentUpdates).map(updateOne));
     }
     setSelectedPaymentIds([]);
     setBulkUpdating(false);
@@ -779,6 +784,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     return (!paymentFilters.studentId || payment.student_id === paymentFilters.studentId)
       && (!paymentFilters.className || students.find((student) => student.id === payment.student_id)?.class_name === paymentFilters.className)
       && (!paymentFilters.method || payment.method === paymentFilters.method)
+      && (!paymentFilters.bankAccountId || payment.bank_gl_account_id === paymentFilters.bankAccountId)
       && (!paymentFilters.from || day >= paymentFilters.from)
       && (!paymentFilters.to || day <= paymentFilters.to);
   }), [rows, students, paymentFilters]);
@@ -881,7 +887,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-6">
           <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <SearchableCombobox
@@ -895,8 +901,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           />
           <select aria-label="Filter payments by class" value={paymentFilters.className} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, className: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All classes</option>{[...new Set(students.map((student) => student.class_name).filter((className): className is string => Boolean(className)))].sort().map((className) => <option key={className} value={className}>{className}</option>)}</select>
           <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
+          <select aria-label="Filter payments by deposited-to bank" value={paymentFilters.bankAccountId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, bankAccountId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All deposited-to banks</option>{bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}</select>
         </div>
-        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
+        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
       </section>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
