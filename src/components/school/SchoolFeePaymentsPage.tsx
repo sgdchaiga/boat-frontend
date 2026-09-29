@@ -82,6 +82,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkBankAccountId, setBulkBankAccountId] = useState("");
   const [bulkBankPaymentSource, setBulkBankPaymentSource] = useState<"schoolpay" | "bank_slip">("bank_slip");
   const [bulkUpdating, setBulkUpdating] = useState(false);
+  const [bulkReversing, setBulkReversing] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState({ studentId: "", method: "", from: "", to: "" });
   const [showBankColumn, setShowBankColumn] = useState(true);
@@ -744,6 +745,26 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setSelectedPaymentIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
 
+  const reverseSelectedPayments = async () => {
+    const orgId = user?.organization_id;
+    if (!orgId || !selectedPaymentIds.length || bulkReversing) return;
+    if (!window.confirm(`Reverse ${selectedPaymentIds.length} selected fee payment${selectedPaymentIds.length === 1 ? "" : "s"}? This restores invoice balances and cannot be undone.`)) return;
+    setBulkReversing(true);
+    setErr(null);
+    let reversed = 0;
+    for (const id of selectedPaymentIds) {
+      const result = await supabase.rpc("reverse_school_fee_payment", { p_payment_id: id, p_organization_id: orgId });
+      if (result.error) { setErr(result.error.message); break; }
+      reversed += 1;
+    }
+    if (reversed) {
+      setRows((current) => current.filter((row) => !selectedPaymentIds.slice(0, reversed).includes(row.id)));
+      setSelectedPaymentIds([]);
+      setBulkMessage(`Reversed ${reversed} payment${reversed === 1 ? "" : "s"}.`);
+    }
+    setBulkReversing(false);
+  };
+
   const visiblePayments = useMemo(() => rows.filter((payment) => {
     const day = String(payment.paid_at || "").slice(0, 10);
     return (!paymentFilters.studentId || payment.student_id === paymentFilters.studentId)
@@ -843,6 +864,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           </select>}
           {(bulkMethod === "bank" || bulkMethod === "transfer") && <select value={bulkBankPaymentSource} onChange={(event) => setBulkBankPaymentSource(event.target.value as "schoolpay" | "bank_slip")} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="bank_slip">Direct bank slip</option><option value="schoolpay">SchoolPay to bank</option></select>}
           <button type="button" onClick={() => void applyBulkPaymentEdit()} disabled={bulkUpdating || selectedPaymentIds.length === 0} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{bulkUpdating ? "Updating…" : `Update selected (${selectedPaymentIds.length})`}</button>
+          <button type="button" onClick={() => void reverseSelectedPayments()} disabled={bulkReversing || selectedPaymentIds.length === 0} className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50">{bulkReversing ? "Reversing…" : `Reverse selected (${selectedPaymentIds.length})`}</button>
         </div>
         {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
