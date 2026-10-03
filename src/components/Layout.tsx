@@ -399,7 +399,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         ),
         allowAdvancedPms: advancedPmsEnabled,
       });
-      if (businessType !== 'general_business' || effectiveGeneralBusinessMode !== 'cashbook') return fullNavigation;
+      if (businessType !== 'general_business' || effectiveGeneralBusinessMode !== 'cashbook') return [...fullNavigation, { name: 'Insurance', icon: Shield, page: 'insurance' } as NavItem];
       return [
         { name: 'Cashbook register', icon: BookOpen, page: 'general_business_cashbook' },
         { name: 'Data entry', icon: Plus, children: [
@@ -415,6 +415,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           ...(allowManufacturing ? [{ name: 'Process Stock', page: 'manufacturing_production_entries', state: { manufacturingMode: 'simple' } }] : []),
         ] },
         { name: 'Daily summary', icon: BarChart3, page: 'general_business_daily_summary' },
+        { name: 'Insurance', icon: Shield, page: 'insurance' },
         { name: 'Master data', icon: UsersRound, children: [
           { name: 'Customers', page: 'retail_customers' },
           { name: 'Suppliers', page: 'purchases_vendors' },
@@ -1345,6 +1346,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     const navigation = businessType !== 'accounting_practice' && enableAssetVerification
       ? [...baseNavigation, { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' }]
       : baseNavigation;
+    if (!navigation.some((item) => 'page' in item && item.page === 'insurance') && businessType !== 'accounting_practice') {
+      navigation.push({ name: 'Insurance', icon: Shield, page: 'insurance' });
+    }
     if ((user?.isSuperAdmin === true || user?.role === 'super_admin') && user?.enable_control_centre === true) {
       navigation.push({ name: 'Control Centre', icon: Shield, page: 'control_centre' });
     }

@@ -175,6 +175,7 @@ const CashflowPage = lazyNamed(() => import('./components/accounting/CashflowPag
 const BudgetingPage = lazyNamed(() => import('./components/accounting/BudgetingPage'), 'BudgetingPage');
 const BudgetVarianceReportPage = lazyNamed(() => import('./components/accounting/BudgetVarianceReportPage'), 'BudgetVarianceReportPage');
 const FixedAssetsPage = lazyNamed(() => import('./components/fixedAssets/FixedAssetsPage'), 'FixedAssetsPage');
+const InsurancePage = lazyNamed(() => import('./components/insurance/InsurancePage'), 'InsurancePage');
 const AdminStockAdjustmentsPage = lazyNamed(() => import('./components/admin/AdminStockAdjustmentsPage'), 'AdminStockAdjustmentsPage');
 const StoreRequisitionsPage = lazyNamed(() => import('./components/inventory/StoreRequisitionsPage'), 'StoreRequisitionsPage');
 const StockBalancesPage = lazyNamed(() => import('./components/inventory/StockBalancesPage'), 'StockBalancesPage');
@@ -1789,6 +1790,8 @@ function AppContent() {
         return <BudgetVarianceReportPage />;
       case 'fixed_assets':
         return <FixedAssetsPage readOnly={access.readOnly} />;
+      case 'insurance':
+        return <InsurancePage readOnly={access.readOnly} />;
       default:
         return user?.business_type === "retail" ? (
           <RetailDashboard onNavigate={navigate} />

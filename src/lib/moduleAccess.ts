@@ -26,6 +26,7 @@ export type ModuleId =
   | "accounting"
   | "reconciliation"
   | "fixed_assets"
+  | "insurance"
   | "asset_verification"
   | "staff"
   | "admin"
@@ -94,6 +95,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   accounting: "both",
   reconciliation: "both",
   fixed_assets: "both",
+  insurance: "both",
   asset_verification: "both",
   staff: "both",
   admin: "both",
@@ -136,6 +138,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   accounting: true,
   reconciliation: true,
   fixed_assets: true,
+  insurance: true,
   asset_verification: true,
   staff: true,
   admin: true,
@@ -742,6 +745,7 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "accounting_bank_reconciliation") return "reconciliation";
   if (["accounting_budgeting", "reports_budget_variance"].includes(page)) return "budget";
   if (page === "fixed_assets") return "fixed_assets";
+  if (page === "insurance") return "insurance";
   if (page.startsWith("payroll_")) return "payroll";
   if (page === "wallet") return "wallet";
   if (page === "treasury") return "treasury";
