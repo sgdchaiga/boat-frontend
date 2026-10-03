@@ -103,6 +103,9 @@ interface AuthUser {
   vsla_member_id?: string | null;
   vsla_member_access_status?: "invited" | "active" | "suspended" | "revoked";
   vsla_member_must_change_password?: boolean;
+  isInsuranceCustomer?: boolean;
+  insurance_customer_id?: string | null;
+  insurance_customer_access_status?: "invited" | "active" | "suspended" | "revoked";
   organization_name?: string | null;
   /** When set, hospitality POS/orders/payments are limited to this branch (see hospitality_branches). */
   hospitality_branch_id?: string | null;
@@ -911,13 +914,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const meta = (sessionUser as { user_metadata?: Record<string, unknown> }).user_metadata;
       const flags = await loadUserFlags(sessionUser.id);
 
-      const [{ data: memberAccess }, { data: vslaMemberAccess }] = await Promise.all([
+      const [{ data: memberAccess }, { data: vslaMemberAccess }, { data: insuranceAccess }] = await Promise.all([
         supabase.from("sacco_member_app_users")
           .select("organization_id,sacco_member_id,status,must_change_password,sacco_members(full_name,phone)")
           .eq("auth_user_id", sessionUser.id).maybeSingle(),
         supabase.from("vsla_member_app_users")
           .select("organization_id,vsla_member_id,status,must_change_password,vsla_members(full_name,phone)")
           .eq("auth_user_id", sessionUser.id).maybeSingle(),
+        supabase.from("insurance_customer_portal_access").select("organization_id,customer_id,status,insurance_customers(display_name,phone)").eq("auth_user_id", sessionUser.id).maybeSingle(),
       ]);
       const appAccess = memberAccess as {
         organization_id?: string;
@@ -968,6 +972,14 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           isHotelStaff: false,
         });
         if (["invited", "active"].includes(vslaAccess.status || "")) void supabase.rpc("mark_vsla_member_app_login");
+        return;
+      }
+      const portalAccess = insuranceAccess as { organization_id?: string; customer_id?: string; status?: string; insurance_customers?: { display_name?: string | null; phone?: string | null } | null } | null;
+      if (portalAccess?.customer_id) {
+        const tenant = await loadTenantProfile(sessionUser.id, portalAccess.organization_id);
+        setMemberships([]); setNeedsOrganizationPicker(false);
+        setUser({ ...buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta), organization_id: portalAccess.organization_id, role: undefined, full_name: portalAccess.insurance_customers?.display_name ?? (meta?.full_name as string | undefined), phone: portalAccess.insurance_customers?.phone ?? null, isInsuranceCustomer: true, insurance_customer_id: portalAccess.customer_id, insurance_customer_access_status: portalAccess.status as AuthUser["insurance_customer_access_status"], isHotelStaff: false });
+        if (["invited","active"].includes(portalAccess.status || "")) void supabase.rpc("insurance_portal_mark_login");
         return;
       }
 

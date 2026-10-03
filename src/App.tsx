@@ -223,6 +223,7 @@ const SaccoMemberProfilePage = lazy(() => import('./components/sacco/SaccoMember
 const SaccoFinancialSummariesPage = lazy(() => import('./components/sacco/SaccoFinancialSummariesPage'));
 const SaccoSavingsInterest = lazy(() => import('./components/sacco/SaccoSavingsInterest'));
 const SaccoClientDashboard = lazy(() => import('./components/sacco/SaccoClientDashboard'));
+const InsuranceCustomerPortal = lazyNamed(() => import('./components/insurance/InsuranceCustomerPortal'), 'InsuranceCustomerPortal');
 const VslaMemberDashboard = lazy(() => import('./components/vsla/VslaMemberDashboard'));
 const SaccoMemberLoanApplication = lazyNamed(() => import('./components/sacco/SaccoMemberLoanApplication'), 'SaccoMemberLoanApplication');
 const AdminRoomsPage = lazyNamed(() => import('./components/admin/AdminRoomsPage'), 'AdminRoomsPage');
@@ -881,6 +882,7 @@ function AppContent() {
     }
     return pageSuspense(<OrganizationPickerPage />);
   }
+  if (user.isInsuranceCustomer && user.insurance_customer_id) return pageSuspense(<InsuranceCustomerPortal customerId={user.insurance_customer_id} />);
 
   if (user.isSaccoMember && user.sacco_member_id &&
       (!['active', 'invited'].includes(user.sacco_member_access_status || '') || user.sacco_member_must_change_password)) {
