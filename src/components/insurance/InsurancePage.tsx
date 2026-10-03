@@ -13,9 +13,9 @@ const tabs: { id: Tab; label: string }[] = [
 const money = (value: number) => new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 }).format(value || 0);
 const date = (value?: string) => value ? new Intl.DateTimeFormat("en-GB", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(`${value}T00:00:00`)) : "—";
 
-export function InsurancePage({ readOnly = false }: { readOnly?: boolean }) {
+export function InsurancePage({ readOnly = false, initialTab = "dashboard" }: { readOnly?: boolean; initialTab?: Tab }) {
   const { user } = useAuth();
-  const [tab, setTab] = useState<Tab>("dashboard");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [policies, setPolicies] = useState<Policy[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -33,6 +33,7 @@ export function InsurancePage({ readOnly = false }: { readOnly?: boolean }) {
     setLoading(false);
   }, [user?.organization_id]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (tabs.some((item) => item.id === initialTab)) setTab(initialTab); }, [initialTab]);
 
   const expiring = useMemo(() => policies.filter((p) => {
     const days = (new Date(`${p.expiry_date}T00:00:00`).getTime() - Date.now()) / 86400000;

@@ -212,6 +212,7 @@ export function getModuleAccess(input: {
   subscriptionStatus?: SubscriptionStatus;
   /** When not true, Fixed assets navigation is hidden (superuser-controlled per organization). */
   enableFixedAssets?: boolean;
+  enableInsurance?: boolean;
   /** Accounting practices always have this; other organizations require the platform flag. */
   enableAssetVerification?: boolean;
   /** Platform: Communications hub. */
@@ -256,6 +257,7 @@ export function getModuleAccess(input: {
     businessType,
     subscriptionStatus = "none",
     enableFixedAssets,
+    enableInsurance,
     enableAssetVerification,
     enableCommunications,
     enableWallet,
@@ -369,6 +371,9 @@ export function getModuleAccess(input: {
       readOnly: true,
       blockedReason: "Fixed assets is not enabled for this business. Ask a platform admin to turn it on.",
     };
+  }
+  if (moduleId === "insurance" && enableInsurance !== true) {
+    return { visible: false, readOnly: true, blockedReason: "Insurance is not enabled for this organization. Ask a platform admin to enable the Insurance add-on." };
   }
 
   if (

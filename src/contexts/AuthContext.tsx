@@ -63,6 +63,7 @@ export type BusinessType =
   | "agriculture"
   | "accounting_practice"
   | "financial_modelling"
+  | "insurance"
   | "general_business"
   | "vsla"
   | "other";
@@ -115,6 +116,8 @@ interface AuthUser {
   subscription_period_end?: string | null;
   /** Platform enables per organization; gates Fixed assets navigation. */
   enable_fixed_assets?: boolean;
+  /** Optional Insurance module for licensed agents and brokers. */
+  enable_insurance?: boolean;
   /** Always available to accounting practices; platform-controlled for other organizations. */
   enable_asset_verification?: boolean;
   /** Platform: Communications hub (SMS/WhatsApp). */
@@ -278,6 +281,7 @@ function parseLocalBusinessType(value: string): BusinessType {
     "agriculture",
     "accounting_practice",
     "financial_modelling",
+    "insurance",
     "general_business",
     "vsla",
     "other",
@@ -309,6 +313,7 @@ type TenantProfile = {
   subscription_plan_code: string | null;
   subscription_period_end: string | null;
   enable_fixed_assets: boolean;
+  enable_insurance: boolean;
   enable_asset_verification: boolean;
   enable_communications: boolean;
   enable_wallet: boolean;
@@ -629,7 +634,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_assistant, enable_cashbook_mode, school_layout_mode, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_insurance, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_assistant, enable_cashbook_mode, school_layout_mode, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -660,6 +665,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       app_version?: string | null;
       desktop_device_limit?: number | null;
       enable_fixed_assets?: boolean | null;
+      enable_insurance?: boolean | null;
       enable_asset_verification?: boolean | null;
       enable_communications?: boolean | null;
       enable_wallet?: boolean | null;
@@ -712,6 +718,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       subscription_plan_code: sub?.subscription_plans?.code ?? null,
       subscription_period_end: sub?.period_end ?? null,
       enable_fixed_assets: !!org?.enable_fixed_assets,
+      enable_insurance: !!org?.enable_insurance,
       enable_asset_verification:
         org?.business_type === "accounting_practice" || org?.enable_asset_verification === true,
       enable_communications: org?.enable_communications !== false,

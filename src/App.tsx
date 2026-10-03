@@ -972,6 +972,7 @@ function AppContent() {
           businessType: user?.business_type ?? null,
           subscriptionStatus: user?.subscription_status ?? "none",
           enableFixedAssets: user?.enable_fixed_assets === true,
+          enableInsurance: user?.enable_insurance === true,
           enableAssetVerification: user?.enable_asset_verification === true,
           enableCommunications: user?.enable_communications !== false,
           enableWallet: user?.enable_wallet !== false,
@@ -1791,7 +1792,7 @@ function AppContent() {
       case 'fixed_assets':
         return <FixedAssetsPage readOnly={access.readOnly} />;
       case 'insurance':
-        return <InsurancePage readOnly={access.readOnly} />;
+        return <InsurancePage readOnly={access.readOnly} initialTab={pageState?.insuranceTab as any} />;
       default:
         return user?.business_type === "retail" ? (
           <RetailDashboard onNavigate={navigate} />
