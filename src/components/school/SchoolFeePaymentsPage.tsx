@@ -13,6 +13,7 @@ import { randomUuid } from "@/lib/randomUuid";
 import { boatApi } from "@/lib/boatApi";
 import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 import { DEFAULT_SCHOOL_PAYMENT_METHODS, SCHOOL_PAYMENT_METHODS, normalizeSchoolPaymentMethods, type SchoolPaymentMethod } from "@/lib/schoolPaymentMethods";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string; class_name?: string | null; school_pay_number?: string | null };
 type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; academic_year?: string | null; term_name?: string | null; created_at?: string; student_id?: string; status?: string };
@@ -389,13 +390,20 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     let paymentsQuery = supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(1000);
     if (paymentFilters.studentId) paymentsQuery = paymentsQuery.eq("student_id", paymentFilters.studentId);
-    const [pRes, sRes] = await Promise.all([
+    const [pRes, studentResult] = await Promise.all([
       paymentsQuery,
-      supabase.from("students").select("id,first_name,last_name,admission_number,class_name,school_pay_number").eq("organization_id", orgId).order("last_name"),
+      fetchAllPages<StudentOpt>((from, to) => supabase
+        .from("students")
+        .select("id,first_name,last_name,admission_number,class_name,school_pay_number")
+        .eq("organization_id", orgId)
+        .order("last_name")
+        .range(from, to))
+        .then((data) => ({ data, error: null }))
+        .catch((error: unknown) => ({ data: null, error })),
     ]);
-    setErr(pRes.error?.message || sRes.error?.message || null);
+    setErr(pRes.error?.message || (studentResult.error instanceof Error ? studentResult.error.message : studentResult.error ? String(studentResult.error) : null));
     setRows((pRes.data as PayRow[]) || []);
-    setStudents((sRes.data as StudentOpt[]) || []);
+    setStudents(studentResult.data || []);
     setLoading(false);
   }, [user?.organization_id, paymentFilters.studentId]);
 
