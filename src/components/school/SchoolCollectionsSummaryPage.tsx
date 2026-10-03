@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 import { Download } from "lucide-react";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -24,6 +25,7 @@ type PayRow = {
   paid_at: string;
   student_id: string;
   bank_gl_account_id?: string | null;
+  invoice_allocations?: Array<{ category_label?: string | null }> | null;
 };
 type BankAccount = { id: string; account_name: string; account_code: string };
 
@@ -42,6 +44,8 @@ type Filters = {
   method: "" | (typeof METHODS)[number];
   studentId: string;
   classId: string;
+  feeType: string;
+  bankAccountId: string;
 };
 
 type Props = { readOnly?: boolean };
@@ -81,6 +85,8 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     method: "",
     studentId: "",
     classId: "",
+    feeType: "",
+    bankAccountId: "",
   });
 
   const studentById = useMemo(() => new Map(students.map((s) => [s.id, s])), [students]);
@@ -100,9 +106,14 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     return s.class_name?.trim() || "—";
   };
 
+  const feeTypeLabel = (payment: PayRow) => {
+    const labels = [...new Set((payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim()).filter((label): label is string => !!label))];
+    return labels.join(", ") || "—";
+  };
+
   useEffect(() => {
     setPage(1);
-  }, [filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId]);
+  }, [filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId, filters.feeType, filters.bankAccountId]);
 
   const load = useCallback(async () => {
     const revision = ++loadRevision.current;
@@ -113,23 +124,26 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       return;
     }
 
-    const [sRes, cRes] = await Promise.all([
-      supabase
+    const [studentResult, cRes] = await Promise.all([
+      fetchAllPages<StudentOpt>((from, to) => supabase
         .from("students")
         .select("id,first_name,last_name,admission_number,school_pay_number,class_id,class_name")
         .eq("organization_id", orgId)
-        .order("last_name"),
+        .order("last_name")
+        .range(from, to))
+        .then((data) => ({ data, error: null }))
+        .catch((error: unknown) => ({ data: null, error })),
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
     ]);
-    if (sRes.error || cRes.error) {
+    if (studentResult.error || cRes.error) {
       if (revision === loadRevision.current) {
-        setErr(sRes.error?.message || cRes.error?.message || null);
+        setErr(studentResult.error instanceof Error ? studentResult.error.message : studentResult.error ? String(studentResult.error) : cRes.error?.message || null);
         setLoading(false);
       }
       return;
     }
 
-    const studs = (sRes.data as StudentOpt[]) || [];
+    const studs = studentResult.data || [];
     const clsList = (cRes.data as ClassOpt[]) || [];
     let matchingStudentIds: string[] | null = null;
     if (filters.classId) {
@@ -154,7 +168,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
 
     let q = supabase
       .from("school_payments")
-      .select("id,amount,paid_at,method,reference,student_id,bank_gl_account_id", { count: "exact" })
+      .select("id,amount,paid_at,method,reference,student_id,bank_gl_account_id,invoice_allocations", { count: "exact" })
       .eq("organization_id", orgId)
       .order("paid_at", { ascending: false });
 
@@ -165,6 +179,8 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     if (filters.method) q = q.eq("method", filters.method);
     if (filters.studentId) q = q.eq("student_id", filters.studentId);
     if (matchingStudentIds) q = q.in("student_id", matchingStudentIds);
+    if (filters.feeType.trim()) q = q.contains("invoice_allocations", [{ category_label: filters.feeType.trim() }]);
+    if (filters.bankAccountId) q = q.eq("bank_gl_account_id", filters.bankAccountId);
 
     const startIndex = (page - 1) * pageSize;
     const { data, error, count } = await q.range(startIndex, startIndex + pageSize - 1);
@@ -178,7 +194,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       setTotalPayments(count || 0);
       setLoading(false);
     }
-  }, [user?.organization_id, filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId, page, pageSize]);
+  }, [user?.organization_id, filters.dateFrom, filters.dateTo, filters.method, filters.studentId, filters.classId, filters.feeType, filters.bankAccountId, page, pageSize]);
 
   useEffect(() => {
     load();
@@ -204,7 +220,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
     METHODS.includes(m as (typeof METHODS)[number]) ? METHOD_LABEL[m as (typeof METHODS)[number]] : m;
 
   const clearFilters = () =>
-    setFilters({ dateFrom: "", dateTo: "", method: "", studentId: "", classId: "" });
+    setFilters({ dateFrom: "", dateTo: "", method: "", studentId: "", classId: "", feeType: "", bankAccountId: "" });
 
   const exportCollections = () => {
     const quote = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -281,6 +297,14 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
             </option>
           ))}
         </select>
+        <label className="flex flex-col gap-1 text-xs text-slate-600">
+          Fee type
+          <input value={filters.feeType} onChange={(event) => setFilters((current) => ({ ...current, feeType: event.target.value }))} placeholder="e.g. Tuition" className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900" />
+        </label>
+        <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={filters.bankAccountId} onChange={(event) => setFilters((current) => ({ ...current, bankAccountId: event.target.value }))}>
+          <option value="">All receiving banks</option>
+          {bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_name} ({account.account_code})</option>)}
+        </select>
         <SearchableCombobox
           value={filters.studentId}
           onChange={(studentId) => setFilters((f) => ({ ...f, studentId }))}
@@ -343,6 +367,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
               <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Fee type</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
@@ -352,13 +377,13 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={showBankColumn ? 8 : 7} className="p-6 text-slate-500">
+                <td colSpan={showBankColumn ? 9 : 8} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : payments.length === 0 ? (
               <tr>
-                <td colSpan={showBankColumn ? 8 : 7} className="p-6 text-slate-500">
+                <td colSpan={showBankColumn ? 9 : 8} className="p-6 text-slate-500">
                   No payments match the current filters.
                 </td>
               </tr>
@@ -377,8 +402,9 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
                         : "—"}
                     </td>
                     <td className="p-3 text-slate-700">{studentLabel(r.student_id)}</td>
-                  <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{st?.school_pay_number || "—"}</td>
+                    <td className="p-3 font-mono text-slate-700 whitespace-nowrap">{st?.school_pay_number || "—"}</td>
                     <td className="p-3 text-slate-600">{classLabelForStudent(st)}</td>
+                    <td className="p-3 text-slate-600">{feeTypeLabel(r)}</td>
                     <td className="p-3 text-slate-800 capitalize">{methodLabel(r.method)}</td>
                     {showBankColumn && <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>}
                     <td className="p-3 text-right font-medium text-slate-900">{Number(r.amount).toLocaleString()}</td>
