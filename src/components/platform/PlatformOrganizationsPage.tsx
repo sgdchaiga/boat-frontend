@@ -14,6 +14,7 @@ type Org = {
   sales_workflow?: "invoice" | "quick_sale" | "both" | null;
   created_at: string;
   enable_fixed_assets?: boolean | null;
+  enable_insurance?: boolean | null;
   enable_asset_verification?: boolean | null;
   school_enable_reports?: boolean | null;
   school_enable_fixed_deposit?: boolean | null;
@@ -200,6 +201,7 @@ export function PlatformOrganizationsPage() {
   const [copyName, setCopyName] = useState("");
   const [copySlug, setCopySlug] = useState("");
   const [editEnableFixedAssets, setEditEnableFixedAssets] = useState(false);
+  const [editEnableInsurance, setEditEnableInsurance] = useState(false);
   const [editEnableAssetVerification, setEditEnableAssetVerification] = useState(false);
   const [editSchoolReports, setEditSchoolReports] = useState(false);
   const [editSchoolFixedDeposit, setEditSchoolFixedDeposit] = useState(false);
@@ -637,6 +639,7 @@ export function PlatformOrganizationsPage() {
     setSubStart(sub?.period_start || new Date().toISOString().slice(0, 10));
     setSubEnd(sub?.period_end || "");
     setEditEnableFixedAssets(!!org.enable_fixed_assets);
+    setEditEnableInsurance(!!org.enable_insurance);
     setEditEnableAssetVerification(org.business_type === "accounting_practice" || !!org.enable_asset_verification);
     setEditSchoolReports(!!org.school_enable_reports);
     setEditSchoolFixedDeposit(!!org.school_enable_fixed_deposit);
@@ -692,6 +695,7 @@ export function PlatformOrganizationsPage() {
         business_type: editBiz,
         sales_workflow: editBiz === "general_business" ? editSalesWorkflow : "both",
         enable_fixed_assets: editEnableFixedAssets,
+        enable_insurance: editEnableInsurance,
         enable_asset_verification: editBiz === "accounting_practice" || editEnableAssetVerification,
         school_enable_reports: editSchoolReports,
         school_enable_fixed_deposit: editSchoolFixedDeposit,
@@ -1428,6 +1432,10 @@ export function PlatformOrganizationsPage() {
                 onChange={(e) => setEditEnableFixedAssets(e.target.checked)}
               />
               Enable fixed assets module (standalone register, depreciation, GL)
+            </label>
+            <label className="flex items-start gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
+              <input type="checkbox" className="mt-0.5" checked={editEnableInsurance} onChange={(e) => setEditEnableInsurance(e.target.checked)} />
+              <span><strong>Enable Insurance services</strong><span className="block text-xs text-slate-500">For licensed agents and brokers. Adds quotations, policies, renewals, claims and commissions without changing this organization’s primary business type.</span></span>
             </label>
             <label className="flex items-start gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
               <input
