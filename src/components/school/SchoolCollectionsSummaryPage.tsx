@@ -298,8 +298,8 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
           ))}
         </select>
         <label className="flex flex-col gap-1 text-xs text-slate-600">
-          Fee type
-          <input value={filters.feeType} onChange={(event) => setFilters((current) => ({ ...current, feeType: event.target.value }))} placeholder="e.g. Tuition" className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900" />
+          Income type
+          <input value={filters.feeType} onChange={(event) => setFilters((current) => ({ ...current, feeType: event.target.value }))} placeholder="e.g. Examination fees" className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900" />
         </label>
         <select className="border border-slate-300 rounded-lg px-3 py-2 text-sm" value={filters.bankAccountId} onChange={(event) => setFilters((current) => ({ ...current, bankAccountId: event.target.value }))}>
           <option value="">All receiving banks</option>
@@ -367,7 +367,7 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
               <th className="text-left p-3 font-semibold text-slate-700">Student</th>
               <th className="text-left p-3 font-semibold text-slate-700 whitespace-nowrap">SchoolPay code</th>
               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Fee type</th>
+              <th className="text-left p-3 font-semibold text-slate-700">Income type</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
