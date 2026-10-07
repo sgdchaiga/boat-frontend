@@ -329,6 +329,7 @@ export function buildSimpleOrgNavigation(args: BuildSimpleOrgNavArgs): NavItem[]
     settings.push({ name: "Payroll", page: PAYROLL_PAGE.hub });
   }
   settings.push({ name: "Integrations", page: "system_integrations" });
+  settings.push({ name: "BOAT Market", page: "marketplace" });
   settings.push({ name: "Ecosystem", page: "ecosystem" });
   settings.push({ name: "BOAT Connect", page: "boat_connect" });
   if (allowBudget) {

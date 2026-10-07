@@ -593,6 +593,8 @@ export function isPageAllowedForBusinessType(page: string, businessType?: Busine
   if (page === "data_migration") return true;
   if (page === "industry_intelligence") return true;
   if (page === "ecosystem") return true;
+  if (page === "marketplace") return true;
+  if (page === "marketplace_merchant") return true;
   if (page === "boat_connect") return true;
   if (page === "asset_verification") return true;
   if (ACCOUNTING_PRACTICE_PAGE_IDS.has(page)) return businessType === "accounting_practice";
@@ -658,6 +660,8 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
   if (page === "ecosystem") return "admin";
+  if (page === "marketplace") return null;
+  if (page === "marketplace_merchant") return "admin";
   if (page === "data_migration") return "admin";
   if (page === "industry_intelligence") return "reports";
   if (page === "communications") return "communications";

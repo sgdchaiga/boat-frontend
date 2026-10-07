@@ -57,7 +57,49 @@ Deno.serve(async (req) => {
     .eq("tx_ref", txRef)
     .maybeSingle();
   if (lookupError) return json({ ok: false, error: lookupError.message }, 500);
-  if (!existingAttempt) return json({ ok: true, ignored: true, reason: "attempt_not_found" }, 202);
+  if (!existingAttempt) {
+    const { data: marketplaceRequest, error: marketplaceLookupError } = await serviceClient
+      .from("marketplace_payment_requests")
+      .select("amount,currency")
+      .eq("payment_reference", txRef)
+      .maybeSingle();
+    if (marketplaceLookupError) return json({ ok: false, error: marketplaceLookupError.message }, 500);
+    if (!marketplaceRequest) return json({ ok: true, ignored: true, reason: "payment_request_not_found" }, 202);
+
+    const returnedAmount = asMoney(data.amount);
+    const expectedAmount = asMoney((marketplaceRequest as { amount?: unknown }).amount);
+    if (Number.isFinite(returnedAmount) && returnedAmount !== expectedAmount) {
+      return json({ ok: false, error: "Gateway amount mismatch" }, 400);
+    }
+    const returnedCurrency = String(data.currency || (marketplaceRequest as { currency?: string }).currency || "UGX").toUpperCase();
+    const expectedCurrency = String((marketplaceRequest as { currency?: string }).currency || "UGX").toUpperCase();
+    if (returnedCurrency !== expectedCurrency) {
+      return json({ ok: false, error: "Gateway currency mismatch" }, 400);
+    }
+
+    const updatePayload: Record<string, unknown> = { status, gateway_response: payload };
+    if (Number.isFinite(transactionId) && transactionId > 0) updatePayload.gateway_transaction_id = transactionId;
+    if (status === "successful") {
+      updatePayload.paid_at = new Date().toISOString();
+      updatePayload.last_error = null;
+    } else if (status === "failed" || status === "cancelled") {
+      updatePayload.last_error = String(payload.message || data.processor_response || "Payment not successful");
+    }
+    const { error: marketplaceUpdateError } = await serviceClient
+      .from("marketplace_payment_requests")
+      .update(updatePayload)
+      .eq("payment_reference", txRef);
+    if (marketplaceUpdateError) return json({ ok: false, error: marketplaceUpdateError.message }, 500);
+    if (status === "successful") {
+      const { error: finaliseError } = await serviceClient.rpc("marketplace_finalize_payment", {
+        p_payment_reference: txRef,
+        p_gateway_transaction_id: Number.isFinite(transactionId) && transactionId > 0 ? transactionId : null,
+        p_gateway_response: payload,
+      });
+      if (finaliseError) return json({ ok: false, error: finaliseError.message }, 500);
+    }
+    return json({ ok: true, marketplace: true });
+  }
 
   const returnedAmount = asMoney(data.amount);
   const expectedAmount = asMoney((existingAttempt as { amount?: unknown }).amount);

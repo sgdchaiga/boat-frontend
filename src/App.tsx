@@ -296,6 +296,8 @@ const MfiWorkspacePage = lazyNamed(() => import('./components/mfi/MfiWorkspacePa
 const MfiPortfolioManagementPage = lazyNamed(() => import('./components/mfi/MfiPortfolioManagementPage'), 'MfiPortfolioManagementPage');
 const MfiIntegrationPage = lazyNamed(() => import('./components/mfi/MfiIntegrationPage'), 'MfiIntegrationPage');
 const EcosystemPage = lazyNamed(() => import('./components/EcosystemPage'), 'EcosystemPage');
+const MarketplaceMerchantPanel = lazyNamed(() => import('./components/marketplace/MarketplaceMerchantPanel'), 'MarketplaceMerchantPanel');
+const MarketplaceBrowsePage = lazyNamed(() => import('./components/marketplace/MarketplaceBrowsePage'), 'MarketplaceBrowsePage');
 
 function PageLoadingFallback() {
   return (
@@ -1737,6 +1739,10 @@ function AppContent() {
         return <IntegrationsHubPage onNavigate={navigate} />;
       case 'ecosystem':
         return <EcosystemPage onNavigate={navigate} />;
+      case 'marketplace_merchant':
+        return pageSuspense(<div className="mx-auto max-w-7xl p-6"><MarketplaceMerchantPanel /></div>);
+      case 'marketplace':
+        return pageSuspense(<MarketplaceBrowsePage />);
       case 'data_migration':
         return <DataMigrationPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'industry_intelligence':
