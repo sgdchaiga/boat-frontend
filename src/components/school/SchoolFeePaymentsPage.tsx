@@ -22,7 +22,7 @@ type FeeLine = { code?: string; label?: string; amount?: number; priority?: numb
 type FeeStructure = { id: string; line_items: FeeLine[] | null };
 type PaymentSlice = { invoice_id: string; amount: number; category_code?: string; category_label?: string; priority?: number };
 type SchoolPayImportRow = { row: number; schoolPayCode: string; amount: number; reference: string; paidAt: string; student?: StudentOpt; error?: string };
-type DirectBankImportRow = { row: number; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
+type DirectBankImportRow = { row: number; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchEvidence: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
 
 type PayRow = {
   id: string;
@@ -285,7 +285,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       });
       const parsed = raw.map((row, index): DirectBankImportRow => {
         const admissionNumber = String(valueFor(row, ["Student Admission Number", "Admission Number", "Admission No", "Student Number"])).trim();
-        const statementDescription = String(valueFor(row, ["Statement Description", "Description", "Narration", "Details", "Payer Name"])).trim();
+        const statementDescription = String(valueFor(row, ["Statement Description", "Description", "Narration", "Details"])).trim();
+        const studentName = String(valueFor(row, ["Student Name", "Payer Name", "Customer Name", "Depositor Name"])).trim();
+        const schoolPayCode = String(valueFor(row, ["SchoolPay Code", "SchoolPay Number", "School Pay Code", "Payment Code", "PRN"])).trim();
         const bank = String(valueFor(row, ["Bank", "Bank Name"])).trim();
         const accountText = String(valueFor(row, ["Bank Account", "Receiving Bank Account", "Account"])).trim();
         const reference = String(valueFor(row, ["Bank Slip / Transaction Reference", "Bank Slip", "Transaction Reference", "Reference"])).trim();
@@ -293,14 +295,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         const amount = Number(String(valueFor(row, ["Amount (UGX)", "Amount", "Payment Amount"])).replace(/[^0-9.-]/g, ""));
         const dateValue = valueFor(row, ["Payment Date", "Paid At", "Transaction Date", "Date"]);
         const date = dateValue instanceof Date ? dateValue : new Date(String(dateValue));
+        const matchEvidence = [statementDescription, studentName, schoolPayCode, reference].filter(Boolean).join(" · ");
         const admissionMatch = admissionNumber ? studentByAdmission.get(normalized(admissionNumber)) : undefined;
-        const statementMatch = !admissionMatch && statementDescription ? matchStudentStatement(statementDescription, students, studentAliases) : undefined;
+        const statementMatch = !admissionMatch && matchEvidence ? matchStudentStatement(matchEvidence, students, studentAliases) : undefined;
         const student = admissionMatch || (statementMatch?.basis === "schoolpay_code" ? statementMatch.student as StudentOpt : undefined);
         const bankAccount = accountByName.get(normalized(accountText));
         const notes = String(valueFor(row, ["Notes", "Note", "Description"])).trim();
         let error = "";
         if (admissionNumber && !admissionMatch) error = "Student admission number was not found in BOAT";
-        else if (!admissionNumber && !statementDescription) error = "Provide a student admission number or statement description";
+        else if (!admissionNumber && !matchEvidence) error = "Provide a student admission number, SchoolPay code, name, or statement description";
         else if (statementMatch?.basis === "exact_name") error = "Exact name match found; review and confirm the student before posting";
         else if (statementMatch?.basis === "conflict") error = "SchoolPay code conflicts with the name; review before posting";
         else if (statementMatch?.basis === "ambiguous") error = "More than one student may match this statement description; review before posting";
@@ -312,7 +315,18 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         else if (!reference) error = "Bank slip or transaction reference is missing";
         else if (!feeType) error = "Fee type is missing";
         else if (Number.isNaN(date.getTime())) error = "Payment date is invalid";
-        return { row: index + 2, bank, bankAccount: bankAccount as BankAccount, admissionNumber, statementDescription, matchBasis: admissionMatch ? "Admission number" : statementMatch?.basis === "schoolpay_code" ? "Exact SchoolPay code" : statementMatch?.basis === "exact_name" ? "Exact name - review" : statementMatch?.basis, feeType, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), notes, student, error: error || undefined };
+        const matchBasis = admissionMatch
+          ? `Admission number: ${admissionNumber}`
+          : statementMatch?.basis === "schoolpay_code"
+            ? `Exact SchoolPay code in: ${matchEvidence}`
+            : statementMatch?.basis === "exact_name"
+              ? `Exact name - review: ${matchEvidence}`
+              : statementMatch?.basis
+                ? `${statementMatch.basis}: ${matchEvidence}`
+                : matchEvidence
+                  ? `No student match in: ${matchEvidence}`
+                  : "No matching details supplied";
+        return { row: index + 2, bank, bankAccount: bankAccount as BankAccount, admissionNumber, statementDescription, matchEvidence, matchBasis, feeType, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), notes, student, error: error || undefined };
       });
       setDirectBankImportRows(parsed);
       setDirectBankImportMessage(parsed.length ? `Checked ${parsed.length} direct-bank row${parsed.length === 1 ? "" : "s"}. Review the results before importing.` : "No payment rows were found.");

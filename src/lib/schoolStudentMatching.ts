@@ -26,7 +26,10 @@ export function normalizeStudentName(value: string | null | undefined): string {
 
 function containsCode(description: string, code: string): boolean {
   const escaped = code.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(description);
+  if (new RegExp(`(?:^|[^a-z0-9])${escaped}(?:$|[^a-z0-9])`, "i").test(description)) return true;
+  // Payment providers often append a SchoolPay code to an otherwise unbroken transaction ID.
+  // Only allow that form for substantial codes, so short numeric values cannot match by accident.
+  return code.length >= 6 && description.toLocaleLowerCase().includes(code.toLocaleLowerCase());
 }
 
 function fullName(student: MatchableStudent): string {
