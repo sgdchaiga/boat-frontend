@@ -10,6 +10,7 @@ type StudentRow = {
   id: string;
   admission_number: string;
   first_name: string;
+  other_names: string | null;
   last_name: string;
   class_name: string;
   is_boarding: boolean;
@@ -20,6 +21,7 @@ type StudentRow = {
 type EditDraft = {
   admission_number: string;
   first_name: string;
+  other_names: string;
   last_name: string;
   class_name: string;
   is_boarding: boolean;
@@ -29,9 +31,14 @@ function normalizeStudentCase(row: StudentRow): StudentRow {
   return {
     ...row,
     first_name: toSchoolTitleCase(row.first_name),
+    other_names: toSchoolTitleCase(row.other_names) || null,
     last_name: toSchoolTitleCase(row.last_name),
     class_name: toSchoolTitleCase(row.class_name),
   };
+}
+
+function studentName(student: Pick<StudentRow, "first_name" | "other_names" | "last_name">) {
+  return [student.first_name, student.other_names, student.last_name].filter(Boolean).join(" ");
 }
 
 export function StudentsListPage() {
@@ -85,7 +92,7 @@ export function StudentsListPage() {
   };
 
   const filtered = rows.filter((r) =>
-    `${r.first_name} ${r.last_name} ${r.admission_number} ${r.school_pay_number || ""}`.toLowerCase().includes(search.toLowerCase())
+    `${studentName(r)} ${r.admission_number} ${r.school_pay_number || ""}`.toLowerCase().includes(search.toLowerCase())
   ).filter((r) =>
     !classFilter || (r.class_name || "").toLowerCase().includes(classFilter.toLowerCase())
   );
@@ -104,6 +111,7 @@ export function StudentsListPage() {
     setEditDraft({
       admission_number: r.admission_number || "",
       first_name: r.first_name || "",
+      other_names: r.other_names || "",
       last_name: r.last_name || "",
       class_name: r.class_name || "",
       is_boarding: !!r.is_boarding,
@@ -127,6 +135,7 @@ export function StudentsListPage() {
     const payload = {
       admission_number: editDraft.admission_number.trim(),
       first_name: toSchoolTitleCase(editDraft.first_name),
+      other_names: toSchoolTitleCase(editDraft.other_names) || null,
       last_name: toSchoolTitleCase(editDraft.last_name),
       class_name: toSchoolTitleCase(editDraft.class_name),
       is_boarding: editDraft.is_boarding,
@@ -162,7 +171,7 @@ export function StudentsListPage() {
       return;
     }
     const confirmed = window.confirm(
-      `Delete student "${row.first_name} ${row.last_name}" (${row.admission_number})?\n\nThis action cannot be undone.`
+      `Delete student "${studentName(row)}" (${row.admission_number})?\n\nThis action cannot be undone.`
     );
     if (!confirmed) return;
 
@@ -226,7 +235,7 @@ export function StudentsListPage() {
           <input
             autoFocus
             type="text"
-            aria-label={`SchoolPay code for ${row.first_name} ${row.last_name}`}
+            aria-label={`SchoolPay code for ${studentName(row)}`}
             value={schoolPayDraft}
             disabled={schoolPaySaving}
             onChange={(event) => setSchoolPayDraft(event.target.value)}
@@ -249,7 +258,7 @@ export function StudentsListPage() {
               setSchoolPayEditingId(row.id);
               setSchoolPayDraft(row.school_pay_number || "");
               setError(null);
-            }} aria-label={`Edit SchoolPay code for ${row.first_name} ${row.last_name}`} className="text-indigo-700 hover:text-indigo-900 text-xs font-medium disabled:opacity-60 print:hidden">
+            }} aria-label={`Edit SchoolPay code for ${studentName(row)}`} className="text-indigo-700 hover:text-indigo-900 text-xs font-medium disabled:opacity-60 print:hidden">
               {row.school_pay_number ? "Edit" : "Add code"}
             </button>
           )}
@@ -259,7 +268,7 @@ export function StudentsListPage() {
   );
 
   const markAsLeft = async (row: StudentRow) => {
-    if (!window.confirm(`Mark ${row.first_name} ${row.last_name} as having left the school?`)) return;
+    if (!window.confirm(`Mark ${studentName(row)} as having left the school?`)) return;
     setError(null);
     try {
       if (canUseSchoolApi() && user?.organization_id) {
@@ -339,10 +348,16 @@ export function StudentsListPage() {
                     />
                   </td>
                   <td className="p-2">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-3 gap-2">
                       <input
                         value={editDraft.first_name}
                         onChange={(e) => setEditDraft((d) => (d ? { ...d, first_name: e.target.value } : d))}
+                        className="border p-2 rounded"
+                      />
+                      <input
+                        value={editDraft.other_names}
+                        placeholder="Other name(s)"
+                        onChange={(e) => setEditDraft((d) => (d ? { ...d, other_names: e.target.value } : d))}
                         className="border p-2 rounded"
                       />
                       <input
@@ -390,7 +405,7 @@ export function StudentsListPage() {
               ) : (
                 <tr key={r.id} className="border-t">
                   <td>{r.admission_number}</td>
-                  <td>{r.first_name} {r.last_name}</td>
+                  <td>{studentName(r)}</td>
                   <td>{r.class_name}</td>
                   <td>{r.is_boarding ? "Boarding" : "Day"}</td>
                   <td className="capitalize">{r.status || "active"}</td>

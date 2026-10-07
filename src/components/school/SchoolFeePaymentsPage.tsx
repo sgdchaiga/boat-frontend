@@ -90,6 +90,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkMethod, setBulkMethod] = useState<SchoolPaymentMethod>("cash");
   const [bulkBankAccountId, setBulkBankAccountId] = useState("");
   const [bulkBankPaymentSource, setBulkBankPaymentSource] = useState<"schoolpay" | "bank_slip">("bank_slip");
+  const [bulkEditTab, setBulkEditTab] = useState<"routing" | "income_type">("routing");
+  const [bulkIncomeType, setBulkIncomeType] = useState("");
   const [bulkUpdating, setBulkUpdating] = useState(false);
   const [bulkUpdateProgress, setBulkUpdateProgress] = useState({ completed: 0, total: 0 });
   const [bulkReversing, setBulkReversing] = useState(false);
@@ -899,6 +901,49 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     if (failures.length) setErr(failures[0]);
   };
 
+  const applyBulkIncomeTypeEdit = async () => {
+    const orgId = user?.organization_id;
+    const incomeType = bulkIncomeType.trim();
+    if (!orgId || selectedPaymentIds.length === 0 || bulkUpdating) return;
+    if (!incomeType) {
+      setErr("Select an income type.");
+      return;
+    }
+    if (!window.confirm(`Change the income type for ${selectedPaymentIds.length} selected payment${selectedPaymentIds.length === 1 ? "" : "s"} to ${incomeType}?`)) return;
+    const selected = rows.filter((row) => selectedPaymentIds.includes(row.id));
+    setBulkUpdating(true);
+    setBulkUpdateProgress({ completed: 0, total: selected.length });
+    setBulkMessage(null);
+    setErr(null);
+    let updated = 0;
+    const failures: string[] = [];
+    for (const payment of selected) {
+      try {
+        const existingAllocations = payment.invoice_allocations || [];
+        if (!existingAllocations.length) throw new Error(`Payment ${payment.reference || payment.id} has no invoice allocation to classify.`);
+        const invoice_allocations: PaymentSlice[] = existingAllocations.map((allocation) => ({ ...allocation, category_label: incomeType }));
+        let saved: PayRow;
+        if (canUseSchoolApi()) {
+          saved = await updateSchoolRow<PayRow>("payments", orgId, payment.id, { invoice_allocations });
+        } else {
+          const result = await supabase.from("school_payments").update({ invoice_allocations }).eq("organization_id", orgId).eq("id", payment.id).select("*").single();
+          if (result.error) throw result.error;
+          saved = result.data as PayRow;
+        }
+        setRows((current) => current.map((row) => row.id === payment.id ? { ...row, ...saved } : row));
+        updated += 1;
+      } catch (error) {
+        failures.push(error instanceof Error ? error.message : `Payment ${payment.id} could not be updated.`);
+      } finally {
+        setBulkUpdateProgress((progress) => ({ ...progress, completed: progress.completed + 1 }));
+      }
+    }
+    setSelectedPaymentIds([]);
+    setBulkUpdating(false);
+    setBulkMessage(`Updated the income type on ${updated} payment${updated === 1 ? "" : "s"}${failures.length ? `; ${failures.length} failed.` : "."}`);
+    if (failures.length) setErr(failures[0]);
+  };
+
   const togglePaymentSelection = (id: string) => {
     setSelectedPaymentIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
   };
@@ -1026,8 +1071,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         </>
       )}
       {!readOnly && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
-        <div><h2 className="font-semibold text-slate-900">Bulk edit payment routing</h2><p className="mt-1 text-sm text-slate-600">Select recorded payments below, then change their method and, for bank or transfer payments, the bank account that received the money. The related accounting entries are reposted.</p></div>
-        <div className="grid gap-3 md:grid-cols-3">
+        <div><h2 className="font-semibold text-slate-900">Bulk edit fee payments</h2><p className="mt-1 text-sm text-slate-600">Select recorded payments below, then update their bank routing or income type.</p></div>
+        <div className="flex gap-2 border-b border-indigo-200"><button type="button" onClick={() => setBulkEditTab("routing")} className={`border-b-2 px-3 py-2 text-sm font-medium ${bulkEditTab === "routing" ? "border-indigo-700 text-indigo-800" : "border-transparent text-slate-600"}`}>Bank routing</button><button type="button" onClick={() => setBulkEditTab("income_type")} className={`border-b-2 px-3 py-2 text-sm font-medium ${bulkEditTab === "income_type" ? "border-indigo-700 text-indigo-800" : "border-transparent text-slate-600"}`}>Income type</button></div>
+        {bulkEditTab === "routing" ? <div className="grid gap-3 md:grid-cols-3">
           <select value={bulkMethod} onChange={(event) => setBulkMethod(event.target.value as SchoolPaymentMethod)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
             {SCHOOL_PAYMENT_METHODS.filter((method) => enabledMethods.includes(method.code)).map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}
           </select>
@@ -1039,8 +1085,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           {(bulkMethod === "bank" || bulkMethod === "transfer") && <select value={bulkBankPaymentSource} onChange={(event) => setBulkBankPaymentSource(event.target.value as "schoolpay" | "bank_slip")} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="bank_slip">Direct bank slip</option><option value="schoolpay">SchoolPay to bank</option></select>}
           <button type="button" onClick={() => void applyBulkPaymentEdit()} disabled={bulkUpdating || selectedPaymentIds.length === 0} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{bulkUpdating ? "Updating…" : `Update selected (${selectedPaymentIds.length})`}</button>
           {canBulkReverse && <button type="button" onClick={() => void reverseSelectedPayments()} disabled={bulkReversing || selectedPaymentIds.length === 0} className="rounded-lg border border-red-300 bg-white px-4 py-2 text-sm font-semibold text-red-700 disabled:cursor-not-allowed disabled:opacity-50">{bulkReversing ? "Reversing…" : `Reverse selected (${selectedPaymentIds.length})`}</button>}
-        </div>
-        {(bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
+        </div> : <div className="grid gap-3 md:grid-cols-3"><select value={bulkIncomeType} onChange={(event) => setBulkIncomeType(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">Select income type</option>{incomeTypes.map((incomeType) => <option key={incomeType} value={incomeType}>{incomeType}</option>)}</select><button type="button" onClick={() => void applyBulkIncomeTypeEdit()} disabled={bulkUpdating || selectedPaymentIds.length === 0 || !bulkIncomeType} className="rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{bulkUpdating ? "Updating…" : `Update selected (${selectedPaymentIds.length})`}</button><p className="self-center text-xs text-slate-600">Updates the selected payments&apos; income classification, such as Examination Fees.</p></div>}
+        {bulkEditTab === "routing" && (bulkMethod === "bank" || bulkMethod === "transfer") && bankAccounts.length === 0 && <p className="text-xs text-amber-800">No bank asset accounts were found. Add the bank account in the chart of accounts first.</p>}
         {bulkUpdating && bulkUpdateProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Updating selected payments…</span><span>{bulkUpdateProgress.completed} of {bulkUpdateProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(bulkUpdateProgress.completed / bulkUpdateProgress.total * 100)}%` }} /></div></div>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}

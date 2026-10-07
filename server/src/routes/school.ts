@@ -187,7 +187,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
     orderBy: "paid_at DESC, created_at DESC",
     name: "payments",
     insertable: [],
-    patchable: ["method", "bank_gl_account_id", "bank_payment_source"],
+    patchable: ["method", "bank_gl_account_id", "bank_payment_source", "invoice_allocations"],
   },
   receipts: {
     table: "school_receipts",
@@ -245,7 +245,7 @@ function coerceBody(value: unknown): Record<string, unknown> {
 }
 
 function normalizeValue(column: string, value: unknown) {
-  if (column === "line_items") {
+  if (["line_items", "invoice_allocations"].includes(column)) {
     return JSON.stringify(Array.isArray(value) ? value : value ?? []);
   }
   if (["class_id", "stream_id", "student_id", "fee_structure_id", "staff_id", "department_id"].includes(column)) {
@@ -776,7 +776,7 @@ async function insertRow(app: Parameters<FastifyPluginAsync>[0], resource: Resou
     throw new Error("organization_id is required.");
   }
   const placeholders = columns.map((column, index) => {
-    const cast = column === "line_items" ? "::jsonb" : "";
+    const cast = ["line_items", "invoice_allocations"].includes(column) ? "::jsonb" : "";
     return `$${index + 1}${cast}`;
   });
   const values = columns.map((column) => normalizeValue(column, body[column]));

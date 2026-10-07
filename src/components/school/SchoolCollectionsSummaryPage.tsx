@@ -27,7 +27,13 @@ type PayRow = {
   bank_gl_account_id?: string | null;
   invoice_allocations?: Array<{ category_label?: string | null }> | null;
 };
-type BankAccount = { id: string; account_name: string; account_code: string };
+type BankAccount = {
+  id: string;
+  account_name: string;
+  account_code: string;
+  account_type: string;
+  category?: string | null;
+};
 
 const METHODS = ["cash", "mobile_money", "bank", "transfer", "other"] as const;
 const METHOD_LABEL: Record<(typeof METHODS)[number], string> = {
@@ -201,8 +207,22 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
   }, [load]);
 
   useEffect(() => {
-    if (!user?.organization_id) return;
-    void supabase.from("gl_accounts").select("id,account_name,account_code").eq("organization_id", user.organization_id).then(({ data }) => setBankAccounts((data as BankAccount[]) || []));
+    if (!user?.organization_id) {
+      setBankAccounts([]);
+      return;
+    }
+    void supabase
+      .from("gl_accounts")
+      .select("id,account_name,account_code,account_type,category")
+      .eq("organization_id", user.organization_id)
+      .eq("account_type", "asset")
+      .order("account_code")
+      .then(({ data }) => {
+        const accounts = ((data as BankAccount[] | null) || []).filter((account) =>
+          /bank/i.test(`${account.account_name} ${account.category || ""}`)
+        );
+        setBankAccounts(accounts);
+      });
   }, [user?.organization_id]);
 
   const totalsByMethod = useMemo(() => {
