@@ -22,7 +22,7 @@ type FeeLine = { code?: string; label?: string; amount?: number; priority?: numb
 type FeeStructure = { id: string; line_items: FeeLine[] | null };
 type PaymentSlice = { invoice_id: string; amount: number; category_code?: string; category_label?: string; priority?: number };
 type SchoolPayImportRow = { row: number; schoolPayCode: string; amount: number; reference: string; paidAt: string; student?: StudentOpt; error?: string };
-type DirectBankImportRow = { row: number; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchEvidence: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
+type DirectBankImportRow = { row: number; sourceFileName: string; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchEvidence: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
 
 type PayRow = {
   id: string;
@@ -30,6 +30,7 @@ type PayRow = {
   method: string;
   reference: string | null;
   paid_at: string;
+  notes?: string | null;
   student_id: string;
   receipt_number?: string | null;
   receipt_issued_at?: string | null;
@@ -52,6 +53,11 @@ const DEFAULT_INCOME_TYPES = [
   "Uniform Fees",
   "Boarding Fees",
 ];
+
+function uploadFileFromNotes(notes: string | null | undefined): string | null {
+  const match = String(notes || "").match(/(?:^|\s·\s)Upload file:\s*([^·]+?)(?=\s·\s|$)/i);
+  return match?.[1]?.trim() || null;
+}
 
 type Props = {
   readOnly?: boolean;
@@ -207,7 +213,11 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     const existingReferences = new Set(((existingResult.data as Array<{ reference: string | null }> | null) || []).map((payment) => payment.reference).filter((reference): reference is string => !!reference));
     let completed = 0;
     const processRow = async (row: SchoolPayImportRow) => {
-      if (existingReferences.has(row.reference)) { skipped += 1; return; }
+      if (existingReferences.has(row.reference)) {
+        skipped += 1;
+        setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "Duplicate reference — not imported" } : item));
+        return;
+      }
       // Reserve the reference before awaiting so duplicate rows in concurrent queues cannot both post.
       existingReferences.add(row.reference);
       const invoiceResult = await supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId).eq("student_id", row.student!.id).neq("status", "cancelled").order("created_at", { ascending: true });
@@ -326,7 +336,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                 : matchEvidence
                   ? `No student match in: ${matchEvidence}`
                   : "No matching details supplied";
-        return { row: index + 2, bank, bankAccount: bankAccount as BankAccount, admissionNumber, statementDescription, matchEvidence, matchBasis, feeType, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), notes, student, error: error || undefined };
+        return { row: index + 2, sourceFileName: file.name, bank, bankAccount: bankAccount as BankAccount, admissionNumber, statementDescription, matchEvidence, matchBasis, feeType, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), notes, student, error: error || undefined };
       });
       setDirectBankImportRows(parsed);
       setDirectBankImportMessage(parsed.length ? `Checked ${parsed.length} direct-bank row${parsed.length === 1 ? "" : "s"}. Review the results before importing.` : "No payment rows were found.");
@@ -345,12 +355,17 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setDirectBankImportProgress({ completed: 0, total: validRows.length });
     let imported = 0;
     let skipped = 0;
+    const importedReferences = new Set<string>();
     const existingResult = await supabase.from("school_payments").select("reference").eq("organization_id", orgId).in("reference", validRows.map((row) => row.reference));
     if (existingResult.error) { setDirectBankImporting(false); setDirectBankImportMessage(existingResult.error.message); return; }
     const existingReferences = new Set(((existingResult.data as Array<{ reference: string | null }> | null) || []).map((payment) => payment.reference).filter((reference): reference is string => !!reference));
     let completed = 0;
     const processRow = async (row: DirectBankImportRow) => {
-      if (existingReferences.has(row.reference)) { skipped += 1; return; }
+      if (existingReferences.has(row.reference)) {
+        skipped += 1;
+        setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "Duplicate reference — not imported" } : item));
+        return;
+      }
       existingReferences.add(row.reference);
       const invoiceResult = await supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId).eq("student_id", row.student!.id).neq("status", "cancelled").order("created_at", { ascending: true });
       if (invoiceResult.error) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: invoiceResult.error.message } : item)); return; }
@@ -369,7 +384,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       if (!allocations.length) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); return; }
       if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
-      const notes = [`Bulk imported direct bank slip`, `Bank: ${row.bank}`, `Fee type: ${row.feeType}`, row.notes].filter(Boolean).join(" · ");
+      const notes = [`Bulk imported direct bank slip`, `Upload file: ${row.sourceFileName}`, `Bank: ${row.bank}`, `Fee type: ${row.feeType}`, row.notes].filter(Boolean).join(" · ");
       const paymentNotes = [notes, row.matchBasis ? `Student match: ${row.matchBasis}` : ""].filter(Boolean).join(" · ");
       const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "bank", bank_gl_account_id: row.bankAccount.id, bank_payment_source: "bank_slip", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: paymentNotes }).select("id").single();
       if (paymentResult.error) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: paymentResult.error.message } : item)); return; }
@@ -381,6 +396,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         supabase.from("school_receipts").insert({ school_payment_id: paymentResult.data.id, receipt_number: `BK-${row.reference}`, delivery_channels: ["bank"] }),
       ]);
       imported += 1;
+      importedReferences.add(row.reference);
     };
     const queues = [...validRows.reduce((groups, row) => {
       const key = row.student!.id;
@@ -402,8 +418,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
     setDirectBankImporting(false);
     setDirectBankImportProgress({ completed: validRows.length, total: validRows.length });
-    setDirectBankImportRows([]);
-    setDirectBankImportMessage(`Imported ${imported} direct-bank payment${imported === 1 ? "" : "s"}${skipped ? `; skipped ${skipped} duplicate reference${skipped === 1 ? "" : "s"}` : ""}.`);
+    setDirectBankImportRows((current) => current.filter((row) => !importedReferences.has(row.reference)));
+    setDirectBankImportMessage(`Imported ${imported} direct-bank payment${imported === 1 ? "" : "s"}${skipped ? `; ${skipped} duplicate reference${skipped === 1 ? " was" : "s were"} not imported` : ""}. Any remaining rows below need attention and were not imported.`);
     await load();
   };
 
@@ -1196,6 +1212,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
               <th className="text-left p-3 font-semibold text-slate-700">Method</th>
               {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
+              <th className="text-left p-3 font-semibold text-slate-700">Upload file</th>
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
               <th className="text-right p-3 font-semibold text-slate-700 whitespace-nowrap print:hidden min-w-[7rem]">
                 Receipt
@@ -1205,13 +1222,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={(readOnly ? 9 : 10) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 10 : 11) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : visiblePayments.length === 0 ? (
               <tr>
-                <td colSpan={(readOnly ? 9 : 10) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 10 : 11) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
@@ -1229,6 +1246,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                     {r.method === "wallet" ? "Wallet" : r.method.replace("_", " ")}
                    </td>
                    {showBankColumn && <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>}
+                   <td className="p-3 text-slate-600">{uploadFileFromNotes(r.notes) || "—"}</td>
                    <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
                   <td className="p-3 text-right whitespace-nowrap print:hidden min-w-[7rem]">
                     <button
