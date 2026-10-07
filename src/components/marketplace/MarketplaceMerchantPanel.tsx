@@ -136,11 +136,11 @@ export function MarketplaceMerchantPanel() {
   const copyStorefrontLink = async () => {
     if (!merchant) return;
     const url = new URL(window.location.href);
-    url.searchParams.set("page", "marketplace");
+    url.searchParams.set("page", "storefront");
     url.searchParams.set("store", merchant.public_slug);
     try {
       await navigator.clipboard.writeText(url.toString());
-      setMessage("Storefront link copied. Share it with BOAT Market buyers.");
+      setMessage("Public storefront link copied. Anyone can browse it; BOAT sign-in is required to order.");
     } catch {
       setMessage(`Storefront link: ${url.toString()}`);
     }

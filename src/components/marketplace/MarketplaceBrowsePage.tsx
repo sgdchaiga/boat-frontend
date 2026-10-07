@@ -160,11 +160,11 @@ export function MarketplaceBrowsePage({ onNavigate }: { onNavigate?: (page: stri
   const copyStorefrontLink = async () => {
     if (!selectedMerchant) return;
     const url = new URL(window.location.href);
-    url.searchParams.set("page", "marketplace");
+    url.searchParams.set("page", "storefront");
     url.searchParams.set("store", selectedMerchant.public_slug);
     try {
       await navigator.clipboard.writeText(url.toString());
-      setMessage("Storefront link copied. You can share it with buyers who have access to BOAT Market.");
+      setMessage("Public storefront link copied. Anyone can browse it; BOAT sign-in is required to order.");
     } catch {
       setMessage(`Storefront link: ${url.toString()}`);
     }
@@ -225,6 +225,22 @@ export function MarketplaceBrowsePage({ onNavigate }: { onNavigate?: (page: stri
     });
     setMessage(null);
   };
+
+  // A public storefront can hand one selected item into the secure BOAT cart.
+  // Remove the hint immediately so reloads never add the item more than once.
+  useEffect(() => {
+    const listingId = new URLSearchParams(window.location.search).get("add");
+    if (!listingId) return;
+    const listing = listings.find((row) => row.id === listingId);
+    if (!listing) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("add");
+    window.history.replaceState({}, "", url.toString());
+    addToCart(listing);
+    setMessage(`${listing.title} was added to your order.`);
+    // Listing data is the trigger. `addToCart` intentionally reads the current cart.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listings]);
 
   const changeQuantity = (listingId: string, increment: number) => {
     setCart((items) => items.flatMap((item) => {

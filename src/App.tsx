@@ -298,6 +298,7 @@ const MfiIntegrationPage = lazyNamed(() => import('./components/mfi/MfiIntegrati
 const EcosystemPage = lazyNamed(() => import('./components/EcosystemPage'), 'EcosystemPage');
 const MarketplaceMerchantPanel = lazyNamed(() => import('./components/marketplace/MarketplaceMerchantPanel'), 'MarketplaceMerchantPanel');
 const MarketplaceBrowsePage = lazyNamed(() => import('./components/marketplace/MarketplaceBrowsePage'), 'MarketplaceBrowsePage');
+const PublicStorefrontPage = lazyNamed(() => import('./components/marketplace/PublicStorefrontPage'), 'PublicStorefrontPage');
 
 function PageLoadingFallback() {
   return (
@@ -872,6 +873,12 @@ function AppContent() {
         </div>
       </div>
     );
+  }
+
+  // Shareable merchant catalogue. This stays outside the authenticated workspace;
+  // placing an order returns the customer to the protected BOAT checkout flow.
+  if (currentPage === "storefront") {
+    return pageSuspense(<PublicStorefrontPage />);
   }
 
   if (!user) {
