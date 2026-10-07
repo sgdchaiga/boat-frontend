@@ -364,7 +364,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     (businessType === "hotel" || businessType === "mixed") && user?.enable_hotel_assessment !== false;
   const allowManufacturing = user?.enable_manufacturing !== false;
   const canManageMarketplace = Boolean(
-    isSuperAdmin || ["admin", "super_admin"].includes(String(user?.role ?? "").trim().toLowerCase())
+    isSuperAdmin || ["admin", "super_admin", "manager"].includes(String(user?.role ?? "").trim().toLowerCase())
   );
   const { version: manufacturingVersion } = useManufacturingVersion();
 

@@ -1030,12 +1030,12 @@ function AppContent() {
       currentPage === "marketplace_merchant" &&
       access.visible &&
       !user?.isSuperAdmin &&
-      !["admin", "super_admin"].includes(String(user?.role ?? "").trim().toLowerCase())
+      !["admin", "super_admin", "manager"].includes(String(user?.role ?? "").trim().toLowerCase())
     ) {
       access = {
         visible: false,
         readOnly: true,
-        blockedReason: "Only organization administrators can manage marketplace sales.",
+        blockedReason: "Only organization administrators or managers can manage marketplace sales.",
       };
     }
 
