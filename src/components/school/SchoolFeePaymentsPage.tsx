@@ -54,6 +54,29 @@ const DEFAULT_INCOME_TYPES = [
   "Boarding Fees",
 ];
 
+const SCHOOL_FEES_ALIASES = new Set([
+  "general",
+  "utilities",
+  "ict",
+  "church fund",
+  "sesemat",
+  "asshu",
+  "co-curricular",
+  "co curricular",
+  "plant maintainance",
+  "plant maintenance",
+  "unsa",
+  "boarding fees",
+  "materials",
+  "tuition day",
+  "tuition boarding",
+]);
+
+function normalizeIncomeType(value: string | null | undefined): string {
+  const label = String(value || "").trim();
+  return SCHOOL_FEES_ALIASES.has(label.toLocaleLowerCase()) ? "School Fees" : label || "School Fees";
+}
+
 function uploadFileFromNotes(notes: string | null | undefined): string | null {
   const match = String(notes || "").match(/(?:^|\s·\s)Upload file:\s*([^·]+?)(?=\s·\s|$)/i);
   return match?.[1]?.trim() || null;
@@ -230,7 +253,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         const outstanding = Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid));
         const applied = round2(Math.min(remaining, outstanding));
         if (applied > 0) {
-          allocations.push({ invoice_id: invoice.id, amount: applied, category_code: "GENERAL", category_label: "General", priority: 999 });
+          allocations.push({ invoice_id: invoice.id, amount: applied, category_code: "GENERAL", category_label: "School Fees", priority: 999 });
           invoiceUpdates.push({ id: invoice.id, total: Number(invoice.total_due), paid: round2(Number(invoice.amount_paid) + applied) });
           remaining = round2(remaining - applied);
         }
@@ -301,14 +324,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         const bank = String(valueFor(row, ["Bank", "Bank Name"])).trim();
         const accountText = String(valueFor(row, ["Bank Account", "Receiving Bank Account", "Account"])).trim();
         const reference = String(valueFor(row, ["Bank Slip / Transaction Reference", "Bank Slip", "Transaction Reference", "Reference"])).trim();
-        const feeType = String(valueFor(row, ["Fee Type", "Payment Type"])).trim();
+        const rawFeeType = String(valueFor(row, ["Fee Type", "Payment Type"])).trim();
+        const feeType = normalizeIncomeType(rawFeeType);
         const amount = Number(String(valueFor(row, ["Amount (UGX)", "Amount", "Payment Amount"])).replace(/[^0-9.-]/g, ""));
         const dateValue = valueFor(row, ["Payment Date", "Paid At", "Transaction Date", "Date"]);
         const date = dateValue instanceof Date ? dateValue : new Date(String(dateValue));
         const matchEvidence = [statementDescription, studentName, schoolPayCode, reference].filter(Boolean).join(" · ");
         const admissionMatch = admissionNumber ? studentByAdmission.get(normalized(admissionNumber)) : undefined;
         const statementMatch = !admissionMatch && matchEvidence ? matchStudentStatement(matchEvidence, students, studentAliases) : undefined;
-        const student = admissionMatch || (statementMatch?.basis === "schoolpay_code" ? statementMatch.student as StudentOpt : undefined);
+        const student = admissionMatch || (["schoolpay_code", "schoolpay_and_name"].includes(statementMatch?.basis || "") ? statementMatch?.student as StudentOpt : undefined);
         const bankAccount = accountByName.get(normalized(accountText));
         const notes = String(valueFor(row, ["Notes", "Note", "Description"])).trim();
         let error = "";
@@ -323,12 +347,14 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         else if (!bankAccount) error = "Bank account does not match a BOAT bank account";
         else if (!(amount > 0)) error = "Amount must be greater than zero";
         else if (!reference) error = "Bank slip or transaction reference is missing";
-        else if (!feeType) error = "Fee type is missing";
+        else if (!rawFeeType) error = "Fee type is missing";
         else if (Number.isNaN(date.getTime())) error = "Payment date is invalid";
         const matchBasis = admissionMatch
           ? `Admission number: ${admissionNumber}`
-          : statementMatch?.basis === "schoolpay_code"
-            ? `Exact SchoolPay code in: ${matchEvidence}`
+          : statementMatch?.basis === "schoolpay_and_name"
+            ? `SchoolPay and student name agree: ${matchEvidence}`
+            : statementMatch?.basis === "schoolpay_code"
+              ? `Exact SchoolPay code: ${matchEvidence}`
             : statementMatch?.basis === "exact_name"
               ? `Exact name - review: ${matchEvidence}`
               : statementMatch?.basis
@@ -675,7 +701,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               invoice_id: inv.id,
               amount: share,
               category_code: line.code,
-              category_label: line.label,
+              category_label: normalizeIncomeType(line.label),
               priority: line.priority,
             });
             allocLeft = round2(allocLeft - share);
@@ -685,7 +711,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
 
       if (allocLeft > 0) {
-        allocations.push({ invoice_id: inv.id, amount: allocLeft, category_code: "GENERAL", category_label: "General", priority: 999 });
+        allocations.push({ invoice_id: inv.id, amount: allocLeft, category_code: "GENERAL", category_label: "School Fees", priority: 999 });
       }
       remaining = round2(remaining - applyOnInvoice);
     }
@@ -1002,7 +1028,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       try {
         const existingAllocations = payment.invoice_allocations || [];
         if (!existingAllocations.length) throw new Error(`Payment ${payment.reference || payment.id} has no invoice allocation to classify.`);
-        const invoice_allocations: PaymentSlice[] = existingAllocations.map((allocation) => ({ ...allocation, category_label: incomeType }));
+        const invoice_allocations: PaymentSlice[] = existingAllocations.map((allocation) => ({ ...allocation, category_label: normalizeIncomeType(incomeType) }));
         let saved: PayRow;
         if (canUseSchoolApi()) {
           saved = await updateSchoolRow<PayRow>("payments", orgId, payment.id, { invoice_allocations });
@@ -1051,7 +1077,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const visiblePayments = useMemo(() => rows.filter((payment) => {
     const day = String(payment.paid_at || "").slice(0, 10);
-    const incomeTypes = (payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim().toLowerCase()).filter(Boolean);
+    const incomeTypes = (payment.invoice_allocations || []).map((allocation) => normalizeIncomeType(allocation.category_label).toLowerCase());
     return (!paymentFilters.studentId || payment.student_id === paymentFilters.studentId)
       && (!paymentFilters.className || students.find((student) => student.id === payment.student_id)?.class_name === paymentFilters.className)
       && (!paymentFilters.method || payment.method === paymentFilters.method)
@@ -1064,12 +1090,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     const types = [
       ...DEFAULT_INCOME_TYPES,
       ...budgetIncomeTypes,
-      ...rows.flatMap((payment) => (payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim()).filter((label): label is string => !!label)),
+      ...rows.flatMap((payment) => (payment.invoice_allocations || []).map((allocation) => normalizeIncomeType(allocation.category_label))),
     ];
-    return [...new Map(types.map((type) => [type.toLocaleLowerCase(), type])).values()]
+    return [...new Map(types.map((type) => {
+      const normalized = normalizeIncomeType(type);
+      return [normalized.toLocaleLowerCase(), normalized];
+    })).values()]
       .sort((a, b) => a.localeCompare(b));
   }, [budgetIncomeTypes, rows]);
-  const paymentIncomeTypeLabel = (payment: PayRow) => [...new Set((payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim()).filter((label): label is string => !!label))].join(", ") || "—";
+  const paymentIncomeTypeLabel = (payment: PayRow) => [...new Set((payment.invoice_allocations || []).map((allocation) => normalizeIncomeType(allocation.category_label)))].join(", ") || "—";
 
   return (
     <div className="p-6 lg:p-8 max-w-6xl mx-auto space-y-6">

@@ -9,7 +9,7 @@ export type MatchableStudent = {
 
 export type StudentMatch = {
   student?: MatchableStudent;
-  basis: "schoolpay_code" | "exact_name" | "ambiguous" | "unmatched" | "conflict";
+  basis: "schoolpay_and_name" | "schoolpay_code" | "exact_name" | "ambiguous" | "unmatched" | "conflict";
   candidates: MatchableStudent[];
 };
 
@@ -36,6 +36,12 @@ function fullName(student: MatchableStudent): string {
   return [student.first_name, student.other_names, student.last_name].filter(Boolean).join(" ");
 }
 
+function containsFullName(description: string, name: string): boolean {
+  const descriptionTokens = new Set(normalizeStudentName(description).split(" ").filter(Boolean));
+  const nameTokens = normalizeStudentName(name).split(" ").filter(Boolean);
+  return nameTokens.length > 0 && nameTokens.every((token) => descriptionTokens.has(token));
+}
+
 /**
  * Deterministic student matcher for statement descriptions. A name match is deliberately
  * only a proposal: callers must get a staff member to confirm it before posting a payment.
@@ -53,10 +59,9 @@ export function matchStudentStatement(
     return code.length > 0 && containsCode(text, code);
   });
   const uniqueCodeMatches = [...new Map(codeMatches.map((student) => [student.id, student])).values()];
-  const normalizedDescription = normalizeStudentName(text);
-  const exactNameMatches = students.filter((student) => normalizeStudentName(fullName(student)) === normalizedDescription);
+  const exactNameMatches = students.filter((student) => containsFullName(text, fullName(student)));
   const aliasMatches = aliases
-    .filter((alias) => normalizeStudentName(alias.alias) === normalizedDescription)
+    .filter((alias) => containsFullName(text, alias.alias))
     .map((alias) => students.find((student) => student.id === alias.student_id))
     .filter((student): student is MatchableStudent => Boolean(student));
   const exactMatches = [...new Map([...exactNameMatches, ...aliasMatches].map((student) => [student.id, student])).values()];
@@ -65,6 +70,9 @@ export function matchStudentStatement(
     const [student] = uniqueCodeMatches;
     if (exactMatches.length > 0 && !exactMatches.some((match) => match.id === student.id)) {
       return { basis: "conflict", candidates: [student, ...exactMatches] };
+    }
+    if (exactMatches.some((match) => match.id === student.id)) {
+      return { student, basis: "schoolpay_and_name", candidates: [student] };
     }
     return { student, basis: "schoolpay_code", candidates: [student] };
   }
