@@ -129,6 +129,8 @@ interface AuthUser {
   enable_wallet?: boolean;
   /** Platform: Payroll module toggle. */
   enable_payroll?: boolean;
+  /** Platform: BOAT Market entitlement. */
+  enable_marketplace?: boolean;
   /** Platform: Budget module toggle. */
   enable_budget?: boolean;
   /** Platform: Treasury module toggle. */
@@ -321,6 +323,7 @@ type TenantProfile = {
   enable_communications: boolean;
   enable_wallet: boolean;
   enable_payroll: boolean;
+  enable_marketplace: boolean;
   enable_budget: boolean;
   enable_treasury: boolean;
   enable_control_centre: boolean;
@@ -419,6 +422,7 @@ function localTenantDefaults(): TenantProfile {
     enable_communications: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_COMMUNICATIONS, true),
     enable_wallet: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_WALLET, true),
     enable_payroll: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_PAYROLL, true),
+    enable_marketplace: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_MARKETPLACE, false),
     enable_budget: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BUDGET, true),
     enable_treasury: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_TREASURY, true),
     enable_control_centre: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_CONTROL_CENTRE, true),
@@ -587,6 +591,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     enable_communications: true,
     enable_wallet: true,
     enable_payroll: true,
+    enable_marketplace: false,
     enable_budget: true,
     enable_treasury: true,
     enable_control_centre: false,
@@ -637,7 +642,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       supabase
         .from("organizations")
         .select(
-          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_insurance, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_assistant, enable_cashbook_mode, school_layout_mode, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
+          "business_type, app_version, sales_workflow, desktop_device_limit, enable_fixed_assets, enable_insurance, enable_asset_verification, enable_communications, enable_wallet, enable_payroll, enable_marketplace, enable_budget, enable_treasury, enable_reconciliation, enable_agent, enable_assistant, enable_cashbook_mode, school_layout_mode, enable_boat_connect, enable_hotel_assessment, enable_manufacturing, enable_reports, enable_accounting, enable_inventory, enable_purchases, hotel_enable_smart_room_charges, school_enable_reports, school_enable_fixed_deposit, school_enable_accounting, school_enable_inventory, school_enable_purchases, purchases_require_po_approval, purchases_require_bill_approval"
         )
         .eq("id", organization_id)
         .maybeSingle(),
@@ -673,6 +678,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_communications?: boolean | null;
       enable_wallet?: boolean | null;
       enable_payroll?: boolean | null;
+      enable_marketplace?: boolean | null;
       enable_budget?: boolean | null;
       enable_treasury?: boolean | null;
       enable_reconciliation?: boolean | null;
@@ -727,6 +733,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_communications: org?.enable_communications !== false,
       enable_wallet: org?.enable_wallet !== false,
       enable_payroll: org?.enable_payroll !== false,
+      enable_marketplace: org?.enable_marketplace === true,
       enable_budget: org?.enable_budget !== false,
       enable_treasury: org?.enable_treasury !== false,
       enable_control_centre: IS_LOCAL_AUTH_MODE
@@ -1041,6 +1048,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
           enable_communications: true,
           enable_wallet: true,
           enable_payroll: true,
+          enable_marketplace: false,
           enable_budget: true,
           enable_treasury: true,
           enable_reconciliation: true,

@@ -980,7 +980,8 @@ function AppContent() {
           enableAssetVerification: user?.enable_asset_verification === true,
           enableCommunications: user?.enable_communications !== false,
           enableWallet: user?.enable_wallet !== false,
-          enablePayroll: user?.enable_payroll !== false,
+           enablePayroll: user?.enable_payroll !== false,
+           enableMarketplace: user?.enable_marketplace === true,
           enableBudget: user?.enable_budget !== false,
           enableTreasury: user?.enable_treasury !== false,
           enableReconciliation: user?.enable_reconciliation !== false,
@@ -1022,6 +1023,19 @@ function AppContent() {
         visible: false,
         readOnly: true,
         blockedReason: "This workspace is hidden by your user page-access settings.",
+      };
+    }
+
+    if (
+      currentPage === "marketplace_merchant" &&
+      access.visible &&
+      !user?.isSuperAdmin &&
+      !["admin", "super_admin"].includes(String(user?.role ?? "").trim().toLowerCase())
+    ) {
+      access = {
+        visible: false,
+        readOnly: true,
+        blockedReason: "Only organization administrators can manage marketplace sales.",
       };
     }
 
@@ -1742,7 +1756,7 @@ function AppContent() {
       case 'marketplace_merchant':
         return pageSuspense(<div className="mx-auto max-w-7xl p-6"><MarketplaceMerchantPanel /></div>);
       case 'marketplace':
-        return pageSuspense(<MarketplaceBrowsePage />);
+        return pageSuspense(<MarketplaceBrowsePage onNavigate={navigate} />);
       case 'data_migration':
         return <DataMigrationPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'industry_intelligence':
@@ -1825,6 +1839,7 @@ function AppContent() {
     if (currentPage === SACCOPRO_PAGE.loanInput) {
       return <SaccoMemberLoanApplication memberId={user.sacco_member_id} onBack={() => navigate(SACCOPRO_PAGE.clientDashboard)} />;
     }
+
     if (currentPage === SACCOPRO_PAGE.savingsStatements) {
       return <div className="min-h-screen bg-slate-100 p-3 sm:p-6"><button type="button" onClick={() => navigate(SACCOPRO_PAGE.clientDashboard)} className="mb-4 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">Back to member app</button><SaccoSavingsStatementsPage memberIdFromNav={user.sacco_member_id} navigate={navigate} /></div>;
     }

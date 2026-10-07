@@ -24,6 +24,7 @@ type Org = {
   enable_communications?: boolean | null;
   enable_wallet?: boolean | null;
   enable_payroll?: boolean | null;
+  enable_marketplace?: boolean | null;
   enable_budget?: boolean | null;
   enable_treasury?: boolean | null;
   enable_reconciliation?: boolean | null;
@@ -211,6 +212,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableCommunications, setEditEnableCommunications] = useState(true);
   const [editEnableWallet, setEditEnableWallet] = useState(true);
   const [editEnablePayroll, setEditEnablePayroll] = useState(true);
+  const [editEnableMarketplace, setEditEnableMarketplace] = useState(false);
   const [editEnableBudget, setEditEnableBudget] = useState(true);
   const [editEnableTreasury, setEditEnableTreasury] = useState(true);
   const [editEnableReconciliation, setEditEnableReconciliation] = useState(true);
@@ -277,6 +279,7 @@ export function PlatformOrganizationsPage() {
     orgId: string,
     key:
       | "enable_payroll"
+      | "enable_marketplace"
       | "enable_budget"
       | "enable_treasury"
       | "enable_reconciliation"
@@ -649,6 +652,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableCommunications(org.enable_communications !== false);
     setEditEnableWallet(org.enable_wallet !== false);
     setEditEnablePayroll(org.enable_payroll !== false);
+    setEditEnableMarketplace(org.enable_marketplace === true);
     setEditEnableBudget(org.enable_budget !== false);
     setEditEnableTreasury(org.enable_treasury !== false);
     setEditEnableReconciliation(org.enable_reconciliation !== false);
@@ -705,6 +709,7 @@ export function PlatformOrganizationsPage() {
         enable_communications: editEnableCommunications,
         enable_wallet: editEnableWallet,
         enable_payroll: editEnablePayroll,
+        enable_marketplace: editEnableMarketplace,
         enable_budget: editEnableBudget,
         enable_treasury: editEnableTreasury,
         enable_reconciliation: editEnableReconciliation,
@@ -880,6 +885,7 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">BOAT version</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Staff</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Payroll</th>
+                <th className="text-left p-3 font-semibold text-slate-700">Marketplace</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Cashbook mode</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Assistant</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Treasury</th>
@@ -898,7 +904,7 @@ export function PlatformOrganizationsPage() {
             <tbody>
               {filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={18} className="p-8 text-center text-slate-600 text-sm">
+                  <td colSpan={19} className="p-8 text-center text-slate-600 text-sm">
                     {orgSearch.trim()
                       ? "No organizations match your search."
                       : "No organizations yet."}
@@ -930,6 +936,28 @@ export function PlatformOrganizationsPage() {
                           className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
                         >
                           {org.enable_payroll === false ? "Turn On" : "Turn Off"}
+                        </button>
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      <div className="flex items-center gap-2">
+                        <span
+                          className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
+                            org.enable_marketplace === true
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-red-100 text-red-800"
+                          }`}
+                        >
+                          {org.enable_marketplace === true ? "On" : "Off"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleOrgModule(org.id, "enable_marketplace", org.enable_marketplace !== true)
+                          }
+                          className="text-xs px-2 py-0.5 rounded border border-slate-300 hover:bg-slate-50"
+                        >
+                          {org.enable_marketplace === true ? "Turn Off" : "Turn On"}
                         </button>
                       </div>
                     </td>
@@ -1495,6 +1523,14 @@ export function PlatformOrganizationsPage() {
                   onChange={(e) => setEditEnablePayroll(e.target.checked)}
                 />
                 Enable Payroll module
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={editEnableMarketplace}
+                  onChange={(e) => setEditEnableMarketplace(e.target.checked)}
+                />
+                Enable BOAT Market (buyer catalogue and merchant sales)
               </label>
               <label className="flex items-center gap-2 text-sm text-slate-700 cursor-pointer">
                 <input

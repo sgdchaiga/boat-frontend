@@ -348,6 +348,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const enableAssetVerification =
     businessType === 'accounting_practice' || user?.enable_asset_verification === true;
   const enablePayroll = user?.enable_payroll !== false;
+  const allowMarketplace = user?.enable_marketplace === true;
   const enableBudget = user?.enable_budget !== false;
   const enableTreasury = user?.enable_treasury !== false;
   const retailOnly = businessType === "retail";
@@ -362,6 +363,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const allowHotelAssessment =
     (businessType === "hotel" || businessType === "mixed") && user?.enable_hotel_assessment !== false;
   const allowManufacturing = user?.enable_manufacturing !== false;
+  const canManageMarketplace = Boolean(
+    isSuperAdmin || ["admin", "super_admin"].includes(String(user?.role ?? "").trim().toLowerCase())
+  );
   const { version: manufacturingVersion } = useManufacturingVersion();
 
   const saccoSystemCashbookNav = Boolean(
@@ -1347,6 +1351,12 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ? [...baseNavigation, { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' }]
       : baseNavigation;
     if (enableInsurance) navigation.push({ name: 'Insurance', icon: Shield, page: 'insurance' });
+    if (allowMarketplace) {
+      navigation.push({ name: 'BOAT Market', icon: ShoppingCart, page: 'marketplace' });
+      if (canManageMarketplace) {
+        navigation.push({ name: 'My market sales', icon: ShoppingCart, page: 'marketplace_merchant' });
+      }
+    }
     if ((user?.isSuperAdmin === true || user?.role === 'super_admin') && user?.enable_control_centre === true) {
       navigation.push({ name: 'Control Centre', icon: Shield, page: 'control_centre' });
     }
@@ -1509,6 +1519,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         enableCommunications: allowCommunications,
         enableWallet: allowWallet,
         enablePayroll: allowPayroll,
+        enableMarketplace: allowMarketplace,
         enableBudget: allowBudget,
         enableTreasury,
         enableReconciliation: user?.enable_reconciliation !== false,
@@ -1554,6 +1565,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       allowCommunications,
       allowWallet,
       allowPayroll,
+      allowMarketplace,
       allowBudget,
       enableTreasury,
       user?.enable_reconciliation,
@@ -1589,6 +1601,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       enableCommunications: allowCommunications,
       enableWallet: allowWallet,
       enablePayroll: allowPayroll,
+      enableMarketplace: allowMarketplace,
       enableBudget: allowBudget,
       enableTreasury,
       enableReconciliation: user?.enable_reconciliation !== false,

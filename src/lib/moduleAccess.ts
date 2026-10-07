@@ -43,6 +43,7 @@ export type ModuleId =
   | "boat_connect"
   | "agent"
   | "hotel_assessment"
+  | "marketplace"
   | "control_centre";
 
 type ModuleAudience =
@@ -112,6 +113,7 @@ const MODULE_AUDIENCE: Record<ModuleId, ModuleAudience> = {
   boat_connect: "both",
   agent: "both",
   hotel_assessment: "hotel",
+  marketplace: "both",
   control_centre: "both",
 };
 
@@ -155,6 +157,7 @@ const MODULE_REQUIRES_SUBSCRIPTION: Record<ModuleId, boolean> = {
   boat_connect: true,
   agent: false,
   hotel_assessment: false,
+  marketplace: true,
   control_centre: true,
 };
 
@@ -221,6 +224,8 @@ export function getModuleAccess(input: {
   enableWallet?: boolean;
   /** Platform: Payroll module toggle. */
   enablePayroll?: boolean;
+  /** Platform: BOAT Market entitlement. */
+  enableMarketplace?: boolean;
   /** Platform: Budget module toggle. */
   enableBudget?: boolean;
   /** Platform: Treasury module toggle. */
@@ -262,6 +267,7 @@ export function getModuleAccess(input: {
     enableCommunications,
     enableWallet,
     enablePayroll,
+    enableMarketplace,
     enableBudget,
     enableTreasury,
     enableAgent,
@@ -409,6 +415,14 @@ export function getModuleAccess(input: {
       visible: false,
       readOnly: true,
       blockedReason: "Payroll is not enabled for this organization. Ask a platform admin to turn it on.",
+    };
+  }
+
+  if (moduleId === "marketplace" && enableMarketplace !== true) {
+    return {
+      visible: false,
+      readOnly: true,
+      blockedReason: "BOAT Market is not enabled for this organization. Ask a platform admin to turn it on.",
     };
   }
 
@@ -660,8 +674,8 @@ export function pageToModuleId(page: string): ModuleId | null {
   if (page === "image_document_converter") return null;
   if (page === "system_integrations") return null;
   if (page === "ecosystem") return "admin";
-  if (page === "marketplace") return null;
-  if (page === "marketplace_merchant") return "admin";
+  if (page === "marketplace") return "marketplace";
+  if (page === "marketplace_merchant") return "marketplace";
   if (page === "data_migration") return "admin";
   if (page === "industry_intelligence") return "reports";
   if (page === "communications") return "communications";

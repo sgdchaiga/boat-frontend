@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { MarketplaceMerchantOrdersPanel } from "./MarketplaceMerchantOrdersPanel";
 import { MarketplaceFinancePanel } from "./MarketplaceFinancePanel";
 import { MarketplaceSchoolFeeConnector } from "./MarketplaceSchoolFeeConnector";
+import { MarketplaceHotelRoomConnector } from "./MarketplaceHotelRoomConnector";
 
 const db = supabase as any;
 type Category = { id: string; name: string };
@@ -17,6 +18,7 @@ const slugify = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]
 export function MarketplaceMerchantPanel() {
   const { user } = useAuth();
   const orgId = user?.organization_id;
+  const isHotel = user?.business_type === "hotel" || user?.business_type === "mixed";
   const [merchant, setMerchant] = useState<Merchant | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [listings, setListings] = useState<Listing[]>([]);
@@ -83,7 +85,7 @@ export function MarketplaceMerchantPanel() {
   };
 
   return <section className="space-y-4 rounded-xl border border-indigo-200 bg-indigo-50/40 p-5">
-    <div><div className="flex items-center gap-2"><Globe2 className="h-5 w-5 text-indigo-700" /><h2 className="font-semibold text-slate-900">BOAT Market merchant profile</h2></div><p className="mt-1 text-sm text-slate-600">Create the business profile and publish products or services to the shared marketplace. Retail products can be published from existing BOAT inventory without re-entering their name or price.</p></div>
+    <div><div className="flex items-center gap-2"><Globe2 className="h-5 w-5 text-indigo-700" /><h2 className="font-semibold text-slate-900">My BOAT Market sales</h2></div><p className="mt-1 text-sm text-slate-600">Create the public business profile, publish listings, manage marketplace orders, and settle completed sales. Retail products can be published from existing BOAT inventory without re-entering their name or price.</p>{isHotel && <p className="mt-2 rounded-lg bg-white/80 px-3 py-2 text-sm text-indigo-900">For this hotel, publish room booking requests, restaurant offers, conference packages, or other hotel services. Use the <strong>Room</strong> listing type and state the nightly rate or package terms clearly; the hotel confirms the stay details after the buyer places the request.</p>}</div>
     {message && <p className="text-sm text-slate-700" role="status">{message}</p>}
     <div className="grid gap-3 md:grid-cols-2"><input value={draft.display_name} onChange={(e) => setDraft((v) => ({ ...v, display_name: e.target.value, public_slug: v.public_slug || slugify(e.target.value) }))} placeholder="Public business name" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input value={draft.public_slug} onChange={(e) => setDraft((v) => ({ ...v, public_slug: e.target.value }))} placeholder="marketplace address e.g. lakeview-hotel" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><input value={draft.phone} onChange={(e) => setDraft((v) => ({ ...v, phone: e.target.value }))} placeholder="Public phone" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><label className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={draft.is_published} onChange={(e) => setDraft((v) => ({ ...v, is_published: e.target.checked }))} /> Publish merchant profile</label><textarea value={draft.description} onChange={(e) => setDraft((v) => ({ ...v, description: e.target.value }))} placeholder="Describe your business" className="min-h-20 rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-2" /></div>
     <button type="button" onClick={() => void saveMerchant()} disabled={saving} className="app-btn-primary"><Save className="h-4 w-4" /> Save profile</button>
@@ -107,6 +109,7 @@ export function MarketplaceMerchantPanel() {
       {orgId && <MarketplaceMerchantOrdersPanel merchantId={merchant.id} organizationId={orgId} />}
       {orgId && <MarketplaceFinancePanel merchantId={merchant.id} organizationId={orgId} />}
       {orgId && user?.business_type === "school" && <MarketplaceSchoolFeeConnector merchantId={merchant.id} organizationId={orgId} />}
+      {orgId && isHotel && <MarketplaceHotelRoomConnector merchantId={merchant.id} organizationId={orgId} />}
     </div>}
   </section>;
 }
