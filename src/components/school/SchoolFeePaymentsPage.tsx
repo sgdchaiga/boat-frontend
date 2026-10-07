@@ -14,14 +14,15 @@ import { boatApi } from "@/lib/boatApi";
 import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 import { DEFAULT_SCHOOL_PAYMENT_METHODS, SCHOOL_PAYMENT_METHODS, normalizeSchoolPaymentMethods, type SchoolPaymentMethod } from "@/lib/schoolPaymentMethods";
 import { fetchAllPages } from "@/lib/supabasePagination";
+import { matchStudentStatement, type MatchableStudent } from "@/lib/schoolStudentMatching";
 
-type StudentOpt = { id: string; first_name: string; last_name: string; admission_number: string; class_name?: string | null; school_pay_number?: string | null };
+type StudentOpt = MatchableStudent & { class_name?: string | null };
 type InvOpt = { id: string; invoice_number: string; total_due: number; amount_paid: number; fee_structure_id: string | null; academic_year?: string | null; term_name?: string | null; created_at?: string; student_id?: string; status?: string };
 type FeeLine = { code?: string; label?: string; amount?: number; priority?: number };
 type FeeStructure = { id: string; line_items: FeeLine[] | null };
 type PaymentSlice = { invoice_id: string; amount: number; category_code?: string; category_label?: string; priority?: number };
 type SchoolPayImportRow = { row: number; schoolPayCode: string; amount: number; reference: string; paidAt: string; student?: StudentOpt; error?: string };
-type DirectBankImportRow = { row: number; bank: string; bankAccount: BankAccount; admissionNumber: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
+type DirectBankImportRow = { row: number; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
 
 type PayRow = {
   id: string;
@@ -37,6 +38,20 @@ type PayRow = {
   invoice_allocations?: PaymentSlice[] | null;
 };
 type BankAccount = { id: string; account_code: string; account_name: string; account_type: string; category?: string | null };
+type BudgetIncomeLine = { line_label: string };
+
+const DEFAULT_INCOME_TYPES = [
+  "School Fees",
+  "Mock Fees",
+  "UNEB Fees",
+  "Examination Fees",
+  "Registration Fees",
+  "Development Fees",
+  "Transport Fees",
+  "Meals Fees",
+  "Uniform Fees",
+  "Boarding Fees",
+];
 
 type Props = {
   readOnly?: boolean;
@@ -86,6 +101,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [directBankImportProgress, setDirectBankImportProgress] = useState({ completed: 0, total: 0 });
   const [directBankImportMessage, setDirectBankImportMessage] = useState<string | null>(null);
   const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
+  const [budgetIncomeTypes, setBudgetIncomeTypes] = useState<string[]>([]);
+  const [studentAliases, setStudentAliases] = useState<Array<{ student_id: string; alias: string }>>([]);
   const [selectedPaymentIds, setSelectedPaymentIds] = useState<string[]>([]);
   const [bulkMethod, setBulkMethod] = useState<SchoolPaymentMethod>("cash");
   const [bulkBankAccountId, setBulkBankAccountId] = useState("");
@@ -268,6 +285,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       });
       const parsed = raw.map((row, index): DirectBankImportRow => {
         const admissionNumber = String(valueFor(row, ["Student Admission Number", "Admission Number", "Admission No", "Student Number"])).trim();
+        const statementDescription = String(valueFor(row, ["Statement Description", "Description", "Narration", "Details", "Payer Name"])).trim();
         const bank = String(valueFor(row, ["Bank", "Bank Name"])).trim();
         const accountText = String(valueFor(row, ["Bank Account", "Receiving Bank Account", "Account"])).trim();
         const reference = String(valueFor(row, ["Bank Slip / Transaction Reference", "Bank Slip", "Transaction Reference", "Reference"])).trim();
@@ -275,12 +293,18 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         const amount = Number(String(valueFor(row, ["Amount (UGX)", "Amount", "Payment Amount"])).replace(/[^0-9.-]/g, ""));
         const dateValue = valueFor(row, ["Payment Date", "Paid At", "Transaction Date", "Date"]);
         const date = dateValue instanceof Date ? dateValue : new Date(String(dateValue));
-        const student = studentByAdmission.get(normalized(admissionNumber));
+        const admissionMatch = admissionNumber ? studentByAdmission.get(normalized(admissionNumber)) : undefined;
+        const statementMatch = !admissionMatch && statementDescription ? matchStudentStatement(statementDescription, students, studentAliases) : undefined;
+        const student = admissionMatch || (statementMatch?.basis === "schoolpay_code" ? statementMatch.student as StudentOpt : undefined);
         const bankAccount = accountByName.get(normalized(accountText));
         const notes = String(valueFor(row, ["Notes", "Note", "Description"])).trim();
         let error = "";
-        if (!admissionNumber) error = "Student admission number is missing";
-        else if (!student) error = "Student admission number was not found in BOAT";
+        if (admissionNumber && !admissionMatch) error = "Student admission number was not found in BOAT";
+        else if (!admissionNumber && !statementDescription) error = "Provide a student admission number or statement description";
+        else if (statementMatch?.basis === "exact_name") error = "Exact name match found; review and confirm the student before posting";
+        else if (statementMatch?.basis === "conflict") error = "SchoolPay code conflicts with the name; review before posting";
+        else if (statementMatch?.basis === "ambiguous") error = "More than one student may match this statement description; review before posting";
+        else if (!student) error = "No student match found in BOAT";
         else if (!bank) error = "Bank is missing";
         else if (!accountText) error = "Bank account is missing";
         else if (!bankAccount) error = "Bank account does not match a BOAT bank account";
@@ -288,7 +312,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         else if (!reference) error = "Bank slip or transaction reference is missing";
         else if (!feeType) error = "Fee type is missing";
         else if (Number.isNaN(date.getTime())) error = "Payment date is invalid";
-        return { row: index + 2, bank, bankAccount: bankAccount as BankAccount, admissionNumber, feeType, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), notes, student, error: error || undefined };
+        return { row: index + 2, bank, bankAccount: bankAccount as BankAccount, admissionNumber, statementDescription, matchBasis: admissionMatch ? "Admission number" : statementMatch?.basis === "schoolpay_code" ? "Exact SchoolPay code" : statementMatch?.basis === "exact_name" ? "Exact name - review" : statementMatch?.basis, feeType, amount, reference, paidAt: Number.isNaN(date.getTime()) ? "" : date.toISOString(), notes, student, error: error || undefined };
       });
       setDirectBankImportRows(parsed);
       setDirectBankImportMessage(parsed.length ? `Checked ${parsed.length} direct-bank row${parsed.length === 1 ? "" : "s"}. Review the results before importing.` : "No payment rows were found.");
@@ -332,7 +356,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       if (!allocations.length) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); return; }
       if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
       const notes = [`Bulk imported direct bank slip`, `Bank: ${row.bank}`, `Fee type: ${row.feeType}`, row.notes].filter(Boolean).join(" · ");
-      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "bank", bank_gl_account_id: row.bankAccount.id, bank_payment_source: "bank_slip", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes }).select("id").single();
+      const paymentNotes = [notes, row.matchBasis ? `Student match: ${row.matchBasis}` : ""].filter(Boolean).join(" · ");
+      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "bank", bank_gl_account_id: row.bankAccount.id, bank_payment_source: "bank_slip", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: paymentNotes }).select("id").single();
       if (paymentResult.error) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: paymentResult.error.message } : item)); return; }
       const updateResults = await Promise.all(invoiceUpdates.map((invoice) => supabase.from("student_invoices").update({ amount_paid: invoice.paid, status: invoice.paid >= invoice.total ? "paid" : "partial" }).eq("id", invoice.id)));
       const updateError = updateResults.find((result) => result.error)?.error;
@@ -397,7 +422,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       paymentsQuery,
       fetchAllPages<StudentOpt>((from, to) => supabase
         .from("students")
-        .select("id,first_name,last_name,admission_number,class_name,school_pay_number")
+        .select("id,first_name,other_names,last_name,admission_number,class_name,school_pay_number")
         .eq("organization_id", orgId)
         .order("last_name")
         .range(from, to))
@@ -425,6 +450,32 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         const accounts = ((data as BankAccount[] | null) || []).filter((account) => /bank/i.test(`${account.account_name} ${account.category || ""}`));
         setBankAccounts(accounts);
       });
+  }, [user?.organization_id]);
+
+  useEffect(() => {
+    const orgId = user?.organization_id;
+    if (!orgId || canUseSchoolApi()) {
+      setBudgetIncomeTypes([]);
+      return;
+    }
+    void supabase
+      .from("budget_lines")
+      .select("line_label,budgets!inner(organization_id)")
+      .eq("budget_type", "income")
+      .eq("budgets.organization_id", orgId)
+      .then(({ data, error }) => {
+        if (error) return;
+        setBudgetIncomeTypes(((data as BudgetIncomeLine[] | null) || [])
+          .map((line) => line.line_label?.trim())
+          .filter((label): label is string => Boolean(label)));
+      });
+  }, [user?.organization_id]);
+
+  useEffect(() => {
+    const orgId = user?.organization_id;
+    if (!orgId || canUseSchoolApi()) { setStudentAliases([]); return; }
+    void supabase.from("school_student_name_aliases").select("student_id,alias").eq("organization_id", orgId)
+      .then(({ data, error }) => { if (!error) setStudentAliases((data as Array<{ student_id: string; alias: string }> | null) || []); });
   }, [user?.organization_id]);
 
   useEffect(() => {
@@ -837,7 +888,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const downloadDirectBankTemplate = () => {
     const sheet = XLSX.utils.json_to_sheet([{
-      "Payment Date": new Date().toISOString().slice(0, 10), Bank: "Bank name", "Bank Account": "Account code or account name", "Bank Slip / Transaction Reference": "SLIP-123456", "Student Admission Number": "20260001", "Student Name": "Optional", "SchoolPay Code": "Optional", "Amount (UGX)": 150000, "Fee Type": "School fees", "Academic Year": new Date().getFullYear(), Term: "Term 1", Notes: "",
+      "Payment Date": new Date().toISOString().slice(0, 10), Bank: "Bank name", "Bank Account": "Account code or account name", "Bank Slip / Transaction Reference": "SLIP-123456", "Student Admission Number": "Optional when a SchoolPay code is in the statement description", "Statement Description": "SchoolPay 00123456 Jane Mary Doe", "Amount (UGX)": 150000, "Fee Type": "School fees", "Academic Year": new Date().getFullYear(), Term: "Term 1", Notes: "",
     }]);
     const book = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(book, sheet, "Direct bank payments");
@@ -979,7 +1030,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       && (!paymentFilters.from || day >= paymentFilters.from)
       && (!paymentFilters.to || day <= paymentFilters.to);
   }), [rows, students, paymentFilters]);
-  const incomeTypes = useMemo(() => [...new Set(rows.flatMap((payment) => (payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim()).filter((label): label is string => !!label)))].sort((a, b) => a.localeCompare(b)), [rows]);
+  const incomeTypes = useMemo(() => {
+    const types = [
+      ...DEFAULT_INCOME_TYPES,
+      ...budgetIncomeTypes,
+      ...rows.flatMap((payment) => (payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim()).filter((label): label is string => !!label)),
+    ];
+    return [...new Map(types.map((type) => [type.toLocaleLowerCase(), type])).values()]
+      .sort((a, b) => a.localeCompare(b));
+  }, [budgetIncomeTypes, rows]);
   const paymentIncomeTypeLabel = (payment: PayRow) => [...new Set((payment.invoice_allocations || []).map((allocation) => allocation.category_label?.trim()).filter((label): label is string => !!label))].join(", ") || "—";
 
   return (
@@ -1014,16 +1073,16 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         </div>
         <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-semibold text-slate-900">Bulk upload direct bank payments</h2><p className="mt-1 text-sm text-slate-600">Upload bank-slip deposits for school fees, examination fees, uniform, and other fee types. BOAT matches the student by admission number, records the selected BOAT bank account, checks duplicate references, and allocates to the oldest open invoices.</p></div>
+            <div><h2 className="font-semibold text-slate-900">Bulk upload direct bank payments</h2><p className="mt-1 text-sm text-slate-600">Upload bank-slip deposits for school fees, examination fees, uniform, and other fee types. BOAT matches students by admission number or a unique SchoolPay code in the statement description, checks duplicate references, and allocates only confirmed matches to the oldest open invoices.</p></div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={downloadDirectBankTemplate} className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-800"><Download className="h-4 w-4"/> Template</button>
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800"><Upload className="h-4 w-4"/> Choose direct-bank file<input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={(event) => { void parseDirectBankFile(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label>
             </div>
           </div>
-          <p className="text-xs text-slate-600">The <strong>Bank Account</strong> column must exactly match a BOAT bank account code or account name. Every imported payment is saved as <strong>Bank · Direct bank slip</strong>.</p>
+          <p className="text-xs text-slate-600">The <strong>Bank Account</strong> column must exactly match a BOAT bank account code or account name. A name-only, conflicting, or ambiguous match is held for review and cannot be posted automatically. Every imported payment is saved as <strong>Bank · Direct bank slip</strong>.</p>
           {directBankImportMessage && <p className="text-sm text-slate-700" role="status">{directBankImportMessage}</p>}
           {directBankImporting && directBankImportProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Importing direct-bank payments…</span><span>{directBankImportProgress.completed} of {directBankImportProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-sky-100"><div className="h-full bg-sky-600 transition-all" style={{ width: `${Math.round(directBankImportProgress.completed / directBankImportProgress.total * 100)}%` }} /></div></div>}
-          {directBankImportRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">Student</th><th className="p-2 text-left">Bank account</th><th className="p-2 text-left">Fee type</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Reference</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{directBankImportRows.map((row) => <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="p-2">{row.student ? `${row.student.admission_number} — ${row.student.first_name} ${row.student.last_name}` : row.admissionNumber || "—"}</td><td className="p-2">{row.bankAccount ? `${row.bankAccount.account_code} — ${row.bankAccount.account_name}` : "—"}</td><td className="p-2">{row.feeType || "—"}</td><td className="p-2 text-right">{row.amount > 0 ? row.amount.toLocaleString() : "—"}</td><td className="p-2">{row.reference || "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready"}</td></tr>)}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{directBankImportRows.filter((row) => !row.error).length} ready · {directBankImportRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void importDirectBankRows()} disabled={directBankImporting || !directBankImportRows.some((row) => !row.error)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{directBankImporting ? "Importing…" : "Import ready payments"}</button></div></div>}
+          {directBankImportRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">Student</th><th className="p-2 text-left">Match basis</th><th className="p-2 text-left">Bank account</th><th className="p-2 text-left">Fee type</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Reference</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{directBankImportRows.map((row) => <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="p-2">{row.student ? `${row.student.admission_number} — ${row.student.first_name} ${row.student.other_names ? `${row.student.other_names} ` : ""}${row.student.last_name}` : <select aria-label={`Choose student for import row ${row.row}`} defaultValue="" onChange={(event) => { const student = students.find((item) => item.id === event.target.value); if (student) setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, student, matchBasis: "Manually confirmed", error: /match|review|admission number was not found/i.test(item.error || "") ? undefined : item.error } : item)); }} className="w-full rounded border border-slate-300 px-2 py-1 text-xs"><option value="">Choose student for review</option>{students.map((student) => <option key={student.id} value={student.id}>{student.admission_number} — {student.first_name} {student.other_names ? `${student.other_names} ` : ""}{student.last_name}</option>)}</select>}</td><td className="p-2">{row.matchBasis || "—"}</td><td className="p-2">{row.bankAccount ? `${row.bankAccount.account_code} — ${row.bankAccount.account_name}` : "—"}</td><td className="p-2">{row.feeType || "—"}</td><td className="p-2 text-right">{row.amount > 0 ? row.amount.toLocaleString() : "—"}</td><td className="p-2">{row.reference || "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready"}</td></tr>)}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{directBankImportRows.filter((row) => !row.error).length} ready · {directBankImportRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void importDirectBankRows()} disabled={directBankImporting || !directBankImportRows.some((row) => !row.error)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{directBankImporting ? "Importing…" : "Import ready payments"}</button></div></div>}
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <SearchableCombobox
