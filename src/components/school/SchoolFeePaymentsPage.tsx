@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, Printer, Upload } from "lucide-react";
+import { Download, FolderOpen, Pencil, Printer, Upload, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -40,6 +40,7 @@ type PayRow = {
 };
 type BankAccount = { id: string; account_code: string; account_name: string; account_type: string; category?: string | null };
 type BudgetIncomeLine = { line_label: string };
+type PaymentFilters = { studentId: string; className: string; method: string; bankAccountId: string; incomeType: string; from: string; to: string; month: string };
 
 const DEFAULT_INCOME_TYPES = [
   "School Fees",
@@ -82,6 +83,31 @@ function uploadFileFromNotes(notes: string | null | undefined): string | null {
   return match?.[1]?.trim() || null;
 }
 
+function paymentLocalDay(value: string | null | undefined): string {
+  const date = new Date(String(value || ""));
+  if (Number.isNaN(date.getTime())) return String(value || "").slice(0, 10);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
+
+function monthBounds(month: string): { from: string; toExclusive: string } | null {
+  if (!/^\d{4}-\d{2}$/.test(month)) return null;
+  const [year, monthNumber] = month.split("-").map(Number);
+  return { from: month + "-01", toExclusive: new Date(Date.UTC(year, monthNumber, 1)).toISOString().slice(0, 10) };
+}
+
+function paymentBatchKey(payment: PayRow): string | null {
+  const tagged = String(payment.notes || "").match(/(?:^|\s·\s)Batch:\s*([^·]+?)(?=\s·\s|$)/i)?.[1]?.trim();
+  if (tagged) return "batch:" + tagged;
+  const file = uploadFileFromNotes(payment.notes);
+  return file ? "file:" + file : null;
+}
+
+function paymentBatchLabel(payment: PayRow): string | null {
+  const key = paymentBatchKey(payment);
+  if (!key) return null;
+  return key.startsWith("file:") ? uploadFileFromNotes(payment.notes) || "Imported file" : key.slice("batch:".length);
+}
+
 type Props = {
   readOnly?: boolean;
   /** Deep-link from reports (e.g. School Defaulters) — pre-fills student and optional invoice. */
@@ -109,6 +135,7 @@ function normalizeFeeLines(lines: FeeLine[] | null | undefined): Array<{ code: s
 export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoiceId }: Props) {
   const { user } = useAuth();
   const canBulkReverse = user?.isSuperAdmin === true;
+  const canEditBatches = user?.isSuperAdmin === true || user?.role === "admin" || user?.role === "super_admin";
   const [rows, setRows] = useState<PayRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const [invoices, setInvoices] = useState<InvOpt[]>([]);
@@ -142,8 +169,12 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkUpdateProgress, setBulkUpdateProgress] = useState({ completed: 0, total: 0 });
   const [bulkReversing, setBulkReversing] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
-  const [paymentFilters, setPaymentFilters] = useState({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "" });
+  const [paymentFilters, setPaymentFilters] = useState<PaymentFilters>({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" });
   const [showBankColumn, setShowBankColumn] = useState(true);
+  const [openBatchKey, setOpenBatchKey] = useState<string | null>(null);
+  const [editingPayment, setEditingPayment] = useState<PayRow | null>(null);
+  const [editPaidDate, setEditPaidDate] = useState("");
+  const [savingPaymentEdit, setSavingPaymentEdit] = useState(false);
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
@@ -226,6 +257,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     let imported = 0;
     let skipped = 0;
     const paymentMethod = schoolPayImportBankAccountId ? "bank" : "school_pay";
+    const batchLabel = `SchoolPay ${new Date().toISOString().replace(/[:.]/g, "-")}`;
     // One duplicate lookup for the batch avoids a round trip for every spreadsheet row.
     const existingResult = await supabase.from("school_payments").select("reference").eq("organization_id", orgId).in("reference", validRows.map((row) => row.reference));
     if (existingResult.error) {
@@ -260,7 +292,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       if (!allocations.length) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); return; }
       if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
-      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: paymentMethod, bank_gl_account_id: schoolPayImportBankAccountId || null, bank_payment_source: schoolPayImportBankAccountId ? "schoolpay" : null, reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: "Bulk imported from SchoolPay" }).select("id").single();
+      const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: paymentMethod, bank_gl_account_id: schoolPayImportBankAccountId || null, bank_payment_source: schoolPayImportBankAccountId ? "schoolpay" : null, reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: `Bulk imported from SchoolPay · Batch: ${batchLabel}` }).select("id").single();
       if (paymentResult.error) { setImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: paymentResult.error.message } : item)); return; }
       const updateResults = await Promise.all(invoiceUpdates.map((invoice) => supabase.from("student_invoices").update({ amount_paid: invoice.paid, status: invoice.paid >= invoice.total ? "paid" : "partial" }).eq("id", invoice.id)));
       const updateError = updateResults.find((result) => result.error)?.error;
@@ -382,6 +414,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     let imported = 0;
     let skipped = 0;
     const importedReferences = new Set<string>();
+    const batchLabel = `Direct bank ${new Date().toISOString().replace(/[:.]/g, "-")}`;
     const existingResult = await supabase.from("school_payments").select("reference").eq("organization_id", orgId).in("reference", validRows.map((row) => row.reference));
     if (existingResult.error) { setDirectBankImporting(false); setDirectBankImportMessage(existingResult.error.message); return; }
     const existingReferences = new Set(((existingResult.data as Array<{ reference: string | null }> | null) || []).map((payment) => payment.reference).filter((reference): reference is string => !!reference));
@@ -410,7 +443,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       if (!allocations.length) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); return; }
       if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
-      const notes = [`Bulk imported direct bank slip`, `Upload file: ${row.sourceFileName}`, `Bank: ${row.bank}`, `Fee type: ${row.feeType}`, row.notes].filter(Boolean).join(" · ");
+      const notes = [`Bulk imported direct bank slip`, `Batch: ${batchLabel}`, `Upload file: ${row.sourceFileName}`, `Bank: ${row.bank}`, `Fee type: ${row.feeType}`, row.notes].filter(Boolean).join(" · ");
       const paymentNotes = [notes, row.matchBasis ? `Student match: ${row.matchBasis}` : ""].filter(Boolean).join(" · ");
       const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "bank", bank_gl_account_id: row.bankAccount.id, bank_payment_source: "bank_slip", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: paymentNotes }).select("id").single();
       if (paymentResult.error) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: paymentResult.error.message } : item)); return; }
@@ -472,10 +505,19 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       return;
     }
-    let paymentsQuery = supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(1000);
-    if (paymentFilters.studentId) paymentsQuery = paymentsQuery.eq("student_id", paymentFilters.studentId);
+    const selectedMonth = monthBounds(paymentFilters.month);
+    const fromDate = paymentFilters.from || selectedMonth?.from;
+    const toExclusive = paymentFilters.to
+      ? new Date(new Date(paymentFilters.to + "T00:00:00").getTime() + 86_400_000).toISOString().slice(0, 10)
+      : selectedMonth?.toExclusive;
     const [pRes, studentResult] = await Promise.all([
-      paymentsQuery,
+      fetchAllPages<PayRow>((from, to) => {
+        let paymentsQuery = supabase.from("school_payments").select("*").eq("organization_id", orgId).order("paid_at", { ascending: false }).range(from, to);
+        if (paymentFilters.studentId) paymentsQuery = paymentsQuery.eq("student_id", paymentFilters.studentId);
+        if (fromDate) paymentsQuery = paymentsQuery.gte("paid_at", fromDate);
+        if (toExclusive) paymentsQuery = paymentsQuery.lt("paid_at", toExclusive);
+        return paymentsQuery;
+      }).then((data) => ({ data, error: null })).catch((error: unknown) => ({ data: null, error })),
       fetchAllPages<StudentOpt>((from, to) => supabase
         .from("students")
         .select("id,first_name,other_names,last_name,admission_number,class_name,school_pay_number")
@@ -489,7 +531,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setRows((pRes.data as PayRow[]) || []);
     setStudents(studentResult.data || []);
     setLoading(false);
-  }, [user?.organization_id, paymentFilters.studentId]);
+  }, [user?.organization_id, paymentFilters.studentId, paymentFilters.from, paymentFilters.to, paymentFilters.month]);
 
   useEffect(() => {
     if (!user?.organization_id) {
@@ -1075,17 +1117,52 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     setBulkReversing(false);
   };
 
+  const beginPaymentEdit = (payment: PayRow) => {
+    setEditingPayment(payment);
+    setEditPaidDate(paymentLocalDay(payment.paid_at));
+  };
+
+  const savePaymentDate = async () => {
+    const orgId = user?.organization_id;
+    if (!editingPayment || !orgId || !editPaidDate || savingPaymentEdit) return;
+    setSavingPaymentEdit(true);
+    setErr(null);
+    try {
+      const prior = new Date(editingPayment.paid_at);
+      const replacement = new Date(editPaidDate + "T12:00:00");
+      if (Number.isNaN(replacement.getTime())) throw new Error("Enter a valid payment date.");
+      replacement.setHours(Number.isNaN(prior.getTime()) ? 12 : prior.getHours(), Number.isNaN(prior.getTime()) ? 0 : prior.getMinutes(), 0, 0);
+      const patch = { paid_at: replacement.toISOString() };
+      let saved: PayRow;
+      if (canUseSchoolApi()) saved = await updateSchoolRow<PayRow>("payments", orgId, editingPayment.id, patch);
+      else {
+        const result = await supabase.from("school_payments").update(patch).eq("organization_id", orgId).eq("id", editingPayment.id).select("*").single();
+        if (result.error) throw result.error;
+        saved = result.data as PayRow;
+        const accounting = await postSchoolFeePaymentAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, paymentId: saved.id, amount: Number(saved.amount), method: saved.method, paidAt: saved.paid_at, studentId: saved.student_id, bankGlAccountId: saved.bank_gl_account_id });
+        if (accounting.journalMessage) throw new Error(accounting.journalMessage);
+      }
+      setRows((current) => current.map((payment) => payment.id === saved.id ? { ...payment, ...saved } : payment));
+      setEditingPayment(null);
+      setBulkMessage("Payment date updated.");
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "The payment date could not be updated.");
+    } finally { setSavingPaymentEdit(false); }
+  };
+
   const visiblePayments = useMemo(() => rows.filter((payment) => {
-    const day = String(payment.paid_at || "").slice(0, 10);
+    const day = paymentLocalDay(payment.paid_at);
     const incomeTypes = (payment.invoice_allocations || []).map((allocation) => normalizeIncomeType(allocation.category_label).toLowerCase());
     return (!paymentFilters.studentId || payment.student_id === paymentFilters.studentId)
       && (!paymentFilters.className || students.find((student) => student.id === payment.student_id)?.class_name === paymentFilters.className)
       && (!paymentFilters.method || payment.method === paymentFilters.method)
       && (!paymentFilters.bankAccountId || payment.bank_gl_account_id === paymentFilters.bankAccountId)
       && (!paymentFilters.incomeType || incomeTypes.includes(paymentFilters.incomeType.toLowerCase()))
+      && (!paymentFilters.month || day.slice(0, 7) === paymentFilters.month)
       && (!paymentFilters.from || day >= paymentFilters.from)
       && (!paymentFilters.to || day <= paymentFilters.to);
   }), [rows, students, paymentFilters]);
+  const openBatchPayments = useMemo(() => openBatchKey ? rows.filter((payment) => paymentBatchKey(payment) === openBatchKey) : [], [rows, openBatchKey]);
   const incomeTypes = useMemo(() => {
     const types = [
       ...DEFAULT_INCOME_TYPES,
@@ -1188,8 +1265,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         </div>
         </>
       )}
-      {!readOnly && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
-        <div><h2 className="font-semibold text-slate-900">Bulk edit fee payments</h2><p className="mt-1 text-sm text-slate-600">Select recorded payments below, then update their bank routing or income type.</p></div>
+      {!readOnly && canEditBatches && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
+        <div><h2 className="font-semibold text-slate-900">Bulk edit fee payments</h2><p className="mt-1 text-sm text-slate-600">Administrators can select payments below, including a complete imported batch, then update their bank routing or income type.</p></div>
         <div className="flex gap-2 border-b border-indigo-200"><button type="button" onClick={() => setBulkEditTab("routing")} className={`border-b-2 px-3 py-2 text-sm font-medium ${bulkEditTab === "routing" ? "border-indigo-700 text-indigo-800" : "border-transparent text-slate-600"}`}>Bank routing</button><button type="button" onClick={() => setBulkEditTab("income_type")} className={`border-b-2 px-3 py-2 text-sm font-medium ${bulkEditTab === "income_type" ? "border-indigo-700 text-indigo-800" : "border-transparent text-slate-600"}`}>Income type</button></div>
         {bulkEditTab === "routing" ? <div className="grid gap-3 md:grid-cols-3">
           <select value={bulkMethod} onChange={(event) => setBulkMethod(event.target.value as SchoolPaymentMethod)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
@@ -1209,9 +1286,10 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
       <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-7">
-          <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <div className="grid gap-3 md:grid-cols-8">
+          <input type="month" aria-label="Payments month" value={paymentFilters.month} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, month: event.target.value, from: "", to: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value, month: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+          <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value, month: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <SearchableCombobox
             value={paymentFilters.studentId}
             onChange={(studentId) => setPaymentFilters((filters) => ({ ...filters, studentId }))}
@@ -1226,7 +1304,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <select aria-label="Filter payments by income type" value={paymentFilters.incomeType} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, incomeType: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All income types</option>{incomeTypes.map((incomeType) => <option key={incomeType} value={incomeType}>{incomeType}</option>)}</select>
           <select aria-label="Filter payments by deposited-to bank" value={paymentFilters.bankAccountId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, bankAccountId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All deposited-to banks</option>{bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}</select>
         </div>
-        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
+        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
       </section>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
@@ -1243,6 +1321,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
               <th className="text-left p-3 font-semibold text-slate-700">Upload file</th>
               <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
+              <th className="text-right p-3 font-semibold text-slate-700 print:hidden">Actions</th>
               <th className="text-right p-3 font-semibold text-slate-700 whitespace-nowrap print:hidden min-w-[7rem]">
                 Receipt
               </th>
@@ -1251,13 +1330,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={(readOnly ? 10 : 11) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 11 : 12) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
             ) : visiblePayments.length === 0 ? (
               <tr>
-                <td colSpan={(readOnly ? 10 : 11) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 11 : 12) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   No payments yet.
                 </td>
               </tr>
@@ -1277,6 +1356,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                    {showBankColumn && <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>}
                    <td className="p-3 text-slate-600">{uploadFileFromNotes(r.notes) || "—"}</td>
                    <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
+                    <td className="p-3 text-right whitespace-nowrap print:hidden"><div className="inline-flex gap-1">{paymentBatchKey(r) && <button type="button" title="Open import batch" aria-label="Open import batch" onClick={() => setOpenBatchKey(paymentBatchKey(r))} className="rounded p-2 text-indigo-700 hover:bg-indigo-50"><FolderOpen className="h-4 w-4" /></button>}{!readOnly && <button type="button" title="Edit payment date" aria-label="Edit payment date" onClick={() => beginPaymentEdit(r)} className="rounded p-2 text-slate-700 hover:bg-slate-100"><Pencil className="h-4 w-4" /></button>}</div></td>
                   <td className="p-3 text-right whitespace-nowrap print:hidden min-w-[7rem]">
                     <button
                       type="button"
@@ -1293,6 +1373,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           </tbody>
         </table>
       </div>
+
+      {openBatchKey && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label="Imported payment batch"><div className="max-h-[85vh] w-full max-w-4xl overflow-auto rounded-xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900">Imported payment batch</h2><p className="mt-1 text-sm text-slate-600">{openBatchPayments.length} payment{openBatchPayments.length === 1 ? "" : "s"} · {paymentBatchLabel(openBatchPayments[0]) || "Imported batch"}</p></div><button type="button" onClick={() => setOpenBatchKey(null)} className="rounded p-2 text-slate-500 hover:bg-slate-100" aria-label="Close batch"><X className="h-5 w-5" /></button></div><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Date</th><th className="p-2 text-left">Student</th><th className="p-2 text-left">Reference</th><th className="p-2 text-right">Amount</th></tr></thead><tbody>{openBatchPayments.map((payment) => { const student = students.find((item) => item.id === payment.student_id); return <tr key={payment.id} className="border-t"><td className="p-2">{paymentLocalDay(payment.paid_at)}</td><td className="p-2">{student ? student.admission_number + " — " + student.first_name + " " + student.last_name : "—"}</td><td className="p-2">{payment.reference || "—"}</td><td className="p-2 text-right">{Number(payment.amount).toLocaleString()}</td></tr>; })}</tbody></table></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setOpenBatchKey(null)} className="app-btn-secondary">Close</button>{canEditBatches && !readOnly && <button type="button" onClick={() => { setSelectedPaymentIds(openBatchPayments.map((payment) => payment.id)); setOpenBatchKey(null); setBulkMessage(openBatchPayments.length + " batch payment" + (openBatchPayments.length === 1 ? "" : "s") + " selected for editing."); }} className="app-btn-primary">Edit this batch</button>}</div></div></div>}
+      {editingPayment && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label="Edit payment date"><div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900">Edit payment date</h2><p className="mt-1 text-sm text-slate-600">{editingPayment.reference || "School-fee payment"}</p></div><button type="button" onClick={() => setEditingPayment(null)} className="rounded p-2 text-slate-500 hover:bg-slate-100" aria-label="Close edit"><X className="h-5 w-5" /></button></div><label className="mt-4 block text-sm font-medium text-slate-700">Payment date<input type="date" value={editPaidDate} onChange={(event) => setEditPaidDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" /></label><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditingPayment(null)} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void savePaymentDate()} disabled={savingPaymentEdit || !editPaidDate} className="app-btn-primary">{savingPaymentEdit ? "Saving…" : "Save date"}</button></div></div></div>}
 
       {receiptPreview && (
         <SchoolFeeReceiptPreviewModal
