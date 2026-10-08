@@ -1345,6 +1345,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               {showBankColumn && sortHeader("Deposited to", "bank")}
               {sortHeader("Upload file", "upload")}
               {sortHeader("Reference", "reference")}
+              <th className="text-center p-3 font-semibold text-slate-700 print:hidden">Batch</th>
               <th className="text-right p-3 font-semibold text-slate-700 print:hidden">Actions</th>
               <th className="text-right p-3 font-semibold text-slate-700 whitespace-nowrap print:hidden min-w-[7rem]">
                 Receipt
@@ -1354,7 +1355,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <tbody>
             {loading ? (
               <tr>
-                <td colSpan={(readOnly ? 11 : 12) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
+                <td colSpan={(readOnly ? 12 : 13) + (showBankColumn ? 1 : 0)} className="p-6 text-slate-500">
                   Loading…
                 </td>
               </tr>
@@ -1380,7 +1381,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                    {showBankColumn && <td className="p-3 text-slate-600">{r.bank_gl_account_id ? bankAccounts.find((account) => account.id === r.bank_gl_account_id)?.account_name || "Bank account" : "—"}</td>}
                    <td className="p-3 text-slate-600">{uploadFileFromNotes(r.notes) || "—"}</td>
                    <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
-                    <td className="p-3 text-right whitespace-nowrap print:hidden"><div className="inline-flex gap-1">{paymentBatchKey(r) && <button type="button" title="Open import batch" aria-label="Open import batch" onClick={() => setOpenBatchKey(paymentBatchKey(r))} className="rounded p-2 text-indigo-700 hover:bg-indigo-50"><FolderOpen className="h-4 w-4" /></button>}{!readOnly && <button type="button" title="Edit payment date" aria-label="Edit payment date" onClick={() => beginPaymentEdit(r)} className="rounded p-2 text-slate-700 hover:bg-slate-100"><Pencil className="h-4 w-4" /></button>}</div></td>
+                    <td className="p-3 text-center whitespace-nowrap print:hidden">{paymentBatchKey(r) ? <button type="button" title={"Open batch: " + paymentBatchLabel(r)} aria-label="Open import batch" onClick={() => setOpenBatchKey(paymentBatchKey(r))} className="rounded p-2 text-indigo-700 hover:bg-indigo-50"><FolderOpen className="h-5 w-5" /></button> : <span className="text-slate-300">—</span>}</td>
+                    <td className="p-3 text-right whitespace-nowrap print:hidden">{!readOnly && <button type="button" title="Edit payment date" aria-label="Edit payment date" onClick={() => beginPaymentEdit(r)} className="rounded p-2 text-slate-700 hover:bg-slate-100"><Pencil className="h-4 w-4" /></button>}</td>
                   <td className="p-3 text-right whitespace-nowrap print:hidden min-w-[7rem]">
                     <button
                       type="button"
