@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Download, FolderOpen, Pencil, Printer, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowDownUp, ArrowUp, Download, FolderOpen, Pencil, Printer, Upload, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -41,6 +41,7 @@ type PayRow = {
 type BankAccount = { id: string; account_code: string; account_name: string; account_type: string; category?: string | null };
 type BudgetIncomeLine = { line_label: string };
 type PaymentFilters = { studentId: string; className: string; method: string; bankAccountId: string; incomeType: string; from: string; to: string; month: string };
+type PaymentSortKey = "paid_at" | "schoolpay" | "student" | "class" | "income" | "amount" | "method" | "bank" | "upload" | "reference";
 
 const DEFAULT_INCOME_TYPES = [
   "School Fees",
@@ -171,6 +172,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState<PaymentFilters>({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" });
   const [showBankColumn, setShowBankColumn] = useState(true);
+  const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; direction: "asc" | "desc" }>({ key: "paid_at", direction: "desc" });
   const [openBatchKey, setOpenBatchKey] = useState<string | null>(null);
   const [editingPayment, setEditingPayment] = useState<PayRow | null>(null);
   const [editPaidDate, setEditPaidDate] = useState("");
@@ -1162,6 +1164,28 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       && (!paymentFilters.from || day >= paymentFilters.from)
       && (!paymentFilters.to || day <= paymentFilters.to);
   }), [rows, students, paymentFilters]);
+  const sortedPayments = useMemo(() => [...visiblePayments].sort((left, right) => {
+    const studentName = (payment: PayRow) => { const student = students.find((item) => item.id === payment.student_id); return student ? student.first_name + " " + student.last_name : ""; };
+    const value = (payment: PayRow): string | number => {
+      switch (paymentSort.key) {
+        case "paid_at": return paymentLocalDay(payment.paid_at);
+        case "schoolpay": return students.find((item) => item.id === payment.student_id)?.school_pay_number || "";
+        case "student": return studentName(payment);
+        case "class": return students.find((item) => item.id === payment.student_id)?.class_name || "";
+        case "income": return paymentIncomeTypeLabel(payment);
+        case "amount": return Number(payment.amount || 0);
+        case "method": return payment.method || "";
+        case "bank": return payment.bank_gl_account_id ? bankAccounts.find((account) => account.id === payment.bank_gl_account_id)?.account_name || "" : "";
+        case "upload": return uploadFileFromNotes(payment.notes) || "";
+        case "reference": return payment.reference || "";
+      }
+    };
+    const a = value(left); const b = value(right);
+    const comparison = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+    return paymentSort.direction === "asc" ? comparison : -comparison;
+  }), [visiblePayments, students, bankAccounts, paymentSort]);
+  const togglePaymentSort = (key: PaymentSortKey) => setPaymentSort((current) => current.key === key ? { key, direction: current.direction === "asc" ? "desc" : "asc" } : { key, direction: key === "paid_at" ? "desc" : "asc" });
+  const sortHeader = (label: string, key: PaymentSortKey, align: "left" | "right" = "left") => <th className={"p-3 text-" + align + " font-semibold text-slate-700"}><button type="button" onClick={() => togglePaymentSort(key)} className={"inline-flex items-center gap-1 hover:text-indigo-700 " + (align === "right" ? "justify-end" : "")} aria-label={"Sort by " + label}>{label}{paymentSort.key === key ? paymentSort.direction === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" /> : <ArrowDownUp className="h-3.5 w-3.5 text-slate-400" />}</button></th>;
   const openBatchPayments = useMemo(() => openBatchKey ? rows.filter((payment) => paymentBatchKey(payment) === openBatchKey) : [], [rows, openBatchKey]);
   const incomeTypes = useMemo(() => {
     const types = [
@@ -1311,16 +1335,16 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <thead className="bg-slate-50 border-b border-slate-200">
             <tr>
               {!readOnly && <th className="w-10 p-3"><input type="checkbox" aria-label="Select all filtered payments" checked={visiblePayments.length > 0 && visiblePayments.every((row) => selectedPaymentIds.includes(row.id))} onChange={(event) => setSelectedPaymentIds(event.target.checked ? [...new Set([...selectedPaymentIds, ...visiblePayments.map((row) => row.id)])] : selectedPaymentIds.filter((id) => !visiblePayments.some((row) => row.id === id)))} /></th>}
-              <th className="text-left p-3 font-semibold text-slate-700">When</th>
-              <th className="text-left p-3 font-semibold text-slate-700">SchoolPay code</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Student</th>
-               <th className="text-left p-3 font-semibold text-slate-700">Class</th>
-               <th className="text-left p-3 font-semibold text-slate-700">Income type</th>
-              <th className="text-right p-3 font-semibold text-slate-700">Amount</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Method</th>
-              {showBankColumn && <th className="text-left p-3 font-semibold text-slate-700">Deposited to</th>}
-              <th className="text-left p-3 font-semibold text-slate-700">Upload file</th>
-              <th className="text-left p-3 font-semibold text-slate-700">Reference</th>
+              {sortHeader("When", "paid_at")}
+              {sortHeader("SchoolPay code", "schoolpay")}
+              {sortHeader("Student", "student")}
+               {sortHeader("Class", "class")}
+               {sortHeader("Income type", "income")}
+              {sortHeader("Amount", "amount", "right")}
+              {sortHeader("Method", "method")}
+              {showBankColumn && sortHeader("Deposited to", "bank")}
+              {sortHeader("Upload file", "upload")}
+              {sortHeader("Reference", "reference")}
               <th className="text-right p-3 font-semibold text-slate-700 print:hidden">Actions</th>
               <th className="text-right p-3 font-semibold text-slate-700 whitespace-nowrap print:hidden min-w-[7rem]">
                 Receipt
@@ -1341,7 +1365,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                 </td>
               </tr>
             ) : (
-              visiblePayments.map((r) => (
+              sortedPayments.map((r) => (
                 <tr key={r.id} className="border-b border-slate-100 hover:bg-slate-50/80">
                    {!readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${r.reference || r.id}`} checked={selectedPaymentIds.includes(r.id)} onChange={() => togglePaymentSelection(r.id)} /></td>}
                   <td className="p-3 text-slate-700">{new Date(r.paid_at).toLocaleString()}</td>
