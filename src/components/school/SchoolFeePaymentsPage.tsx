@@ -23,6 +23,8 @@ type FeeStructure = { id: string; line_items: FeeLine[] | null };
 type PaymentSlice = { invoice_id: string; amount: number; category_code?: string; category_label?: string; priority?: number };
 type SchoolPayImportRow = { row: number; schoolPayCode: string; amount: number; reference: string; paidAt: string; student?: StudentOpt; error?: string };
 type DirectBankImportRow = { row: number; sourceFileName: string; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchEvidence: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
+type BulkCancelImportRow = { row: number; reference: string; payment?: PayRow; error?: string };
+type FeePaymentActivity = "schoolpay" | "directBank" | "manual" | "bulkEdit" | "bulkCancel";
 
 type PayRow = {
   id: string;
@@ -149,6 +151,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [enabledMethods, setEnabledMethods] = useState<SchoolPaymentMethod[]>(DEFAULT_SCHOOL_PAYMENT_METHODS);
   const [receiptPreview, setReceiptPreview] = useState<SchoolFeeReceiptDetail | null>(null);
   const [importRows, setImportRows] = useState<SchoolPayImportRow[]>([]);
+  const [activeActivity, setActiveActivity] = useState<FeePaymentActivity>("schoolpay");
   const [importing, setImporting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ completed: number; total: number }>({ completed: 0, total: 0 });
   const [importMessage, setImportMessage] = useState<string | null>(null);
@@ -170,6 +173,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkUpdateProgress, setBulkUpdateProgress] = useState({ completed: 0, total: 0 });
   const [bulkReversing, setBulkReversing] = useState(false);
   const [bulkMessage, setBulkMessage] = useState<string | null>(null);
+  const [bulkCancelRows, setBulkCancelRows] = useState<BulkCancelImportRow[]>([]);
+  const [bulkCancelMessage, setBulkCancelMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState<PaymentFilters>({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" });
   const [showBankColumn, setShowBankColumn] = useState(true);
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; direction: "asc" | "desc" }>({ key: "paid_at", direction: "desc" });
@@ -995,6 +1000,71 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     XLSX.writeFile(book, "boat-direct-bank-fee-payments-template.xlsx");
   };
 
+  const downloadBulkCancelTemplate = () => {
+    const sheet = XLSX.utils.json_to_sheet([{ "Payment Reference": "TXN-123456789" }]);
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, "Payments to cancel");
+    XLSX.writeFile(book, "boat-bulk-payment-cancellation-template.xlsx");
+  };
+
+  const parseBulkCancelFile = async (file?: File) => {
+    if (!file) return;
+    setBulkCancelMessage(null);
+    try {
+      const book = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const sheetName = book.SheetNames[0];
+      if (!sheetName) throw new Error("The file has no worksheet.");
+      const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(book.Sheets[sheetName], { defval: "", raw: true });
+      const normalized = (value: string) => value.toLowerCase().replace(/[^a-z0-9]/g, "");
+      const referenceFor = (row: Record<string, unknown>) => {
+        const wanted = ["paymentreference", "reference", "transactionreference", "banksliptransactionreference"];
+        const key = Object.keys(row).find((candidate) => wanted.includes(normalized(candidate)));
+        return key ? String(row[key] || "").trim() : "";
+      };
+      const seen = new Set<string>();
+      const parsed = raw.map((row, index): BulkCancelImportRow => {
+        const reference = referenceFor(row);
+        const matches = reference ? rows.filter((payment) => String(payment.reference || "").trim() === reference) : [];
+        let error = "";
+        if (!reference) error = "Payment reference is missing";
+        else if (seen.has(reference)) error = "Duplicate reference in this cancellation file";
+        else if (matches.length === 0) error = "No payment with this reference was found in the current organization";
+        else if (matches.length > 1) error = "More than one payment has this reference — cancel it individually";
+        seen.add(reference);
+        return { row: index + 2, reference, payment: matches.length === 1 ? matches[0] : undefined, error: error || undefined };
+      });
+      setBulkCancelRows(parsed);
+      setBulkCancelMessage(parsed.length ? `Checked ${parsed.length} row${parsed.length === 1 ? "" : "s"}. Review matched payments before cancelling.` : "No cancellation rows were found.");
+    } catch (error) {
+      setBulkCancelRows([]);
+      setBulkCancelMessage(error instanceof Error ? error.message : "The cancellation file could not be read.");
+    }
+  };
+
+  const cancelUploadedPayments = async () => {
+    const orgId = user?.organization_id;
+    const readyRows = bulkCancelRows.filter((row) => !row.error && row.payment);
+    if (!orgId || !readyRows.length || bulkReversing) return;
+    if (!window.confirm(`Cancel ${readyRows.length} uploaded fee payment${readyRows.length === 1 ? "" : "s"}? This restores invoice balances and cannot be undone.`)) return;
+    setBulkReversing(true);
+    setErr(null);
+    let cancelled = 0;
+    const cancelledIds = new Set<string>();
+    const failures: string[] = [];
+    for (const row of readyRows) {
+      const result = await supabase.rpc("reverse_school_fee_payment", { p_payment_id: row.payment!.id, p_organization_id: orgId });
+      if (result.error) failures.push(`${row.reference}: ${result.error.message}`);
+      else { cancelled += 1; cancelledIds.add(row.payment!.id); }
+    }
+    if (cancelled) {
+      setRows((current) => current.filter((row) => !cancelledIds.has(row.id)));
+      setBulkCancelRows((current) => current.filter((row) => !row.payment || !cancelledIds.has(row.payment.id)));
+    }
+    setBulkReversing(false);
+    setBulkCancelMessage(`Cancelled ${cancelled} payment${cancelled === 1 ? "" : "s"}${failures.length ? `; ${failures.length} could not be cancelled.` : "."}`);
+    if (failures.length) setErr(failures[0]);
+  };
+
   const applyBulkPaymentEdit = async () => {
     const orgId = user?.organization_id;
     if (!orgId || selectedPaymentIds.length === 0 || bulkUpdating) return;
@@ -1215,7 +1285,16 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       {err && <p className="text-red-600 text-sm">{err}</p>}
       {!readOnly && (
         <>
-        <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
+        <nav aria-label="Fee payment activities" className="flex flex-wrap gap-2 rounded-xl border border-slate-200 bg-white p-3 shadow-sm">
+          {([
+            ["schoolpay", "SchoolPay upload"],
+            ["directBank", "Direct-bank upload"],
+            ["manual", "Record payment"],
+            ...(canEditBatches ? [["bulkEdit", "Bulk edit"]] : []),
+            ...(canBulkReverse ? [["bulkCancel", "Bulk cancel"]] : []),
+          ] as Array<[FeePaymentActivity, string]>).map(([activity, label]) => <button key={activity} type="button" onClick={() => setActiveActivity(activity)} className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${activeActivity === activity ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{label}</button>)}
+        </nav>
+        {activeActivity === "schoolpay" && <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-4 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><h2 className="font-semibold text-slate-900">Bulk upload from SchoolPay</h2><p className="mt-1 text-sm text-slate-600">Upload the updated Excel or CSV list. BOAT matches each payment using the student&apos;s unique SchoolPay code, checks duplicate transaction references, and allocates payments to their oldest open invoices.</p></div>
             <div className="flex flex-wrap gap-2">
@@ -1230,8 +1309,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           {importMessage && <p className="text-sm text-slate-700" role="status">{importMessage}</p>}
           {importing && importProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Importing payments…</span><span>{importProgress.completed} of {importProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-emerald-100"><div className="h-full bg-emerald-600 transition-all" style={{ width: `${Math.round(importProgress.completed / importProgress.total * 100)}%` }} /></div></div>}
           {importRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">SchoolPay code</th><th className="p-2 text-left">Student</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Transaction reference</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{importRows.map((row) => <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="p-2">{row.schoolPayCode || "—"}</td><td className="p-2">{row.student ? `${row.student.first_name} ${row.student.last_name}` : "—"}</td><td className="p-2 text-right">{row.amount > 0 ? row.amount.toLocaleString() : "—"}</td><td className="p-2">{row.reference || "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready"}</td></tr>)}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{importRows.filter((row) => !row.error).length} ready · {importRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void importSchoolPayRows()} disabled={importing || !importRows.some((row) => !row.error)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{importing ? "Importing…" : "Import ready payments"}</button></div></div>}
-        </div>
-        <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 space-y-3">
+        </div>}
+        {activeActivity === "directBank" && <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div><h2 className="font-semibold text-slate-900">Bulk upload direct bank payments</h2><p className="mt-1 text-sm text-slate-600">Upload bank-slip deposits for school fees, examination fees, uniform, and other fee types. BOAT matches students by admission number or a unique SchoolPay code in the statement description, checks duplicate references, and allocates only confirmed matches to the oldest open invoices.</p></div>
             <div className="flex flex-wrap gap-2">
@@ -1243,8 +1322,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           {directBankImportMessage && <p className="text-sm text-slate-700" role="status">{directBankImportMessage}</p>}
           {directBankImporting && directBankImportProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Importing direct-bank payments…</span><span>{directBankImportProgress.completed} of {directBankImportProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-sky-100"><div className="h-full bg-sky-600 transition-all" style={{ width: `${Math.round(directBankImportProgress.completed / directBankImportProgress.total * 100)}%` }} /></div></div>}
           {directBankImportRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[860px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">Student</th><th className="p-2 text-left">Match basis</th><th className="p-2 text-left">Bank account</th><th className="p-2 text-left">Fee type</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Reference</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{directBankImportRows.map((row) => <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="min-w-64 p-2">{row.student ? `${row.student.admission_number} — ${row.student.first_name} ${row.student.other_names ? `${row.student.other_names} ` : ""}${row.student.last_name}` : <SearchableCombobox value="" onChange={(studentId) => { const student = students.find((item) => item.id === studentId); if (student) setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, student, matchBasis: "Manually confirmed", error: /match|review|admission number was not found/i.test(item.error || "") ? undefined : item.error } : item)); }} options={students.map((student) => ({ id: student.id, label: `${student.admission_number} — ${student.first_name} ${student.other_names ? `${student.other_names} ` : ""}${student.last_name}${student.school_pay_number ? ` · SchoolPay: ${student.school_pay_number}` : ""}` }))} emptyOption={{ label: "Choose student for review" }} placeholder="Type name, admission, or SchoolPay…" inputAriaLabel={`Search student for import row ${row.row}`} className="min-w-60" />}</td><td className="p-2">{row.matchBasis || "—"}</td><td className="p-2">{row.bankAccount ? `${row.bankAccount.account_code} — ${row.bankAccount.account_name}` : "—"}</td><td className="p-2">{row.feeType || "—"}</td><td className="p-2 text-right">{row.amount > 0 ? row.amount.toLocaleString() : "—"}</td><td className="p-2">{row.reference || "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready"}</td></tr>)}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{directBankImportRows.filter((row) => !row.error).length} ready · {directBankImportRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void importDirectBankRows()} disabled={directBankImporting || !directBankImportRows.some((row) => !row.error)} className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{directBankImporting ? "Importing…" : "Import ready payments"}</button></div></div>}
-        </div>
-        <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
+        </div>}
+        {activeActivity === "manual" && <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <SearchableCombobox
             value={form.student_id}
             onChange={(studentId) => setForm((f) => ({ ...f, student_id: studentId, invoice_id: "" }))}
@@ -1286,10 +1365,16 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <button type="button" onClick={recordPayment} disabled={saving} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60 w-fit">
             {saving ? "Saving payment..." : "Record school-fee payment"}
           </button>
-        </div>
+        </div>}
         </>
       )}
-      {!readOnly && canEditBatches && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
+      {!readOnly && canBulkReverse && activeActivity === "bulkCancel" && <section className="rounded-xl border border-red-200 bg-red-50/40 p-4 space-y-3">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h2 className="font-semibold text-slate-900">Bulk cancel fee payments</h2><p className="mt-1 text-sm text-slate-600">Upload payment references to cancel. BOAT matches each reference within this organization and shows every result before cancellation.</p></div><div className="flex flex-wrap gap-2"><button type="button" onClick={downloadBulkCancelTemplate} className="inline-flex items-center gap-2 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-medium text-red-800"><Download className="h-4 w-4"/> Template</button><label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-red-700 px-3 py-2 text-sm font-medium text-white hover:bg-red-800"><Upload className="h-4 w-4"/> Choose cancellation file<input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={(event) => { void parseBulkCancelFile(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label></div></div>
+        <p className="text-xs text-red-800">The file needs a <strong>Payment Reference</strong> column. Cancellation restores the related invoice balances and cannot be undone.</p>
+        {bulkCancelMessage && <p className="text-sm text-slate-700" role="status">{bulkCancelMessage}</p>}
+        {bulkCancelRows.length > 0 && <div className="space-y-3"><div className="max-h-72 overflow-auto rounded-lg border border-slate-200 bg-white"><table className="w-full min-w-[720px] text-sm"><thead className="sticky top-0 bg-slate-50"><tr><th className="p-2 text-left">Row</th><th className="p-2 text-left">Reference</th><th className="p-2 text-left">Student</th><th className="p-2 text-right">Amount</th><th className="p-2 text-left">Payment date</th><th className="p-2 text-left">Result</th></tr></thead><tbody>{bulkCancelRows.map((row) => { const student = row.payment ? students.find((item) => item.id === row.payment!.student_id) : undefined; return <tr key={row.row} className="border-t border-slate-100"><td className="p-2">{row.row}</td><td className="p-2">{row.reference || "—"}</td><td className="p-2">{student ? `${student.first_name} ${student.last_name}` : "—"}</td><td className="p-2 text-right">{row.payment ? Number(row.payment.amount).toLocaleString() : "—"}</td><td className="p-2">{row.payment ? paymentLocalDay(row.payment.paid_at) : "—"}</td><td className={`p-2 ${row.error ? "text-red-600" : "text-emerald-700"}`}>{row.error || "Ready to cancel"}</td></tr>; })}</tbody></table></div><div className="flex items-center justify-between gap-3"><p className="text-xs text-slate-600">{bulkCancelRows.filter((row) => !row.error).length} ready · {bulkCancelRows.filter((row) => row.error).length} need attention</p><button type="button" onClick={() => void cancelUploadedPayments()} disabled={bulkReversing || !bulkCancelRows.some((row) => !row.error)} className="rounded-lg bg-red-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{bulkReversing ? "Cancelling…" : "Cancel ready payments"}</button></div></div>}
+      </section>}
+      {!readOnly && canEditBatches && activeActivity === "bulkEdit" && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 space-y-3">
         <div><h2 className="font-semibold text-slate-900">Bulk edit fee payments</h2><p className="mt-1 text-sm text-slate-600">Administrators can select payments below, including a complete imported batch, then update their bank routing or income type.</p></div>
         <div className="flex gap-2 border-b border-indigo-200"><button type="button" onClick={() => setBulkEditTab("routing")} className={`border-b-2 px-3 py-2 text-sm font-medium ${bulkEditTab === "routing" ? "border-indigo-700 text-indigo-800" : "border-transparent text-slate-600"}`}>Bank routing</button><button type="button" onClick={() => setBulkEditTab("income_type")} className={`border-b-2 px-3 py-2 text-sm font-medium ${bulkEditTab === "income_type" ? "border-indigo-700 text-indigo-800" : "border-transparent text-slate-600"}`}>Income type</button></div>
         {bulkEditTab === "routing" ? <div className="grid gap-3 md:grid-cols-3">
