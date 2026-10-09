@@ -137,7 +137,7 @@ function normalizeFeeLines(lines: FeeLine[] | null | undefined): Array<{ code: s
 
 export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoiceId }: Props) {
   const { user } = useAuth();
-  const canBulkReverse = user?.isSuperAdmin === true;
+  const canBulkReverse = user?.isSuperAdmin === true || user?.role === "super_admin";
   const canEditBatches = user?.isSuperAdmin === true || user?.role === "admin" || user?.role === "super_admin";
   const [rows, setRows] = useState<PayRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
