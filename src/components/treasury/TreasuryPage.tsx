@@ -50,6 +50,7 @@ type Disbursement = {
 type TreasuryTab = "overview" | "cash-control" | "movements" | "end-of-day" | "daily-method" | "daily-department" | "approvals" | "disbursements" | "collections" | "history";
 type PaymentMethod = "cash" | "bank_transfer" | "mobile_money" | "wallet" | "card";
 type MovementFilter = "all" | "transfer" | "inflow" | "outflow";
+type OutflowBreakdown = "spendMoney" | "supplierPayments" | "otherOutflows" | "transfers";
 type FundingAccount = { id: string; account_code: string; account_name: string; account_type: string; category: string | null; is_active: boolean };
 type CashAccount = FundingAccount & { balance: number; kind: "Cash" | "Bank" | "Mobile / wallet" | "Float" };
 type MoneyJournalLine = { gl_account_id: string; debit: number; credit: number; line_description: string | null; gl_accounts?: { account_code: string; account_name: string } | null };
@@ -148,6 +149,7 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const [dateTo, setDateTo] = useState("");
   const [movementAccountId, setMovementAccountId] = useState("");
   const [movementFilter, setMovementFilter] = useState<MovementFilter>("all");
+  const [outflowBreakdown, setOutflowBreakdown] = useState<OutflowBreakdown | null>(null);
   const [summaryDate, setSummaryDate] = useState(() => businessTodayISO());
   const [transferForm, setTransferForm] = useState<TransferForm>({
     fromAccountId: "",
@@ -574,6 +576,14 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const eodExternalOutflows = eodMovement.spendMoney + eodMovement.supplierPayments + eodMovement.otherOutflows;
   const eodGrossOutflows = eodExternalOutflows + eodMovement.transfers;
   const eodCashEquivalentChange = eodMovement.inflows - eodExternalOutflows;
+  const eodBreakdownRows = useMemo(() => eodJournalRows.filter((journal) => {
+    if (outflowBreakdown === "spendMoney") return journal.transfer === 0 && journal.reference_type === "expense";
+    if (outflowBreakdown === "supplierPayments") return journal.transfer === 0 && journal.reference_type === "vendor_payment";
+    if (outflowBreakdown === "otherOutflows") return journal.transfer === 0 && journal.outflow > 0 && !["expense", "vendor_payment"].includes(journal.reference_type || "");
+    if (outflowBreakdown === "transfers") return journal.transfer > 0;
+    return false;
+  }), [eodJournalRows, outflowBreakdown]);
+  const outflowBreakdownTitle = outflowBreakdown === "spendMoney" ? "Spend Money" : outflowBreakdown === "supplierPayments" ? "Supplier payments" : outflowBreakdown === "otherOutflows" ? "Other external outflows" : "Transfers out";
   const dailySummaryCollections = useMemo(() => collections.filter((collection) => localDatePart(collection.paid_at) === summaryDate), [collections, summaryDate]);
   const dailySummaryDisbursements = useMemo(() => disbursements.filter((disbursement) => localDatePart(disbursement.date) === summaryDate), [disbursements, summaryDate]);
   const dailyMethodRows = useMemo(() => [
@@ -1234,12 +1244,16 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
         <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="border-b border-slate-200 px-5 py-4"><h2 className="font-bold text-slate-900">Outflow breakdown</h2><p data-treasury-comment className="text-sm text-slate-500">Gross outflows include transfers for operational visibility. Net cash-equivalent change excludes transfers because both sides are Treasury accounts.</p></div>
           <div className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-5">
-            <div className="rounded-xl bg-rose-50 p-4"><p className="text-xs font-bold uppercase text-rose-700">Spend Money</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.spendMoney)}</p></div>
-            <div className="rounded-xl bg-orange-50 p-4"><p className="text-xs font-bold uppercase text-orange-700">Suppliers</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.supplierPayments)}</p></div>
-            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-bold uppercase text-amber-700">Other external</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.otherOutflows)}</p></div>
-            <div className="rounded-xl bg-cyan-50 p-4"><p className="text-xs font-bold uppercase text-cyan-700">Transfers out</p><p className="mt-2 text-lg font-bold">{money.format(eodMovement.transfers)}</p></div>
+            <div className="rounded-xl bg-rose-50 p-4"><p className="text-xs font-bold uppercase text-rose-700">Spend Money</p><button type="button" onClick={() => setOutflowBreakdown("spendMoney")} className="mt-2 text-lg font-bold text-blue-700 underline decoration-blue-300 underline-offset-4 hover:text-blue-900">{money.format(eodMovement.spendMoney)}</button></div>
+            <div className="rounded-xl bg-orange-50 p-4"><p className="text-xs font-bold uppercase text-orange-700">Suppliers</p><button type="button" onClick={() => setOutflowBreakdown("supplierPayments")} className="mt-2 text-lg font-bold text-blue-700 underline decoration-blue-300 underline-offset-4 hover:text-blue-900">{money.format(eodMovement.supplierPayments)}</button></div>
+            <div className="rounded-xl bg-amber-50 p-4"><p className="text-xs font-bold uppercase text-amber-700">Other external</p><button type="button" onClick={() => setOutflowBreakdown("otherOutflows")} className="mt-2 text-lg font-bold text-blue-700 underline decoration-blue-300 underline-offset-4 hover:text-blue-900">{money.format(eodMovement.otherOutflows)}</button></div>
+            <div className="rounded-xl bg-cyan-50 p-4"><p className="text-xs font-bold uppercase text-cyan-700">Transfers out</p><button type="button" onClick={() => setOutflowBreakdown("transfers")} className="mt-2 text-lg font-bold text-blue-700 underline decoration-blue-300 underline-offset-4 hover:text-blue-900">{money.format(eodMovement.transfers)}</button></div>
             <div className="rounded-xl bg-slate-100 p-4"><p className="text-xs font-bold uppercase text-slate-700">Gross total</p><p className="mt-2 text-lg font-bold">{money.format(eodGrossOutflows)}</p></div>
           </div>
+          {outflowBreakdown && <div className="border-t border-slate-200 px-5 py-4">
+            <div className="flex items-center justify-between gap-3"><div><h3 className="font-bold text-slate-900">{outflowBreakdownTitle} details</h3><p className="text-sm text-slate-500">Posted entries for the selected end-of-day period.</p></div><button type="button" onClick={() => setOutflowBreakdown(null)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-semibold text-slate-600 hover:bg-slate-50">Close</button></div>
+            <div className="mt-3 overflow-x-auto rounded-xl border border-slate-200"><table className="min-w-full text-sm"><thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-4 py-3">Date</th><th className="px-4 py-3">Description</th><th className="px-4 py-3">Accounts touched</th><th className="px-4 py-3 text-right">Amount</th></tr></thead><tbody className="divide-y divide-slate-100">{eodBreakdownRows.length === 0 ? <tr><td colSpan={4} className="px-4 py-8 text-center text-slate-500">No posted entries found.</td></tr> : eodBreakdownRows.map((journal) => <tr key={journal.id}><td className="px-4 py-3 text-slate-600">{journal.entry_date}</td><td className="px-4 py-3 font-medium text-slate-900">{journal.description}</td><td className="px-4 py-3 text-slate-600">{journal.moneyLines.map((line) => line.gl_accounts?.account_name || line.gl_account_id).join(", ")}</td><td className="px-4 py-3 text-right font-bold">{money.format(journal.transfer || journal.outflow)}</td></tr>)}</tbody></table></div>
+          </div>}
         </section>
         <div className="grid gap-4 lg:grid-cols-1">
           <section className="rounded-2xl border border-slate-200 bg-white shadow-sm">
