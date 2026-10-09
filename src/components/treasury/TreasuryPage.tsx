@@ -47,6 +47,7 @@ type Disbursement = {
 };
 type TreasuryTab = "overview" | "cash-control" | "movements" | "end-of-day" | "daily-method" | "daily-department" | "approvals" | "disbursements" | "collections" | "history";
 type PaymentMethod = "cash" | "bank_transfer" | "mobile_money" | "wallet" | "card";
+type MovementFilter = "all" | "transfer" | "inflow" | "outflow";
 type FundingAccount = { id: string; account_code: string; account_name: string; account_type: string; category: string | null; is_active: boolean };
 type CashAccount = FundingAccount & { balance: number; kind: "Cash" | "Bank" | "Mobile / wallet" | "Float" };
 type MoneyJournalLine = { gl_account_id: string; debit: number; credit: number; line_description: string | null; gl_accounts?: { account_code: string; account_name: string } | null };
@@ -143,6 +144,8 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
   const [spendMoneyApprovalEnabled, setSpendMoneyApprovalEnabled] = useState(true);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
+  const [movementAccountId, setMovementAccountId] = useState("");
+  const [movementFilter, setMovementFilter] = useState<MovementFilter>("all");
   const [summaryDate, setSummaryDate] = useState(() => businessTodayISO());
   const [transferForm, setTransferForm] = useState<TransferForm>({
     fromAccountId: "",
@@ -507,6 +510,21 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     }),
     { inflow: 0, outflow: 0, transfer: 0 }
   ), [journalMovementRows]);
+  const filteredJournalMovementRows = useMemo(() => journalMovementRows.filter((journal) => {
+    if (movementAccountId && !journal.moneyLines.some((line) => line.gl_account_id === movementAccountId)) return false;
+    if (movementFilter === "transfer") return journal.transfer > 0;
+    if (movementFilter === "inflow") return journal.inflow > 0;
+    if (movementFilter === "outflow") return journal.outflow > 0;
+    return true;
+  }), [journalMovementRows, movementAccountId, movementFilter]);
+  const filteredMovementTotals = useMemo(() => filteredJournalMovementRows.reduce(
+    (sum, row) => ({
+      inflow: sum.inflow + row.inflow,
+      outflow: sum.outflow + row.outflow,
+      transfer: sum.transfer + row.transfer,
+    }),
+    { inflow: 0, outflow: 0, transfer: 0 }
+  ), [filteredJournalMovementRows]);
   const movementBreakdown = useMemo(() => journalMovementRows.reduce(
     (sum, row) => {
       if (row.transfer > 0) sum.transfers += row.transfer;
@@ -1103,20 +1121,36 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
       {activeTab === "movements" ? <section className="space-y-4">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)]">
           <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-200 px-5 py-4">
-              <h2 className="font-bold text-slate-900">Money movement ledger</h2>
-              <p data-treasury-comment className="text-sm text-slate-500">Posted journals touching active cash-equivalent GL accounts through {balanceAsOfDate}.</p>
-            </div>
-            <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-3">
-              <div className="rounded-xl bg-emerald-50 p-3"><p className="text-xs font-bold uppercase text-emerald-700">Inflow</p><p className="mt-1 text-lg font-bold">{money.format(movementTotals.inflow)}</p></div>
-              <div className="rounded-xl bg-rose-50 p-3"><p className="text-xs font-bold uppercase text-rose-700">Outflow</p><p className="mt-1 text-lg font-bold">{money.format(movementTotals.outflow)}</p></div>
-              <div className="rounded-xl bg-cyan-50 p-3"><p className="text-xs font-bold uppercase text-cyan-700">Transfers</p><p className="mt-1 text-lg font-bold">{money.format(movementTotals.transfer)}</p></div>
+             <div className="border-b border-slate-200 px-5 py-4">
+               <h2 className="font-bold text-slate-900">Money movement ledger</h2>
+               <p data-treasury-comment className="text-sm text-slate-500">Choose a cash or bank account to review only the transfers and other posted movements involving that account.</p>
+             </div>
+             <div className="grid gap-3 border-b border-slate-100 px-5 py-4 sm:grid-cols-2">
+               <label className="block text-sm font-semibold text-slate-700">Account
+                 <select value={movementAccountId} onChange={(event) => setMovementAccountId(event.target.value)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal">
+                   <option value="">All cash, bank, mobile money, and float accounts</option>
+                   {cashAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} - {account.account_name} ({account.kind})</option>)}
+                 </select>
+               </label>
+               <label className="block text-sm font-semibold text-slate-700">Movement type
+                 <select value={movementFilter} onChange={(event) => setMovementFilter(event.target.value as MovementFilter)} className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2.5 font-normal">
+                   <option value="all">All movements</option>
+                   <option value="transfer">Transfers</option>
+                   <option value="inflow">Inflows</option>
+                   <option value="outflow">Outflows</option>
+                 </select>
+               </label>
+             </div>
+             <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-3">
+               <div className="rounded-xl bg-emerald-50 p-3"><p className="text-xs font-bold uppercase text-emerald-700">Inflow</p><p className="mt-1 text-lg font-bold">{money.format(filteredMovementTotals.inflow)}</p></div>
+               <div className="rounded-xl bg-rose-50 p-3"><p className="text-xs font-bold uppercase text-rose-700">Outflow</p><p className="mt-1 text-lg font-bold">{money.format(filteredMovementTotals.outflow)}</p></div>
+               <div className="rounded-xl bg-cyan-50 p-3"><p className="text-xs font-bold uppercase text-cyan-700">Transfers</p><p className="mt-1 text-lg font-bold">{money.format(filteredMovementTotals.transfer)}</p></div>
             </div>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead className="bg-slate-50 text-left text-xs uppercase tracking-wide text-slate-500"><tr><th className="px-5 py-3">Date</th><th className="px-5 py-3">Movement</th><th className="px-5 py-3">Accounts touched</th><th className="px-5 py-3 text-right">Amount</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
-                  {journalMovementRows.length === 0 ? <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No posted money movement found for the selected dates.</td></tr> : journalMovementRows.slice(0, 60).map((journal) => {
+                  {filteredJournalMovementRows.length === 0 ? <tr><td colSpan={4} className="px-5 py-8 text-center text-slate-500">No posted {movementFilter === "all" ? "money movement" : movementFilter} found for the selected filters and dates.</td></tr> : filteredJournalMovementRows.slice(0, 60).map((journal) => {
                     const tone = journal.transfer > 0 ? "text-cyan-700" : journal.inflow > 0 ? "text-emerald-700" : "text-rose-700";
                     const label = journal.transfer > 0 ? "Transfer" : journal.inflow > 0 ? "Inflow" : "Outflow";
                     const amount = journal.transfer || journal.inflow || journal.outflow;
