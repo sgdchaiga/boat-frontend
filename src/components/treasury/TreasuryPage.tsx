@@ -14,6 +14,8 @@ import { businessTodayISO } from "@/lib/timezone";
 import { canApprove } from "@/lib/approvalRights";
 import { approveExpenseAndPost } from "@/lib/treasuryWorkflow";
 import { clearCashbookDraft } from "@/lib/cashbookDraft";
+import { downloadXlsx, exportAccountingPdf } from "@/lib/accountingReportExport";
+import { AccountingExportButtons } from "@/components/accounting/AccountingExportButtons";
 
 type Status = "pending_approval" | "approved" | "rejected" | "disbursed";
 type TreasuryRequest = {
@@ -879,6 +881,34 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
     }
   };
 
+  const movementFilterLabel = movementFilter === "all" ? "All movements" : `${movementFilter[0].toUpperCase()}${movementFilter.slice(1)}s`;
+  const movementAccountLabel = movementAccountId
+    ? cashAccounts.find((account) => account.id === movementAccountId)?.account_name || "Selected account"
+    : "All Treasury accounts";
+  const movementPeriodLabel = dateFrom || dateTo ? `${dateFrom || "Start"} to ${dateTo || "Today"}` : "All dates";
+  const movementFileStamp = `${dateFrom || "all"}-${dateTo || "current"}`;
+  const movementExportRows = filteredJournalMovementRows.map((journal) => {
+    const label = journal.transfer > 0 ? "Transfer" : journal.inflow > 0 ? "Inflow" : "Outflow";
+    const amount = journal.transfer || journal.inflow || journal.outflow;
+    return [journal.entry_date, label, journal.description, journal.moneyLines.map((line) => line.gl_accounts?.account_name || line.gl_account_id).join(", "), amount, journal.transaction_id || journal.reference_type || "Journal"] as (string | number)[];
+  });
+  const exportMovementExcel = () => {
+    downloadXlsx(`treasury-movements-${movementFileStamp}.xlsx`, [
+      ["Treasury movement statement", movementPeriodLabel, movementAccountLabel, movementFilterLabel], [],
+      ["Date", "Movement", "Description", "Accounts touched", "Amount (UGX)", "Reference"], ...movementExportRows, [],
+      ["Inflows", filteredMovementTotals.inflow], ["Outflows", filteredMovementTotals.outflow], ["Transfers", filteredMovementTotals.transfer],
+    ], { sheetName: "Treasury movements" });
+  };
+  const exportMovementPdf = () => {
+    exportAccountingPdf({
+      title: "Treasury movement statement",
+      subtitle: `${movementPeriodLabel} · ${movementAccountLabel} · ${movementFilterLabel}`,
+      filename: `treasury-movements-${movementFileStamp}.pdf`,
+      sections: [{ title: "Movements", head: ["Date", "Movement", "Description", "Accounts touched", "Amount (UGX)", "Reference"], body: movementExportRows.map((row) => [...row.slice(0, 4), money.format(Number(row[4])), row[5]]) }],
+      footerLines: [`Inflows: ${money.format(filteredMovementTotals.inflow)}`, `Outflows: ${money.format(filteredMovementTotals.outflow)}`, `Transfers: ${money.format(filteredMovementTotals.transfer)}`],
+    });
+  };
+
   return (
     <div className={`mx-auto max-w-7xl space-y-6 p-4 sm:p-6 lg:p-8 ${showComments ? "" : "[&_[data-treasury-comment]]:hidden"}`}>
       {readOnly && <ReadOnlyNotice />}
@@ -1140,6 +1170,9 @@ export function TreasuryPage({ readOnly = false, initialTab = "overview", cashbo
                    <option value="outflow">Outflows</option>
                  </select>
                </label>
+             </div>
+             <div className="flex justify-end border-b border-slate-100 px-5 py-3">
+               <AccountingExportButtons onExcel={exportMovementExcel} onPdf={exportMovementPdf} disabled={filteredJournalMovementRows.length === 0} />
              </div>
              <div className="grid gap-3 border-b border-slate-100 p-4 sm:grid-cols-3">
                <div className="rounded-xl bg-emerald-50 p-3"><p className="text-xs font-bold uppercase text-emerald-700">Inflow</p><p className="mt-1 text-lg font-bold">{money.format(filteredMovementTotals.inflow)}</p></div>
