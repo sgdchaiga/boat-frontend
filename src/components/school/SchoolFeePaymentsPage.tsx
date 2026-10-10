@@ -188,6 +188,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     amount: "",
     method: "cash" as SchoolPaymentMethod,
     bank_payment_source: "bank_slip" as "schoolpay" | "bank_slip",
+    bank_gl_account_id: "",
     paid_at: new Date().toISOString().slice(0, 10),
     income_type: "School Fees",
   });
@@ -666,6 +667,11 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     const orgId = user?.organization_id;
     if (!orgId) return;
+    const needsBankAccount = form.method === "bank" || form.method === "transfer";
+    if (needsBankAccount && !form.bank_gl_account_id) {
+      setErr("Select the bank account receiving this payment.");
+      return;
+    }
     const paymentDate = new Date(`${form.paid_at}T12:00:00`);
     if (Number.isNaN(paymentDate.getTime())) {
       setErr("Enter a valid payment date.");
@@ -688,6 +694,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           invoice_id: form.invoice_id || null,
           amount: amt,
           method: form.method,
+          bank_gl_account_id: needsBankAccount ? form.bank_gl_account_id : null,
           bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
           paid_at: paidAtIso,
           income_type: normalizeIncomeType(form.income_type),
@@ -708,7 +715,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             st?.school_pay_number ?? null
           )
         );
-        setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
+        setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", bank_gl_account_id: "", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
         await load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to record payment.");
@@ -867,6 +874,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         student_id: form.student_id,
         amount: amt,
         method: form.method,
+        bank_gl_account_id: needsBankAccount ? form.bank_gl_account_id : null,
         bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
         reference: autoRef,
         paid_at: paidAtIso,
@@ -919,6 +927,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           method: form.method,
           paidAt: paidAtIso,
           studentId: form.student_id,
+          bankGlAccountId: needsBankAccount ? form.bank_gl_account_id : null,
         }),
         Promise.all(invoiceUpdates),
         supabase.from("school_receipts").insert({
@@ -940,7 +949,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 1000));
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
-    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
+    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", bank_gl_account_id: "", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
   };
 
   const openPrintReceipt = async (payment: PayRow) => {
@@ -1380,6 +1389,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           </select>
           <select
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            aria-label="Payment method"
             value={form.method}
             onChange={(e) => setForm((f) => ({ ...f, method: e.target.value as typeof form.method }))}
           >
@@ -1387,6 +1397,25 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               <option key={method.code} value={method.code}>{method.label}</option>
             ))}
           </select>
+          {(form.method === "bank" || form.method === "transfer") && <select
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            aria-label="Receiving bank account"
+            value={form.bank_gl_account_id}
+            onChange={(e) => setForm((f) => ({ ...f, bank_gl_account_id: e.target.value }))}
+          >
+            <option value="">Select receiving bank account</option>
+            {bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}
+          </select>}
+          {(form.method === "bank" || form.method === "transfer") && <select
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            aria-label="Bank payment source"
+            value={form.bank_payment_source}
+            onChange={(e) => setForm((f) => ({ ...f, bank_payment_source: e.target.value as "schoolpay" | "bank_slip" }))}
+          >
+            <option value="bank_slip">Direct bank slip</option>
+            <option value="schoolpay">SchoolPay to bank</option>
+          </select>}
+          {(form.method === "bank" || form.method === "transfer") && bankAccounts.length === 0 && <p className="md:col-span-2 text-xs text-amber-800">No bank asset accounts are configured. Add one in the chart of accounts first.</p>}
           <p className="md:col-span-2 text-xs text-slate-600">{refNote}</p>
           <button type="button" onClick={recordPayment} disabled={saving} className="px-4 py-2 bg-slate-900 text-white rounded-lg text-sm hover:bg-slate-800 disabled:cursor-wait disabled:opacity-60 w-fit">
             {saving ? "Saving payment..." : "Record school-fee payment"}
