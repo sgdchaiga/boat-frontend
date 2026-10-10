@@ -180,12 +180,13 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; direction: "asc" | "desc" }>({ key: "paid_at", direction: "desc" });
   const [openBatchKey, setOpenBatchKey] = useState<string | null>(null);
   const [editingPayment, setEditingPayment] = useState<PayRow | null>(null);
-  const [editPaidDate, setEditPaidDate] = useState("");
+  const [editPaymentDetails, setEditPaymentDetails] = useState({ reference: "", paid_at: "", method: "cash" as SchoolPaymentMethod, bank_gl_account_id: "", bank_payment_source: "bank_slip" as "schoolpay" | "bank_slip", income_type: "School Fees" });
   const [savingPaymentEdit, setSavingPaymentEdit] = useState(false);
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
     amount: "",
+    reference: "",
     method: "cash" as SchoolPaymentMethod,
     bank_payment_source: "bank_slip" as "schoolpay" | "bank_slip",
     bank_gl_account_id: "",
@@ -203,7 +204,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   }, [initialStudentId, initialInvoiceId]);
 
   const refNote =
-    "Reference is auto-generated: 01-YYYYMMDD-NNN (page 01 · UTC date · Nth school-fee payment that day).";
+    "Reference is optional. If left blank, BOAT generates 01-YYYYMMDD-NNN (page 01 · UTC date · Nth school-fee payment that day).";
 
   const downloadSchoolPayTemplate = () => {
     const sheet = XLSX.utils.json_to_sheet([{ "SchoolPay Code": "1000123456", Amount: 150000, "Transaction Reference": "TXN-123456789", "Payment Date": new Date().toISOString().slice(0, 10) }]);
@@ -693,6 +694,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           student_id: form.student_id,
           invoice_id: form.invoice_id || null,
           amount: amt,
+          reference: form.reference.trim() || null,
           method: form.method,
           bank_gl_account_id: needsBankAccount ? form.bank_gl_account_id : null,
           bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
@@ -715,7 +717,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             st?.school_pay_number ?? null
           )
         );
-        setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", bank_gl_account_id: "", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
+        setForm({ student_id: "", invoice_id: "", amount: "", reference: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", bank_gl_account_id: "", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
         await load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to record payment.");
@@ -793,12 +795,14 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     setErr(null);
 
-    let autoRef: string;
-    try {
-      autoRef = await buildSchoolFeesAutoReference(supabase, orgId);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : "Could not generate payment reference.");
-      return;
+    let reference = form.reference.trim();
+    if (!reference) {
+      try {
+        reference = await buildSchoolFeesAutoReference(supabase, orgId);
+      } catch (e) {
+        setErr(e instanceof Error ? e.message : "Could not generate payment reference.");
+        return;
+      }
     }
 
     let walletIdForReverse: string | null = null;
@@ -855,7 +859,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         p_txn_type: "payment",
         p_amount: amt,
         p_counterparty_wallet_id: null,
-        p_reference: autoRef,
+        p_reference: reference,
         p_narration: `School fees (${targetInvoices.map((i) => i.invoice_number).join(", ") || "invoice"})`,
         p_created_by: staffId,
         p_idempotency_key: randomUuid(),
@@ -876,7 +880,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         method: form.method,
         bank_gl_account_id: needsBankAccount ? form.bank_gl_account_id : null,
         bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
-        reference: autoRef,
+        reference,
         paid_at: paidAtIso,
         invoice_allocations: allocations,
       })
@@ -949,7 +953,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 1000));
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
-    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", bank_gl_account_id: "", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
+    setForm({ student_id: "", invoice_id: "", amount: "", reference: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", bank_gl_account_id: "", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
   };
 
   const openPrintReceipt = async (payment: PayRow) => {
@@ -1210,20 +1214,30 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const beginPaymentEdit = (payment: PayRow) => {
     setEditingPayment(payment);
-    setEditPaidDate(paymentLocalDay(payment.paid_at));
+    setEditPaymentDetails({
+      reference: payment.reference || "",
+      paid_at: paymentLocalDay(payment.paid_at),
+      method: payment.method as SchoolPaymentMethod,
+      bank_gl_account_id: payment.bank_gl_account_id || "",
+      bank_payment_source: payment.bank_payment_source || "bank_slip",
+      income_type: paymentIncomeTypeLabel(payment) === "—" ? "School Fees" : paymentIncomeTypeLabel(payment).split(", ")[0],
+    });
   };
 
-  const savePaymentDate = async () => {
+  const savePaymentDetails = async () => {
     const orgId = user?.organization_id;
-    if (!editingPayment || !orgId || !editPaidDate || savingPaymentEdit) return;
+    if (!editingPayment || !orgId || !editPaymentDetails.paid_at || savingPaymentEdit) return;
+    const needsBankAccount = editPaymentDetails.method === "bank" || editPaymentDetails.method === "transfer";
+    if (needsBankAccount && !editPaymentDetails.bank_gl_account_id) { setErr("Select the bank account receiving this payment."); return; }
     setSavingPaymentEdit(true);
     setErr(null);
     try {
       const prior = new Date(editingPayment.paid_at);
-      const replacement = new Date(editPaidDate + "T12:00:00");
+      const replacement = new Date(editPaymentDetails.paid_at + "T12:00:00");
       if (Number.isNaN(replacement.getTime())) throw new Error("Enter a valid payment date.");
       replacement.setHours(Number.isNaN(prior.getTime()) ? 12 : prior.getHours(), Number.isNaN(prior.getTime()) ? 0 : prior.getMinutes(), 0, 0);
-      const patch = { paid_at: replacement.toISOString() };
+      const invoice_allocations = (editingPayment.invoice_allocations || []).map((allocation) => ({ ...allocation, category_label: normalizeIncomeType(editPaymentDetails.income_type) }));
+      const patch = { reference: editPaymentDetails.reference.trim() || null, paid_at: replacement.toISOString(), method: editPaymentDetails.method, bank_gl_account_id: needsBankAccount ? editPaymentDetails.bank_gl_account_id : null, bank_payment_source: needsBankAccount ? editPaymentDetails.bank_payment_source : null, invoice_allocations };
       let saved: PayRow;
       if (canUseSchoolApi()) saved = await updateSchoolRow<PayRow>("payments", orgId, editingPayment.id, patch);
       else {
@@ -1235,9 +1249,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
       setRows((current) => current.map((payment) => payment.id === saved.id ? { ...payment, ...saved } : payment));
       setEditingPayment(null);
-      setBulkMessage("Payment date updated.");
+      setBulkMessage("Payment details updated.");
     } catch (error) {
-      setErr(error instanceof Error ? error.message : "The payment date could not be updated.");
+      setErr(error instanceof Error ? error.message : "The payment details could not be updated.");
     } finally { setSavingPaymentEdit(false); }
   };
 
@@ -1371,6 +1385,14 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             aria-label="Payment amount"
             value={form.amount}
             onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
+          />
+          <input
+            type="text"
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            placeholder="Reference number (optional)"
+            aria-label="Payment reference number"
+            value={form.reference}
+            onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))}
           />
           <input
             type="date"
@@ -1522,7 +1544,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
                    <td className="p-3 text-slate-600">{uploadFileFromNotes(r.notes) || "—"}</td>
                    <td className="p-3 text-slate-600">{r.reference ?? "—"}</td>
                     <td className="p-3 text-center whitespace-nowrap print:hidden">{paymentBatchKey(r) ? <button type="button" title={"Open batch: " + paymentBatchLabel(r)} aria-label="Open import batch" onClick={() => setOpenBatchKey(paymentBatchKey(r))} className="rounded p-2 text-indigo-700 hover:bg-indigo-50"><FolderOpen className="h-5 w-5" /></button> : <span className="text-slate-300">—</span>}</td>
-                    <td className="p-3 text-right whitespace-nowrap print:hidden">{!readOnly && <button type="button" title="Edit payment date" aria-label="Edit payment date" onClick={() => beginPaymentEdit(r)} className="rounded p-2 text-slate-700 hover:bg-slate-100"><Pencil className="h-4 w-4" /></button>}</td>
+                     <td className="p-3 text-right whitespace-nowrap print:hidden">{!readOnly && <button type="button" title="Edit payment" aria-label="Edit payment" onClick={() => beginPaymentEdit(r)} className="rounded p-2 text-slate-700 hover:bg-slate-100"><Pencil className="h-4 w-4" /></button>}</td>
                   <td className="p-3 text-right whitespace-nowrap print:hidden min-w-[7rem]">
                     <button
                       type="button"
@@ -1541,7 +1563,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       </div>
 
       {openBatchKey && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label="Imported payment batch"><div className="max-h-[85vh] w-full max-w-4xl overflow-auto rounded-xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900">Imported payment batch</h2><p className="mt-1 text-sm text-slate-600">{openBatchPayments.length} payment{openBatchPayments.length === 1 ? "" : "s"} · {paymentBatchLabel(openBatchPayments[0]) || "Imported batch"}</p></div><button type="button" onClick={() => setOpenBatchKey(null)} className="rounded p-2 text-slate-500 hover:bg-slate-100" aria-label="Close batch"><X className="h-5 w-5" /></button></div><div className="mt-4 overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Date</th><th className="p-2 text-left">Student</th><th className="p-2 text-left">Reference</th><th className="p-2 text-right">Amount</th></tr></thead><tbody>{openBatchPayments.map((payment) => { const student = students.find((item) => item.id === payment.student_id); return <tr key={payment.id} className="border-t"><td className="p-2">{paymentLocalDay(payment.paid_at)}</td><td className="p-2">{student ? student.admission_number + " — " + student.first_name + " " + student.last_name : "—"}</td><td className="p-2">{payment.reference || "—"}</td><td className="p-2 text-right">{Number(payment.amount).toLocaleString()}</td></tr>; })}</tbody></table></div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setOpenBatchKey(null)} className="app-btn-secondary">Close</button>{canEditBatches && !readOnly && <button type="button" onClick={() => { setSelectedPaymentIds(openBatchPayments.map((payment) => payment.id)); setOpenBatchKey(null); setBulkMessage(openBatchPayments.length + " batch payment" + (openBatchPayments.length === 1 ? "" : "s") + " selected for editing."); }} className="app-btn-primary">Edit this batch</button>}</div></div></div>}
-      {editingPayment && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label="Edit payment date"><div className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900">Edit payment date</h2><p className="mt-1 text-sm text-slate-600">{editingPayment.reference || "School-fee payment"}</p></div><button type="button" onClick={() => setEditingPayment(null)} className="rounded p-2 text-slate-500 hover:bg-slate-100" aria-label="Close edit"><X className="h-5 w-5" /></button></div><label className="mt-4 block text-sm font-medium text-slate-700">Payment date<input type="date" value={editPaidDate} onChange={(event) => setEditPaidDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" /></label><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditingPayment(null)} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void savePaymentDate()} disabled={savingPaymentEdit || !editPaidDate} className="app-btn-primary">{savingPaymentEdit ? "Saving…" : "Save date"}</button></div></div></div>}
+      {editingPayment && <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/45 p-4" role="dialog" aria-modal="true" aria-label="Edit payment"><div className="max-h-[90vh] w-full max-w-2xl overflow-auto rounded-xl bg-white p-5 shadow-2xl"><div className="flex items-start justify-between gap-4"><div><h2 className="text-lg font-bold text-slate-900">Edit payment</h2><p className="mt-1 text-sm text-slate-600">Update the payment record and classification.</p></div><button type="button" onClick={() => setEditingPayment(null)} className="rounded p-2 text-slate-500 hover:bg-slate-100" aria-label="Close edit"><X className="h-5 w-5" /></button></div><div className="mt-4 grid gap-3 sm:grid-cols-2"><label className="text-sm font-medium text-slate-700">Reference<input type="text" value={editPaymentDetails.reference} onChange={(event) => setEditPaymentDetails((current) => ({ ...current, reference: event.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" /></label><label className="text-sm font-medium text-slate-700">Payment date<input type="date" value={editPaymentDetails.paid_at} onChange={(event) => setEditPaymentDetails((current) => ({ ...current, paid_at: event.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2" /></label><label className="text-sm font-medium text-slate-700">Payment method<select value={editPaymentDetails.method} onChange={(event) => setEditPaymentDetails((current) => ({ ...current, method: event.target.value as SchoolPaymentMethod }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2">{SCHOOL_PAYMENT_METHODS.filter((method) => enabledMethods.includes(method.code)).map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Income type<select value={editPaymentDetails.income_type} onChange={(event) => setEditPaymentDetails((current) => ({ ...current, income_type: event.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2">{incomeTypes.map((incomeType) => <option key={incomeType} value={incomeType}>{incomeType}</option>)}</select></label>{(editPaymentDetails.method === "bank" || editPaymentDetails.method === "transfer") && <><label className="text-sm font-medium text-slate-700">Receiving bank<select value={editPaymentDetails.bank_gl_account_id} onChange={(event) => setEditPaymentDetails((current) => ({ ...current, bank_gl_account_id: event.target.value }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="">Select receiving bank account</option>{bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}</select></label><label className="text-sm font-medium text-slate-700">Bank payment source<select value={editPaymentDetails.bank_payment_source} onChange={(event) => setEditPaymentDetails((current) => ({ ...current, bank_payment_source: event.target.value as "schoolpay" | "bank_slip" }))} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="bank_slip">Direct bank slip</option><option value="schoolpay">SchoolPay to bank</option></select></label></>}</div><div className="mt-5 flex justify-end gap-2"><button type="button" onClick={() => setEditingPayment(null)} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void savePaymentDetails()} disabled={savingPaymentEdit || !editPaymentDetails.paid_at} className="app-btn-primary">{savingPaymentEdit ? "Saving…" : "Save changes"}</button></div></div></div>}
 
       {receiptPreview && (
         <SchoolFeeReceiptPreviewModal
