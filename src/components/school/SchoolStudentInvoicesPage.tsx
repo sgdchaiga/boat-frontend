@@ -432,11 +432,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     const invoiceRows = toCreate.map((s, idx) => {
       const appliedLines=applicableLines(fee,s.is_boarding);
       const subtotalBase=appliedLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
-      const isNewStudent = !rows.some((r) => r.student_id === s.id);
-       const specialLines = specialFeeLinesFor(s.id, fee.academic_year, fee.term_name, isNewStudent);
-       const specialTotal = specialLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
-      const subtotal = subtotalBase + specialTotal;
-       const invoiceLines=[...appliedLines,...specialLines];
+      const subtotal = subtotalBase;
+      const invoiceLines = appliedLines;
       const burs = Number(
         bursaries.find((b) => b.student_id === s.id && b.academic_year === fee.academic_year && b.term_name === fee.term_name)?.amount ?? 0
       );
@@ -526,11 +523,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     if(!student){setErr("Student not found.");return;}
     const appliedLines=applicableLines(fee,student.is_boarding);
     const subtotalBase=appliedLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
-    const isNewStudent = !rows.some((r) => r.student_id === form.student_id);
-    const specialLines = specialFeeLinesFor(form.student_id, fee.academic_year, fee.term_name, isNewStudent);
-    const specialTotal = specialLines.reduce((sum,line)=>sum+Number(line.amount||0),0);
-    const subtotal = subtotalBase + specialTotal;
-    const invoiceLines=[...appliedLines,...specialLines];
+    const subtotal = subtotalBase;
+    const invoiceLines = appliedLines;
     const disc = Number(form.discount_amount) || 0;
     const burs =
       Number(
@@ -810,10 +804,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         const student = students.find((item) => item.id === invoice.student_id);
         if (!student) throw new Error(`Student for ${invoice.invoice_number} could not be found.`);
         const regularLines = applicableLines(toFee, student.is_boarding);
-        const wasNewStudentCharge = (invoice.line_items || []).some((line) => String(line.code || "").toUpperCase() === "SPECIAL_NEW_STUDENT");
-        const isOnlyInvoice = !currentInvoices.some((row) => row.student_id === invoice.student_id && row.id !== invoice.id && row.status !== "cancelled");
-        const specialLines = specialFeeLinesFor(invoice.student_id, toFee.academic_year, toFee.term_name, wasNewStudentCharge || isOnlyInvoice);
-        const line_items = [...regularLines, ...specialLines];
+        const line_items = regularLines;
         const subtotal = line_items.reduce((sum, line) => sum + Number(line.amount || 0), 0);
         const total_due = Math.max(0, subtotal - Number(invoice.discount_amount || 0) - Number(invoice.bursary_amount || 0) - Number(invoice.scholarship_amount || 0));
         const paid = Number(invoice.amount_paid || 0);
