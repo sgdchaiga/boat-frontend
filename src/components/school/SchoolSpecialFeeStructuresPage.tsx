@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
 
 type ClassOpt = { id: string; name: string };
 type SpecialFeeRow = {
@@ -116,29 +117,37 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
     setErr(null);
     setApplyMessage(null);
     try {
-      const [studentResult, invoiceResult] = await Promise.all([
-        supabase.from("students").select("id,class_id,class_name,status").eq("organization_id", orgId),
-        supabase.from("student_invoices").select("student_id,line_items").eq("organization_id", orgId).eq("academic_year", fee.academic_year).eq("term_name", fee.term_name).neq("status", "cancelled"),
-      ]);
-      if (studentResult.error) throw studentResult.error;
-      if (invoiceResult.error) throw invoiceResult.error;
+      const useSchoolApi = canUseSchoolApi();
+      const [studentData, invoiceData] = useSchoolApi
+        ? await Promise.all([
+          listSchoolRows<{ id: string; class_id: string | null; class_name?: string | null; status?: string | null }>("students", orgId),
+          listSchoolRows<{ student_id: string; line_items: Array<{ code?: string }> | null; status?: string }>("invoices", orgId),
+        ])
+        : await Promise.all([
+          supabase.from("students").select("id,class_id,class_name,status").eq("organization_id", orgId).then(({ data, error }) => { if (error) throw error; return data || []; }),
+          supabase.from("student_invoices").select("student_id,line_items,status").eq("organization_id", orgId).eq("academic_year", fee.academic_year).eq("term_name", fee.term_name).neq("status", "cancelled").then(({ data, error }) => { if (error) throw error; return data || []; }),
+        ]);
       const targetClassName = classes.find((row) => row.id === fee.target_class_id)?.name.trim().toLocaleLowerCase();
-      const eligible = ((studentResult.data || []) as Array<{ id: string; class_id: string | null; class_name?: string | null; status?: string | null }>)
+      const eligible = (studentData as Array<{ id: string; class_id: string | null; class_name?: string | null; status?: string | null }>)
         .filter((student) => !fee.target_class_id || student.class_id === fee.target_class_id || (Boolean(targetClassName) && String(student.class_name || "").trim().toLocaleLowerCase() === targetClassName))
         .filter((student) => !["inactive", "withdrawn", "graduated", "archived"].includes(String(student.status || "").trim().toLowerCase()));
       if (eligible.length === 0) throw new Error(`No eligible students were found in ${classLabel}. Check that the students are assigned to that class.`);
       const code = `SPECIAL_STRUCTURE_${fee.id}`;
-      const alreadyInvoiced = new Set(((invoiceResult.data || []) as Array<{ student_id: string; line_items: Array<{ code?: string }> | null }>).filter((invoice) => (invoice.line_items || []).some((line) => line.code === code)).map((invoice) => invoice.student_id));
+      const alreadyInvoiced = new Set((invoiceData as Array<{ student_id: string; line_items: Array<{ code?: string }> | null; status?: string }>).filter((invoice) => invoice.status !== "cancelled" && (invoice.line_items || []).some((line) => line.code === code)).map((invoice) => invoice.student_id));
       const pending = eligible.filter((student) => !alreadyInvoiced.has(student.id));
       setApplyProgress({ completed: 0, total: pending.length });
       let created = 0;
       for (const student of pending) {
         const amount = Number(fee.amount) || 0;
         const line_items = [{ code, label: `${feeTypeLabel(fee.fee_type)}${fee.reference ? ` — ${fee.reference}` : ""}`, amount, priority: 1, applies_to: "all" as const }];
-        const result = await supabase.from("student_invoices").insert({ student_id: student.id, fee_structure_id: null, academic_year: fee.academic_year, term_name: fee.term_name, invoice_number: `SP-${fee.fee_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}-${student.id.slice(0, 8)}`, subtotal: amount, line_items, discount_amount: 0, bursary_amount: 0, scholarship_amount: 0, total_due: amount, amount_paid: 0, status: amount > 0 ? "sent" : "paid", issue_date: fee.charge_date || null, notes: fee.reference || fee.notes || null }).select("*").single();
-        if (result.error) throw result.error;
-        const accounting = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: result.data });
-        if (accounting.journalMessage) throw new Error(accounting.journalMessage);
+        const payload = { student_id: student.id, fee_structure_id: null, academic_year: fee.academic_year, term_name: fee.term_name, invoice_number: `SP-${fee.fee_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}-${student.id.slice(0, 8)}`, subtotal: amount, line_items, discount_amount: 0, bursary_amount: 0, scholarship_amount: 0, total_due: amount, amount_paid: 0, status: amount > 0 ? "sent" : "paid", issue_date: fee.charge_date || null, notes: fee.reference || fee.notes || null };
+        if (useSchoolApi) await createSchoolRow("invoices", orgId, { ...payload, staff_user_id: user?.id ?? null });
+        else {
+          const result = await supabase.from("student_invoices").insert(payload).select("*").single();
+          if (result.error) throw result.error;
+          const accounting = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: result.data });
+          if (accounting.journalMessage) throw new Error(accounting.journalMessage);
+        }
         created += 1;
         setApplyProgress({ completed: created, total: pending.length });
       }
