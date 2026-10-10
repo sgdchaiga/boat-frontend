@@ -90,7 +90,17 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const [activeTab, setActiveTab] = useState<"invoices" | "charges">("invoices");
   const [rows, setRows] = useState<InvRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
-  const { filteredRows, controls: invoiceFilters } = useSchoolInvoiceFilters(rows, students, { showResidency: true });
+  const { filteredRows, controls: invoiceFilters } = useSchoolInvoiceFilters(rows, students, {
+    showResidency: true,
+    getChargeTypes: (invoice) => {
+      const lines = Array.isArray(invoice.line_items) ? invoice.line_items : [];
+      const specialTypes = lines
+        .filter((line) => String(line.code || "").toUpperCase().startsWith("SPECIAL"))
+        .map((line) => String(line.label || "Special fee").split(" — ")[0].trim())
+        .filter(Boolean);
+      return [...new Set([...(invoice.fee_structure_id ? ["School Fees"] : []), ...specialTypes, ...(!invoice.fee_structure_id && specialTypes.length === 0 ? ["Other fees"] : [])])];
+    },
+  });
   const [fees, setFees] = useState<FeeOpt[]>([]);
   const [bursaries, setBursaries] = useState<BursaryOpt[]>([]);
   const [specialFees, setSpecialFees] = useState<SpecialFeeOpt[]>([]);

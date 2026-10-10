@@ -2,9 +2,9 @@ import { useMemo, useState } from "react";
 
 type Student = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null; class_id: string | null; class_name: string; is_boarding?: boolean | null };
 type Invoice = { student_id: string; invoice_number: string; academic_year: string; term_name: string; status: string; issue_date?: string | null };
-const emptyFilters = { residency: "", search: "", student: "", className: "", year: "", term: "", status: "", from: "", to: "" };
+const emptyFilters = { residency: "", search: "", student: "", className: "", chargeType: "", year: "", term: "", status: "", from: "", to: "" };
 
-export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[], optionsConfig: { showResidency?: boolean } = {}) {
+export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[], optionsConfig: { showResidency?: boolean; getChargeTypes?: (invoice: T) => string[] } = {}) {
   const [filters, setFilters] = useState(emptyFilters);
   const studentMap = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
   const filteredRows = useMemo(() => rows.filter((row) => {
@@ -15,6 +15,7 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
       && (!filters.residency || (filters.residency === "boarding" ? student?.is_boarding === true : student?.is_boarding === false))
       && (!filters.student || row.student_id === filters.student)
       && (!filters.className || student?.class_name?.trim() === filters.className)
+      && (!filters.chargeType || (optionsConfig.getChargeTypes?.(row) || []).includes(filters.chargeType))
       && (!filters.year || row.academic_year === filters.year)
       && (!filters.term || row.term_name === filters.term)
       && (!filters.status || row.status === filters.status)
@@ -40,6 +41,7 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
         {select("Students", "student", students.map((student) => ({ value: student.id, label: `${student.first_name} ${student.last_name}` })).sort((a, b) => a.label.localeCompare(b.label)))}
         {optionsConfig.showResidency && select("Day/Boarding", "residency", [{ value: "day", label: "Day" }, { value: "boarding", label: "Boarding" }])}
         {select("Classes", "className", simpleOptions(students.map((student) => student.class_name?.trim() || "")))}
+        {optionsConfig.getChargeTypes && select("Charge type", "chargeType", simpleOptions(rows.flatMap((row) => optionsConfig.getChargeTypes?.(row) || [])))}
         {select("Academic years", "year", simpleOptions(rows.map((row) => row.academic_year)))}
         {select("Terms", "term", simpleOptions(rows.map((row) => row.term_name)))}
         {select("Statuses", "status", simpleOptions(rows.map((row) => row.status)))}
