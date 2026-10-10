@@ -188,6 +188,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     amount: "",
     method: "cash" as SchoolPaymentMethod,
     bank_payment_source: "bank_slip" as "schoolpay" | "bank_slip",
+    paid_at: new Date().toISOString().slice(0, 10),
+    income_type: "School Fees",
   });
 
   useEffect(() => {
@@ -653,8 +655,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const recordPaymentImpl = async () => {
     if (readOnly) return;
-    if (!form.student_id || !form.amount) {
-      setErr("Student and amount are required.");
+    if (!form.student_id || !form.amount || !form.paid_at || !form.income_type) {
+      setErr("Student, amount, payment date, and income type are required.");
       return;
     }
     const amt = Number(form.amount);
@@ -664,6 +666,12 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     const orgId = user?.organization_id;
     if (!orgId) return;
+    const paymentDate = new Date(`${form.paid_at}T12:00:00`);
+    if (Number.isNaN(paymentDate.getTime())) {
+      setErr("Enter a valid payment date.");
+      return;
+    }
+    const paidAtIso = paymentDate.toISOString();
     if (canUseSchoolApi()) {
       if (form.method === "wallet") {
         setErr("Wallet payments are not enabled in server-backed school mode yet. Use cash, mobile money, bank, transfer, or other.");
@@ -681,6 +689,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           amount: amt,
           method: form.method,
           bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
+          paid_at: paidAtIso,
+          income_type: normalizeIncomeType(form.income_type),
           staff_user_id: user?.id ?? null,
         });
         const payment = result.data.payment;
@@ -698,7 +708,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             st?.school_pay_number ?? null
           )
         );
-        setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash" });
+        setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
         await load();
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to record payment.");
@@ -750,7 +760,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
               invoice_id: inv.id,
               amount: share,
               category_code: line.code,
-              category_label: normalizeIncomeType(line.label),
+              category_label: normalizeIncomeType(form.income_type),
               priority: line.priority,
             });
             allocLeft = round2(allocLeft - share);
@@ -760,7 +770,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       }
 
       if (allocLeft > 0) {
-        allocations.push({ invoice_id: inv.id, amount: allocLeft, category_code: "GENERAL", category_label: "School Fees", priority: 999 });
+        allocations.push({ invoice_id: inv.id, amount: allocLeft, category_code: "GENERAL", category_label: normalizeIncomeType(form.income_type), priority: 999 });
       }
       remaining = round2(remaining - applyOnInvoice);
     }
@@ -859,6 +869,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         method: form.method,
         bank_payment_source: (form.method === "bank" || form.method === "transfer") ? form.bank_payment_source : null,
         reference: autoRef,
+        paid_at: paidAtIso,
         invoice_allocations: allocations,
       })
       .select("id,amount,method,reference,paid_at,student_id")
@@ -886,7 +897,6 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     const receiptNo = `R-${Date.now().toString(36).toUpperCase()}`;
     if (pay?.id) {
-      const paidAtIso = new Date().toISOString();
       const paidByInvoice = new Map<string, number>();
       for (const a of allocations) {
         paidByInvoice.set(a.invoice_id, (paidByInvoice.get(a.invoice_id) ?? 0) + Number(a.amount));
@@ -930,7 +940,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     }
     setRows((current) => [{ ...(pay as PayRow), receipt_number: receiptNo }, ...current].slice(0, 1000));
     sessionStorage.removeItem(`boat.school.available-funds.${orgId}`);
-    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip" });
+    setForm({ student_id: "", invoice_id: "", amount: "", method: enabledMethods[0] || "cash", bank_payment_source: "bank_slip", paid_at: new Date().toISOString().slice(0, 10), income_type: "School Fees" });
   };
 
   const openPrintReceipt = async (payment: PayRow) => {
@@ -1349,9 +1359,25 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             type="number"
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
             placeholder="Amount"
+            aria-label="Payment amount"
             value={form.amount}
             onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
           />
+          <input
+            type="date"
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            aria-label="Payment date"
+            value={form.paid_at}
+            onChange={(e) => setForm((f) => ({ ...f, paid_at: e.target.value }))}
+          />
+          <select
+            className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
+            aria-label="Income type"
+            value={form.income_type}
+            onChange={(e) => setForm((f) => ({ ...f, income_type: e.target.value }))}
+          >
+            {incomeTypes.map((incomeType) => <option key={incomeType} value={incomeType}>{incomeType}</option>)}
+          </select>
           <select
             className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
             value={form.method}
