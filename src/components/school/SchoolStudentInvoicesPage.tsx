@@ -37,6 +37,7 @@ type SpecialFeeOpt = {
   term_name: string;
   amount: number;
   is_active: boolean;
+  target_class_id: string | null;
 };
 type BursaryOpt = {
   student_id: string;
@@ -258,7 +259,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       supabase.from("school_bursaries").select("student_id,academic_year,term_name,amount").eq("organization_id", orgId),
       supabase
         .from("school_special_fee_structures")
-        .select("fee_type,academic_year,term_name,amount,is_active")
+        .select("fee_type,academic_year,term_name,amount,is_active,target_class_id")
         .eq("organization_id", orgId)
         .eq("is_active", true),
     ]);
@@ -321,7 +322,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
 
   const specialFeeLinesFor = useCallback(
     (studentId: string, academicYear: string, termName: string, isNewStudent: boolean) => {
-      const rows = specialFees.filter((sf) => sf.academic_year === academicYear && sf.term_name === termName && sf.is_active);
+      const student = students.find((item) => item.id === studentId);
+      const rows = specialFees.filter((sf) => sf.academic_year === academicYear && sf.term_name === termName && sf.is_active && (!sf.target_class_id || sf.target_class_id === student?.class_id));
       const result: FeeLine[] = [];
       rows.forEach((sf, index) => {
         if (sf.fee_type === "new_student") {
@@ -332,7 +334,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       });
       return result;
     },
-    [specialFees]
+    [specialFees, students]
   );
 
   const matchesClassFilter = (s: StudentOpt, classId: string) => {
