@@ -9,7 +9,7 @@ export type MatchableStudent = {
 
 export type StudentMatch = {
   student?: MatchableStudent;
-  basis: "schoolpay_and_name" | "schoolpay_code" | "exact_name" | "ambiguous" | "unmatched" | "conflict";
+  basis: "schoolpay_and_name" | "schoolpay_code" | "admission_number" | "exact_name" | "ambiguous" | "unmatched" | "conflict";
   candidates: MatchableStudent[];
 };
 
@@ -59,6 +59,11 @@ export function matchStudentStatement(
     return code.length > 0 && containsCode(text, code);
   });
   const uniqueCodeMatches = [...new Map(codeMatches.map((student) => [student.id, student])).values()];
+  const admissionMatches = students.filter((student) => {
+    const admissionNumber = String(student.admission_number || "").trim();
+    return admissionNumber.length > 0 && containsCode(text, admissionNumber);
+  });
+  const uniqueAdmissionMatches = [...new Map(admissionMatches.map((student) => [student.id, student])).values()];
   const exactNameMatches = students.filter((student) => containsFullName(text, fullName(student)));
   const aliasMatches = aliases
     .filter((alias) => containsFullName(text, alias.alias))
@@ -68,15 +73,14 @@ export function matchStudentStatement(
 
   if (uniqueCodeMatches.length === 1) {
     const [student] = uniqueCodeMatches;
-    if (exactMatches.length > 0 && !exactMatches.some((match) => match.id === student.id)) {
-      return { basis: "conflict", candidates: [student, ...exactMatches] };
-    }
     if (exactMatches.some((match) => match.id === student.id)) {
       return { student, basis: "schoolpay_and_name", candidates: [student] };
     }
     return { student, basis: "schoolpay_code", candidates: [student] };
   }
   if (uniqueCodeMatches.length > 1) return { basis: "ambiguous", candidates: uniqueCodeMatches };
+  if (uniqueAdmissionMatches.length === 1) return { student: uniqueAdmissionMatches[0], basis: "admission_number", candidates: uniqueAdmissionMatches };
+  if (uniqueAdmissionMatches.length > 1) return { basis: "ambiguous", candidates: uniqueAdmissionMatches };
   if (exactMatches.length === 1) return { student: exactMatches[0], basis: "exact_name", candidates: exactMatches };
   if (exactMatches.length > 1) return { basis: "ambiguous", candidates: exactMatches };
   return { basis: "unmatched", candidates: [] };

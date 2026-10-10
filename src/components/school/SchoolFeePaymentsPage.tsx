@@ -372,14 +372,20 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         const amount = Number(String(valueFor(row, ["Amount (UGX)", "Amount", "Payment Amount"])).replace(/[^0-9.-]/g, ""));
         const dateValue = valueFor(row, ["Payment Date", "Paid At", "Transaction Date", "Date"]);
         const date = dateValue instanceof Date ? dateValue : new Date(String(dateValue));
-        const matchEvidence = [statementDescription, studentName, schoolPayCode, reference].filter(Boolean).join(" · ");
+        // Keep the three student identifiers independent: bank exports often combine a
+        // name with a class, account number, or other narration, while the SchoolPay
+        // value is still an unambiguous identifier.
+        const matchEvidence = [statementDescription, studentName, schoolPayCode, admissionNumber, reference].filter(Boolean).join(" · ");
         const admissionMatch = admissionNumber ? studentByAdmission.get(normalized(admissionNumber)) : undefined;
-        const statementMatch = !admissionMatch && matchEvidence ? matchStudentStatement(matchEvidence, students, studentAliases) : undefined;
-        const student = admissionMatch || (["schoolpay_code", "schoolpay_and_name"].includes(statementMatch?.basis || "") ? statementMatch?.student as StudentOpt : undefined);
+        const schoolPayMatch = schoolPayCode ? matchStudentStatement(schoolPayCode, students) : undefined;
+        const statementMatch = matchEvidence ? matchStudentStatement(matchEvidence, students, studentAliases) : undefined;
+        const schoolPayStudent = ["schoolpay_code", "schoolpay_and_name"].includes(schoolPayMatch?.basis || "") ? schoolPayMatch?.student as StudentOpt : undefined;
+        const matchedStatementStudent = ["schoolpay_code", "schoolpay_and_name", "admission_number"].includes(statementMatch?.basis || "") ? statementMatch?.student as StudentOpt : undefined;
+        const student = schoolPayStudent || admissionMatch || matchedStatementStudent;
         const bankAccount = accountByName.get(normalized(accountText));
         const notes = String(valueFor(row, ["Notes", "Note", "Description"])).trim();
         let error = "";
-        if (admissionNumber && !admissionMatch) error = "Student admission number was not found in BOAT";
+        if (admissionNumber && !admissionMatch && !schoolPayStudent && statementMatch?.basis !== "admission_number") error = "Student admission number was not found in BOAT";
         else if (!admissionNumber && !matchEvidence) error = "Provide a student admission number, SchoolPay code, name, or statement description";
         else if (statementMatch?.basis === "exact_name") error = "Exact name match found; review and confirm the student before posting";
         else if (statementMatch?.basis === "conflict") error = "SchoolPay code conflicts with the name; review before posting";
@@ -394,6 +400,10 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         else if (Number.isNaN(date.getTime())) error = "Payment date is invalid";
         const matchBasis = admissionMatch
           ? `Admission number: ${admissionNumber}`
+          : schoolPayStudent
+            ? `SchoolPay code: ${schoolPayCode}`
+            : statementMatch?.basis === "admission_number"
+              ? `Admission number in statement: ${matchEvidence}`
           : statementMatch?.basis === "schoolpay_and_name"
             ? `SchoolPay and student name agree: ${matchEvidence}`
             : statementMatch?.basis === "schoolpay_code"
