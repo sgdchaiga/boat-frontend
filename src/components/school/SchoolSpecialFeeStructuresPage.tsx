@@ -115,12 +115,15 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
     setApplyMessage(null);
     try {
       const [studentResult, invoiceResult] = await Promise.all([
-        supabase.from("students").select("id,class_id").eq("organization_id", orgId).eq("status", "active"),
+        supabase.from("students").select("id,class_id,status").eq("organization_id", orgId),
         supabase.from("student_invoices").select("student_id,line_items").eq("organization_id", orgId).eq("academic_year", fee.academic_year).eq("term_name", fee.term_name).neq("status", "cancelled"),
       ]);
       if (studentResult.error) throw studentResult.error;
       if (invoiceResult.error) throw invoiceResult.error;
-      const eligible = ((studentResult.data || []) as Array<{ id: string; class_id: string | null }>).filter((student) => !fee.target_class_id || student.class_id === fee.target_class_id);
+      const eligible = ((studentResult.data || []) as Array<{ id: string; class_id: string | null; status?: string | null }>)
+        .filter((student) => !fee.target_class_id || student.class_id === fee.target_class_id)
+        .filter((student) => !["inactive", "withdrawn", "graduated", "archived"].includes(String(student.status || "").trim().toLowerCase()));
+      if (eligible.length === 0) throw new Error(`No eligible students were found in ${classLabel}. Check that the students are assigned to that class.`);
       const code = `SPECIAL_STRUCTURE_${fee.id}`;
       const alreadyInvoiced = new Set(((invoiceResult.data || []) as Array<{ student_id: string; line_items: Array<{ code?: string }> | null }>).filter((invoice) => (invoice.line_items || []).some((line) => line.code === code)).map((invoice) => invoice.student_id));
       const pending = eligible.filter((student) => !alreadyInvoiced.has(student.id));
