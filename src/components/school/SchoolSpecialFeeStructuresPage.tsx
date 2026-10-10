@@ -26,6 +26,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
   const [classes, setClasses] = useState<ClassOpt[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
+  const [applyProgress, setApplyProgress] = useState({ completed: 0, total: 0 });
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -111,6 +112,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
     const classLabel = classes.find((row) => row.id === fee.target_class_id)?.name || "all classes";
     if (!window.confirm(`Create separate ${feeTypeLabel(fee.fee_type)} invoices for eligible ${classLabel} students in ${fee.academic_year} · ${fee.term_name}? Existing matching special-fee invoices will be skipped.`)) return;
     setApplyingId(fee.id);
+    setApplyProgress({ completed: 0, total: 0 });
     setErr(null);
     setApplyMessage(null);
     try {
@@ -128,6 +130,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
       const code = `SPECIAL_STRUCTURE_${fee.id}`;
       const alreadyInvoiced = new Set(((invoiceResult.data || []) as Array<{ student_id: string; line_items: Array<{ code?: string }> | null }>).filter((invoice) => (invoice.line_items || []).some((line) => line.code === code)).map((invoice) => invoice.student_id));
       const pending = eligible.filter((student) => !alreadyInvoiced.has(student.id));
+      setApplyProgress({ completed: 0, total: pending.length });
       let created = 0;
       for (const student of pending) {
         const amount = Number(fee.amount) || 0;
@@ -137,6 +140,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
         const accounting = await syncStudentInvoiceAccounting({ organizationId: orgId, staffUserId: user?.id ?? null, invoice: result.data });
         if (accounting.journalMessage) throw new Error(accounting.journalMessage);
         created += 1;
+        setApplyProgress({ completed: created, total: pending.length });
       }
       setApplyMessage(`Created ${created} separate invoice${created === 1 ? "" : "s"}; skipped ${alreadyInvoiced.size} already charged student${alreadyInvoiced.size === 1 ? "" : "s"}.`);
     } catch (error) {
@@ -156,6 +160,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
       {applyMessage && <p className="text-emerald-700 text-sm" role="status">{applyMessage}</p>}
+      {applyingId && applyProgress.total > 0 && <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-4" role="status" aria-live="polite"><div className="mb-2 flex justify-between text-sm font-medium text-indigo-900"><span>Creating special-fee invoices…</span><span>{applyProgress.completed} of {applyProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(applyProgress.completed / applyProgress.total * 100)}%` }} /></div></div>}
       {!readOnly && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <select
