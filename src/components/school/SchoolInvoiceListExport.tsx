@@ -55,10 +55,10 @@ export function SchoolInvoiceListExport({ rows, school, disabled, onError }: {
       <div className="flex flex-wrap gap-x-4 gap-y-2">{columns.map(([key, title]) => <label key={key} className="flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={selected.includes(key)} onChange={(event) => setSelected((current) => event.target.checked ? [...current, key] : current.filter((item) => item !== key))} />{title}</label>)}</div>
     </fieldset>
     <div className="flex flex-wrap items-center gap-3">
-      <button type="button" onClick={() => setSelected(columns.map(([key]) => key))} className="text-sm text-indigo-700">Select all columns</button>
-      <button type="button" disabled={unavailable} onClick={print} className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50">Print list</button>
-      <button type="button" disabled={unavailable} onClick={excel} className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50">Export Excel</button>
-      <button type="button" disabled={unavailable} onClick={pdf} className="px-3 py-2 rounded-lg border text-sm disabled:opacity-50">Export PDF</button>
+      <button type="button" onClick={() => setSelected(columns.map(([key]) => key))} className="rounded-lg bg-indigo-50 px-3 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100">Select all columns</button>
+      <button type="button" disabled={unavailable} onClick={print} className="rounded-lg border border-slate-400 bg-slate-700 px-3 py-2 text-sm font-semibold text-white hover:bg-slate-800 disabled:opacity-50">Print list</button>
+      <button type="button" disabled={unavailable} onClick={excel} className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 disabled:opacity-50">Export Excel</button>
+      <button type="button" disabled={unavailable} onClick={pdf} className="rounded-lg bg-rose-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-rose-700 disabled:opacity-50">Export PDF</button>
       <span className="text-xs text-slate-500">Uses the filtered invoice list and selected columns.</span>
     </div>
     {!active.length && <p className="text-sm text-amber-700">Select at least one column to print or export.</p>}

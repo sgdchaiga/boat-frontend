@@ -26,6 +26,7 @@ import {
   fetchSaccoWorkspaceData,
   insertFixedDepositRow,
   insertLoanRow,
+  calculateSaccoCreditAssessment,
   replaceLoanProductsForOrg,
   updateLoanRow,
   upsertProvisioningSettings,
@@ -132,7 +133,7 @@ export type AppContextValue = {
     collateralDescription?: string;
     lc1ChairmanName?: string;
     lc1ChairmanPhone?: string;
-  }) => Promise<void>;
+  }) => Promise<Loan>;
   /** True while initial SACCO workspace fetch runs (sacco org only). */
   saccoLoading: boolean;
   saccoError: string | null;
@@ -404,7 +405,7 @@ export function AppProvider({
           fees: payload.fees,
         };
         setLoans((prev) => [...prev, newLoan]);
-        return;
+        return newLoan;
       }
 
       try {
@@ -448,7 +449,9 @@ export function AppProvider({
           last_payment_date: null,
           loan_number: loanNumber,
         });
+        await calculateSaccoCreditAssessment(row.id);
         setLoans((prev) => [...prev, row]);
+        return row;
       } catch (e) {
         console.error("[SACCO] addLoan", e);
         throw e;

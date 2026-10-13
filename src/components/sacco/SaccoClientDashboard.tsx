@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
+import { QRCodeSVG } from "qrcode.react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -23,6 +24,7 @@ import { PageNotes } from "@/components/common/PageNotes";
 import { useAppContext } from "@/contexts/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
+import { supabase } from "@/lib/supabase";
 import {
   fetchSavingsAccountsList,
   type SaccoSavingsAccountListRow,
@@ -41,6 +43,8 @@ type Props = {
   memberIdFromAuth?: string;
   memberMode?: boolean;
 };
+type MemberAction = MemberRequestKind | "qr_pay" | "qr_request" | "mini_app_pay";
+type SaccoMiniApp = { id: string; display_name: string; description: string; icon_key: string; minimum_amount: number; maximum_amount: number | null };
 
 function statusClass(status: string): string {
   const s = status.toLowerCase();
@@ -59,6 +63,12 @@ function moneyDelta(row: { debit: number; credit: number }): number {
   return Number(row.debit || 0) - Number(row.credit || 0);
 }
 
+function qrPaymentToken(value: string): string {
+  const trimmed = value.trim();
+  const prefix = "boat:sacco:pay:";
+  return trimmed.toLowerCase().startsWith(prefix) ? trimmed.slice(prefix.length) : trimmed;
+}
+
 const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFromAuth, memberMode = false }) => {
   const { user, isSuperAdmin, signOut } = useAuth();
   const { members, loans, fixedDeposits, cashbook, formatCurrency } = useAppContext();
@@ -68,10 +78,15 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
   const [accountsError, setAccountsError] = useState<string | null>(null);
   const [online, setOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [memberRequests, setMemberRequests] = useState<SaccoMemberRequest[]>([]);
-  const [activeAction, setActiveAction] = useState<MemberRequestKind | null>(null);
-  const [actionForm, setActionForm] = useState({ amount: "", destination: "", provider: "MTN", reference: "", note: "" });
+  const [activeAction, setActiveAction] = useState<MemberAction | null>(null);
+  const [actionForm, setActionForm] = useState({ amount: "", destination: "", provider: "MTN", reference: "", note: "", sourceAccountId: "" });
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
+  const [activeQrCode, setActiveQrCode] = useState<string | null>(null);
+  const [miniApps, setMiniApps] = useState<SaccoMiniApp[]>([]);
+  const [selectedMiniApp, setSelectedMiniApp] = useState<SaccoMiniApp | null>(null);
+  const [miniAppDraft, setMiniAppDraft] = useState({ displayName: "", description: "", settlementAccountId: "", active: true });
+  const [miniAppSaving, setMiniAppSaving] = useState(false);
 
   useEffect(() => {
     if (!memberMode) return;
@@ -117,6 +132,27 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
     };
   }, [user?.organization_id]);
 
+  const saveMiniApp = async () => {
+    const orgId = user?.organization_id;
+    if (!orgId || !miniAppDraft.displayName.trim() || !miniAppDraft.settlementAccountId) {
+      setActionMessage("Enter the service name and settlement savings account.");
+      return;
+    }
+    const appKey = miniAppDraft.displayName.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "");
+    if (!appKey) { setActionMessage("Enter a service name containing letters or numbers."); return; }
+    setMiniAppSaving(true);
+    const result = await supabase.from("sacco_mini_apps").upsert({
+      organization_id: orgId, app_key: appKey, display_name: miniAppDraft.displayName.trim(), description: miniAppDraft.description.trim(),
+      settlement_account_id: miniAppDraft.settlementAccountId, is_active: miniAppDraft.active,
+    }, { onConflict: "organization_id,app_key" });
+    setMiniAppSaving(false);
+    if (result.error) { setActionMessage(result.error.message); return; }
+    setMiniAppDraft({ displayName: "", description: "", settlementAccountId: "", active: true });
+    const { data } = await supabase.from("sacco_mini_apps").select("id,display_name,description,icon_key,minimum_amount,maximum_amount").eq("organization_id", orgId).eq("is_active", true).order("display_name");
+    setMiniApps((data || []) as SaccoMiniApp[]);
+    setActionMessage("Mini-app service saved.");
+  };
+
   useEffect(() => {
     const setConnected = () => setOnline(navigator.onLine);
     window.addEventListener("online", setConnected);
@@ -144,6 +180,15 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
       .then(setMemberRequests)
       .finally(() => setSyncing(false));
   }, [online, selectedMemberId, user?.organization_id]);
+
+  useEffect(() => {
+    const orgId = user?.organization_id;
+    if (!orgId) return;
+    void supabase.from("sacco_mini_apps")
+      .select("id,display_name,description,icon_key,minimum_amount,maximum_amount")
+      .eq("organization_id", orgId).eq("is_active", true).order("display_name")
+      .then(({ data }) => setMiniApps((data || []) as SaccoMiniApp[]));
+  }, [user?.organization_id]);
 
   const memberOptions = useMemo(() => {
     const q = memberSearch.trim().toLowerCase();
@@ -187,8 +232,78 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
     const orgId = user?.organization_id;
     const amount = Number(actionForm.amount);
     if (!orgId || !member || !activeAction || !Number.isFinite(amount) || amount <= 0) return;
-    if (activeAction === "member_transfer" && !actionForm.destination.trim()) return;
+    if ((activeAction === "member_transfer" || activeAction === "qr_pay") && !actionForm.destination.trim()) return;
     if (activeAction === "bill_payment" && !actionForm.reference.trim()) return;
+    const sourceAccount = ordinaryAccounts.find((account) => account.id === actionForm.sourceAccountId) || ordinaryAccounts[0];
+    if ((activeAction === "member_transfer" || activeAction === "qr_pay" || activeAction === "qr_request" || activeAction === "mini_app_pay") && !sourceAccount) {
+      setActionMessage("Open an active ordinary savings account before sending a payment.");
+      return;
+    }
+    if (activeAction === "member_transfer") {
+      setSyncing(true);
+      const result = await supabase.rpc("sacco_member_instant_transfer", {
+        p_source_account_id: sourceAccount.id,
+        p_destination: actionForm.destination.trim(),
+        p_amount: amount,
+        p_note: actionForm.note.trim() || null,
+        p_idempotency_key: crypto.randomUUID(),
+      });
+      setSyncing(false);
+      if (result.error) { setActionMessage(result.error.message); return; }
+      setActionMessage(`Transfer complete. Reference: ${String(result.data?.reference || "recorded")}`);
+      setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "", sourceAccountId: "" });
+      setActiveAction(null);
+      return;
+    }
+    if (activeAction === "qr_pay") {
+      const token = qrPaymentToken(actionForm.destination);
+      setSyncing(true);
+      const intent = await supabase.rpc("sacco_get_payment_qr_intent", { p_token: token });
+      if (intent.error) { setSyncing(false); setActionMessage(intent.error.message); return; }
+      const result = await supabase.rpc("sacco_pay_qr_intent", {
+        p_token: token, p_source_account_id: sourceAccount.id,
+        p_amount: amount, p_idempotency_key: crypto.randomUUID(),
+      });
+      setSyncing(false);
+      if (result.error) { setActionMessage(result.error.message); return; }
+      setActionMessage(`QR payment complete. Reference: ${String(result.data?.reference || "recorded")}`);
+      setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "", sourceAccountId: "" });
+      setActiveAction(null);
+      return;
+    }
+    if (activeAction === "qr_request") {
+      setSyncing(true);
+      const result = await supabase.rpc("sacco_create_payment_qr_intent", {
+        p_recipient_account_id: sourceAccount.id,
+        p_amount: amount,
+        p_note: actionForm.note.trim() || null,
+        p_expires_minutes: 15,
+      });
+      setSyncing(false);
+      if (result.error) { setActionMessage(result.error.message); return; }
+      setActiveQrCode(String(result.data?.token || ""));
+      setActionMessage("QR payment request created. It expires in 15 minutes.");
+      setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "", sourceAccountId: "" });
+      setActiveAction(null);
+      return;
+    }
+    if (activeAction === "mini_app_pay") {
+      if (!selectedMiniApp) { setActionMessage("Choose a service first."); return; }
+      setSyncing(true);
+      const intent = await supabase.rpc("sacco_create_mini_app_payment_intent", {
+        p_mini_app_id: selectedMiniApp.id, p_amount: amount, p_service_reference: actionForm.reference.trim() || null,
+      });
+      if (intent.error || !intent.data?.payment_token) { setSyncing(false); setActionMessage(intent.error?.message || "Could not prepare this service payment."); return; }
+      const result = await supabase.rpc("sacco_pay_qr_intent", {
+        p_token: intent.data.payment_token, p_source_account_id: sourceAccount.id, p_amount: amount, p_idempotency_key: crypto.randomUUID(),
+      });
+      setSyncing(false);
+      if (result.error) { setActionMessage(result.error.message); return; }
+      setActionMessage(`${selectedMiniApp.display_name} paid. Reference: ${String(result.data?.reference || "recorded")}`);
+      setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "", sourceAccountId: "" });
+      setSelectedMiniApp(null); setActiveAction(null);
+      return;
+    }
     queueMemberRequest({
       organizationId: orgId,
       memberId: member.id,
@@ -208,7 +323,7 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
     } else {
       setActionMessage("Saved safely on this phone. It will submit automatically when internet returns.");
     }
-    setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "" });
+    setActionForm({ amount: "", destination: "", provider: "MTN", reference: "", note: "", sourceAccountId: "" });
     setActiveAction(null);
   };
 
@@ -299,10 +414,11 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
       onClick: () => setActiveAction("bill_payment"),
     },
     {
-      label: "Balance",
-      desc: "Available offline",
+      label: "QR Pay",
+      desc: "Pay a member",
       icon: <QrCode size={20} />,
       tone: "bg-rose-50 text-rose-700 border-rose-100",
+      onClick: () => setActiveAction("qr_pay"),
     },
   ];
 
@@ -410,6 +526,10 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
                 ))}
               </div>
 
+              <button type="button" onClick={() => setActiveAction("qr_request")} disabled={readOnly} className="w-full rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-left text-sm font-bold text-indigo-800 disabled:opacity-55">Receive payment · create a 15-minute QR request</button>
+              {activeQrCode && <div className="rounded-xl border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-950"><div className="flex items-start gap-3"><div className="rounded-lg bg-white p-2"><QRCodeSVG value={`boat:sacco:pay:${activeQrCode}`} size={132} level="M" includeMargin /></div><div className="min-w-0"><p className="font-bold">QR payment request</p><p className="mt-1 text-xs">Scan this code in BOAT, or share the payment code. It is single-use and expires in 15 minutes.</p><p className="mt-2 break-all rounded bg-white p-2 font-mono text-[10px]">{activeQrCode}</p><button type="button" onClick={() => void navigator.clipboard?.writeText(`boat:sacco:pay:${activeQrCode}`)} className="mt-2 text-xs font-bold text-indigo-700">Copy payment code</button></div></div></div>}
+              {miniApps.length > 0 && <section className="rounded-2xl border border-slate-200 bg-white p-4"><div className="flex items-center justify-between"><h3 className="text-sm font-bold text-slate-900">Services</h3><span className="text-xs text-slate-500">BOAT mini-apps</span></div><div className="mt-3 grid gap-2">{miniApps.map((app) => <button key={app.id} type="button" disabled={readOnly} onClick={() => { setSelectedMiniApp(app); setActiveAction("mini_app_pay"); }} className="rounded-xl border border-slate-200 p-3 text-left enabled:hover:border-indigo-300 disabled:opacity-55"><p className="font-semibold text-slate-900">{app.display_name}</p><p className="mt-1 text-xs text-slate-600">{app.description || "Secure payment service"}</p></button>)}</div></section>}
+
               <div className="rounded-2xl border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-slate-900">Notifications</h3>
@@ -489,18 +609,33 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
               <div>
                 <p className="text-xs font-bold uppercase tracking-wide text-emerald-700">Member self-service</p>
                 <h2 className="mt-1 text-xl font-black text-slate-950">
-                  {activeAction === "savings_deposit" ? "Add to savings" : activeAction === "member_transfer" ? "Send to a member" : "Pay a bill"}
+                  {activeAction === "savings_deposit" ? "Add to savings" : activeAction === "member_transfer" ? "Send to a member" : activeAction === "qr_pay" ? "Pay by QR" : activeAction === "qr_request" ? "Create QR request" : activeAction === "mini_app_pay" ? `Pay ${selectedMiniApp?.display_name || "service"}` : "Pay a bill"}
                 </h2>
                 <p className="mt-1 text-xs text-slate-500">{online ? "Will submit now for confirmation." : "Will be saved in this device's local app storage and queued until online."}</p>
               </div>
               <button type="button" onClick={() => setActiveAction(null)} className="rounded-full bg-slate-100 px-3 py-1.5 text-sm font-bold">Close</button>
             </div>
             <div className="space-y-4">
+              {["member_transfer", "qr_pay", "qr_request", "mini_app_pay"].includes(activeAction) && ordinaryAccounts.length > 1 && (
+                <label className="block text-sm font-semibold text-slate-700">Pay from
+                  <select value={actionForm.sourceAccountId} onChange={(e) => setActionForm((f) => ({ ...f, sourceAccountId: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3">
+                    <option value="">Primary savings account</option>
+                    {ordinaryAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_number} · {formatCurrency(Number(account.balance || 0))}</option>)}
+                  </select>
+                </label>
+              )}
               {activeAction === "member_transfer" && (
                 <label className="block text-sm font-semibold text-slate-700">Recipient member number
                   <input required value={actionForm.destination} onChange={(e) => setActionForm((f) => ({ ...f, destination: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3" placeholder="e.g. SAC-00124" />
                 </label>
               )}
+              {activeAction === "qr_pay" && (
+                <label className="block text-sm font-semibold text-slate-700">QR payment code
+                  <input required value={actionForm.destination} onChange={(e) => setActionForm((f) => ({ ...f, destination: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3 font-mono" placeholder="Scan or paste the QR payment code" />
+                  <span className="mt-1 block text-xs font-normal text-slate-500">Paste a BOAT QR payload or its payment code. The recipient, amount, and expiry are validated before funds move.</span>
+                </label>
+              )}
+              {activeAction === "mini_app_pay" && <label className="block text-sm font-semibold text-slate-700">Service reference <span className="font-normal text-slate-500">(optional)</span><input value={actionForm.reference} onChange={(e) => setActionForm((f) => ({ ...f, reference: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3" placeholder="Account, invoice, or order reference" /></label>}
               {activeAction === "bill_payment" && (<>
                 <label className="block text-sm font-semibold text-slate-700">Provider
                   <select value={actionForm.provider} onChange={(e) => setActionForm((f) => ({ ...f, provider: e.target.value }))} className="mt-1 min-h-12 w-full rounded-xl border border-slate-300 px-3">
@@ -539,6 +674,8 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
           </div>
         </section>
       )}
+
+      {!memberMode && ["admin", "super_admin", "manager"].includes(String(user?.role || "").toLowerCase()) && <section className="rounded-xl border border-indigo-200 bg-indigo-50/40 p-4 shadow-sm"><h2 className="font-bold text-slate-900">Mini-app service registry</h2><p className="mt-1 text-sm text-slate-600">Publish an internal service with a controlled settlement account. Members only see active services.</p><div className="mt-3 grid gap-2 md:grid-cols-2"><input value={miniAppDraft.displayName} onChange={(e) => setMiniAppDraft((draft) => ({ ...draft, displayName: e.target.value }))} placeholder="Service name, e.g. School fees" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" /><select value={miniAppDraft.settlementAccountId} onChange={(e) => setMiniAppDraft((draft) => ({ ...draft, settlementAccountId: e.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">Settlement savings account</option>{accounts.filter((account) => account.is_active && !isShareAccount(account.savings_product_code)).map((account) => <option key={account.id} value={account.id}>{account.account_number} · {account.sacco_members?.full_name || "Member account"}</option>)}</select><input value={miniAppDraft.description} onChange={(e) => setMiniAppDraft((draft) => ({ ...draft, description: e.target.value }))} placeholder="Short member-facing description" className="rounded-lg border border-slate-300 px-3 py-2 text-sm md:col-span-2" /></div><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><label className="text-sm text-slate-700"><input type="checkbox" checked={miniAppDraft.active} onChange={(e) => setMiniAppDraft((draft) => ({ ...draft, active: e.target.checked }))} className="mr-2" />Publish now</label><button type="button" onClick={() => void saveMiniApp()} disabled={miniAppSaving} className="app-btn-primary">{miniAppSaving ? "Saving…" : "Save service"}</button></div></section>}
 
       {!memberMode && <><section className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">

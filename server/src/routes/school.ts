@@ -154,6 +154,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
       "issue_date",
       "due_date",
       "subtotal",
+      "line_items",
       "discount_amount",
       "discount_reason",
       "bursary_amount",
@@ -172,6 +173,7 @@ const RESOURCES: Record<string, ResourceConfig> = {
       "issue_date",
       "due_date",
       "subtotal",
+      "line_items",
       "discount_amount",
       "discount_reason",
       "bursary_amount",
@@ -633,9 +635,6 @@ function allocatePayment(amount: number, invoices: InvoiceForPayment[], feeById:
     remaining = round2(remaining - applyOnInvoice);
   }
 
-  if (remaining > 0 && allocations.length > 0) {
-    allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
-  }
   return allocations;
 }
 
@@ -691,7 +690,6 @@ async function recordSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body:
         studentId
       );
   const invoices = (Array.isArray(invoiceRows) ? invoiceRows : []) as InvoiceForPayment[];
-  if (invoices.length === 0) throw new Error("No open invoice found for this student.");
 
   const feeIds = [...new Set(invoices.map((invoice) => invoice.fee_structure_id).filter(Boolean))] as string[];
   const feeRows =
@@ -703,10 +701,11 @@ async function recordSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body:
         )) as FeeStructureForPayment[])
       : [];
   const feeById = new Map(feeRows.map((fee) => [fee.id, fee]));
+  // A receipt may legitimately arrive before an invoice is raised. Keep its
+  // allocations empty so it can be matched later, rather than rejecting it.
   const allocations = allocatePayment(amount, invoices, feeById);
-  if (allocations.length === 0) throw new Error("Could not allocate this payment to any open invoice.");
 
-  const reference = await nextSchoolFeeReference(app, organizationId);
+  const reference = String(body.reference || "").trim() || await nextSchoolFeeReference(app, organizationId);
   const receiptNumber = `R-${Date.now().toString(36).toUpperCase()}`;
   const now = new Date().toISOString();
 
@@ -720,7 +719,7 @@ async function recordSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body:
       amount,
       method,
       reference,
-      now,
+      body.paid_at ? new Date(String(body.paid_at)).toISOString() : now,
        JSON.stringify(allocations),
        ["bank", "transfer"].includes(method) ? String(body.bank_payment_source || "bank_slip") : null
     );
@@ -760,6 +759,67 @@ async function recordSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body:
     const receipt = Array.isArray(receiptRows) ? receiptRows[0] : null;
     const journalId = await postPaymentAccounting(tx as unknown as DbClient, organizationId, staffUserId, payment);
     return { payment, receipt, allocations, journal_id: journalId };
+  });
+}
+
+async function allocateUnallocatedSchoolPayment(app: Parameters<FastifyPluginAsync>[0], body: Record<string, unknown>) {
+  const organizationId = assertUuid(body.organization_id, "organization_id");
+  const paymentId = assertUuid(body.payment_id, "payment_id");
+  const invoiceId = assertUuid(body.invoice_id, "invoice_id");
+  const requestedAmount = Number(body.amount);
+  if (!(requestedAmount > 0)) throw new Error("Allocation amount must be positive.");
+
+  return app.prisma.$transaction(async (tx) => {
+    const paymentRows = await tx.$queryRawUnsafe(
+      `SELECT id, student_id, amount, invoice_allocations
+       FROM public.school_payments
+       WHERE organization_id = $1::uuid AND id = $2::uuid
+       FOR UPDATE`,
+      organizationId,
+      paymentId
+    );
+    const payment = (Array.isArray(paymentRows) ? paymentRows[0] : null) as { id: string; student_id: string; amount: number; invoice_allocations: unknown } | null;
+    if (!payment) throw new Error("Payment not found.");
+    const currentAllocations = Array.isArray(payment.invoice_allocations) ? payment.invoice_allocations as PaymentSlice[] : [];
+    const alreadyAllocated = round2(currentAllocations.reduce((sum, allocation) => sum + Math.max(0, Number(allocation.amount) || 0), 0));
+    const unallocated = round2(Math.max(0, Number(payment.amount) - alreadyAllocated));
+    if (!(unallocated > 0)) throw new Error("This payment is already fully allocated.");
+
+    const invoiceRows = await tx.$queryRawUnsafe(
+      `SELECT id, invoice_number, total_due, amount_paid, fee_structure_id
+       FROM public.student_invoices
+       WHERE organization_id = $1::uuid AND id = $2::uuid AND student_id = $3::uuid AND status <> 'cancelled'
+       FOR UPDATE`,
+      organizationId,
+      invoiceId,
+      payment.student_id
+    );
+    const invoice = (Array.isArray(invoiceRows) ? invoiceRows[0] : null) as InvoiceForPayment | null;
+    if (!invoice) throw new Error("Choose an active invoice belonging to this student.");
+    const outstanding = round2(Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid)));
+    const allocatedAmount = round2(Math.min(requestedAmount, unallocated, outstanding));
+    if (!(allocatedAmount > 0)) throw new Error("The selected invoice has no outstanding balance.");
+
+    const feeRows = invoice.fee_structure_id
+      ? await tx.$queryRawUnsafe(`SELECT id, line_items FROM public.fee_structures WHERE organization_id = $1::uuid AND id = $2::uuid`, organizationId, invoice.fee_structure_id) as FeeStructureForPayment[]
+      : [];
+    const slices = allocatePayment(allocatedAmount, [invoice], new Map(feeRows.map((fee) => [fee.id, fee])));
+    const allocations = [...currentAllocations, ...slices];
+    const paymentUpdateRows = await tx.$queryRawUnsafe(
+      `UPDATE public.school_payments SET invoice_allocations = $1::jsonb WHERE organization_id = $2::uuid AND id = $3::uuid RETURNING *`,
+      JSON.stringify(allocations),
+      organizationId,
+      paymentId
+    );
+    const newPaid = round2(Number(invoice.amount_paid) + allocatedAmount);
+    await tx.$executeRawUnsafe(
+      `UPDATE public.student_invoices SET amount_paid = $1::numeric, status = $2 WHERE organization_id = $3::uuid AND id = $4::uuid`,
+      newPaid,
+      newPaid >= Number(invoice.total_due) ? "paid" : "partial",
+      organizationId,
+      invoiceId
+    );
+    return { payment: Array.isArray(paymentUpdateRows) ? paymentUpdateRows[0] : null, allocated_amount: allocatedAmount };
   });
 }
 
@@ -924,6 +984,20 @@ export const schoolRoutes: FastifyPluginAsync = async (app) => {
       return reply.status(400).send({
         error: "invalid_school_payment",
         message: err instanceof Error ? err.message : "Invalid payment request.",
+      });
+    }
+  });
+
+  app.post<{
+    Body: Record<string, unknown>;
+  }>("/school/payments/allocate", async (req, reply) => {
+    try {
+      const data = await allocateUnallocatedSchoolPayment(app, coerceBody(req.body));
+      return { data };
+    } catch (err) {
+      return reply.status(400).send({
+        error: "invalid_school_payment_allocation",
+        message: err instanceof Error ? err.message : "Invalid payment allocation.",
       });
     }
   });

@@ -59,7 +59,7 @@ test("maker-checker is enforced in UI, service, and database", async () => {
   const [page, db, migration] = await Promise.all([
     source("src/components/sacco/SaccoTellerPage.tsx"),
     source("src/lib/saccoTellerDb.ts"),
-    source("supabase/migrations/20260724120000_sacco_prevent_self_approval.sql"),
+    source("supabase/migrations/20260724120001_sacco_prevent_self_approval.sql"),
   ]);
   assert.match(page, /disabled=\{!canMutate \|\| saving \|\| isMaker\}/);
   assert.match(db, /cannot approve a transaction that you entered/i);
@@ -94,4 +94,48 @@ test("ordinary SACCO roles do not receive transaction-correction rights", async 
     permissions,
     /permission === "sacco_transaction_edit"\) return roleKey === "admin" \|\| roleKey === "manager" \|\| roleKey === "accountant"/
   );
+});
+
+test("member payment rail keeps queued-transfer processing staff controlled", async () => {
+  const migration = await source("supabase/migrations/20261012100000_sacco_member_payment_rail.sql");
+  assert.match(migration, /Only authorized SACCO staff can process transfer requests/);
+  assert.match(migration, /process_sacco_member_transfer_request_guarded/);
+  assert.match(migration, /v_actor\.organization_id/);
+});
+
+test("member payment rail has idempotent internal transfer and expiring QR intent controls", async () => {
+  const migration = await source("supabase/migrations/20261012100000_sacco_member_payment_rail.sql");
+  for (const expected of [
+    /sacco_member_payment_idempotency/,
+    /pg_advisory_xact_lock/,
+    /Insufficient available savings balance/,
+    /sacco_create_payment_qr_intent/,
+    /sacco_pay_qr_intent/,
+    /QR payment request is expired or unavailable/,
+  ]) assert.match(migration, expected);
+});
+
+test("payment platform enforces limits, records risk, supports disputes and governs mini-app settlement", async () => {
+  const migration = await source("supabase/migrations/20261012110000_sacco_payment_platform_controls.sql");
+  for (const expected of [
+    /maximum_transaction_amount/,
+    /daily_transfer_limit/,
+    /sacco_member_payment_transactions_immutable/,
+    /sacco_member_payment_risk_events/,
+    /sacco_open_member_payment_dispute/,
+    /sacco_reverse_member_payment/,
+    /sacco_mini_apps/,
+    /sacco_create_mini_app_payment_intent/,
+  ]) assert.match(migration, expected);
+});
+
+test("member app exposes secure transfer, QR, and mini-app payment entry points", async () => {
+  const page = await source("src/components/sacco/SaccoClientDashboard.tsx");
+  for (const expected of [
+    /sacco_member_instant_transfer/,
+    /QRCodeSVG/,
+    /sacco_pay_qr_intent/,
+    /sacco_create_mini_app_payment_intent/,
+    /Mini-app service registry/,
+  ]) assert.match(page, expected);
 });

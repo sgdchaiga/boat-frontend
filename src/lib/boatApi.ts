@@ -111,5 +111,11 @@ export const boatApi = {
         body,
       });
     },
+    allocatePayment<T = unknown>(body: Record<string, unknown>) {
+      return boatApiFetch<{ data: T }>(`/api/v1/school/payments/allocate`, {
+        method: "POST",
+        body,
+      });
+    },
   },
 };

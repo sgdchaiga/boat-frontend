@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowDownUp, ArrowUp, Download, FolderOpen, Pencil, Printer, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowDownUp, ArrowUp, Download, FolderOpen, Pencil, Printer, SlidersHorizontal, Upload, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -24,7 +24,7 @@ type PaymentSlice = { invoice_id: string; amount: number; category_code?: string
 type SchoolPayImportRow = { row: number; schoolPayCode: string; amount: number; reference: string; paidAt: string; student?: StudentOpt; error?: string };
 type DirectBankImportRow = { row: number; sourceFileName: string; bank: string; bankAccount: BankAccount; admissionNumber: string; statementDescription: string; matchEvidence: string; matchBasis?: string; feeType: string; amount: number; reference: string; paidAt: string; notes: string; student?: StudentOpt; error?: string };
 type BulkCancelImportRow = { row: number; reference: string; payment?: PayRow; error?: string };
-type FeePaymentActivity = "schoolpay" | "directBank" | "manual" | "bulkEdit" | "bulkCancel";
+type FeePaymentActivity = "schoolpay" | "directBank" | "manual" | "allocate" | "bulkEdit" | "bulkCancel";
 
 type PayRow = {
   id: string;
@@ -176,12 +176,15 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkCancelRows, setBulkCancelRows] = useState<BulkCancelImportRow[]>([]);
   const [bulkCancelMessage, setBulkCancelMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState<PaymentFilters>({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" });
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showBankColumn, setShowBankColumn] = useState(true);
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; direction: "asc" | "desc" }>({ key: "paid_at", direction: "desc" });
   const [openBatchKey, setOpenBatchKey] = useState<string | null>(null);
   const [editingPayment, setEditingPayment] = useState<PayRow | null>(null);
   const [editPaymentDetails, setEditPaymentDetails] = useState({ reference: "", paid_at: "", method: "cash" as SchoolPaymentMethod, bank_gl_account_id: "", bank_payment_source: "bank_slip" as "schoolpay" | "bank_slip", income_type: "School Fees" });
   const [savingPaymentEdit, setSavingPaymentEdit] = useState(false);
+  const [allocatingPayment, setAllocatingPayment] = useState(false);
+  const [allocationForm, setAllocationForm] = useState({ payment_id: "", invoice_id: "", amount: "" });
   const [form, setForm] = useState({
     student_id: "",
     invoice_id: "",
@@ -205,6 +208,8 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
 
   const refNote =
     "Reference is optional. If left blank, BOAT generates 01-YYYYMMDD-NNN (page 01 · UTC date · Nth school-fee payment that day).";
+
+  const unallocatedAmount = (payment: PayRow) => round2(Math.max(0, Number(payment.amount) - (payment.invoice_allocations || []).reduce((sum, allocation) => sum + Math.max(0, Number(allocation.amount) || 0), 0)));
 
   const downloadSchoolPayTemplate = () => {
     const sheet = XLSX.utils.json_to_sheet([{ "SchoolPay Code": "1000123456", Amount: 150000, "Transaction Reference": "TXN-123456789", "Payment Date": new Date().toISOString().slice(0, 10) }]);
@@ -462,8 +467,6 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           remaining = round2(remaining - applied);
         }
       }
-      if (!allocations.length) { setDirectBankImportRows((current) => current.map((item) => item.row === row.row ? { ...item, error: "No open invoice found" } : item)); return; }
-      if (remaining > 0) allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
       const notes = [`Bulk imported direct bank slip`, `Batch: ${batchLabel}`, `Upload file: ${row.sourceFileName}`, `Bank: ${row.bank}`, `Fee type: ${row.feeType}`, row.notes].filter(Boolean).join(" · ");
       const paymentNotes = [notes, row.matchBasis ? `Student match: ${row.matchBasis}` : ""].filter(Boolean).join(" · ");
       const paymentResult = await supabase.from("school_payments").insert({ student_id: row.student!.id, amount: row.amount, method: "bank", bank_gl_account_id: row.bankAccount.id, bank_payment_source: "bank_slip", reference: row.reference, paid_at: row.paidAt, recorded_by: user?.id ?? null, invoice_allocations: allocations, notes: paymentNotes }).select("id").single();
@@ -794,15 +797,6 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
       remaining = round2(remaining - applyOnInvoice);
     }
 
-    if (remaining > 0 && allocations.length > 0) {
-      allocations[allocations.length - 1].amount = round2(allocations[allocations.length - 1].amount + remaining);
-      remaining = 0;
-    }
-
-    if (allocations.length === 0) {
-      setErr("Could not allocate this payment to any open invoice.");
-      return;
-    }
     setErr(null);
 
     let reference = form.reference.trim();
@@ -1265,6 +1259,42 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
     } finally { setSavingPaymentEdit(false); }
   };
 
+  const allocatePayment = async () => {
+    const orgId = user?.organization_id;
+    const payment = rows.find((row) => row.id === allocationForm.payment_id);
+    const invoice = invoices.find((row) => row.id === allocationForm.invoice_id);
+    const requested = Number(allocationForm.amount);
+    if (!orgId || !payment || !invoice || !(requested > 0) || allocatingPayment) return;
+    const available = unallocatedAmount(payment);
+    const outstanding = round2(Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid)));
+    const amount = round2(Math.min(requested, available, outstanding));
+    if (!(amount > 0)) { setErr("This payment or invoice has no amount available for allocation."); return; }
+    setAllocatingPayment(true);
+    setErr(null);
+    try {
+      let saved: PayRow;
+      if (canUseSchoolApi()) {
+        const result = await boatApi.school.allocatePayment<{ payment: PayRow }>({ organization_id: orgId, payment_id: payment.id, invoice_id: invoice.id, amount });
+        if (!result.data.payment) throw new Error("Payment allocation was not saved.");
+        saved = result.data.payment;
+      } else {
+        const allocations = [...(payment.invoice_allocations || []), { invoice_id: invoice.id, amount, category_code: "GENERAL", category_label: "School Fees", priority: 999 }];
+        const paymentResult = await supabase.from("school_payments").update({ invoice_allocations: allocations }).eq("organization_id", orgId).eq("id", payment.id).select("*").single();
+        if (paymentResult.error) throw paymentResult.error;
+        const newPaid = round2(Number(invoice.amount_paid) + amount);
+        const invoiceResult = await supabase.from("student_invoices").update({ amount_paid: newPaid, status: newPaid >= Number(invoice.total_due) ? "paid" : "partial" }).eq("organization_id", orgId).eq("id", invoice.id);
+        if (invoiceResult.error) throw invoiceResult.error;
+        saved = paymentResult.data as PayRow;
+      }
+      setRows((current) => current.map((row) => row.id === saved.id ? { ...row, ...saved } : row));
+      setInvoices((current) => current.map((row) => row.id === invoice.id ? { ...row, amount_paid: round2(Number(row.amount_paid) + amount), status: round2(Number(row.amount_paid) + amount) >= Number(row.total_due) ? "paid" : "partial" } : row));
+      setAllocationForm({ payment_id: "", invoice_id: "", amount: "" });
+      setBulkMessage(`Allocated ${amount.toLocaleString()} to ${invoice.invoice_number}.`);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "The payment could not be allocated.");
+    } finally { setAllocatingPayment(false); }
+  };
+
   const visiblePayments = useMemo(() => rows.filter((payment) => {
     const day = paymentLocalDay(payment.paid_at);
     const incomeTypes = (payment.invoice_allocations || []).map((allocation) => normalizeIncomeType(allocation.category_label).toLowerCase());
@@ -1333,6 +1363,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             ["schoolpay", "SchoolPay upload"],
             ["directBank", "Direct-bank upload"],
             ["manual", "Record payment"],
+            ["allocate", "Allocate payments"],
             ...(canEditBatches ? [["bulkEdit", "Bulk edit"]] : []),
             ...(canBulkReverse ? [["bulkCancel", "Bulk cancel"]] : []),
           ] as Array<[FeePaymentActivity, string]>).map(([activity, label]) => <button key={activity} type="button" onClick={() => setActiveActivity(activity)} className={`rounded-lg px-3 py-2 text-sm font-semibold transition-colors ${activeActivity === activity ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-700 hover:bg-slate-200"}`}>{label}</button>)}
@@ -1355,7 +1386,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         </div>}
         {activeActivity === "directBank" && <div className="rounded-xl border border-sky-200 bg-sky-50/40 p-4 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-semibold text-slate-900">Bulk upload direct bank payments</h2><p className="mt-1 text-sm text-slate-600">Upload bank-slip deposits for school fees, examination fees, uniform, and other fee types. BOAT matches students by admission number or a unique SchoolPay code in the statement description, checks duplicate references, and allocates only confirmed matches to the oldest open invoices.</p></div>
+          <div><h2 className="font-semibold text-slate-900">Bulk upload direct bank payments</h2><p className="mt-1 text-sm text-slate-600">Upload bank-slip deposits for school fees, examination fees, uniform, and other fee types. BOAT matches students by admission number or a unique SchoolPay code in the statement description, checks duplicate references, and allocates confirmed payments to the oldest open invoices when available. Payments without an open invoice are saved as unallocated.</p></div>
             <div className="flex flex-wrap gap-2">
               <button type="button" onClick={downloadDirectBankTemplate} className="inline-flex items-center gap-2 rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm font-medium text-sky-800"><Download className="h-4 w-4"/> Template</button>
               <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg bg-sky-700 px-3 py-2 text-sm font-medium text-white hover:bg-sky-800"><Upload className="h-4 w-4"/> Choose direct-bank file<input type="file" accept=".xlsx,.xls,.csv,text/csv" className="hidden" onChange={(event) => { void parseDirectBankFile(event.target.files?.[0]); event.currentTarget.value = ""; }}/></label>
@@ -1453,6 +1484,29 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
             {saving ? "Saving payment..." : "Record school-fee payment"}
           </button>
         </div>}
+        {activeActivity === "allocate" && <section className="rounded-xl border border-violet-200 bg-violet-50/40 p-4 space-y-3">
+          <div><h2 className="font-semibold text-slate-900">Allocate an unallocated payment</h2><p className="mt-1 text-sm text-slate-600">Use this for a payment recorded before its invoice was raised. Only the amount not already assigned to an invoice is available.</p></div>
+          {(() => {
+            const payment = rows.find((row) => row.id === allocationForm.payment_id);
+            const student = payment ? students.find((row) => row.id === payment.student_id) : null;
+            return <div className="grid gap-3 md:grid-cols-2">
+              <select value={allocationForm.payment_id} onChange={(event) => {
+                const selected = rows.find((row) => row.id === event.target.value);
+                setAllocationForm({ payment_id: event.target.value, invoice_id: "", amount: selected ? String(unallocatedAmount(selected)) : "" });
+                if (selected) setForm((current) => ({ ...current, student_id: selected.student_id, invoice_id: "" }));
+              }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">
+                <option value="">Choose unallocated payment</option>
+                {rows.filter((row) => unallocatedAmount(row) > 0).map((row) => { const owner = students.find((student) => student.id === row.student_id); return <option key={row.id} value={row.id}>{paymentLocalDay(row.paid_at)} · {owner ? `${owner.admission_number} — ${owner.first_name} ${owner.last_name}` : row.student_id} · {unallocatedAmount(row).toLocaleString()} unallocated</option>; })}
+              </select>
+              <select value={allocationForm.invoice_id} disabled={!payment} onChange={(event) => { const invoice = invoices.find((row) => row.id === event.target.value); setAllocationForm((current) => ({ ...current, invoice_id: event.target.value, amount: invoice && payment ? String(Math.min(unallocatedAmount(payment), Math.max(0, Number(invoice.total_due) - Number(invoice.amount_paid)))) : current.amount })); }} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm disabled:bg-slate-100">
+                <option value="">Choose active invoice</option>
+                {invoices.filter((invoice) => Number(invoice.total_due) > Number(invoice.amount_paid)).map((invoice) => <option key={invoice.id} value={invoice.id}>{invoice.invoice_number} · {invoice.academic_year || "Year not set"} {invoice.term_name || ""} · due {Number(invoice.total_due - invoice.amount_paid).toLocaleString()}</option>)}
+              </select>
+              <input type="number" min="0.01" value={allocationForm.amount} onChange={(event) => setAllocationForm((current) => ({ ...current, amount: event.target.value }))} placeholder="Amount to allocate" className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm" />
+              <div className="flex items-center gap-3"><button type="button" onClick={() => void allocatePayment()} disabled={allocatingPayment || !payment || !allocationForm.invoice_id || !(Number(allocationForm.amount) > 0)} className="rounded-lg bg-violet-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50">{allocatingPayment ? "Allocating…" : "Allocate to invoice"}</button>{payment && <span className="text-xs text-slate-600">{unallocatedAmount(payment).toLocaleString()} available{student ? ` for ${student.first_name} ${student.last_name}` : ""}</span>}</div>
+            </div>;
+          })()}
+        </section>}
         </>
       )}
       {!readOnly && canBulkReverse && activeActivity === "bulkCancel" && <section className="rounded-xl border border-red-200 bg-red-50/40 p-4 space-y-3">
@@ -1481,8 +1535,21 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         {bulkUpdating && bulkUpdateProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Updating selected payments…</span><span>{bulkUpdateProgress.completed} of {bulkUpdateProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(bulkUpdateProgress.completed / bulkUpdateProgress.total * 100)}%` }} /></div></div>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
-      <section className="rounded-xl border border-slate-200 bg-white p-4">
-        <div className="grid gap-3 md:grid-cols-8">
+      <section className="rounded-xl border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((open) => !open)}
+            aria-expanded={filtersOpen}
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            <SlidersHorizontal className="h-4 w-4" />
+            Filters{Object.values(paymentFilters).filter(Boolean).length > 0 ? ` (${Object.values(paymentFilters).filter(Boolean).length})` : ""}
+          </button>
+          {Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}
+          <label className="ml-auto whitespace-nowrap text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label>
+        </div>
+        {filtersOpen && <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <input type="month" aria-label="Payments month" value={paymentFilters.month} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, month: event.target.value, from: "", to: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value, month: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value, month: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
@@ -1499,8 +1566,7 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
           <select aria-label="Filter payments by income type" value={paymentFilters.incomeType} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, incomeType: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All income types</option>{incomeTypes.map((incomeType) => <option key={incomeType} value={incomeType}>{incomeType}</option>)}</select>
           <select aria-label="Filter payments by deposited-to bank" value={paymentFilters.bankAccountId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, bankAccountId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All deposited-to banks</option>{bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}</select>
-        </div>
-        <div className="mt-3 flex items-center gap-3">{Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}<label className="ml-auto text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
+        </div>}
       </section>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">

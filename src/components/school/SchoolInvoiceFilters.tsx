@@ -4,14 +4,16 @@ type Student = { id: string; first_name: string; last_name: string; admission_nu
 type Invoice = { student_id: string; invoice_number: string; academic_year: string; term_name: string; status: string; issue_date?: string | null };
 const emptyFilters = { residency: "", search: "", student: "", className: "", chargeType: "", year: "", term: "", status: "", from: "", to: "" };
 
-export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[], optionsConfig: { showResidency?: boolean; getChargeTypes?: (invoice: T) => string[] } = {}) {
+export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[], optionsConfig: { showResidency?: boolean; getChargeTypes?: (invoice: T) => string[]; hideCancelledByDefault?: boolean } = {}) {
   const [filters, setFilters] = useState(emptyFilters);
+  const [showCancelled, setShowCancelled] = useState(!optionsConfig.hideCancelledByDefault);
   const studentMap = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
   const filteredRows = useMemo(() => rows.filter((row) => {
     const student = studentMap.get(row.student_id);
     const search = filters.search.trim().toLowerCase();
     const date = row.issue_date?.slice(0, 10);
     return (!search || `${row.invoice_number} ${student?.first_name ?? ""} ${student?.last_name ?? ""} ${student?.admission_number ?? ""} ${student?.school_pay_number ?? ""}`.toLowerCase().includes(search))
+      && (showCancelled || filters.status === "cancelled" || row.status !== "cancelled")
       && (!filters.residency || (filters.residency === "boarding" ? student?.is_boarding === true : student?.is_boarding === false))
       && (!filters.student || row.student_id === filters.student)
       && (!filters.className || student?.class_name?.trim() === filters.className)
@@ -21,7 +23,7 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
       && (!filters.status || row.status === filters.status)
       && (!filters.from || (!!date && date >= filters.from))
       && (!filters.to || (!!date && date <= filters.to));
-  }), [rows, studentMap, filters]);
+  }), [rows, studentMap, filters, showCancelled]);
   const options = (values: string[]) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
   const controlClass = "border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white w-full";
   const select = (label: string, key: keyof typeof filters, values: { value: string; label: string }[]) => (
@@ -48,7 +50,7 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
         <label className="text-xs text-slate-600 space-y-1"><span>Issue date from</span><input type="date" className={controlClass} value={filters.from} max={filters.to || undefined} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
         <label className="text-xs text-slate-600 space-y-1"><span>Issue date to</span><input type="date" className={controlClass} value={filters.to} min={filters.from || undefined} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
       </div>
-      <div className="flex items-center justify-between gap-3 text-sm text-slate-600"><span>{filteredRows.length} of {rows.length} invoices</span><button type="button" onClick={() => setFilters(emptyFilters)} className="font-medium text-indigo-700">Clear filters</button></div>
+      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600"><span>{filteredRows.length} of {rows.length} invoices</span><div className="flex items-center gap-4"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={showCancelled} onChange={(event) => setShowCancelled(event.target.checked)} /> Show cancelled invoices</label><button type="button" onClick={() => { setFilters(emptyFilters); setShowCancelled(!optionsConfig.hideCancelledByDefault); }} className="font-medium text-indigo-700">Clear filters</button></div></div>
       {filters.from && filters.to && filters.from > filters.to && <p role="alert" className="text-sm text-red-600">The end date must be on or after the start date.</p>}
     </div>
   );

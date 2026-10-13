@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useAppContext, Loan } from "@/contexts/AppContext";
 import { toast } from "@/components/ui/use-toast";
+import { disburseSaccoLoanToSavings, fetchSaccoCreditAssessments, type SaccoCreditAssessmentSummary } from "@/lib/saccoDb";
 import { CheckCircle, XCircle, Clock, Eye, X, ChevronRight, Shield } from "lucide-react";
 
 export type LoanApprovalPipeline = "approval_gates" | "disbursement_final";
@@ -13,6 +14,13 @@ const LoanApproval: React.FC<Props> = ({ pipeline = "approval_gates" }) => {
   const { loans, approveLoan, rejectLoan, formatCurrency, members } = useAppContext();
   const [viewLoan, setViewLoan] = useState<Loan | null>(null);
   const [stageFilter, setStageFilter] = useState<string>("all");
+  const [assessments, setAssessments] = useState<Record<string, SaccoCreditAssessmentSummary>>({});
+
+  useEffect(() => {
+    void fetchSaccoCreditAssessments(loans.map((loan) => loan.id))
+      .then((rows) => setAssessments(Object.fromEntries(rows.map((row) => [row.sacco_loan_id, row]))))
+      .catch(() => setAssessments({}));
+  }, [loans]);
 
   const stages = ["Credit Officer Review", "Manager Approval", "Board Approval"];
 
@@ -97,6 +105,7 @@ const LoanApproval: React.FC<Props> = ({ pipeline = "approval_gates" }) => {
           {filtered.map((loan) => {
             const member = members.find((m) => m.id === loan.memberId);
             const disburseClick = pipeline === "disbursement_final" || loan.approvalStage >= 2;
+            const assessment = assessments[loan.id];
             return (
               <div key={loan.id} className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
                 <div className="p-5">
@@ -162,22 +171,33 @@ const LoanApproval: React.FC<Props> = ({ pipeline = "approval_gates" }) => {
                       <p className="text-sm font-medium">{member ? formatCurrency(member.savingsBalance) : "N/A"}</p>
                     </div>
                   </div>
+                  {assessment && <div className={`mt-3 rounded-lg border p-3 text-sm ${assessment.risk_band === "low" ? "border-emerald-200 bg-emerald-50" : assessment.risk_band === "moderate" ? "border-amber-200 bg-amber-50" : "border-rose-200 bg-rose-50"}`}>
+                    <div className="flex flex-wrap items-center justify-between gap-2"><strong>BOAT credit screen: {assessment.score}/100 · {assessment.risk_band} risk</strong><span className="font-medium">{assessment.recommendation.replace(/_/g, " ")}</span></div>
+                    <p className="mt-1 text-xs">Maximum indicated amount: {formatCurrency(assessment.maximum_eligible_amount)}{assessment.guarantors_required ? " · Guarantors required" : ""}</p>
+                    {assessment.reasons.length > 0 && <p className="mt-1 text-xs">{assessment.reasons.join(" ")}</p>}
+                  </div>}
 
                   <div className="mt-4 flex items-center gap-3 pt-4 border-t border-slate-100">
                     <button
                       type="button"
                       onClick={async () => {
                         try {
+                          if (disburseClick) {
+                            const payout = await disburseSaccoLoanToSavings(loan.id);
+                            toast({
+                              title: payout.status === "paid" ? "Savings account credited" : "Disbursement processing",
+                              description: payout.status === "paid" ? "The loan and member savings ledgers have been updated." : "The disbursement is still processing.",
+                            });
+                            return;
+                          }
                           await approveLoan(loan.id);
                           toast({
-                            title: disburseClick ? "Disbursement posted" : "Stage advanced",
-                            description: disburseClick
-                              ? "Funds released subject to treasury balance."
-                              : "Moved to the next approval gate.",
+                            title: "Stage advanced",
+                            description: "Moved to the next approval gate.",
                           });
                         } catch (e) {
                           toast({
-                            title: disburseClick ? "Disbursement blocked" : "Approval blocked",
+                            title: disburseClick ? "Savings credit not posted" : "Approval blocked",
                             description: e instanceof Error ? e.message : "Unable to complete this step.",
                             variant: "destructive",
                           });
@@ -186,7 +206,7 @@ const LoanApproval: React.FC<Props> = ({ pipeline = "approval_gates" }) => {
                       className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700"
                     >
                       <CheckCircle size={14} />{" "}
-                      {disburseClick ? "Disburse loan" : `Approve Stage ${loan.approvalStage + 1}`}
+                      {disburseClick ? "Disburse to savings account" : `Approve Stage ${loan.approvalStage + 1}`}
                     </button>
                     <button
                       type="button"

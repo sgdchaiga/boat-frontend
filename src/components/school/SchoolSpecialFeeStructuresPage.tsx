@@ -3,9 +3,11 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
-import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
+import { canUseSchoolApi, createSchoolRow } from "@/lib/schoolApiData";
+import { fetchAllPages } from "@/lib/supabasePagination";
 
 type ClassOpt = { id: string; name: string };
+type StudentAudience = { id: string; class_id: string | null; class_name?: string | null; status?: string | null };
 type SpecialFeeRow = {
   id: string;
   fee_type: "new_student" | "exam" | "uneb";
@@ -21,10 +23,52 @@ type SpecialFeeRow = {
 
 type Props = { readOnly?: boolean };
 
+function isInTargetClass(studentClassName: string | null | undefined, targetClassName: string | undefined) {
+  // Keep this fallback identical to Create term charges: a student's saved class
+  // name must exactly match the selected class. The class ID remains the primary
+  // match; this only supports older student records without a class ID.
+  const studentKey = String(studentClassName || "").trim().toLocaleLowerCase();
+  const targetKey = String(targetClassName || "").trim().toLocaleLowerCase();
+  return Boolean(studentKey && targetKey && studentKey === targetKey);
+}
+
+type InvoiceDuplicateCheck = {
+  student_id: string;
+  line_items?: unknown;
+  status?: string | null;
+  notes?: string | null;
+  invoice_number?: string | null;
+  academic_year?: string | null;
+  term_name?: string | null;
+};
+
+function savedInvoiceLines(value: unknown): Array<{ code?: string }> {
+  if (Array.isArray(value)) return value as Array<{ code?: string }>;
+  if (typeof value !== "string") return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed as Array<{ code?: string }> : [];
+  } catch {
+    return [];
+  }
+}
+
+async function listCurrentOrganizationStudents(organizationId: string): Promise<StudentAudience[]> {
+  // Supabase returns at most 1,000 rows per query. Charge audiences must include
+  // every learner in the logged-in organization, not merely its first page.
+  return fetchAllPages<StudentAudience>((from, to) => supabase
+    .from("students")
+    .select("id,class_id,class_name,status")
+    .eq("organization_id", organizationId)
+    .order("id")
+    .range(from, to));
+}
+
 export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
   const { user } = useAuth();
   const [rows, setRows] = useState<SpecialFeeRow[]>([]);
   const [classes, setClasses] = useState<ClassOpt[]>([]);
+  const [students, setStudents] = useState<StudentAudience[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [applyProgress, setApplyProgress] = useState({ completed: 0, total: 0 });
@@ -51,13 +95,15 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
       setLoading(false);
       return;
     }
-    const [feeResult, classResult] = await Promise.all([
+    const [feeResult, classResult, studentResult] = await Promise.all([
       supabase.from("school_special_fee_structures").select("id,fee_type,academic_year,term_name,amount,notes,is_active,target_class_id,charge_date,reference").eq("organization_id", orgId).order("academic_year", { ascending: false }).order("term_name", { ascending: false }),
       supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
+      listCurrentOrganizationStudents(orgId),
     ]);
     setErr(feeResult.error?.message ?? classResult.error?.message ?? null);
     setRows((feeResult.data as SpecialFeeRow[]) || []);
     setClasses((classResult.data as ClassOpt[]) || []);
+    setStudents(studentResult);
     setLoading(false);
   }, [user?.organization_id]);
 
@@ -102,6 +148,11 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
 
   const feeTypeLabel = (t: SpecialFeeRow["fee_type"]) =>
     t === "new_student" ? "New students" : t === "exam" ? "Exam fees" : "UNEB fees";
+  const canChargeStudent = (student: StudentAudience) => !["inactive", "withdrawn", "graduated", "archived", "left", "suspended"].includes(String(student.status || "").trim().toLowerCase());
+  const audienceFor = (fee: SpecialFeeRow) => {
+    const className = classes.find((row) => row.id === fee.target_class_id)?.name;
+    return students.filter((student) => !fee.target_class_id || student.class_id === fee.target_class_id || isInTargetClass(student.class_name, className));
+  };
   const edit = (row: SpecialFeeRow) => {
     setEditingId(row.id);
     setForm({ fee_type: row.fee_type, academic_year: row.academic_year, term_name: row.term_name, amount: String(row.amount), notes: row.notes || "", is_active: row.is_active, target_class_id: row.target_class_id || "", charge_date: row.charge_date || "", reference: row.reference || "" });
@@ -111,36 +162,61 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
     const orgId = user?.organization_id;
     if (!orgId || applyingId) return;
     const classLabel = classes.find((row) => row.id === fee.target_class_id)?.name || "all classes";
-    if (!window.confirm(`Create separate ${feeTypeLabel(fee.fee_type)} invoices for eligible ${classLabel} students in ${fee.academic_year} · ${fee.term_name}? Existing matching special-fee invoices will be skipped.`)) return;
     setApplyingId(fee.id);
     setApplyProgress({ completed: 0, total: 0 });
     setErr(null);
     setApplyMessage(null);
     try {
       const useSchoolApi = canUseSchoolApi();
-      const [studentData, invoiceData] = useSchoolApi
-        ? await Promise.all([
-          listSchoolRows<{ id: string; class_id: string | null; class_name?: string | null; status?: string | null }>("students", orgId),
-          listSchoolRows<{ student_id: string; line_items: Array<{ code?: string }> | null; status?: string }>("invoices", orgId),
-        ])
-        : await Promise.all([
-          supabase.from("students").select("id,class_id,class_name,status").eq("organization_id", orgId).then(({ data, error }) => { if (error) throw error; return data || []; }),
-          supabase.from("student_invoices").select("student_id,line_items,status").eq("organization_id", orgId).eq("academic_year", fee.academic_year).eq("term_name", fee.term_name).neq("status", "cancelled").then(({ data, error }) => { if (error) throw error; return data || []; }),
-        ]);
-      const targetClassName = classes.find((row) => row.id === fee.target_class_id)?.name.trim().toLocaleLowerCase();
+      const [studentData, invoiceData] = await Promise.all([
+        listCurrentOrganizationStudents(orgId),
+        useSchoolApi
+          ? listSchoolRows<InvoiceDuplicateCheck>("invoices", orgId)
+          : fetchAllPages<InvoiceDuplicateCheck>((from, to) => supabase
+            .from("student_invoices")
+            .select("student_id,line_items,status,notes,invoice_number,academic_year,term_name")
+            .eq("organization_id", orgId)
+            .eq("academic_year", fee.academic_year)
+            .eq("term_name", fee.term_name)
+            .neq("status", "cancelled")
+            .order("id")
+            .range(from, to)),
+      ]);
+      const targetClassName = classes.find((row) => row.id === fee.target_class_id)?.name;
       const eligible = (studentData as Array<{ id: string; class_id: string | null; class_name?: string | null; status?: string | null }>)
-        .filter((student) => !fee.target_class_id || student.class_id === fee.target_class_id || (Boolean(targetClassName) && String(student.class_name || "").trim().toLocaleLowerCase() === targetClassName))
-        .filter((student) => !["inactive", "withdrawn", "graduated", "archived"].includes(String(student.status || "").trim().toLowerCase()));
+        .filter((student) => !fee.target_class_id || student.class_id === fee.target_class_id || isInTargetClass(student.class_name, targetClassName))
+        .filter((student) => !["inactive", "withdrawn", "graduated", "archived", "left", "suspended"].includes(String(student.status || "").trim().toLowerCase()));
       if (eligible.length === 0) throw new Error(`No eligible students were found in ${classLabel}. Check that the students are assigned to that class.`);
       const code = `SPECIAL_STRUCTURE_${fee.id}`;
-      const alreadyInvoiced = new Set((invoiceData as Array<{ student_id: string; line_items: Array<{ code?: string }> | null; status?: string }>).filter((invoice) => invoice.status !== "cancelled" && (invoice.line_items || []).some((line) => line.code === code)).map((invoice) => invoice.student_id));
+      const invoicePrefix = `SP-${fee.fee_type.toUpperCase()}-${fee.id.slice(0, 8).toUpperCase()}-`;
+      const legacyPrefix = `SP-${fee.fee_type.toUpperCase()}-`;
+      const legacyNote = String(fee.reference || fee.notes || "").trim();
+      const alreadyInvoiced = new Set((invoiceData as InvoiceDuplicateCheck[]).filter((invoice) => {
+        if (String(invoice.status || "").toLowerCase() === "cancelled") return false;
+        if (invoice.academic_year !== fee.academic_year || invoice.term_name !== fee.term_name) return false;
+        if (savedInvoiceLines(invoice.line_items).some((line) => line.code === code)) return true;
+        if (String(invoice.invoice_number || "").startsWith(invoicePrefix)) return true;
+        // Earlier local-API invoices omitted line_items. Recognize those safely by their
+        // special-fee number prefix, academic period, and saved reference/notes.
+        return Boolean(legacyNote)
+          && String(invoice.invoice_number || "").startsWith(legacyPrefix)
+          && invoice.academic_year === fee.academic_year
+          && invoice.term_name === fee.term_name
+          && String(invoice.notes || "").trim() === legacyNote;
+      }).map((invoice) => invoice.student_id));
       const pending = eligible.filter((student) => !alreadyInvoiced.has(student.id));
+      const skipped = eligible.length - pending.length;
       setApplyProgress({ completed: 0, total: pending.length });
+      if (!window.confirm(`Create ${feeTypeLabel(fee.fee_type)} invoices for ${pending.length} of ${eligible.length} active student${eligible.length === 1 ? "" : "s"} in ${classLabel} for ${fee.academic_year} · ${fee.term_name}? ${skipped} already charged student${skipped === 1 ? "" : "s"} will be skipped.`)) return;
+      if (pending.length === 0) {
+        setApplyMessage(`No new invoices were created. All ${eligible.length} selected student${eligible.length === 1 ? "" : "s"} already have this special fee for ${fee.academic_year} · ${fee.term_name}.`);
+        return;
+      }
       let created = 0;
       for (const student of pending) {
         const amount = Number(fee.amount) || 0;
         const line_items = [{ code, label: `${feeTypeLabel(fee.fee_type)}${fee.reference ? ` — ${fee.reference}` : ""}`, amount, priority: 1, applies_to: "all" as const }];
-        const payload = { student_id: student.id, fee_structure_id: null, academic_year: fee.academic_year, term_name: fee.term_name, invoice_number: `SP-${fee.fee_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}-${student.id.slice(0, 8)}`, subtotal: amount, line_items, discount_amount: 0, bursary_amount: 0, scholarship_amount: 0, total_due: amount, amount_paid: 0, status: amount > 0 ? "sent" : "paid", issue_date: fee.charge_date || null, notes: fee.reference || fee.notes || null };
+        const payload = { student_id: student.id, fee_structure_id: null, academic_year: fee.academic_year, term_name: fee.term_name, invoice_number: `${invoicePrefix}${student.id.slice(0, 8).toUpperCase()}`, subtotal: amount, line_items, discount_amount: 0, bursary_amount: 0, scholarship_amount: 0, total_due: amount, amount_paid: 0, status: amount > 0 ? "sent" : "paid", issue_date: fee.charge_date || null, notes: fee.reference || fee.notes || null };
         if (useSchoolApi) await createSchoolRow("invoices", orgId, { ...payload, staff_user_id: user?.id ?? null });
         else {
           const result = await supabase.from("student_invoices").insert(payload).select("*").single();
@@ -151,7 +227,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
         created += 1;
         setApplyProgress({ completed: created, total: pending.length });
       }
-      setApplyMessage(`Created ${created} separate invoice${created === 1 ? "" : "s"}; skipped ${alreadyInvoiced.size} already charged student${alreadyInvoiced.size === 1 ? "" : "s"}.`);
+      setApplyMessage(`Created ${created} separate invoice${created === 1 ? "" : "s"}; skipped ${skipped} already charged selected student${skipped === 1 ? "" : "s"}.`);
     } catch (error) {
       setErr(error instanceof Error ? error.message : "Could not create the special-fee invoices.");
     } finally {
@@ -164,7 +240,7 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-bold text-slate-900">Special fee structures</h1>
         <PageNotes ariaLabel="Special fees">
-          <p>Define a charge, its target class, charge date, and reference. A selected class receives the fee only when its term invoice is created.</p>
+          <p>Define a charge, its target class, charge date, and reference. Create invoices from the saved fee to issue one separate invoice per eligible student.</p>
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
@@ -219,17 +295,24 @@ export function SchoolSpecialFeeStructuresPage({ readOnly }: Props) {
             ) : rows.length === 0 ? (
               <tr><td colSpan={readOnly ? 6 : 7} className="p-6 text-slate-500">No special fee structures yet.</td></tr>
             ) : (
-              rows.map((r) => (
-                <tr key={r.id} className="border-b border-slate-100">
+              rows.map((r) => {
+                const audience = audienceFor(r);
+                const eligible = audience.filter(canChargeStudent);
+                const statuses = audience.reduce<Record<string, number>>((counts, student) => {
+                  const status = String(student.status || "Unspecified").trim() || "Unspecified";
+                  counts[status] = (counts[status] || 0) + 1;
+                  return counts;
+                }, {});
+                return <tr key={r.id} className="border-b border-slate-100">
                   <td className="p-3 text-slate-700">{feeTypeLabel(r.fee_type)}</td>
-                  <td className="p-3 text-slate-700">{classes.find((classRow) => classRow.id === r.target_class_id)?.name || "All classes"} · {r.academic_year} · {r.term_name}</td>
+                  <td className="p-3 text-slate-700"><div>{classes.find((classRow) => classRow.id === r.target_class_id)?.name || "All classes"} · {r.academic_year} · {r.term_name}</div><div className="mt-1 text-xs text-slate-500">{eligible.length} eligible of {audience.length} assigned · {Object.entries(statuses).map(([status, count]) => `${status}: ${count}`).join(", ")}</div></td>
                   <td className="p-3 text-slate-600">{r.charge_date || "—"}{r.reference ? ` · ${r.reference}` : ""}</td>
                   <td className="p-3 text-right text-slate-900">{Number(r.amount).toLocaleString()}</td>
                   <td className="p-3 text-slate-600">{r.notes ?? "—"}</td>
                   <td className="p-3 text-slate-600">{r.is_active ? "Active" : "Inactive"}</td>
                   {!readOnly && <td className="p-3 text-right whitespace-nowrap"><div className="flex justify-end gap-2"><button type="button" onClick={() => edit(r)} className="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50">Edit</button><button type="button" onClick={() => void applyToStudents(r)} disabled={applyingId !== null || !r.is_active} className="rounded-lg bg-slate-900 px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50">{applyingId === r.id ? "Creating…" : "Create invoices"}</button></div></td>}
-                </tr>
-              ))
+                </tr>;
+              })
             )}
           </tbody>
         </table>

@@ -9,6 +9,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { getSchoolAccountingBasis, syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
 import { canUseSchoolApi, createSchoolRow, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
+import * as XLSX from "xlsx";
 
 type ClassOpt = { id: string; name: string };
 type StudentOpt = {
@@ -48,6 +49,12 @@ type BursaryOpt = {
 
 const INV_STATUS = ["draft", "sent", "partial", "paid", "cancelled"] as const;
 
+function termInvoiceDate(academicYear: string, termName: string): string | null {
+  const match = String(termName || "").trim().match(/^term\s*([123])$/i);
+  if (!match || !/^\d{4}$/.test(String(academicYear || ""))) return null;
+  return `${academicYear}-${({ "1": "02", "2": "05", "3": "09" }[match[1]])}-01`;
+}
+
 type InvRow = {
   id: string;
   invoice_number: string;
@@ -67,6 +74,8 @@ type InvRow = {
   line_items?: FeeLine[] | null;
   fee_structure_id?: string | null;
 };
+type StatementPayment = { id: string; student_id: string; amount: number; paid_at: string; reference?: string | null; method?: string | null; invoice_allocations?: Array<{ invoice_id: string; amount: number }> | string | null };
+type StatementReceipt = { school_payment_id: string; receipt_number: string };
 
 type InvEditDraft = {
   line_items: FeeLine[];
@@ -86,12 +95,14 @@ function moneyDraftFromDb(n: number | null | undefined): string {
 }
 
 export function SchoolStudentInvoicesPage({ readOnly }: Props) {
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
+  const canBulkCancelInvoices = !readOnly && (user?.role === "admin" || user?.role === "super_admin" || isSuperAdmin);
   const [activeTab, setActiveTab] = useState<"invoices" | "charges">("invoices");
   const [rows, setRows] = useState<InvRow[]>([]);
   const [students, setStudents] = useState<StudentOpt[]>([]);
   const { filteredRows, controls: invoiceFilters } = useSchoolInvoiceFilters(rows, students, {
     showResidency: true,
+    hideCancelledByDefault: true,
     getChargeTypes: (invoice) => {
       const lines = Array.isArray(invoice.line_items) ? invoice.line_items : [];
       const specialTypes = lines
@@ -105,6 +116,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const [bursaries, setBursaries] = useState<BursaryOpt[]>([]);
   const [specialFees, setSpecialFees] = useState<SpecialFeeOpt[]>([]);
   const [loading, setLoading] = useState(true);
+  const [chargingDataLoading, setChargingDataLoading] = useState(false);
+  const chargingDataLoadedFor = useRef<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [form, setForm] = useState({
     student_id: "",
@@ -115,6 +128,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<InvEditDraft | null>(null);
   const [cancellingInvoiceId, setCancellingInvoiceId] = useState<string | null>(null);
+  const [bulkCancelInput, setBulkCancelInput] = useState("");
+  const [bulkCancelRunning, setBulkCancelRunning] = useState(false);
+  const [bulkCancelProgress, setBulkCancelProgress] = useState({ completed: 0, total: 0, cancelled: 0, failed: 0 });
+  const [bulkCancelSummary, setBulkCancelSummary] = useState<string | null>(null);
   const [classes, setClasses] = useState<ClassOpt[]>([]);
   const [bulk, setBulk] = useState({
     fee_structure_id: "",
@@ -141,8 +158,8 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     });
   }, [user?.organization_id]);
 
-  const printDocument = (title: string, body: string) => {
-    const popup = window.open("", "_blank", "width=900,height=700");
+  const printDocument = (title: string, body: string, targetPopup?: Window | null) => {
+    const popup = targetPopup || window.open("", "_blank", "width=900,height=700");
     if (!popup) {
       setErr("Pop-ups are blocked. Allow pop-ups to print this document.");
       return;
@@ -190,15 +207,59 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       <div class="total">Balance: ${balance.toLocaleString()}</div>${demandNote ? "<p>Please settle the outstanding balance by the due date or contact the school bursar.</p>" : ""}`);
   };
 
-  const printStatement = (studentId: string) => {
+  const printStatement = async (studentId: string) => {
+    const popup = window.open("", "_blank", "width=900,height=700");
+    if (!popup) {
+      setErr("Pop-ups are blocked. Allow pop-ups to print this document.");
+      return;
+    }
     const student = students.find((s) => s.id === studentId);
     const items = rows.filter((r) => r.student_id === studentId && r.status !== "cancelled");
-    const totalDue = items.reduce((sum, r) => sum + Number(r.total_due), 0);
-    const totalPaid = items.reduce((sum, r) => sum + Number(r.amount_paid), 0);
-    printDocument(`Fees statement - ${student?.admission_number ?? "student"}`, `<h1>SCHOOL FEES STATEMENT</h1>
+    const orgId = user?.organization_id;
+    if (!orgId) { popup.close(); return; }
+    try {
+      const useSchoolApi = canUseSchoolApi();
+      const [paymentRows, receiptRows] = useSchoolApi
+        ? await Promise.all([
+          listSchoolRows<StatementPayment>("payments", orgId),
+          listSchoolRows<StatementReceipt>("receipts", orgId),
+        ])
+        : await Promise.all([
+          fetchAllPages<StatementPayment>((from, to) => supabase.from("school_payments").select("id,student_id,amount,paid_at,reference,method,invoice_allocations").eq("organization_id", orgId).eq("student_id", studentId).order("paid_at").range(from, to)),
+          fetchAllPages<StatementReceipt>((from, to) => supabase.from("school_receipts").select("school_payment_id,receipt_number").eq("organization_id", orgId).order("issued_at").range(from, to)),
+        ]);
+      const payments = paymentRows.filter((payment) => payment.student_id === studentId);
+      const receiptByPayment = new Map(receiptRows.map((receipt) => [receipt.school_payment_id, receipt.receipt_number]));
+      const invoiceById = new Map(items.map((invoice) => [invoice.id, invoice]));
+      const paymentEntries = payments.flatMap((payment) => {
+        const allocations = typeof payment.invoice_allocations === "string"
+          ? (() => { try { const parsed = JSON.parse(payment.invoice_allocations); return Array.isArray(parsed) ? parsed : []; } catch { return []; } })()
+          : Array.isArray(payment.invoice_allocations) ? payment.invoice_allocations : [];
+        const base = { date: payment.paid_at || "", type: "payment" as const, reference: receiptByPayment.get(payment.id) || payment.reference || "—", order: 1 };
+        if (!allocations.length) return [{ ...base, description: `Fee payment${payment.method ? ` · ${payment.method}` : ""}`, amount: Number(payment.amount) }];
+        return allocations.map((allocation) => {
+          const invoice = invoiceById.get(allocation.invoice_id);
+          return { ...base, description: `Fee payment${payment.method ? ` · ${payment.method}` : ""}${invoice ? ` · applied to ${invoice.invoice_number}` : ""}`, amount: Number(allocation.amount) };
+        });
+      });
+      const entries = [
+        ...items.map((invoice) => ({ date: termInvoiceDate(invoice.academic_year, invoice.term_name) || invoice.issue_date || "", type: "charge" as const, description: `Invoice ${invoice.invoice_number} · ${invoice.academic_year} ${invoice.term_name}`, reference: invoice.invoice_number, amount: Number(invoice.total_due), order: 0 })),
+        ...paymentEntries,
+      ].sort((left, right) => left.date.localeCompare(right.date) || left.order - right.order);
+      let balance = 0;
+      const ledgerRows = entries.map((entry) => {
+        balance += entry.type === "charge" ? entry.amount : -entry.amount;
+        const balanceLabel = balance.toLocaleString();
+        return `<tr><td>${entry.date ? new Date(entry.date).toLocaleDateString() : "—"}</td><td>${entry.description}</td><td>${entry.reference}</td><td class="num">${entry.type === "charge" ? entry.amount.toLocaleString() : ""}</td><td class="num">${entry.type === "payment" ? entry.amount.toLocaleString() : ""}</td><td class="num">${balanceLabel}</td></tr>`;
+      }).join("");
+      printDocument(`Fees statement - ${student?.admission_number ?? "student"}`, `<h1>SCHOOL FEES STATEMENT</h1>
       <div class="meta"><strong>Student:</strong> ${student ? `${student.first_name} ${student.last_name}` : studentId}<br><strong>SchoolPay code:</strong> ${student?.school_pay_number || "—"}<br><strong>Admission:</strong> ${student?.admission_number ?? "—"}</div>
-      <table><tr><th>Invoice</th><th>Term</th><th class="num">Due</th><th class="num">Paid</th><th class="num">Balance</th></tr>${items.map((r) => `<tr><td>${r.invoice_number}</td><td>${r.academic_year} ${r.term_name}</td><td class="num">${Number(r.total_due).toLocaleString()}</td><td class="num">${Number(r.amount_paid).toLocaleString()}</td><td class="num">${Math.max(0,Number(r.total_due)-Number(r.amount_paid)).toLocaleString()}</td></tr>`).join("")}</table>
-      <div class="total">Total balance: ${Math.max(0,totalDue-totalPaid).toLocaleString()}</div>`);
+      <table><tr><th>Date</th><th>Description</th><th>Reference</th><th class="num">Charge</th><th class="num">Payment</th><th class="num">Balance</th></tr>${ledgerRows}</table>
+      <div class="total">Closing balance: ${balance.toLocaleString()}</div>`, popup);
+    } catch (error) {
+      popup.close();
+      setErr(error instanceof Error ? error.message : "Could not load payments for the student statement.");
+    }
   };
 
   const studentLabel = useMemo(() => {
@@ -233,18 +294,10 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     }
     if (canUseSchoolApi()) {
       try {
-        const [invoices, studentRows, feeRows, classRows] = await Promise.all([
-          listSchoolRows<InvRow>("invoices", orgId),
-          listSchoolRows<StudentOpt>("students", orgId),
-          listSchoolRows<FeeOpt>("fee-structures", orgId),
-          listSchoolRows<ClassOpt>("classes", orgId),
-        ]);
+        const studentRows = listSchoolRows<StudentOpt>("students", orgId);
+        void studentRows.then(setStudents).catch((error) => setErr(error instanceof Error ? error.message : "Failed to load students for invoice filters."));
+        const invoices = await listSchoolRows<InvRow>("invoices", orgId);
         setRows(invoices);
-        setStudents(studentRows);
-        setFees(feeRows.filter((f) => (f as FeeOpt & { is_active?: boolean }).is_active !== false));
-        setClasses(classRows);
-        setBursaries([]);
-        setSpecialFees([]);
         setErr(null);
       } catch (error) {
         setErr(error instanceof Error ? error.message : "Failed to load invoices.");
@@ -254,46 +307,59 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       return;
     }
 
-    const [iRes, sRes, fRes, cRes, bRes, sfRes] = await Promise.all([
-      fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("id").range(from, to)).then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
-      fetchAllPages<StudentOpt>((from, to) => supabase.from("students")
+    void fetchAllPages<StudentOpt>((from, to) => supabase.from("students")
         .select("id,first_name,last_name,admission_number,school_pay_number,class_id,class_name,status,is_boarding")
         .eq("organization_id", orgId).order("id").range(from, to))
-        .then((data) => ({ data, error: null }), (error) => ({ data: null, error })),
-      supabase
-        .from("fee_structures")
-        .select("id,class_id,class_name,term_name,academic_year,line_items")
-        .eq("organization_id", orgId)
-        .eq("is_active", true),
-      supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
-      supabase.from("school_bursaries").select("student_id,academic_year,term_name,amount").eq("organization_id", orgId),
-      supabase
-        .from("school_special_fee_structures")
-        .select("fee_type,academic_year,term_name,amount,is_active,target_class_id")
-        .eq("organization_id", orgId)
-        .eq("is_active", true),
-    ]);
-    setErr(
-      iRes.error?.message ||
-        sRes.error?.message ||
-        fRes.error?.message ||
-        cRes.error?.message ||
-        bRes.error?.message ||
-        sfRes.error?.message ||
-        null
-    );
+      .then(setStudents, (error) => setErr(error instanceof Error ? error.message : "Failed to load students for invoice filters."));
+    const iRes = await fetchAllPages<InvRow>((from, to) => supabase.from("student_invoices").select("*").eq("organization_id", orgId).order("id").range(from, to)).then((data) => ({ data, error: null }), (error) => ({ data: null, error }));
+    setErr(iRes.error?.message || null);
     setRows((iRes.data as InvRow[]) || []);
-    setStudents((sRes.data as StudentOpt[]) || []);
-    setFees((fRes.data as FeeOpt[]) || []);
-    setClasses((cRes.data as ClassOpt[]) || []);
-    setBursaries((bRes.data as BursaryOpt[]) || []);
-    setSpecialFees((sfRes.data as SpecialFeeOpt[]) || []);
     setLoading(false);
+  }, [user?.organization_id]);
+
+  const loadChargingData = useCallback(async () => {
+    const orgId = user?.organization_id;
+    if (!orgId || chargingDataLoadedFor.current === orgId) return;
+    chargingDataLoadedFor.current = orgId;
+    setChargingDataLoading(true);
+    try {
+      if (canUseSchoolApi()) {
+        const [feeRows, classRows] = await Promise.all([
+          listSchoolRows<FeeOpt>("fee-structures", orgId),
+          listSchoolRows<ClassOpt>("classes", orgId),
+        ]);
+        setFees(feeRows.filter((fee) => (fee as FeeOpt & { is_active?: boolean }).is_active !== false));
+        setClasses(classRows);
+        setBursaries([]);
+        setSpecialFees([]);
+      } else {
+        const [fRes, cRes, bRes, sfRes] = await Promise.all([
+          supabase.from("fee_structures").select("id,class_id,class_name,term_name,academic_year,line_items").eq("organization_id", orgId).eq("is_active", true),
+          supabase.from("classes").select("id,name").eq("organization_id", orgId).eq("is_active", true).order("sort_order"),
+          supabase.from("school_bursaries").select("student_id,academic_year,term_name,amount").eq("organization_id", orgId),
+          supabase.from("school_special_fee_structures").select("fee_type,academic_year,term_name,amount,is_active,target_class_id").eq("organization_id", orgId).eq("is_active", true),
+        ]);
+        if (fRes.error || cRes.error || bRes.error || sfRes.error) throw fRes.error || cRes.error || bRes.error || sfRes.error;
+        setFees((fRes.data as FeeOpt[]) || []);
+        setClasses((cRes.data as ClassOpt[]) || []);
+        setBursaries((bRes.data as BursaryOpt[]) || []);
+        setSpecialFees((sfRes.data as SpecialFeeOpt[]) || []);
+      }
+    } catch (error) {
+      chargingDataLoadedFor.current = null;
+      setErr(error instanceof Error ? error.message : "Could not load term charging options.");
+    } finally {
+      setChargingDataLoading(false);
+    }
   }, [user?.organization_id]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (activeTab === "charges") void loadChargingData();
+  }, [activeTab, loadChargingData]);
 
   const applicableLines = (fi: FeeOpt | undefined, isBoarding: boolean): FeeLine[] => {
     const lines = fi?.line_items as FeeLine[] | null;
@@ -452,8 +518,9 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       student_id: s.id,
       fee_structure_id: fee.id,
       academic_year: fee.academic_year,
-      term_name: fee.term_name,
-      invoice_number: `INV-${t0.toString(36).toUpperCase()}-${idx}-${s.id.slice(0, 8)}`,
+       term_name: fee.term_name,
+       issue_date: termInvoiceDate(fee.academic_year, fee.term_name),
+       invoice_number: `INV-${t0.toString(36).toUpperCase()}-${idx}-${s.id.slice(0, 8)}`,
       subtotal,
       line_items: invoiceLines,
       discount_amount: disc,
@@ -554,8 +621,9 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
           student_id: form.student_id,
           fee_structure_id: fee.id,
           academic_year: fee.academic_year,
-          term_name: fee.term_name,
-          invoice_number: invNo,
+           term_name: fee.term_name,
+           issue_date: termInvoiceDate(fee.academic_year, fee.term_name),
+           invoice_number: invNo,
           subtotal,
           line_items: invoiceLines,
           discount_amount: disc,
@@ -582,6 +650,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         fee_structure_id: fee.id,
         academic_year: fee.academic_year,
         term_name: fee.term_name,
+        issue_date: termInvoiceDate(fee.academic_year, fee.term_name),
         invoice_number: invNo,
         subtotal,
         line_items: invoiceLines,
@@ -640,6 +709,36 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
     setEditDraft(null);
   };
 
+  const cancelStoredInvoice = async (invoice: InvRow) => {
+    const orgId = user?.organization_id;
+    if (!orgId) throw new Error("Your organization could not be identified.");
+    let updated: InvRow;
+    if (canUseSchoolApi()) {
+      updated = await updateSchoolRow<InvRow>("invoices", orgId, invoice.id, {
+        status: "cancelled",
+        staff_user_id: user?.id ?? null,
+      });
+    } else {
+      const { data, error } = await supabase
+        .from("student_invoices")
+        .update({ status: "cancelled" })
+        .eq("organization_id", orgId)
+        .eq("id", invoice.id)
+        .select("*")
+        .single();
+      if (error) throw error;
+      updated = data as InvRow;
+    }
+    const { journalMessage } = await syncStudentInvoiceAccounting({
+      organizationId: orgId,
+      staffUserId: user?.id ?? null,
+      invoice: updated,
+    });
+    if (journalMessage) throw new Error(`Invoice was cancelled, but its GL entry could not be reversed: ${journalMessage}`);
+    setRows((current) => current.map((row) => row.id === updated.id ? updated : row));
+    return updated;
+  };
+
   const cancelInvoice = async (invoice: InvRow) => {
     if (readOnly || cancellingInvoiceId || invoice.status === "cancelled") return;
     if (Number(invoice.amount_paid) > 0) {
@@ -647,43 +746,72 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       return;
     }
     if (!window.confirm(`Cancel invoice ${invoice.invoice_number}? It will be removed from active student statements and its invoice accounting entry will be reversed.`)) return;
-
-    const orgId = user?.organization_id;
-    if (!orgId) return;
     setErr(null);
     setCancellingInvoiceId(invoice.id);
     try {
-      let updated: InvRow;
-      if (canUseSchoolApi()) {
-        updated = await updateSchoolRow<InvRow>("invoices", orgId, invoice.id, {
-          status: "cancelled",
-          staff_user_id: user?.id ?? null,
-        });
-      } else {
-        const { data, error } = await supabase
-          .from("student_invoices")
-          .update({ status: "cancelled" })
-          .eq("organization_id", orgId)
-          .eq("id", invoice.id)
-          .select("*")
-          .single();
-        if (error) throw error;
-        updated = data as InvRow;
-      }
-      const { journalMessage } = await syncStudentInvoiceAccounting({
-        organizationId: orgId,
-        staffUserId: user?.id ?? null,
-        invoice: updated,
-      });
-      if (journalMessage) throw new Error(`Invoice was cancelled, but its GL entry could not be reversed: ${journalMessage}`);
-
-      setRows((current) => current.map((row) => row.id === updated.id ? updated : row));
+      await cancelStoredInvoice(invoice);
       if (editingId === invoice.id) cancelEdit();
     } catch (error) {
       setErr(error instanceof Error ? error.message : "Failed to cancel invoice.");
     } finally {
       setCancellingInvoiceId(null);
     }
+  };
+
+  const importBulkCancelFile = async (file: File) => {
+    try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+      const values = XLSX.utils.sheet_to_json<unknown[]>(firstSheet, { header: 1, defval: "" })
+        .flatMap((row) => row.map((cell) => String(cell || "").trim()))
+        .filter(Boolean);
+      setBulkCancelInput([...new Set(values)].join("\n"));
+      setBulkCancelSummary(null);
+    } catch (error) {
+      setErr(error instanceof Error ? error.message : "Could not read the cancellation file.");
+    }
+  };
+
+  const runBulkCancel = async () => {
+    if (!canBulkCancelInvoices || bulkCancelRunning) return;
+    const keys = [...new Set(bulkCancelInput.split(/[\n,;\t]+/).map((value) => value.trim().toLowerCase()).filter(Boolean))];
+    if (!keys.length) {
+      setErr("Paste or upload one or more invoice numbers or invoice IDs first.");
+      return;
+    }
+    const selected = rows.filter((invoice) => keys.includes(invoice.id.toLowerCase()) || keys.includes(invoice.invoice_number.toLowerCase()));
+    const unpaid = selected.filter((invoice) => invoice.status !== "cancelled" && Number(invoice.amount_paid) <= 0);
+    const paid = selected.filter((invoice) => invoice.status !== "cancelled" && Number(invoice.amount_paid) > 0).length;
+    const alreadyCancelled = selected.filter((invoice) => invoice.status === "cancelled").length;
+    const unmatched = keys.length - new Set(selected.flatMap((invoice) => [invoice.id.toLowerCase(), invoice.invoice_number.toLowerCase()]).filter((value) => keys.includes(value))).size;
+    if (!unpaid.length) {
+      setBulkCancelSummary(`No unpaid active invoices are ready to cancel. ${alreadyCancelled} were already cancelled; ${paid} have recorded payments; ${Math.max(0, unmatched)} were not found.`);
+      return;
+    }
+    if (!window.confirm(`Cancel ${unpaid.length} unpaid invoice${unpaid.length === 1 ? "" : "s"}? This reverses their invoice accounting entries. ${paid ? `${paid} paid invoice${paid === 1 ? " was" : "s were"} excluded. ` : ""}This cannot be undone by this action.`)) return;
+    setBulkCancelRunning(true);
+    setBulkCancelProgress({ completed: 0, total: unpaid.length, cancelled: 0, failed: 0 });
+    setErr(null);
+    let cancelled = 0;
+    let failed = 0;
+    let nextInvoice = 0;
+    const cancelNextInvoice = async () => {
+      while (nextInvoice < unpaid.length) {
+        const invoice = unpaid[nextInvoice++];
+        try {
+          await cancelStoredInvoice(invoice);
+          cancelled += 1;
+        } catch {
+          failed += 1;
+        }
+        setBulkCancelProgress({ completed: cancelled + failed, total: unpaid.length, cancelled, failed });
+      }
+    };
+    // Each cancellation also reverses its own accounting entry. A small worker pool
+    // avoids waiting for every network round trip while keeping the load bounded.
+    await Promise.all(Array.from({ length: Math.min(3, unpaid.length) }, cancelNextInvoice));
+    setBulkCancelSummary(`Cancelled ${cancelled} invoice${cancelled === 1 ? "" : "s"}. ${alreadyCancelled} already cancelled; ${paid} paid invoice${paid === 1 ? " was" : "s were"} excluded; ${Math.max(0, unmatched)} not found; ${failed} failed.`);
+    setBulkCancelRunning(false);
   };
 
   const saveEdit = async () => {
@@ -853,7 +981,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       <div className="flex flex-wrap items-center gap-2">
         <h1 className="text-2xl font-bold text-slate-900">Student invoices and balances</h1>
         <PageNotes ariaLabel="Invoices">
-          <p>Term invoices pick fee structures automatically by student class. Bursary deductions come from the Bursary page, and active special fees (new student, exam, UNEB) are added automatically for the term.</p>
+          <p>Term invoices pick fee structures automatically by student class. Bursary deductions come from the Bursary page. Special fees such as UNEB, exams, and uniforms are issued as their own invoices.</p>
         </PageNotes>
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
@@ -862,8 +990,9 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
         <button type="button" aria-pressed={activeTab === "charges"} onClick={() => setActiveTab("charges")} className={`px-4 py-2 rounded-lg text-sm font-medium ${activeTab === "charges" ? "bg-slate-900 text-white" : "bg-white border border-slate-300 text-slate-700"}`}>Create term charges</button>
       </div>}
       {!readOnly && activeTab === "charges" && <section className="space-y-6" aria-label="Create term charges">
-      <h2 className="text-lg font-semibold text-slate-900">Create term charges</h2>
-      {!readOnly && (
+       <h2 className="text-lg font-semibold text-slate-900">Create term charges</h2>
+       {chargingDataLoading && <p className="text-sm text-slate-600" role="status">Loading term charging options…</p>}
+       {!readOnly && (
         <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 md:grid-cols-2 gap-3">
           <SearchableCombobox
             value={form.student_id}
@@ -1023,6 +1152,35 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
       )}
       </section>}
       {(readOnly || activeTab === "invoices") && <section className="space-y-4" aria-label="Student invoices and balances">
+      {canBulkCancelInvoices && <details className="rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+        <summary className="cursor-pointer text-sm font-semibold text-rose-900">Bulk cancel invoices</summary>
+        <p className="mt-2 text-sm text-rose-800">Administrators can cancel unpaid invoices in one action. Paste invoice numbers or IDs, or upload an Excel/CSV file with them. Paid invoices are excluded automatically.</p>
+        <div className="mt-3 grid gap-3 md:grid-cols-[1fr_auto]">
+          <textarea
+            value={bulkCancelInput}
+            onChange={(event) => { setBulkCancelInput(event.target.value); setBulkCancelSummary(null); }}
+            className="min-h-28 rounded-lg border border-rose-200 bg-white px-3 py-2 font-mono text-sm"
+            placeholder="One invoice number or invoice ID per line"
+            aria-label="Invoice numbers or IDs to cancel"
+            disabled={bulkCancelRunning}
+          />
+          <div className="flex flex-col gap-2">
+            <label className="app-btn-secondary cursor-pointer text-center">
+              Upload Excel / CSV
+              <input type="file" accept=".xlsx,.xls,.csv,.txt" className="sr-only" onChange={(event) => { const file = event.target.files?.[0]; if (file) void importBulkCancelFile(file); event.currentTarget.value = ""; }} disabled={bulkCancelRunning} />
+            </label>
+            <button type="button" onClick={() => void runBulkCancel()} disabled={bulkCancelRunning || !bulkCancelInput.trim()} className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:cursor-not-allowed disabled:opacity-50">
+              {bulkCancelRunning ? "Cancelling invoices…" : "Cancel listed invoices"}
+            </button>
+          </div>
+        </div>
+        {bulkCancelRunning && bulkCancelProgress.total > 0 && <div className="mt-3" role="status" aria-live="polite">
+          <div className="mb-1 flex justify-between text-xs font-medium text-rose-900"><span>Cancelling invoices…</span><span>{bulkCancelProgress.completed} of {bulkCancelProgress.total}</span></div>
+          <div className="h-2 overflow-hidden rounded-full bg-rose-200"><div className="h-full bg-rose-700 transition-all" style={{ width: `${Math.round((bulkCancelProgress.completed / bulkCancelProgress.total) * 100)}%` }} /></div>
+          {bulkCancelProgress.failed > 0 && <p className="mt-1 text-xs text-rose-800">{bulkCancelProgress.failed} cancellation{bulkCancelProgress.failed === 1 ? "" : "s"} failed; continuing with the remaining invoices.</p>}
+        </div>}
+        {bulkCancelSummary && <p role="status" className="mt-3 text-sm text-rose-900">{bulkCancelSummary}</p>}
+      </details>}
       {invoiceFilters}
       <SchoolInvoiceListExport rows={exportRows} school={schoolHeader} disabled={loading || !!err} onError={setErr} />
       <p className="text-sm text-slate-700">Outstanding balance for matching invoices: <strong>{filteredRows.filter((row) => row.status !== "cancelled").reduce((sum, row) => sum + Math.max(0, Number(row.total_due) - Number(row.amount_paid)), 0).toLocaleString()}</strong></p>
@@ -1092,7 +1250,7 @@ export function SchoolStudentInvoicesPage({ readOnly }: Props) {
                       <div className="flex flex-wrap justify-end gap-2">
                         <button type="button" onClick={() => printInvoice(r)} className="text-xs font-medium text-sky-700">Invoice</button>
                         {r.status !== "cancelled" && <button type="button" onClick={() => printInvoice(r, true)} className="text-xs font-medium text-amber-700">Demand note</button>}
-                        <button type="button" onClick={() => printStatement(r.student_id)} className="text-xs font-medium text-emerald-700">Statement</button>
+                        <button type="button" onClick={() => void printStatement(r.student_id)} className="text-xs font-medium text-emerald-700">Statement</button>
                         <button type="button" onClick={() => setExpandedInvoiceId((id) => id === r.id ? null : r.id)} className="text-xs font-medium text-violet-700">{expandedInvoiceId === r.id ? "Hide fees" : "Drill down"}</button>
                        {!readOnly && (
                         <>

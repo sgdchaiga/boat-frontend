@@ -616,6 +616,65 @@ export async function updateLoanRow(
   if (error) throw error;
 }
 
+/**
+ * Creates an auditable mobile-money payout instruction from an already board-cleared
+ * loan, then hands it to the server-only provider worker. The amount, member and
+ * organization are derived in SQL; the browser never supplies them.
+ */
+export async function authorizeAndSendSaccoMobileLoanDisbursement(loanId: string): Promise<{ id: string; status: string }> {
+  const { data, error } = await sb.rpc("authorize_sacco_mobile_loan_disbursement", {
+    p_loan_id: loanId,
+    p_network: null,
+    p_phone_number: null,
+  });
+  if (error) throw error;
+  const row = data as { id?: string; status?: string } | null;
+  if (!row?.id) throw new Error("Could not create the mobile-money disbursement instruction.");
+  if (row.status === "paid" || row.status === "processing") return { id: row.id, status: row.status };
+  const { data: result, error: invokeError } = await sb.functions.invoke("sacco-mobile-loan-disbursement", {
+    body: { disbursement_id: row.id },
+  });
+  if (invokeError) throw invokeError;
+  if (!result?.ok) throw new Error(String(result?.error ?? "The provider could not accept this payout."));
+  return { id: row.id, status: String(result.status ?? "processing") };
+}
+
+/** Credits the member's existing ordinary savings account and posts the matching loan journal. */
+export async function disburseSaccoLoanToSavings(loanId: string): Promise<{ id: string; status: string }> {
+  const { data, error } = await sb.rpc("disburse_sacco_loan_to_savings", { p_loan_id: loanId, p_savings_account_id: null });
+  if (error) throw error;
+  const row = data as { id?: string; status?: string } | null;
+  if (!row?.id) throw new Error("Could not credit the member savings account.");
+  return { id: row.id, status: String(row.status ?? "paid") };
+}
+
+export type SaccoCreditAssessmentSummary = {
+  sacco_loan_id: string;
+  score: number;
+  risk_band: "low" | "moderate" | "high";
+  recommendation: "recommend_approval" | "refer_manual_appraisal" | "ineligible";
+  maximum_eligible_amount: number;
+  guarantors_required: boolean;
+  reasons: string[];
+  data_quality: Record<string, string>;
+};
+
+/** Runs the shared SQL rules engine and retains its immutable input snapshot. */
+export async function calculateSaccoCreditAssessment(loanId: string): Promise<SaccoCreditAssessmentSummary> {
+  const { data, error } = await sb.rpc("calculate_sacco_credit_assessment", { p_loan_id: loanId });
+  if (error) throw error;
+  return data as SaccoCreditAssessmentSummary;
+}
+
+export async function fetchSaccoCreditAssessments(loanIds: string[]): Promise<SaccoCreditAssessmentSummary[]> {
+  if (!loanIds.length) return [];
+  const { data, error } = await sb.from("sacco_credit_assessments")
+    .select("sacco_loan_id,score,risk_band,recommendation,maximum_eligible_amount,guarantors_required,reasons,data_quality")
+    .in("sacco_loan_id", loanIds);
+  if (error) throw error;
+  return (data ?? []) as SaccoCreditAssessmentSummary[];
+}
+
 /** All loans for an organization (portfolio / bulk import matching). */
 export async function fetchLoansForOrganization(organizationId: string): Promise<Loan[]> {
   const { data, error } = await sb.from("sacco_loans").select("*").eq("organization_id", organizationId);
