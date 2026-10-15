@@ -138,7 +138,7 @@ export function IncomeStatementPage() {
   const [roomBillingJournalIssueIds, setRoomBillingJournalIssueIds] = useState<string[]>([]);
   const [roomBillingRepairing, setRoomBillingRepairing] = useState(false);
   const [roomBillingRepairMessage, setRoomBillingRepairMessage] = useState<string | null>(null);
-  const [drillAccount, setDrillAccount] = useState<{ id: string; code: string; name: string; type: "income" | "expense"; source?: "gl" | "pos" } | null>(null);
+  const [drillAccount, setDrillAccount] = useState<{ id: string; code: string; name: string; type: "income" | "expense"; source?: "gl" | "pos" | "supplier_payments" } | null>(null);
   const [drillRows, setDrillRows] = useState<DrillLine[]>([]);
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillError, setDrillError] = useState<string | null>(null);
@@ -523,17 +523,29 @@ export function IncomeStatementPage() {
         // debit lines so cash-basis purchases agree with the posting comparison.
         let vendorPaymentsQuery = supabase
           .from("vendor_payments")
-          .select("id,bill_id,bill_allocations,amount,status")
+          .select("id,bill_id,bill_allocations,amount,payment_date,status")
           .gte("payment_date", fromDate)
           .lt("payment_date", paidToExclusive.toISOString().slice(0, 10));
         if (orgId) vendorPaymentsQuery = vendorPaymentsQuery.eq("organization_id", orgId);
-        const vendorPaymentsResult = await vendorPaymentsQuery;
+        let vendorPaymentsResult = await vendorPaymentsQuery;
+        // Support historical deployments before the optional JSON allocation
+        // column was introduced; these payments are still valid cash outflows.
+        if (vendorPaymentsResult.error && String(vendorPaymentsResult.error.message || "").toLowerCase().includes("bill_allocations")) {
+          let legacyVendorPaymentsQuery = supabase
+            .from("vendor_payments")
+            .select("id,bill_id,amount,payment_date,status")
+            .gte("payment_date", fromDate)
+            .lt("payment_date", paidToExclusive.toISOString().slice(0, 10));
+          if (orgId) legacyVendorPaymentsQuery = legacyVendorPaymentsQuery.eq("organization_id", orgId);
+          vendorPaymentsResult = await legacyVendorPaymentsQuery as typeof vendorPaymentsResult;
+        }
         if (vendorPaymentsResult.error) throw new Error(vendorPaymentsResult.error.message);
         const vendorPayments = ((vendorPaymentsResult.data || []) as Array<{
           id: string;
           bill_id: string | null;
           bill_allocations: unknown;
           amount: number | null;
+          payment_date: string | null;
           status?: string | null;
         }>).filter((payment) => payment.status !== "reversed");
         const vendorPaymentIds = vendorPayments.map((payment) => payment.id);
@@ -602,7 +614,34 @@ export function IncomeStatementPage() {
             credit: 0,
           }));
         });
-        effectiveLines = [...effectiveLines, ...attributedPurchaseLines];
+        // Payments entered without a linked supplier bill still represent cash
+        // expenditure in a cash-basis report. Their journal settles payable (and
+        // therefore has no P&L line), so surface them as a clearly-labelled
+        // temporary expense until a bill is linked and supplies the detailed GL
+        // allocation. Linked payments continue to use their bill debit lines.
+        const paymentsWithAllocations = new Set(vendorPayments.filter((payment) => {
+          const json = parseBillAllocationsJson(payment.bill_allocations);
+          return json.length > 0 || (tableAllocations.get(payment.id) || []).length > 0 || !!payment.bill_id;
+        }).map((payment) => payment.id));
+        const unallocatedSupplierPaymentLines = vendorPayments
+          .filter((payment) => !paymentsWithAllocations.has(payment.id) && Number(payment.amount || 0) > 0)
+          .map((payment) => ({
+            debit: Number(payment.amount || 0),
+            credit: 0,
+            gl_accounts: {
+              id: "cash-basis-unallocated-supplier-payments",
+              account_code: "—",
+              account_name: "Unallocated supplier payments",
+              account_type: "expense",
+              category: "Cash basis",
+            },
+            journal_entries: {
+              entry_date: String(payment.payment_date || fromDate).slice(0, 10),
+              reference_type: "vendor_payment",
+              reference_id: payment.id,
+            },
+          }));
+        effectiveLines = [...effectiveLines, ...attributedPurchaseLines, ...unallocatedSupplierPaymentLines];
       }
 
       type AccRow = {
@@ -984,7 +1023,8 @@ export function IncomeStatementPage() {
   const pieColors = ["#0ea5e9", "#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#14b8a6", "#6366f1", "#84cc16", "#ec4899", "#22c55e", "#f97316", "#64748b"];
 
   const openDrilldown = async (account: { id: string; code: string; name: string; type: "income" | "expense" }) => {
-    setDrillAccount({ ...account, source: "gl" });
+    const isUnallocatedSupplierPayments = account.id === "cash-basis-unallocated-supplier-payments";
+    setDrillAccount({ ...account, source: isUnallocatedSupplierPayments ? "supplier_payments" : "gl" });
     setDrillRows([]);
     setDrillError(null);
     setDrillLoading(true);
@@ -994,6 +1034,32 @@ export function IncomeStatementPage() {
       const { from, to } = computeRangeInTimezone(dateRange, effectiveCustomFrom, effectiveCustomTo);
       const fromStr = toBusinessDateString(from);
       const toStrInclusive = toBusinessDateString(new Date(to.getTime() - 1));
+      if (isUnallocatedSupplierPayments) {
+        let paymentsQuery = supabase
+          .from("vendor_payments")
+          .select("id,amount,payment_date,payment_method,reference,vendors(name)")
+          .is("bill_id", null)
+          .gte("payment_date", fromStr)
+          .lte("payment_date", toStrInclusive)
+          .order("payment_date", { ascending: false });
+        if (orgId) paymentsQuery = paymentsQuery.eq("organization_id", orgId);
+        const { data, error } = await paymentsQuery;
+        if (error) throw new Error(error.message);
+        setDrillRows(((data || []) as Array<{ id: string; amount: number | null; payment_date: string | null; payment_method: string | null; reference: string | null; vendors?: { name?: string | null } | { name?: string | null }[] | null }>).map((payment) => {
+          const vendor = Array.isArray(payment.vendors) ? payment.vendors[0] : payment.vendors;
+          return {
+            id: payment.id,
+            entry_date: payment.payment_date || "",
+            description: vendor?.name || "Supplier payment",
+            transaction_id: payment.reference,
+            reference_type: "vendor_payment",
+            debit: Number(payment.amount || 0),
+            credit: 0,
+            line_description: payment.payment_method ? `Payment method: ${payment.payment_method}` : null,
+          };
+        }));
+        return;
+      }
       const q = supabase
         .from("journal_entry_lines")
         .select(
@@ -1997,7 +2063,7 @@ export function IncomeStatementPage() {
                   Drill-down: {drillAccount.code} {drillAccount.name}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  {drillAccount.source === "pos" ? "POS items / billing charges" : `${drillAccount.type} general ledger transactions`} in selected period
+                  {drillAccount.source === "pos" ? "POS items / billing charges" : drillAccount.source === "supplier_payments" ? "Unallocated supplier payment transactions" : `${drillAccount.type} general ledger transactions`} in selected period
                 </p>
               </div>
               <button

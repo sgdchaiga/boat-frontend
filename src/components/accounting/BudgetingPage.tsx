@@ -918,6 +918,23 @@ export function BudgetingPage({ readOnly }: Props) {
       )}
       {selectedBudget && lines.length>0 && ["draft","submitted","reviewed"].includes(selectedBudget.status) && <SchoolBudgetDriversPanel budgetId={selectedBudget.id} lines={lines.filter(line=>!lines.some(child=>child.parent_line_id===line.id)).map(l=>({id:l.id,line_label:l.parent_line_id?`${lines.find(parent=>parent.id===l.parent_line_id)?.line_label || "Main line"} — ${l.line_label}`:l.line_label,budget_type:l.budget_type}))} disabled={readOnly||!canPrepareBudget||editingLines} onSaved={()=>void loadLines(selectedBudget.id)}/>}
 
+      {selectedBudget && ["submitted", "reviewed", "approved"].includes(selectedBudget.status) && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-amber-950">Budget workflow: {selectedBudget.status === "submitted" ? "Awaiting review" : selectedBudget.status === "reviewed" ? "Ready for approval" : "Approved — ready to activate"}</p>
+              <p className="mt-0.5 text-xs text-amber-900">{selectedBudget.status === "submitted" ? "Step 1 of 3: mark the submitted budget as reviewed before approval." : selectedBudget.status === "reviewed" ? "Step 2 of 3: approve the reviewed budget." : "Step 3 of 3: activate the approved budget so it can control spending."}</p>
+            </div>
+            {!readOnly && nextStatus(selectedBudget.status) && canMoveTo(nextStatus(selectedBudget.status)) && (
+              <button type="button" onClick={() => void changeBudgetStatus(selectedBudget, nextStatus(selectedBudget.status)!)} className="app-btn-primary">
+                {selectedBudget.status === "submitted" ? "Mark reviewed" : selectedBudget.status === "reviewed" ? "Approve budget" : "Activate budget"}
+              </button>
+            )}
+            {!readOnly && nextStatus(selectedBudget.status) && !canMoveTo(nextStatus(selectedBudget.status)) && <p className="text-xs font-medium text-amber-900">Your role does not have permission for the next workflow step.</p>}
+          </div>
+        </section>
+      )}
+
       {!selectedBudget ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-14 text-center">
           <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-slate-100 text-slate-600"><CircleDollarSign className="h-6 w-6" /></span>

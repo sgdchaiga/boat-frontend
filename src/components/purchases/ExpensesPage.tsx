@@ -152,6 +152,7 @@ function buildGlCodeToSimpleCategoryMap(): Map<string, SimpleCategory> {
 const SIMPLE_GL_CODE_TO_CATEGORY = buildGlCodeToSimpleCategoryMap();
 
 type PaymentMethodSimple = "cash" | "bank" | "mobile" | "wallet";
+type FundingSourceGroup = "cash" | "bank" | "mobile" | "wallet";
 
 type SimpleExpenseLine = {
   school_subvote_id?: string;
@@ -359,6 +360,17 @@ function inferPaymentMethodFromGlId(glId: string, cashOptions: GlAccount[]): Pay
   return "cash";
 }
 
+function fundingGroupForAccount(account: GlAccount): FundingSourceGroup {
+  const text = `${account.account_name} ${account.account_code}`.toLowerCase();
+  const category = (account.category || "").toLowerCase();
+  // "Wallet Clearing" contains the word "clearing", which is also a bank
+  // keyword. Classify the specific rails before applying the broader bank rule.
+  if (category.includes("wallet") || GL_NAME_WALLET.test(text)) return "wallet";
+  if (category.includes("mobile") || GL_NAME_MOBILE.test(text)) return "mobile";
+  if (category === "bank" || GL_NAME_BANK.test(text)) return "bank";
+  return "cash";
+}
+
 const LAST_SIMPLE_CATEGORY_KEY = "boat.expenses.last_category";
 
 function readLastSimpleCategory(): SimpleCategory {
@@ -474,6 +486,7 @@ type LineDraft = {
   vendor_id: string;
   expense_gl_account_id: string;
   source_cash_gl_account_id: string;
+  source_fund_group: FundingSourceGroup;
   /** Net amount (ex VAT) */
   amount: string;
   quantity: string;
@@ -489,6 +502,7 @@ function emptyLine(): LineDraft {
     vendor_id: "",
     expense_gl_account_id: "",
     source_cash_gl_account_id: "",
+    source_fund_group: "cash",
     amount: "",
     quantity: "1",
     vat_enabled: true,
@@ -1058,9 +1072,17 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const currencyCode = useMemo(() => loadHotelConfig(orgId ?? null).currency || "UGX", [orgId]);
 
   const cashSourceOptions = useMemo(() => {
-    const list = glAccounts.filter((a) => (a.category || "").toLowerCase() === "cash");
-    if (list.length > 0) return list;
-    return glAccounts.filter((a) => a.account_type === "asset");
+    // A source of funds can be a till/petty-cash account, bank account, mobile-money
+    // account, or wallet. Previously, finding any "cash" category hid the banks.
+    const list = glAccounts.filter((account) => {
+      const category = (account.category || "").toLowerCase();
+      const text = `${account.account_name} ${account.account_code}`.toLowerCase();
+      return account.account_type === "asset" && (
+        category === "cash" || category === "bank" ||
+        GL_NAME_CASH.test(text) || GL_NAME_BANK.test(text) || GL_NAME_MOBILE.test(text) || GL_NAME_WALLET.test(text)
+      );
+    });
+    return list.length > 0 ? list : glAccounts.filter((account) => account.account_type === "asset");
   }, [glAccounts]);
 
   const expenseGlOptions = useMemo(() => {
@@ -1608,6 +1630,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           school_subvote_id: (lr as { school_subvote_id?: string }).school_subvote_id || "",
           expense_gl_account_id: l.expense_gl_account_id,
           source_cash_gl_account_id: l.source_cash_gl_account_id,
+          source_fund_group: fundingGroupForAccount(cashSourceOptions.find((account) => account.id === l.source_cash_gl_account_id) || { id: "", account_code: "", account_name: "", account_type: "asset", category: "cash" }),
           // expense_lines.amount is the saved total for the whole line.  The
           // editor input is a unit rate, so convert it before its totals code
           // applies the quantity again.
@@ -2451,7 +2474,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                       value={row.source_cash_gl_account_id}
                                       onChange={(id) => updateLine(row.key, { source_cash_gl_account_id: id })}
                                       options={cashSourceOptions}
-                                      placeholder="Type code or name…"
+                                      placeholder="Choose cash, bank, mobile, or wallet account…"
                                     />
                                   </td>
                                   <td className="p-2 align-top">

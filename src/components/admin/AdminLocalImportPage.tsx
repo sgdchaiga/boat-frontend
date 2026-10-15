@@ -5,7 +5,6 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { createJournalForExpenseWithLines, createJournalForVendorPayment } from "@/lib/journal";
 import { isSpendMoneyApprovalEnabled, queueExpenseForTreasury } from "@/lib/treasuryWorkflow";
-import { getTotalPaidForBill, syncBillStatusInDb } from "@/lib/billStatus";
 import { nextSchoolAdmissionNumber } from "@/lib/schoolAdmissionNumber";
 import { toSchoolTitleCase } from "@/lib/schoolTextCase";
 import { fetchAllPages } from "@/lib/supabasePagination";
@@ -60,7 +59,7 @@ const ENTITY_OPTIONS: Array<{ id: ImportEntity; label: string; required: string[
   { id: "school-expenses", label: "School - Expenses", required: ["expense_date", "amount", "description", "expense_account_code", "cash_account_code"] },
   { id: "school-other-income", label: "School - Other Income", required: ["revenue_type", "amount"] },
   { id: "school-purchases", label: "School - Purchases / Supplier Bills", required: ["vendor_name", "bill_date", "amount", "description"] },
-  { id: "school-payments", label: "School - Supplier Payments", required: ["bill_id", "amount", "payment_date", "payment_method"] },
+  { id: "school-payments", label: "School - Supplier Payments", required: ["vendor or particulars", "amount", "date"] },
 ];
 
 const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
@@ -115,15 +114,26 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "school-expenses": [{ expense_date: "2026-08-27", amount: "150000", description: "Examination stationery", vendor_name: "Kampala Stationers", payee: "Kampala Stationers", cheque_number: "000123", voucher_number: "PV-2026-001", expense_account_code: "6100", cash_account_code: "1000", notes: "Term 2 exams" }],
   "school-other-income": [{ revenue_type: "Hall hire", payer_name: "Community Association", amount: "300000", method: "bank", reference: "DEP-1001", received_at: "2026-08-27", notes: "Weekend hall hire" }],
   "school-purchases": [{ vendor_name: "Kampala Stationers", bill_date: "2026-08-27", due_date: "2026-09-27", amount: "800000", description: "Exercise books", reference: "INV-4102" }],
-  "school-payments": [{ bill_id: "paste-approved-bill-uuid-here", amount: "400000", payment_date: "2026-08-27", payment_method: "bank", reference: "PAY-4102" }],
+  "school-payments": [{ date: "2026-08-27", vendor: "Kampala Stationers Ltd", particulars: "Examination stationery", chq_no: "000123", pv_no: "PV-2026-001", amount: "400000", vote: "Academic Expenses", subvote: "Examinations", payment_method: "bank_transfer", bank_name: "Centenary Bank" }],
 };
 
 function normalizeRow(row: Record<string, unknown>): ParsedRow {
   const out: ParsedRow = {};
   for (const [key, value] of Object.entries(row)) {
-    const normalized = key.trim().toLowerCase().replace(/\s+/g, "_");
+    const normalized = key.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
     out[normalized] = typeof value === "string" ? value.trim() : value;
   }
+  // Common headings in school payment vouchers/cashbooks. Keep the original
+  // values too, so standard templates and exports remain compatible.
+  if (!out.vendor_name && out.vendor) out.vendor_name = out.vendor;
+  if (!out.vendor_name && out.particulars) out.vendor_name = out.particulars;
+  if (!out.cheque_number && out.chq_no) out.cheque_number = out.chq_no;
+  if (!out.cheque_number && out.cheque_no) out.cheque_number = out.cheque_no;
+  if (!out.voucher_number && out.pv_no) out.voucher_number = out.pv_no;
+  if (!out.voucher_number && out.pv_number) out.voucher_number = out.pv_number;
+  if (!out.payment_date && out.date) out.payment_date = out.date;
+  if (!out.amount && out.total) out.amount = out.total;
+  if (out.payment_date) out.payment_date = normaliseImportDate(out.payment_date);
   return out;
 }
 
@@ -132,9 +142,60 @@ function asText(value: unknown): string {
   return String(value).trim();
 }
 
+/** Convert Excel serial dates (for example 46029) into the ISO dates expected by Supabase. */
+function normaliseImportDate(value: unknown): string {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
+  const raw = asText(value);
+  if (!raw) return "";
+  if (/^\d+(?:\.\d+)?$/.test(raw)) {
+    const parts = XLSX.SSF.parse_date_code(Number(raw));
+    if (parts?.y && parts.m && parts.d) return `${parts.y}-${String(parts.m).padStart(2, "0")}-${String(parts.d).padStart(2, "0")}`;
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+  return raw;
+}
+
+function normaliseSupplierPaymentMethod(value: unknown): string {
+  const method = asText(value).toLowerCase().replace(/[\s-]+/g, "_");
+  if (["bank", "cheque", "check", "transfer"].includes(method)) return "bank_transfer";
+  if (["mobile_money", "mobilemoney", "momo"].includes(method)) return "wallet";
+  return method || "bank_transfer";
+}
+
+function compactImportText(value: unknown): string {
+  return asText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/** Stable, compact marker stored in the payment reference to make file re-uploads idempotent. */
+function supplierPaymentImportFingerprint(values: unknown[]): string {
+  const input = values.map(compactImportText).join("|");
+  let hash = 2166136261;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = Math.imul(hash ^ input.charCodeAt(index), 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function supplierPaymentImportBatchId(): string {
+  return `SUP-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}-${Date.now().toString(36).toUpperCase()}`;
+}
+
+function importFailureReason(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (error && typeof error === "object") {
+    const value = error as { message?: unknown; details?: unknown; hint?: unknown; code?: unknown };
+    const parts = [value.message, value.details, value.hint, value.code ? `Code ${String(value.code)}` : ""]
+      .map(asText)
+      .filter(Boolean);
+    if (parts.length) return parts.join(" — ");
+  }
+  return asText(error) || "Unknown error";
+}
+
 function asNumber(value: unknown, fallback = 0): number {
   if (value === null || value === undefined || value === "") return fallback;
-  const num = Number(value);
+  const num = Number(String(value).replace(/[,$\s]/g, "").replace(/^UGX/i, ""));
   return Number.isFinite(num) ? num : fallback;
 }
 
@@ -184,7 +245,12 @@ export function AdminLocalImportPage() {
   const [file, setFile] = useState<File | null>(null);
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [paymentImportFailures, setPaymentImportFailures] = useState<string[]>([]);
+  const [supplierPaymentImportProgress, setSupplierPaymentImportProgress] = useState({ completed: 0, total: 0 });
   const [updatePreview, setUpdatePreview] = useState<UpdatePreviewRow[]>([]);
+  // Voucher exports often have no date per row. The operator explicitly sets
+  // the posting date used only for those rows before importing.
+  const [supplierPaymentBatchDate, setSupplierPaymentBatchDate] = useState(() => new Date().toISOString().slice(0, 10));
 
   const selected = useMemo(
     () => ENTITY_OPTIONS.find((opt) => opt.id === entity) ?? ENTITY_OPTIONS[0],
@@ -446,7 +512,11 @@ export function AdminLocalImportPage() {
     const existing = await supabase.from("vendors").select("id").eq("organization_id", organizationId).ilike("name", name).limit(1).maybeSingle();
     if (existing.error) throw existing.error;
     if (existing.data?.id) return existing.data.id as string;
-    const created = await supabase.from("vendors").insert({ organization_id: organizationId, name, is_active: true }).select("id").single();
+    let created = await supabase.from("vendors").insert({ organization_id: organizationId, name, is_active: true }).select("id").single();
+    // Older school databases do not have the optional is_active vendor column.
+    if (created.error && String(created.error.message || "").toLowerCase().includes("is_active")) {
+      created = await supabase.from("vendors").insert({ organization_id: organizationId, name }).select("id").single();
+    }
     if (created.error) throw created.error;
     return created.data.id as string;
   };
@@ -667,30 +737,61 @@ export function AdminLocalImportPage() {
   const importCloudPayments = async (rows: ParsedRow[]) => {
     const organizationId = requireOrganizationId();
     let imported = 0;
+    const failures: string[] = [];
+    const vendorIdsByName = new Map<string, string>();
+    const importBatchId = supplierPaymentImportBatchId();
+    setSupplierPaymentImportProgress({ completed: 0, total: rows.length });
     for (const row of rows) {
-      const billId = asText(row.bill_id);
-      const amount = asNumber(row.amount);
-      const paymentDate = asText(row.payment_date);
-      if (!billId || amount <= 0 || !paymentDate || !asText(row.payment_method)) continue;
-      const bill = await supabase.from("bills").select("id,vendor_id,status,approved_at,amount").eq("id", billId).eq("organization_id", organizationId).maybeSingle();
-      if (bill.error) throw bill.error;
-      if (!bill.data) throw new Error(`Bill ${billId} was not found in this organization.`);
-      if (!bill.data.approved_at && !["approved", "partially_paid", "overdue"].includes(String(bill.data.status).toLowerCase())) throw new Error(`Bill ${billId} must be approved before importing a payment.`);
-      const alreadyPaid = await getTotalPaidForBill(billId);
-      if (alreadyPaid + amount > Number(bill.data.amount) + 0.001) throw new Error(`Payment for bill ${billId} exceeds its remaining balance.`);
-      const reference = asText(row.reference);
-      if (reference) {
-        const duplicate = await supabase.from("vendor_payments").select("id").eq("organization_id", organizationId).eq("reference", reference).limit(1).maybeSingle();
+      const sourceLabel = asText(row.vendor_name || row.vendor || row.particulars) || "Row";
+      try {
+        const amount = asNumber(row.total, asNumber(row.amount));
+        const paymentDate = asText(row.payment_date) || supplierPaymentBatchDate;
+        if (sourceLabel === "Row") { failures.push("Row: supplier name is required in Vendor or Particulars."); continue; }
+        if (amount <= 0 || !paymentDate) { failures.push(`${sourceLabel}: a positive Amount and payment date are required.`); continue; }
+        const cheque = asText(row.cheque_number || row.chq_no || row.cheque_no);
+        const voucher = asText(row.voucher_number || row.pv_no || row.pv_number);
+        const particulars = asText(row.particulars);
+        const bankName = asText(row.bank_name || row.bank);
+        const vote = asText(row.vote);
+        const subvote = asText(row.subvote || row.sunvote);
+        const fingerprint = supplierPaymentImportFingerprint([sourceLabel, paymentDate, amount, cheque, voucher, particulars, vote, subvote, bankName]);
+        const referenceBase = asText(row.reference) || [cheque && `CHQ ${cheque}`, voucher && `PV ${voucher}`, vote && `Vote: ${vote}`, subvote && `Subvote: ${subvote}`, bankName && `Bank: ${bankName}`].filter(Boolean).join(" / ");
+        const reference = `${referenceBase || "Supplier payment"} [IMP:${fingerprint}] [BATCH:${importBatchId}]`;
+        const vendorKey = compactImportText(sourceLabel);
+        let vendorId = vendorIdsByName.get(vendorKey);
+        if (!vendorId) {
+          vendorId = await findOrCreateVendor(organizationId, sourceLabel);
+          vendorIdsByName.set(vendorKey, vendorId);
+        }
+        // A cheque may cover several expenses. The row fingerprint, rather than
+        // the cheque number, makes a repeat upload safe without losing lines.
+        const duplicate = await supabase.from("vendor_payments").select("id,reference").eq("organization_id", organizationId).eq("vendor_id", vendorId).eq("payment_date", paymentDate);
         if (duplicate.error) throw duplicate.error;
-        if (duplicate.data) throw new Error(`Payment reference ${reference} has already been imported.`);
+        const fingerprintMarker = compactImportText(`IMP:${fingerprint}`);
+        if ((duplicate.data || []).some((payment) => compactImportText((payment as { reference?: string | null }).reference).includes(fingerprintMarker))) {
+          failures.push(`${sourceLabel}: this row was already imported (same vendor, date, amount, and payment details).`);
+          continue;
+        }
+        const paymentPayload = { organization_id: organizationId, vendor_id: vendorId, bill_id: null, amount, payment_date: paymentDate, payment_method: normaliseSupplierPaymentMethod(row.payment_method), cheque_number: cheque || null, payment_voucher: voucher || null, reference: reference || null, bill_allocations: [] as unknown[] };
+        let payment = await supabase.from("vendor_payments").insert(paymentPayload).select("id").single();
+        // bill_allocations is a newer optional column. Keep this upload working
+        // for organizations whose database has not yet received that migration.
+        if (payment.error && /bill_allocations|cheque_number|payment_voucher/i.test(String(payment.error.message || ""))) {
+          const { bill_allocations: _unused, cheque_number: _cheque, payment_voucher: _voucher, ...legacyPayload } = paymentPayload;
+          payment = await supabase.from("vendor_payments").insert(legacyPayload).select("id").single();
+        }
+        if (payment.error) throw payment.error;
+        const journal = await createJournalForVendorPayment(payment.data.id, amount, paymentDate, user?.id || null);
+        if (!journal.ok) { failures.push(`${sourceLabel}: payment saved, but its journal was not posted — ${journal.error || "Unknown journal error"}`); imported += 1; continue; }
+        imported += 1;
+      } catch (error) {
+        failures.push(`${sourceLabel}: ${importFailureReason(error)}`);
+      } finally {
+        setSupplierPaymentImportProgress((progress) => ({ ...progress, completed: progress.completed + 1 }));
       }
-      const payment = await supabase.from("vendor_payments").insert({ organization_id: organizationId, vendor_id: bill.data.vendor_id, bill_id: billId, amount, payment_date: paymentDate, payment_method: asText(row.payment_method), reference: reference || null, bill_allocations: [] }).select("id").single();
-      if (payment.error) throw payment.error;
-      const journal = await createJournalForVendorPayment(payment.data.id, amount, paymentDate, user?.id || null);
-      if (!journal.ok) throw new Error(`Payment saved but journal posting failed: ${journal.error}`);
-      await syncBillStatusInDb(billId);
-      imported += 1;
     }
+    setPaymentImportFailures(failures);
+    setMessage(`Imported ${imported} row(s)${imported ? ` in batch ${importBatchId}` : ""}.${failures.length ? ` ${failures.length} row(s) need attention; see the reasons below.` : ""}`);
     return imported;
   };
 
@@ -934,6 +1035,8 @@ export function AdminLocalImportPage() {
 
   const runImport = async () => {
     setMessage(null);
+    setPaymentImportFailures([]);
+    setSupplierPaymentImportProgress({ completed: 0, total: 0 });
     if (!file) {
       setMessage("Choose a CSV or XLSX file first.");
       return;
@@ -968,12 +1071,13 @@ export function AdminLocalImportPage() {
       }
 
       const skipped = rows.length - imported;
-      setMessage(`Imported ${imported} row(s).${skipped > 0 ? ` Skipped ${skipped} row(s).` : ""}`);
+      if (entity !== "school-payments") setMessage(`Imported ${imported} row(s).${skipped > 0 ? ` Skipped ${skipped} row(s).` : ""}`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "Import failed.";
       setMessage(text);
     } finally {
       setRunning(false);
+        setSupplierPaymentImportProgress({ completed: 0, total: 0 });
     }
   };
 
@@ -1048,7 +1152,7 @@ export function AdminLocalImportPage() {
         {entity === "school-students" ? <p className="text-xs text-amber-700">Student import adds new records only. Existing identifiers are rejected and never overwritten.</p> : null}
         {entity === "school-fee-structures" ? <p className="text-xs text-amber-700">Fee structures are added as new records so prior terms remain unchanged.</p> : null}
         {entity === "school-purchases" ? <p className="text-xs text-amber-700">Imported supplier bills are saved as pending approval and are not posted until approved.</p> : null}
-        {entity === "school-payments" ? <p className="text-xs text-amber-700">Use approved bill IDs. Each payment posts through the normal supplier-payment journal workflow.</p> : null}
+        {entity === "school-payments" ? <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><p>Upload: <strong>DATE, VENDOR, PARTICULARS, CHQ NO, PV NO, Amount, Vote, Subvote, Payment Method, Bank Name</strong>. Put the expense details in <strong>PARTICULARS</strong>. No bill matching is required. BOAT creates the vendor if needed and records every payment as unallocated, ready to be matched later. Cheque, voucher, vote, subvote, and bank name are retained in the payment reference for audit.</p><label className="flex max-w-xs items-center gap-2 font-medium">Batch payment date <input type="date" value={supplierPaymentBatchDate} onChange={(event) => setSupplierPaymentBatchDate(event.target.value)} className="rounded border border-amber-300 bg-white px-2 py-1" /></label><p>Rows with a Date/Payment Date column use that date; the batch date fills rows without one. Re-uploading the same file skips rows already imported and adds only new ones.</p></div> : null}
         {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected. Payee, cheque_number and voucher_number are optional. Format cheque and voucher numbers as text to preserve leading zeros. If payee is blank, vendor_name is used.</p> : null}
       </> : <p className="text-xs text-amber-700">Keep {entity === "school-students" ? "admission_number" : "id"} unchanged. For SchoolPay corrections, use the SchoolPay update template and enter only corrected_schoolpay_code. Blank cells are ignored; use {CLEAR_VALUE} to clear an optional field.</p>}
 
@@ -1065,6 +1169,7 @@ export function AdminLocalImportPage() {
         </>}
         {file ? <span className="text-xs text-slate-600">{file.name}</span> : null}
       </div>
+      {entity === "school-payments" && running && supplierPaymentImportProgress.total > 0 ? <div className="max-w-lg rounded-lg border border-indigo-200 bg-indigo-50 p-3" role="status" aria-live="polite"><div className="mb-1 flex justify-between text-xs font-medium text-indigo-900"><span>Importing supplier payments…</span><span>{supplierPaymentImportProgress.completed} / {supplierPaymentImportProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(supplierPaymentImportProgress.completed / supplierPaymentImportProgress.total * 100)}%` }} /></div></div> : null}
 
       {mode === "update" && updatePreview.length ? (
         <div className="border border-slate-200 rounded-lg overflow-auto max-h-80">
@@ -1076,6 +1181,7 @@ export function AdminLocalImportPage() {
       ) : null}
 
       {message ? <p className="text-sm text-slate-700">{message}</p> : null}
+      {entity === "school-payments" && paymentImportFailures.length > 0 ? <div className="max-h-56 overflow-auto rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900"><p className="font-semibold">Supplier-payment import issues</p><ul className="mt-2 list-disc space-y-1 pl-4">{paymentImportFailures.map((reason, index) => <li key={`${index}-${reason}`}>{reason}</li>)}</ul></div> : null}
     </div>
   );
 }

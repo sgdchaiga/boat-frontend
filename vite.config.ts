@@ -64,16 +64,15 @@ export default defineConfig(({ mode }) => {
     },
 
     optimizeDeps: {
+      // Keep cold starts quick. Feature packages such as PDF, Excel and chart
+      // tooling are loaded by lazy pages; forcing Vite to prebundle all of them
+      // here made every `npm run dev` wait for functionality that may not be
+      // opened in that session. Vite will optimize those packages on demand.
       include: [
         "@supabase/supabase-js",
-        "jspdf",
-        "jspdf-autotable",
-        "lucide-react",
         "react",
         "react-dom",
         "react-hot-toast",
-        "recharts",
-        "xlsx",
       ],
     },
   };

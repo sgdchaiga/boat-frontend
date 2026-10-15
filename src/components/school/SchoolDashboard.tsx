@@ -5,6 +5,7 @@ import { SCHOOL_PAGE } from "@/lib/schoolPages";
 import { PageNotes } from "@/components/common/PageNotes";
 import { isCashEquivalentAccount } from "@/lib/cashFlowStatement";
 import { normalizeGlAccountRows } from "@/lib/glAccountNormalize";
+import { fetchAllPages } from "@/lib/supabasePagination";
 import { SchoolDashboardV1 } from "./SchoolDashboardV1";
 import {
   AlertTriangle,
@@ -88,6 +89,18 @@ function SchoolDashboardV11({ onNavigate }: Props) {
   const [data, setData] = useState<DashboardData>(initialData);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [schoolYear, setSchoolYear] = useState(() => localStorage.getItem("boat.school.academic_year") || String(new Date().getFullYear()));
+  const [schoolTerm, setSchoolTerm] = useState(() => localStorage.getItem("boat.school.term") || "All Terms");
+
+  useEffect(() => {
+    const onPeriodChange = (event: Event) => {
+      const detail = (event as CustomEvent<{ academicYear?: string; term?: string }>).detail;
+      setSchoolYear(detail?.academicYear || localStorage.getItem("boat.school.academic_year") || String(new Date().getFullYear()));
+      setSchoolTerm(detail?.term || localStorage.getItem("boat.school.term") || "All Terms");
+    };
+    window.addEventListener("boat-school-period-change", onPeriodChange);
+    return () => window.removeEventListener("boat-school-period-change", onPeriodChange);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -100,18 +113,21 @@ function SchoolDashboardV11({ onNavigate }: Props) {
       today.setHours(0, 0, 0, 0);
       const tomorrow = new Date(today);
       tomorrow.setDate(tomorrow.getDate() + 1);
-      const [students, parents, invoices, payments, pendingPos, expenses] = await Promise.all([
+      const [students, parents, invoiceRows, payments, pendingPos, expenses] = await Promise.all([
         supabase.from("students").select("id", { count: "exact", head: true }).eq("organization_id", orgId).neq("status", "left"),
         supabase.from("parents").select("id", { count: "exact", head: true }).eq("organization_id", orgId),
-        supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId),
+        fetchAllPages<{ id: string; total_due?: number; amount_paid?: number }>((from, to) => {
+          let query = supabase.from("student_invoices").select("id,total_due,amount_paid").eq("organization_id", orgId).neq("status", "cancelled").eq("academic_year", schoolYear);
+          if (schoolTerm !== "All Terms") query = query.eq("term_name", schoolTerm);
+          return query.order("id").range(from, to);
+        }),
         supabase.from("school_payments").select("id,amount,method,reference,paid_at").eq("organization_id", orgId).order("paid_at", { ascending: false }).limit(8),
         supabase.from("purchase_orders").select("id", { count: "exact", head: true }).eq("organization_id", orgId).eq("status", "pending"),
         supabase.from("expenses").select("id,amount,description,expense_date,status").eq("organization_id", orgId).neq("status", "cancelled").order("expense_date", { ascending: false }).limit(8),
       ]);
       if (cancelled) return;
-      const firstError = students.error || parents.error || invoices.error || payments.error || pendingPos.error;
+      const firstError = students.error || parents.error || payments.error || pendingPos.error;
       if (firstError) setError(firstError.message);
-      const invoiceRows = (invoices.data || []) as Array<{ total_due?: number; amount_paid?: number }>;
       const paymentRows = (payments.data || []) as PaymentRow[];
       const fundsCacheKey = `boat.school.available-funds.${orgId}`;
       const cachedFunds = (() => {
@@ -171,7 +187,7 @@ function SchoolDashboardV11({ onNavigate }: Props) {
       }
     })();
     return () => { cancelled = true; };
-  }, [user?.organization_id]);
+  }, [schoolTerm, schoolYear, user?.organization_id]);
 
   const collectionRate = data.billed > 0 ? Math.min(100, (data.collected / data.billed) * 100) : 0;
   const role = user?.role || "admin";
@@ -213,7 +229,7 @@ function SchoolDashboardV11({ onNavigate }: Props) {
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
-        <div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">School operations</p><div className="mt-1 flex items-center gap-2"><h1 className="text-3xl font-bold text-slate-900">{user?.organization_name || "School dashboard"}</h1><PageNotes ariaLabel="School dashboard help"><p>This dashboard prioritizes students, fees, collections, available funds, approvals and exceptions. Detailed accounting remains available only to authorized roles.</p></PageNotes></div><p className="mt-1 text-sm text-slate-600">{roleLabel} view - live operational overview</p></div>
+        <div><p className="text-xs font-bold uppercase tracking-wider text-brand-700">School operations</p><div className="mt-1 flex items-center gap-2"><h1 className="text-3xl font-bold text-slate-900">{user?.organization_name || "School dashboard"}</h1><PageNotes ariaLabel="School dashboard help"><p>This dashboard prioritizes students, fees, collections, available funds, approvals and exceptions. Detailed accounting remains available only to authorized roles.</p></PageNotes></div><p className="mt-1 text-sm text-slate-600">{roleLabel} view - live operational overview</p><p className="mt-1 text-xs font-medium text-brand-700">Fees shown for {schoolYear} · {schoolTerm}</p></div>
         <button type="button" onClick={() => onNavigate(SCHOOL_PAGE.payments)} className="app-btn-primary"><Receipt className="h-4 w-4"/> Receive payment</button>
       </header>
 

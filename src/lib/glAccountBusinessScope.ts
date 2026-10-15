@@ -3,6 +3,7 @@ type AccountLike = {
   account_code?: string | null;
   account_name?: string | null;
   category?: string | null;
+  account_type?: string | null;
   business_type?: string | null;
 };
 
@@ -47,12 +48,19 @@ export function isGlAccountRelevantForBusinessType(account: AccountLike, busines
   const selectedType = String(businessType || "").toLowerCase();
   if (!selectedType || selectedType === "mixed") return true;
   const accountType = String(account.business_type || "").trim().toLowerCase();
+  const isFundingAccount =
+    String(account.account_type || "").trim().toLowerCase() === "asset" &&
+    ["cash", "bank", "mobile", "wallet"].includes(String(account.category || "").trim().toLowerCase());
   // An explicit industry tag is authoritative. Untagged accounts remain eligible
   // so schools can keep administrator-created accounts and common accounting heads.
   if (accountType && accountType !== "mixed" && accountType !== selectedType) return false;
   const text = `${account.account_code || ""} ${account.account_name || ""} ${account.category || ""}`;
   const taggedIndustries = Object.entries(INDUSTRY_PATTERNS).filter(([, pattern]) => pattern.test(text)).map(([industry]) => industry);
   if (selectedType === "school") {
+    // Cash-source accounts are shared accounting infrastructure. Keep every
+    // active school asset tagged as cash/bank/mobile/wallet, including bank
+    // subaccounts such as 1121–1123 that are not in the old fixed code list.
+    if (isFundingAccount) return true;
     // A legacy template may have been incorrectly relabelled as `school`.
     // Recognizable non-school industry names are stronger evidence than that
     // stale tag (for example, "Raw Materials Inventory").

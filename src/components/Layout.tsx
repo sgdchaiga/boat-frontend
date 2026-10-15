@@ -2195,7 +2195,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                 <select aria-label="Academic year" value={schoolYear} onChange={(e) => setSchoolYear(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700">
                   {[new Date().getFullYear() - 1, new Date().getFullYear(), new Date().getFullYear() + 1].map((year) => <option key={year}>{year}</option>)}
                 </select>
-                <select aria-label="School term" value={schoolTerm} onChange={(e) => setSchoolTerm(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"><option>Term 1</option><option>Term 2</option><option>Term 3</option></select>
+                <select aria-label="School term" value={schoolTerm} onChange={(e) => setSchoolTerm(e.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700"><option>All Terms</option><option>Term 1</option><option>Term 2</option><option>Term 3</option></select>
                 <button type="button" onClick={() => onNavigate('communications')} className="relative rounded-lg border border-slate-200 p-2 text-slate-600 hover:bg-slate-50" aria-label="Notifications"><Bell className="h-5 w-5" /><span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-amber-500" /></button>
               </div>
             </header>

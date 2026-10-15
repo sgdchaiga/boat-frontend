@@ -1,13 +1,14 @@
 import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { CreditCard, Pencil, Plus, Undo2, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, CreditCard, Pencil, Plus, Undo2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
-import { createJournalForVendorPayment, deleteJournalEntryByReference, reverseJournalEntriesByReference, type VendorPaymentJournalAllocation } from "../../lib/journal";
+import { createJournalForExpenseWithLines, createJournalForVendorPayment, deleteJournalEntryByReference, reverseJournalEntriesByReference, type ExpenseJournalLineInput, type VendorPaymentJournalAllocation } from "../../lib/journal";
 import { isBillApproved, parseBillAllocationsJson, syncBillStatusInDb } from "../../lib/billStatus";
 import { buildStoragePath, uploadSourceDocument, type SourceDocumentRef } from "../../lib/sourceDocuments";
 import { useAuth } from "../../contexts/AuthContext";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { SourceDocumentsCell } from "../common/SourceDocumentsCell";
+import { SearchableCombobox } from "../common/SearchableCombobox";
 
 interface VendorPayment {
   id: string;
@@ -18,12 +19,30 @@ interface VendorPayment {
   amount?: number | null;
   payment_date?: string | null;
   payment_method?: string | null;
+  cheque_number?: string | null;
+  payment_voucher?: string | null;
   reference?: string | null;
   created_at?: string;
   status?: "active" | "reversed" | null;
   reversed_at?: string | null;
   reversal_reason?: string | null;
   vendors?: { name: string } | null;
+}
+
+type ReclassificationAccount = { id: string; account_code: string; account_name: string; account_type: string };
+type ReclassificationSubvote = { id: string; subvote_code: string; subvote_name: string; default_gl_account_id: string | null };
+type ReclassificationDraft = {
+  payment: VendorPayment;
+  destination: "expense" | "petty_cash";
+  description: string;
+  reason: string;
+  expenseGlId: string;
+  sourceGlId: string;
+  subvoteId: string;
+};
+
+function isPettyCashAccount(account: ReclassificationAccount): boolean {
+  return /petty cash|imprest|cash drawer|cash on hand|\bfloat\b|\btill\b|\bsafe\b/i.test(`${account.account_name} ${account.account_code}`);
 }
 
 /** Lines applied to bills for this payment (legacy single bill or JSON allocations). */
@@ -69,6 +88,15 @@ function formatSupabaseError(e: unknown): string {
   }
 }
 
+function supplierPaymentBatchId(reference: string | null | undefined): string | null {
+  return reference?.match(/\[BATCH:([^\]]+)\]/i)?.[1]?.trim() || null;
+}
+
+function referenceWithBank(reference: string | null | undefined, bankName: string): string {
+  const withoutBank = String(reference || "").replace(/\s*\/?\s*Bank:\s*[^/\[]+/gi, "").replace(/\s*\/\s*$/, "").trim();
+  return bankName.trim() ? [withoutBank, `Bank: ${bankName.trim()}`].filter(Boolean).join(" / ") : withoutBank;
+}
+
 export function VendorPaymentsPage({
   payBillId,
   payVendorId,
@@ -79,6 +107,7 @@ export function VendorPaymentsPage({
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const isAdmin = user?.role === "admin" || user?.role === "super_admin" || user?.isSuperAdmin === true;
+  const isSuperAdmin = user?.role === "super_admin" || user?.isSuperAdmin === true;
   const [payments, setPayments] = useState<VendorPayment[]>([]);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
@@ -89,17 +118,39 @@ export function VendorPaymentsPage({
   const [amount, setAmount] = useState("");
   const [paymentDate, setPaymentDate] = useState(new Date().toISOString().slice(0, 10));
   const [paymentMethod, setPaymentMethod] = useState<"cash" | "card" | "bank_transfer" | "wallet">("bank_transfer");
+  const [bankName, setBankName] = useState("");
   const [reference, setReference] = useState("");
+  const [chequeNumber, setChequeNumber] = useState("");
+  const [paymentVoucher, setPaymentVoucher] = useState("");
   const [attachmentFiles, setAttachmentFiles] = useState<File[]>([]);
   const [saving, setSaving] = useState(false);
   const [editingPayment, setEditingPayment] = useState<VendorPayment | null>(null);
   const [reversingId, setReversingId] = useState<string | null>(null);
+  const [selectedPaymentIds, setSelectedPaymentIds] = useState<string[]>([]);
+  const [bulkReversing, setBulkReversing] = useState(false);
+  const [bulkReverseProgress, setBulkReverseProgress] = useState({ completed: 0, total: 0 });
+  const [sortBy, setSortBy] = useState<"payment_date" | "created_at" | "vendor" | "payment_method" | "reference" | "amount">("payment_date");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [showReversedPayments, setShowReversedPayments] = useState(false);
+  const [vendorFilter, setVendorFilter] = useState("");
+  const [methodFilter, setMethodFilter] = useState("");
+  const [fromDateFilter, setFromDateFilter] = useState("");
+  const [toDateFilter, setToDateFilter] = useState("");
+  const [searchFilter, setSearchFilter] = useState("");
+  const [batchFilter, setBatchFilter] = useState("");
+  const [batchEdit, setBatchEdit] = useState<{ id: string; paymentDate: string; paymentMethod: "" | "cash" | "card" | "bank_transfer" | "wallet"; bankName: string } | null>(null);
+  const [batchEditing, setBatchEditing] = useState(false);
+  const [batchEditProgress, setBatchEditProgress] = useState({ completed: 0, total: 0 });
   const vendorPaymentInFlightRef = useRef(false);
   const [outstandingBills, setOutstandingBills] = useState<OutstandingBill[]>([]);
   const [loadingBills, setLoadingBills] = useState(false);
   const hasOpenedForPayBillRef = useRef(false);
   /** Payment selected to show allocation / line details in a modal */
   const [detailPayment, setDetailPayment] = useState<VendorPayment | null>(null);
+  const [reclassifyDraft, setReclassifyDraft] = useState<ReclassificationDraft | null>(null);
+  const [reclassifying, setReclassifying] = useState(false);
+  const [reclassificationAccounts, setReclassificationAccounts] = useState<ReclassificationAccount[]>([]);
+  const [reclassificationSubvotes, setReclassificationSubvotes] = useState<ReclassificationSubvote[]>([]);
   const [detailBillMeta, setDetailBillMeta] = useState<
     Record<string, { description: string | null; bill_date: string | null }>
   >({});
@@ -316,7 +367,10 @@ export function VendorPaymentsPage({
     setAmount("");
     setPaymentDate(new Date().toISOString().slice(0, 10));
     setPaymentMethod("bank_transfer");
+    setBankName("");
     setReference("");
+    setChequeNumber("");
+    setPaymentVoucher("");
     setAttachmentFiles([]);
     setOutstandingBills([]);
   };
@@ -343,7 +397,10 @@ export function VendorPaymentsPage({
     setAmount(String(payment.amount || ""));
     setPaymentDate(payment.payment_date || new Date().toISOString().slice(0, 10));
     setPaymentMethod((payment.payment_method as "cash" | "card" | "bank_transfer" | "wallet") || "bank_transfer");
+    setBankName(payment.reference?.match(/(?:^|\/\s*)Bank:\s*([^/]+)/i)?.[1]?.trim() || "");
     setReference(payment.reference || "");
+    setChequeNumber(payment.cheque_number || payment.reference?.match(/\bCHQ\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "");
+    setPaymentVoucher(payment.payment_voucher || payment.reference?.match(/\bPV\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "");
     setAllocationInputs(Object.fromEntries(lines.map((line) => [line.bill_id, line.amount.toFixed(2)])));
     await loadOutstandingBills(payment.vendor_id, payment.id);
     setShowModal(true);
@@ -379,6 +436,224 @@ export function VendorPaymentsPage({
     }
   };
 
+  const openReclassify = async (payment: VendorPayment) => {
+    if (!isSuperAdmin || readOnly || payment.status === "reversed" || !orgId) return;
+    try {
+      const [accountsResult, subvotesResult] = await Promise.all([
+        supabase.from("gl_accounts").select("id,account_code,account_name,account_type").eq("organization_id", orgId).eq("is_active", true).order("account_code"),
+        supabase.from("school_budget_subvotes").select("id,subvote_code,subvote_name,default_gl_account_id").eq("organization_id", orgId).eq("is_active", true).order("subvote_code"),
+      ]);
+      if (accountsResult.error) throw accountsResult.error;
+      // Subvotes are optional for a direct expense and may not be enabled in older school databases.
+      setReclassificationAccounts((accountsResult.data || []) as ReclassificationAccount[]);
+      setReclassificationSubvotes(subvotesResult.error ? [] : (subvotesResult.data || []) as ReclassificationSubvote[]);
+      setReclassifyDraft({
+        payment,
+        destination: "expense",
+        description: payment.reference?.replace(/\s*\[(?:IMP|BATCH):[^\]]+\]/gi, "").trim() || `Reclassified supplier payment — ${payment.vendors?.name || "vendor"}`,
+        reason: "",
+        expenseGlId: "",
+        sourceGlId: "",
+        subvoteId: "",
+      });
+    } catch (error) {
+      alert("Unable to prepare reclassification: " + formatSupabaseError(error));
+    }
+  };
+
+  const completeReclassification = async () => {
+    if (!reclassifyDraft || !orgId || !user?.id || reclassifying) return;
+    const draft = reclassifyDraft;
+    const payment = draft.payment;
+    const amountValue = Number(payment.amount || 0);
+    if (!draft.reason.trim() || !draft.description.trim() || !draft.expenseGlId || !draft.sourceGlId || amountValue <= 0) {
+      alert("Enter a reason, description, expense account, source account, and a valid amount.");
+      return;
+    }
+    if (draft.destination === "petty_cash" && !isPettyCashAccount(reclassificationAccounts.find((account) => account.id === draft.sourceGlId) || { id: "", account_code: "", account_name: "", account_type: "" })) {
+      alert("Select a petty-cash, imprest, till, float, or cash-on-hand account.");
+      return;
+    }
+    if (!window.confirm(`Reclassify this supplier payment as ${draft.destination === "petty_cash" ? "a petty-cash entry" : "an expense"}? The original payment will be reversed and linked to the replacement.`)) return;
+
+    setReclassifying(true);
+    let replacementId: string | null = null;
+    try {
+      const linkReference = `${payment.reference || "Supplier payment"} [RECLASSIFIED FROM:vendor_payment:${payment.id}]`;
+      if (draft.destination === "expense") {
+        const { data: expense, error: expenseError } = await supabase.from("expenses").insert({
+          organization_id: orgId,
+          vendor_id: payment.vendor_id || null,
+          amount: amountValue,
+          description: draft.description.trim(),
+          expense_date: payment.payment_date || new Date().toISOString().slice(0, 10),
+        }).select("id").single();
+        if (expenseError || !expense) throw expenseError || new Error("Expense creation did not return an ID.");
+        replacementId = expense.id;
+        const line = {
+          expense_id: expense.id,
+          expense_gl_account_id: draft.expenseGlId,
+          source_cash_gl_account_id: draft.sourceGlId,
+          amount: amountValue,
+          bank_charges: 0,
+          vat_amount: 0,
+          vat_gl_account_id: null,
+          bank_charges_gl_account_id: null,
+          comment: linkReference,
+          quantity: 1,
+          sort_order: 0,
+          vendor_id: payment.vendor_id || null,
+          ...(draft.subvoteId ? { school_subvote_id: draft.subvoteId } : {}),
+        };
+        const { error: lineError } = await supabase.from("expense_lines").insert(line);
+        if (lineError) throw lineError;
+        const journal = await createJournalForExpenseWithLines(expense.id, payment.payment_date || new Date().toISOString().slice(0, 10), [line as ExpenseJournalLineInput], user.id);
+        if (!journal.ok) throw new Error(journal.error);
+      } else {
+        const { data, error } = await (supabase as any).rpc("post_school_cashbook_entry", {
+          p_organization_id: orgId,
+          p_transaction_date: payment.payment_date || new Date().toISOString().slice(0, 10),
+          p_headquarters: "",
+          p_payment_method: "cash",
+          p_description: draft.description.trim(),
+          p_supplier_name: payment.vendors?.name || "",
+          p_customer_name: "",
+          p_counterpart_gl_account_id: draft.expenseGlId,
+          p_cash_gl_account_id: draft.sourceGlId,
+          p_cash_in: 0,
+          p_cash_out: amountValue,
+          p_reference: linkReference,
+          p_subvote_id: draft.subvoteId || null,
+        });
+        if (error || !data) throw error || new Error("Petty-cash entry creation did not return an ID.");
+        replacementId = String(data);
+      }
+
+      const oldLines = await loadPaymentAllocationLines(payment);
+      const reversal = await reverseJournalEntriesByReference("vendor_payment", payment.id, user.id, `Reclassified to ${draft.destination}: ${draft.reason.trim()}`);
+      if (!reversal.ok) throw new Error(reversal.error);
+      await supabase.from("vendor_payment_bill_allocations").delete().eq("vendor_payment_id", payment.id);
+      const update = await supabase.from("vendor_payments").update({
+        status: "reversed", reversed_at: new Date().toISOString(), reversed_by: user.id,
+        reversal_reason: `Reclassified to ${draft.destination}: ${draft.reason.trim()}`,
+        bill_id: null, bill_allocations: [],
+        reclassified_to_type: draft.destination, reclassified_to_id: replacementId, reclassified_at: new Date().toISOString(), reclassified_by: user.id,
+      }).eq("id", payment.id);
+      if (update.error && update.error.code !== "PGRST204") throw update.error;
+      await Promise.all([...new Set(oldLines.map((line) => line.bill_id))].map((id) => syncBillStatusInDb(id)));
+      setReclassifyDraft(null);
+      setDetailPayment(null);
+      await fetchData();
+      if (onNavigate) onNavigate(draft.destination === "petty_cash" ? "school_cashbook_register" : "purchases_expenses", draft.destination === "petty_cash" ? { highlightCashbookEntryId: replacementId } : { highlightExpenseId: replacementId });
+    } catch (error) {
+      alert("Reclassification failed. The original supplier payment was not intentionally deleted. Check the replacement transaction before trying again: " + formatSupabaseError(error));
+    } finally {
+      setReclassifying(false);
+    }
+  };
+
+  const togglePaymentSelection = (paymentId: string) => {
+    setSelectedPaymentIds((current) => current.includes(paymentId) ? current.filter((id) => id !== paymentId) : [...current, paymentId]);
+  };
+
+  const toggleAllActivePayments = () => {
+    const activeIds = payments.filter((payment) => payment.status !== "reversed").map((payment) => payment.id);
+    setSelectedPaymentIds((current) => current.length === activeIds.length ? [] : activeIds);
+  };
+
+  const handleBulkReverse = async () => {
+    if (!isSuperAdmin || readOnly || bulkReversing) return;
+    const selected = payments.filter((payment) => selectedPaymentIds.includes(payment.id) && payment.status !== "reversed");
+    if (!selected.length) return;
+    const reason = window.prompt(`Reason for cancelling ${selected.length} supplier payment${selected.length === 1 ? "" : "s"}:`);
+    if (!reason?.trim()) return;
+    if (!window.confirm(`Cancel ${selected.length} supplier payment${selected.length === 1 ? "" : "s"}? Their bill allocations and journals will be reversed.`)) return;
+    setBulkReversing(true);
+    setBulkReverseProgress({ completed: 0, total: selected.length });
+    const failures: string[] = [];
+    let cancelled = 0;
+    try {
+      const reverseOne = async (payment: VendorPayment) => {
+        try {
+          const oldLines = await loadPaymentAllocationLines(payment);
+          const journal = await reverseJournalEntriesByReference("vendor_payment", payment.id, user?.id ?? null, reason.trim());
+          if (!journal.ok) throw new Error(journal.error);
+          // Keep parity with single-payment reversal on older deployments where
+          // the optional allocation table has not been installed.
+          await supabase.from("vendor_payment_bill_allocations").delete().eq("vendor_payment_id", payment.id);
+          const { error } = await supabase.from("vendor_payments").update({
+            status: "reversed",
+            reversed_at: new Date().toISOString(),
+            reversed_by: user?.id ?? null,
+            reversal_reason: reason.trim(),
+            bill_id: null,
+            bill_allocations: [],
+          }).eq("id", payment.id);
+          if (error) throw error;
+          await Promise.all([...new Set(oldLines.map((line) => line.bill_id))].map((id) => syncBillStatusInDb(id)));
+          cancelled += 1;
+        } catch (error) {
+          failures.push(`${payment.reference || payment.id.slice(0, 8)}: ${formatSupabaseError(error)}`);
+        } finally {
+          setBulkReverseProgress((progress) => ({ ...progress, completed: progress.completed + 1 }));
+        }
+      };
+      const concurrentReversals = 4;
+      for (let start = 0; start < selected.length; start += concurrentReversals) {
+        await Promise.all(selected.slice(start, start + concurrentReversals).map(reverseOne));
+      }
+      setSelectedPaymentIds([]);
+      await fetchData();
+      alert(`Cancelled ${cancelled} payment${cancelled === 1 ? "" : "s"}.${failures.length ? ` ${failures.length} could not be cancelled:\n${failures.slice(0, 5).join("\n")}` : ""}`);
+    } finally {
+      setBulkReversing(false);
+      setBulkReverseProgress({ completed: 0, total: 0 });
+    }
+  };
+
+  const applyBatchEdit = async () => {
+    if (!batchEdit || readOnly || batchEditing) return;
+    if (!batchEdit.paymentDate && !batchEdit.paymentMethod && !batchEdit.bankName.trim()) {
+      alert("Choose a payment date, payment method, or bank name to update.");
+      return;
+    }
+    if (batchEdit.paymentMethod === "bank_transfer" && !batchEdit.bankName.trim()) {
+      alert("Enter a bank name when setting the payment method to Bank Transfer.");
+      return;
+    }
+    const batchPayments = payments.filter((payment) => supplierPaymentBatchId(payment.reference) === batchEdit.id && payment.status !== "reversed");
+    if (!batchPayments.length) return;
+    if (!window.confirm(`Update ${batchPayments.length} active payment${batchPayments.length === 1 ? "" : "s"} in batch ${batchEdit.id}?`)) return;
+    setBatchEditing(true);
+    setBatchEditProgress({ completed: 0, total: batchPayments.length });
+    const failures: string[] = [];
+    try {
+      for (const payment of batchPayments) {
+        try {
+          const paymentDate = batchEdit.paymentDate || payment.payment_date || new Date().toISOString().slice(0, 10);
+          const paymentMethod = batchEdit.paymentMethod || payment.payment_method || "bank_transfer";
+          const reference = batchEdit.bankName.trim() ? referenceWithBank(payment.reference, batchEdit.bankName) : payment.reference;
+          const { error } = await supabase.from("vendor_payments").update({ payment_date: paymentDate, payment_method: paymentMethod, reference }).eq("id", payment.id);
+          if (error) throw error;
+          if (batchEdit.paymentDate) {
+            const journalUpdate = await supabase.from("journal_entries").update({ entry_date: paymentDate }).eq("reference_type", "vendor_payment").eq("reference_id", payment.id);
+            if (journalUpdate.error) throw journalUpdate.error;
+          }
+        } catch (error) {
+          failures.push(`${payment.reference || payment.id.slice(0, 8)}: ${formatSupabaseError(error)}`);
+        } finally {
+          setBatchEditProgress((progress) => ({ ...progress, completed: progress.completed + 1 }));
+        }
+      }
+      await fetchData();
+      if (failures.length) alert(`Batch updated with ${failures.length} issue${failures.length === 1 ? "" : "s"}:\n${failures.slice(0, 5).join("\n")}`);
+      else setBatchEdit(null);
+    } finally {
+      setBatchEditing(false);
+      setBatchEditProgress({ completed: 0, total: 0 });
+    }
+  };
+
   const handleAdd = async () => {
     if (readOnly) return;
     if (!vendorId) {
@@ -388,6 +663,10 @@ export function VendorPaymentsPage({
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) {
       alert("Enter a valid amount.");
+      return;
+    }
+    if (paymentMethod === "bank_transfer" && !bankName.trim()) {
+      alert("Enter the bank name for this bank payment.");
       return;
     }
 
@@ -435,13 +714,17 @@ export function VendorPaymentsPage({
     setSaving(true);
     try {
       const payDate = paymentDate || new Date().toISOString().slice(0, 10);
+      const referenceWithoutBank = reference.trim().replace(/\s*\/?\s*Bank:\s*[^/]+/gi, "").replace(/\s*\/\s*$/, "").trim();
+      const paymentReference = [referenceWithoutBank, paymentMethod === "bank_transfer" && bankName.trim() ? `Bank: ${bankName.trim()}` : ""].filter(Boolean).join(" / ");
       const savePayload: Record<string, unknown> = {
         vendor_id: vendorId,
         bill_id: useLegacySingleBill ? lines[0].billId : null,
         amount: amt,
         payment_date: payDate,
         payment_method: paymentMethod,
-        reference: reference.trim() || null,
+        cheque_number: chequeNumber.trim() || null,
+        payment_voucher: paymentVoucher.trim() || null,
+        reference: paymentReference || null,
       };
       if (needsAllocationRows) {
         savePayload.bill_allocations = lines.map((l) => ({ bill_id: l.billId, amount: l.amt }));
@@ -513,6 +796,42 @@ export function VendorPaymentsPage({
   const showOverHint =
     vendorId && !isNaN(paymentNum) && paymentNum > 0 && sumAllocated > paymentNum + 0.001;
 
+  const filteredPayments = useMemo(() => {
+    const search = searchFilter.trim().toLowerCase();
+    return payments.filter((payment) => {
+      if (!showReversedPayments && payment.status === "reversed") return false;
+      if (vendorFilter && payment.vendor_id !== vendorFilter) return false;
+      if (methodFilter && payment.payment_method !== methodFilter) return false;
+      if (batchFilter && supplierPaymentBatchId(payment.reference) !== batchFilter) return false;
+      if (fromDateFilter && String(payment.payment_date || "") < fromDateFilter) return false;
+      if (toDateFilter && String(payment.payment_date || "") > toDateFilter) return false;
+      if (search && !`${payment.vendors?.name || ""} ${payment.reference || ""}`.toLowerCase().includes(search)) return false;
+      return true;
+    });
+  }, [payments, showReversedPayments, vendorFilter, methodFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
+
+  const hasPaymentFilters = Boolean(searchFilter.trim() || vendorFilter || methodFilter || batchFilter || fromDateFilter || toDateFilter);
+  // Reversed payments remain visible for audit purposes, but never contribute to the active-payment total.
+  const filteredPaymentTotal = useMemo(() => filteredPayments
+    .filter((payment) => payment.status !== "reversed")
+    .reduce((sum, payment) => sum + Number(payment.amount || 0), 0), [filteredPayments]);
+  const importBatches = useMemo(() => [...new Set(payments.map((payment) => supplierPaymentBatchId(payment.reference)).filter((value): value is string => Boolean(value)))].sort().reverse(), [payments]);
+
+  const sortedPayments = useMemo(() => filteredPayments.slice().sort((left, right) => {
+    const vendorName = (payment: VendorPayment) => payment.vendors?.name || "";
+    const leftValue = sortBy === "vendor" ? vendorName(left) : sortBy === "amount" ? Number(left.amount || 0) : String(left[sortBy] || "");
+    const rightValue = sortBy === "vendor" ? vendorName(right) : sortBy === "amount" ? Number(right.amount || 0) : String(right[sortBy] || "");
+    const compared = typeof leftValue === "number" && typeof rightValue === "number" ? leftValue - rightValue : String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" });
+    return sortDirection === "asc" ? compared : -compared;
+  }), [filteredPayments, sortBy, sortDirection]);
+
+  const changeSort = (column: typeof sortBy) => {
+    if (sortBy === column) setSortDirection((direction) => direction === "asc" ? "desc" : "asc");
+    else { setSortBy(column); setSortDirection(column === "payment_date" || column === "created_at" || column === "amount" ? "desc" : "asc"); }
+  };
+
+  const sortHeader = (column: typeof sortBy, label: string, align: "left" | "right" = "left") => <th className={`p-0 text-${align}`}><button type="button" onClick={() => changeSort(column)} className={`inline-flex w-full items-center gap-1 px-3 py-3 font-semibold hover:bg-slate-100 ${align === "right" ? "justify-end" : "justify-start"}`}><span>{label}</span>{sortBy === column ? sortDirection === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" />}</button></th>;
+
   return (
     <div className="p-6 md:p-8">
       {readOnly && <ReadOnlyNotice />}
@@ -525,15 +844,32 @@ export function VendorPaymentsPage({
             </PageNotes>
           </div>
         </div>
-        <button
+        <div className="flex items-center gap-2"><button type="button" onClick={() => setShowReversedPayments((show) => !show)} className="app-btn-secondary text-sm">{showReversedPayments ? "Hide reversed" : "Show reversed"}</button><button
           type="button"
           onClick={() => !readOnly && setShowModal(true)}
           disabled={readOnly}
           className="app-btn-primary disabled:cursor-not-allowed"
         >
           <Plus className="w-5 h-5" /> Record Payment
-        </button>
+        </button></div>
       </div>
+
+      <div className="mb-4 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-2 xl:grid-cols-6">
+        <input value={searchFilter} onChange={(event) => setSearchFilter(event.target.value)} placeholder="Search vendor or reference" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <select value={vendorFilter} onChange={(event) => setVendorFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All suppliers</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select>
+        <select value={methodFilter} onChange={(event) => setMethodFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All methods</option>{[...new Set(payments.map((payment) => payment.payment_method).filter(Boolean))].sort().map((method) => <option key={method} value={method!}>{String(method).replace("_", " ")}</option>)}</select>
+        <select value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All upload batches</option>{importBatches.map((batch) => <option key={batch} value={batch}>{batch}</option>)}</select>
+        <input type="date" aria-label="Payments from date" value={fromDateFilter} onChange={(event) => setFromDateFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
+        <div className="flex gap-2"><input type="date" aria-label="Payments to date" value={toDateFilter} onChange={(event) => setToDateFilter(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" onClick={() => { setSearchFilter(""); setVendorFilter(""); setMethodFilter(""); setBatchFilter(""); setFromDateFilter(""); setToDateFilter(""); }} className="app-btn-secondary text-sm">Clear</button></div>
+      </div>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-slate-500">Showing {filteredPayments.length} of {payments.length} supplier payment{payments.length === 1 ? "" : "s"} · Filtered total: <span className="font-semibold tabular-nums text-slate-700">{filteredPaymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></p>{batchFilter && isAdmin && !readOnly && <button type="button" onClick={() => setBatchEdit({ id: batchFilter, paymentDate: "", paymentMethod: "", bankName: "" })} className="app-btn-secondary text-sm">Edit batch {batchFilter}</button>}</div>
+
+      {isSuperAdmin && !readOnly && selectedPaymentIds.length > 0 && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
+          <div><p className="text-sm font-medium text-rose-900">{selectedPaymentIds.length} supplier payment{selectedPaymentIds.length === 1 ? "" : "s"} selected</p>{bulkReversing && bulkReverseProgress.total > 0 && <div className="mt-2 w-64 max-w-full"><div className="mb-1 flex justify-between text-xs text-rose-800"><span>Cancelling payments…</span><span>{bulkReverseProgress.completed} / {bulkReverseProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-rose-200"><div className="h-full bg-rose-700 transition-all" style={{ width: `${Math.round(bulkReverseProgress.completed / bulkReverseProgress.total * 100)}%` }} /></div></div>}</div>
+          <div className="flex gap-2"><button type="button" onClick={() => setSelectedPaymentIds([])} disabled={bulkReversing} className="app-btn-secondary">Clear selection</button><button type="button" onClick={() => void handleBulkReverse()} disabled={bulkReversing} className="inline-flex items-center gap-2 rounded-lg bg-rose-700 px-3 py-2 text-sm font-semibold text-white hover:bg-rose-800 disabled:opacity-50"><Undo2 className="h-4 w-4" />{bulkReversing ? "Cancelling…" : "Cancel selected"}</button></div>
+        </div>
+      )}
 
       {loading ? (
         <p className="text-slate-500 py-4">Loading…</p>
@@ -542,22 +878,28 @@ export function VendorPaymentsPage({
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
               <tr>
-                <th className="text-left p-3">Date</th>
-                <th className="text-left p-3">Vendor</th>
-                <th className="text-left p-3">Method</th>
-                <th className="text-left p-3">Reference</th>
-                <th className="text-right p-3">Amount</th>
+                {isSuperAdmin && !readOnly && <th className="p-3 text-left"><input type="checkbox" aria-label="Select all active supplier payments" checked={payments.filter((payment) => payment.status !== "reversed").length > 0 && selectedPaymentIds.length === payments.filter((payment) => payment.status !== "reversed").length} onChange={toggleAllActivePayments} /></th>}
+                {sortHeader("payment_date", "Date")}
+                {sortHeader("created_at", "Recorded at")}
+                {sortHeader("vendor", "Vendor")}
+                {sortHeader("payment_method", "Method")}
+                <th className="text-left p-3">Cheque no.</th>
+                <th className="text-left p-3">PV no.</th>
+                {sortHeader("reference", "Reference")}
+                {sortHeader("amount", "Amount", "right")}
                 <th className="text-left p-3 w-28">Documents</th>
                 <th className="text-right p-3">Actions</th>
               </tr>
             </thead>
             <tbody>
-              {payments.map((p) => (
+              {sortedPayments.map((p) => (
                 <tr
                   key={p.id}
                   className={`border-t ${p.status === "reversed" ? "bg-rose-50/60 text-slate-500" : ""} ${highlightVendorPaymentId === p.id ? "bg-amber-50 ring-2 ring-inset ring-amber-300/80" : ""}`}
                 >
+                  {isSuperAdmin && !readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${p.reference || p.id}`} disabled={p.status === "reversed" || bulkReversing} checked={selectedPaymentIds.includes(p.id)} onChange={() => togglePaymentSelection(p.id)} /></td>}
                   <td className="p-3">{p.payment_date ? new Date(p.payment_date).toLocaleDateString() : "—"}</td>
+                  <td className="p-3 whitespace-nowrap text-xs text-slate-600">{p.created_at ? new Date(p.created_at).toLocaleString() : "—"}</td>
                   <td className="p-3">
                     {p.vendor_id && onNavigate ? (
                       <button
@@ -572,7 +914,9 @@ export function VendorPaymentsPage({
                     )}
                   </td>
                   <td className="p-3 capitalize">{(p.payment_method || "—").replace("_", " ")}</td>
-                  <td className="p-3">{p.reference || "—"}{p.status === "reversed" && <p className="text-xs font-semibold text-rose-700">Reversed</p>}</td>
+                  <td className="p-3 whitespace-nowrap">{p.cheque_number || p.reference?.match(/\bCHQ\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "—"}</td>
+                  <td className="p-3 whitespace-nowrap">{p.payment_voucher || p.reference?.match(/\bPV\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "—"}</td>
+                  <td className="p-3">{p.reference || "—"}{supplierPaymentBatchId(p.reference) && <p className="mt-1 text-xs font-medium text-indigo-700">Upload batch: {supplierPaymentBatchId(p.reference)}</p>}{p.status === "reversed" && <p className="text-xs font-semibold text-rose-700">Reversed</p>}</td>
                   <td className="p-3 text-right">
                     <button
                       type="button"
@@ -599,6 +943,7 @@ export function VendorPaymentsPage({
                         <button type="button" onClick={() => void openEdit(p)} className="rounded p-1.5 text-slate-600 hover:bg-slate-100" title="Edit payment">
                           <Pencil className="h-4 w-4" />
                         </button>
+                        {isSuperAdmin && <button type="button" onClick={() => void openReclassify(p)} className="rounded px-2 py-1 text-xs font-semibold text-indigo-700 hover:bg-indigo-50" title="Reclassify to expense or petty cash">Reclassify</button>}
                         <button type="button" onClick={() => void handleReverse(p)} disabled={reversingId === p.id} className="rounded p-1.5 text-rose-700 hover:bg-rose-50 disabled:opacity-50" title="Reverse payment">
                           <Undo2 className="h-4 w-4" />
                         </button>
@@ -609,7 +954,7 @@ export function VendorPaymentsPage({
               ))}
             </tbody>
           </table>
-          {payments.length === 0 && <p className="p-8 text-center text-slate-500">No payments recorded yet.</p>}
+          {sortedPayments.length === 0 && <p className="p-8 text-center text-slate-500">{payments.length === 0 ? "No payments recorded yet." : hasPaymentFilters ? "No supplier payments match these filters. Clear or adjust the search, supplier, method, or date range." : !showReversedPayments ? "No active payments. Show reversed payments to view the audit trail." : "No supplier payments to display."}</p>}
         </div>
       )}
 
@@ -728,6 +1073,7 @@ export function VendorPaymentsPage({
                   <button type="button" className="app-btn-secondary" onClick={() => { const payment = detailPayment; setDetailPayment(null); void openEdit(payment); }}>
                     <Pencil className="h-4 w-4" /> Edit
                   </button>
+                  {isSuperAdmin && <button type="button" className="app-btn-secondary" onClick={() => { const payment = detailPayment; setDetailPayment(null); void openReclassify(payment); }}>Reclassify</button>}
                   <button type="button" className="inline-flex items-center gap-2 rounded-lg border border-rose-300 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50" onClick={() => void handleReverse(detailPayment)}>
                     <Undo2 className="h-4 w-4" /> Reverse
                   </button>
@@ -740,6 +1086,22 @@ export function VendorPaymentsPage({
           </div>
         </div>
       )}
+
+      {reclassifyDraft && <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/50 p-4" onClick={() => !reclassifying && setReclassifyDraft(null)}><div className="w-full max-w-xl rounded-xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-bold text-slate-900">Reclassify supplier payment</h2><p className="mt-1 text-sm text-slate-500">Original payment: {Number(reclassifyDraft.payment.amount || 0).toLocaleString()} · {reclassifyDraft.payment.vendors?.name || "Unknown vendor"}</p></div><button type="button" disabled={reclassifying} onClick={() => setReclassifyDraft(null)} className="text-slate-500 hover:text-slate-800"><X className="h-5 w-5" /></button></div>
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">This creates the replacement first, then reverses the supplier payment and its journal. The original remains in the audit trail.</div>
+        <div className="mt-4 space-y-3">
+          <label className="block text-sm font-medium text-slate-700">Destination<select value={reclassifyDraft.destination} onChange={(event) => setReclassifyDraft({ ...reclassifyDraft, destination: event.target.value as "expense" | "petty_cash", sourceGlId: "" })} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="expense">Expense</option><option value="petty_cash">Petty-cash entry</option></select></label>
+          <label className="block text-sm font-medium text-slate-700">Description<input value={reclassifyDraft.description} onChange={(event) => setReclassifyDraft({ ...reclassifyDraft, description: event.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label>
+          <label className="block text-sm font-medium text-slate-700">Expense account<SearchableCombobox value={reclassifyDraft.expenseGlId} onChange={(expenseGlId) => setReclassifyDraft({ ...reclassifyDraft, expenseGlId })} options={reclassificationAccounts.filter((account) => account.account_type === "expense").map((account) => ({ id: account.id, label: `${account.account_code} — ${account.account_name}` }))} placeholder="Type to find an expense account…" emptyOption={{ label: "Select expense account" }} inputAriaLabel="Search expense account" clearable /></label>
+          <label className="block text-sm font-medium text-slate-700">{reclassifyDraft.destination === "petty_cash" ? "Petty-cash account" : "Source of funds"}<SearchableCombobox value={reclassifyDraft.sourceGlId} onChange={(sourceGlId) => setReclassifyDraft({ ...reclassifyDraft, sourceGlId })} options={reclassificationAccounts.filter((account) => reclassifyDraft.destination !== "petty_cash" || isPettyCashAccount(account)).map((account) => ({ id: account.id, label: `${account.account_code} — ${account.account_name}` }))} placeholder={reclassifyDraft.destination === "petty_cash" ? "Type to find petty cash…" : "Type to find source of funds…"} emptyOption={{ label: "Select source account" }} inputAriaLabel="Search source of funds" clearable /></label>
+          {reclassificationSubvotes.length > 0 && <label className="block text-sm font-medium text-slate-700">Subvote (optional)<SearchableCombobox value={reclassifyDraft.subvoteId} onChange={(subvoteId) => { const subvote = reclassificationSubvotes.find((item) => item.id === subvoteId); setReclassifyDraft({ ...reclassifyDraft, subvoteId, expenseGlId: subvote?.default_gl_account_id || reclassifyDraft.expenseGlId }); }} options={reclassificationSubvotes.map((subvote) => ({ id: subvote.id, label: `${subvote.subvote_code} — ${subvote.subvote_name}` }))} placeholder="Type to find a subvote…" emptyOption={{ label: "No subvote" }} inputAriaLabel="Search subvote" clearable /></label>}
+          <label className="block text-sm font-medium text-slate-700">Reason for reclassification<textarea value={reclassifyDraft.reason} onChange={(event) => setReclassifyDraft({ ...reclassifyDraft, reason: event.target.value })} className="mt-1 min-h-20 w-full rounded-lg border px-3 py-2" placeholder="Why was the original transaction type incorrect?" /></label>
+        </div>
+        <div className="mt-6 flex justify-end gap-2"><button type="button" disabled={reclassifying} onClick={() => setReclassifyDraft(null)} className="app-btn-secondary">Cancel</button><button type="button" disabled={reclassifying} onClick={() => void completeReclassification()} className="app-btn-primary">{reclassifying ? "Reclassifying…" : "Create replacement and reverse original"}</button></div>
+      </div></div>}
+
+      {batchEdit && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => !batchEditing && setBatchEdit(null)}><div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-bold text-slate-900">Edit imported batch</h2><p className="mt-1 text-sm text-slate-500">{batchEdit.id} · {payments.filter((payment) => supplierPaymentBatchId(payment.reference) === batchEdit.id && payment.status !== "reversed").length} active payment(s)</p></div><button type="button" onClick={() => !batchEditing && setBatchEdit(null)} className="text-slate-500 hover:text-slate-800"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm text-slate-600">Leave a field blank to keep its current value across the batch.</p><div className="mt-4 space-y-3"><label className="block text-sm font-medium text-slate-700">Payment date<input type="date" value={batchEdit.paymentDate} onChange={(event) => setBatchEdit({ ...batchEdit, paymentDate: event.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label><label className="block text-sm font-medium text-slate-700">Payment method<select value={batchEdit.paymentMethod} onChange={(event) => setBatchEdit({ ...batchEdit, paymentMethod: event.target.value as typeof batchEdit.paymentMethod })} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">Keep current method</option><option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank Transfer</option><option value="wallet">Wallet</option></select></label><label className="block text-sm font-medium text-slate-700">Bank name<input value={batchEdit.bankName} onChange={(event) => setBatchEdit({ ...batchEdit, bankName: event.target.value })} placeholder="Leave blank to keep current bank" className="mt-1 w-full rounded-lg border px-3 py-2" /></label></div>{batchEditing && batchEditProgress.total > 0 && <div className="mt-4"><div className="mb-1 flex justify-between text-xs text-slate-600"><span>Updating batch…</span><span>{batchEditProgress.completed} / {batchEditProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(batchEditProgress.completed / batchEditProgress.total * 100)}%` }} /></div></div>}<div className="mt-6 flex justify-end gap-2"><button type="button" onClick={() => setBatchEdit(null)} disabled={batchEditing} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void applyBatchEdit()} disabled={batchEditing} className="app-btn-primary">{batchEditing ? "Updating…" : "Update batch"}</button></div></div></div>}
 
       {showModal && (
         <div
@@ -921,8 +1283,14 @@ export function VendorPaymentsPage({
                   <option value="wallet">Wallet</option>
                 </select>
               </div>
+              {paymentMethod === "bank_transfer" && <div>
+                <label className="block text-sm font-medium mb-1">Bank name *</label>
+                <input value={bankName} onChange={(e) => setBankName(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, Centenary Bank" required />
+              </div>}
+              <div><label className="block text-sm font-medium mb-1">Cheque number</label><input value={chequeNumber} onChange={(e) => setChequeNumber(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, 007380" /></div>
+              <div><label className="block text-sm font-medium mb-1">Payment voucher no.</label><input value={paymentVoucher} onChange={(e) => setPaymentVoucher(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, PV-11427" /></div>
               <div>
-                <label className="block text-sm font-medium mb-1">Reference / Check #</label>
+                <label className="block text-sm font-medium mb-1">Reference</label>
                 <input
                   value={reference}
                   onChange={(e) => setReference(e.target.value)}
