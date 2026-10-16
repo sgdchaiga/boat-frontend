@@ -18,7 +18,10 @@ CREATE TABLE IF NOT EXISTS public.insurance_kyc_documents (
 );
 CREATE INDEX IF NOT EXISTS idx_insurance_leads_org_stage ON public.insurance_leads(organization_id, stage, created_at DESC);
 ALTER TABLE public.insurance_leads ENABLE ROW LEVEL SECURITY; ALTER TABLE public.insurance_product_requirements ENABLE ROW LEVEL SECURITY; ALTER TABLE public.insurance_kyc_documents ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS insurance_org_insurance_leads ON public.insurance_leads;
 CREATE POLICY insurance_org_insurance_leads ON public.insurance_leads FOR ALL TO authenticated USING (public.insurance_org_access(organization_id)) WITH CHECK (public.insurance_org_access(organization_id));
+DROP POLICY IF EXISTS insurance_org_insurance_product_requirements ON public.insurance_product_requirements;
 CREATE POLICY insurance_org_insurance_product_requirements ON public.insurance_product_requirements FOR ALL TO authenticated USING (public.insurance_org_access(organization_id)) WITH CHECK (public.insurance_org_access(organization_id));
+DROP POLICY IF EXISTS insurance_org_insurance_kyc_documents ON public.insurance_kyc_documents;
 CREATE POLICY insurance_org_insurance_kyc_documents ON public.insurance_kyc_documents FOR ALL TO authenticated USING (public.insurance_org_access(organization_id)) WITH CHECK (public.insurance_org_access(organization_id));
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.insurance_leads, public.insurance_product_requirements, public.insurance_kyc_documents TO authenticated;

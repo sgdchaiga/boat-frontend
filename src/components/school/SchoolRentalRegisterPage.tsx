@@ -6,6 +6,7 @@ import { businessTodayISO } from '@/lib/timezone';
 import { fetchAllPages } from '@/lib/supabasePagination';
 import { buildInvoiceSettlementMap, invoiceBalanceDue } from '@/lib/invoicePaymentAllocations';
 import { SCHOOL_PAGE } from '@/lib/schoolPages';
+import { SchoolFilterBar, type SchoolFilterChip } from '@/components/common/SchoolFilterBar';
 
 type Property = { id: string; name: string; tenant_id: string | null; monthly_rent: number; due_day: number; revenue_account_id: string; is_active: boolean };
 type Tenant = { id: string; name: string };
@@ -140,9 +141,15 @@ export function SchoolRentalRegisterPage({ readOnly = false, onNavigate }: Props
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-red-700">{error}</p>}
     {message && <p role="status" className="rounded-lg bg-emerald-50 p-3 text-emerald-800">{message}</p>}
     <div className="grid grid-cols-3 gap-3">{[['Invoiced', charged], ['Paid', charged - balance], ['Balance', balance]].map(([label, value]) => <div key={label} className="rounded-xl border bg-white p-4"><p className="text-sm text-slate-500">{label} · UGX</p><p className="text-xl font-bold">{money(Number(value))}</p></div>)}</div>
+    <SchoolFilterBar
+      search={<input aria-label="Search properties or tenants" placeholder="Search property or tenant" value={search} onChange={(e) => setSearch(e.target.value)} className="w-full border rounded-lg p-2" />}
+      activeFilters={([search && { key: 'search', label: `Search: ${search}`, onRemove: () => setSearch('') }, filter !== 'all' && { key: 'status', label: filter === 'uncharged' ? 'Not charged' : filter[0].toUpperCase() + filter.slice(1), onRemove: () => setFilter('all') }].filter(Boolean) as SchoolFilterChip[])}
+      onClearAll={() => { setSearch(''); setFilter('all'); }}
+      resultSummary={<>{visible.length} {visible.length === 1 ? 'property' : 'properties'}</>}
+    >
+      <label className="block max-w-sm text-xs font-medium text-slate-600">Register status<select aria-label="Register filter" value={filter} onChange={(e) => setFilter(e.target.value)} className="mt-1 w-full border rounded-lg p-2"><option value="all">All properties</option><option value="uncharged">Not charged</option><option value="outstanding">Outstanding</option><option value="vacant">Vacant</option></select></label>
+    </SchoolFilterBar>
     <div className="flex flex-wrap gap-3 items-center">
-      <input aria-label="Search properties or tenants" placeholder="Search property or tenant" value={search} onChange={(e) => setSearch(e.target.value)} className="border rounded-lg p-2" />
-      <select aria-label="Register filter" value={filter} onChange={(e) => setFilter(e.target.value)} className="border rounded-lg p-2"><option value="all">All properties</option><option value="uncharged">Not charged</option><option value="outstanding">Outstanding</option><option value="vacant">Vacant</option></select>
       {!readOnly && <><button disabled={busy || !ready} onClick={() => { setForm(blank); setShowSetup(true); }} className="app-btn-primary">Add property</button><button disabled={busy || !ready || !eligible.length} onClick={() => void charge(eligible)} className="app-btn-primary">Charge {eligible.length} matching properties</button></>}
       <button disabled={busy} className="text-emerald-700 font-medium" onClick={() => onNavigate(SCHOOL_PAGE.rentalPayments)}>Rent collections</button>
     </div>

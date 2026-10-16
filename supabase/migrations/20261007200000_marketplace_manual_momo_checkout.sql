@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS public.marketplace_manual_momo_settings (
 );
 
 ALTER TABLE public.marketplace_manual_momo_settings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_manual_momo_settings_admin ON public.marketplace_manual_momo_settings;
 CREATE POLICY marketplace_manual_momo_settings_admin
   ON public.marketplace_manual_momo_settings FOR ALL TO authenticated
   USING (public.marketplace_admin_access(organization_id))
@@ -85,6 +86,7 @@ CREATE INDEX IF NOT EXISTS idx_marketplace_commission_records_merchant
   ON public.marketplace_commission_records (merchant_id, recorded_at DESC);
 
 ALTER TABLE public.marketplace_commission_records ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_commission_records_org_read ON public.marketplace_commission_records;
 CREATE POLICY marketplace_commission_records_org_read
   ON public.marketplace_commission_records FOR SELECT TO authenticated
   USING (public.marketplace_org_access(organization_id));

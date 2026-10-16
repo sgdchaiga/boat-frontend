@@ -8,6 +8,7 @@ ALTER TABLE public.marketplace_orders
 
 -- Prevent direct client-side changes to marketplace order status. Merchant actions use the guarded RPC below.
 DROP POLICY IF EXISTS marketplace_org_marketplace_orders ON public.marketplace_orders;
+DROP POLICY IF EXISTS marketplace_orders_org_read ON public.marketplace_orders;
 CREATE POLICY marketplace_orders_org_read ON public.marketplace_orders FOR SELECT TO authenticated
   USING (public.marketplace_org_access(organization_id));
 

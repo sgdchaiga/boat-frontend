@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Search, ShieldAlert } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
+import { SchoolFilterBar, type SchoolFilterChip } from "@/components/common/SchoolFilterBar";
 
 type Student = { id: string; admission_number: string; first_name: string; last_name: string; class_name: string; stream: string | null; has_health_issue: boolean };
 type HealthRecord = { id: string; student_id: string; condition_name: string; allergies: string | null; medication: string | null; emergency_action: string | null; notes: string | null; updated_at: string };
@@ -58,10 +59,14 @@ export function StudentsHealthPage() {
     {error && <p className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}{message && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">{message}</p>}
     <section className="rounded-xl border border-slate-200 bg-white p-5">
       <h2 className="font-semibold text-slate-900">Find a student</h2>
-      <div className="mt-3 grid gap-3 md:grid-cols-[1fr_240px]">
-        <label className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search student or admission number" className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm" /></label>
-        <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All classes</option>{classes.map((name) => <option key={name}>{name}</option>)}</select>
-      </div>
+      <div className="mt-3"><SchoolFilterBar
+        search={<label className="relative block"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search student or admission number" className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm" /></label>}
+        activeFilters={([search && { key: "search", label: `Search: ${search}`, onRemove: () => setSearch("") }, classFilter && { key: "class", label: `Class: ${classFilter}`, onRemove: () => setClassFilter("") }].filter(Boolean) as SchoolFilterChip[])}
+        onClearAll={() => { setSearch(""); setClassFilter(""); }}
+        resultSummary={<>{filteredStudents.length} students</>}
+      >
+        <select value={classFilter} onChange={(e) => setClassFilter(e.target.value)} className="w-full max-w-sm rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All classes</option>{classes.map((name) => <option key={name}>{name}</option>)}</select>
+      </SchoolFilterBar></div>
       <div className="mt-3 max-h-52 overflow-auto rounded-lg border border-slate-200">
         {filteredStudents.map((student) => <button key={student.id} type="button" onClick={() => setForm((current) => ({ ...current, student_id: student.id }))} className={`flex w-full items-center justify-between border-b border-slate-100 px-4 py-3 text-left text-sm last:border-0 ${form.student_id === student.id ? "bg-indigo-50 ring-1 ring-inset ring-indigo-300" : "hover:bg-slate-50"}`}><span><strong>{student.first_name} {student.last_name}</strong><span className="ml-2 text-slate-500">{student.admission_number}</span></span><span className="text-slate-600">{student.class_name}{student.stream ? ` · ${student.stream}` : ""}</span></button>)}
         {filteredStudents.length === 0 && <p className="p-5 text-center text-sm text-slate-500">No students match the search.</p>}

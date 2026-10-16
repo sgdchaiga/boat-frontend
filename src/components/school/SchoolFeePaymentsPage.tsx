@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowDownUp, ArrowUp, Download, FolderOpen, Pencil, Printer, SlidersHorizontal, Upload, X } from "lucide-react";
+import { ArrowDown, ArrowDownUp, ArrowUp, Download, FolderOpen, Pencil, Printer, Upload, X } from "lucide-react";
 import * as XLSX from "xlsx";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { SearchableCombobox } from "@/components/common/SearchableCombobox";
+import { SchoolFilterBar, type SchoolFilterChip } from "@/components/common/SchoolFilterBar";
 import { SchoolFeeReceiptPreviewModal } from "@/components/school/SchoolFeeReceiptPreviewModal";
 import { schoolFeeReceiptDetailFromPayment, type SchoolFeeReceiptDetail } from "@/lib/schoolFeeReceipt";
 import { buildSchoolFeesAutoReference } from "@/lib/autoReference";
@@ -176,7 +177,6 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
   const [bulkCancelRows, setBulkCancelRows] = useState<BulkCancelImportRow[]>([]);
   const [bulkCancelMessage, setBulkCancelMessage] = useState<string | null>(null);
   const [paymentFilters, setPaymentFilters] = useState<PaymentFilters>({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" });
-  const [filtersOpen, setFiltersOpen] = useState(false);
   const [showBankColumn, setShowBankColumn] = useState(true);
   const [paymentSort, setPaymentSort] = useState<{ key: PaymentSortKey; direction: "asc" | "desc" }>({ key: "paid_at", direction: "desc" });
   const [openBatchKey, setOpenBatchKey] = useState<string | null>(null);
@@ -1535,24 +1535,23 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         {bulkUpdating && bulkUpdateProgress.total > 0 && <div className="space-y-1" role="status" aria-live="polite"><div className="flex justify-between text-xs font-medium text-slate-700"><span>Updating selected payments…</span><span>{bulkUpdateProgress.completed} of {bulkUpdateProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(bulkUpdateProgress.completed / bulkUpdateProgress.total * 100)}%` }} /></div></div>}
         {bulkMessage && <p className="text-sm text-slate-700" role="status">{bulkMessage}</p>}
       </section>}
-      <section className="rounded-xl border border-slate-200 bg-white p-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setFiltersOpen((open) => !open)}
-            aria-expanded={filtersOpen}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            <SlidersHorizontal className="h-4 w-4" />
-            Filters{Object.values(paymentFilters).filter(Boolean).length > 0 ? ` (${Object.values(paymentFilters).filter(Boolean).length})` : ""}
-          </button>
-          {Object.values(paymentFilters).some(Boolean) && <><span className="text-xs text-slate-600">{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</span><button type="button" onClick={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" })} className="text-xs font-semibold text-indigo-700 hover:underline">Clear filters</button></>}
-          <label className="ml-auto whitespace-nowrap text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label>
-        </div>
-        {filtersOpen && <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+      <SchoolFilterBar
+        period={<><input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value, month: "" }))} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="text-sm text-slate-400">to</span><input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value, month: "" }))} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /></>}
+        activeFilters={([
+          paymentFilters.month && { key: "month", label: `Month: ${paymentFilters.month}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, month: "" })) },
+          paymentFilters.from && { key: "from", label: `From: ${paymentFilters.from}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, from: "" })) },
+          paymentFilters.to && { key: "to", label: `To: ${paymentFilters.to}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, to: "" })) },
+          paymentFilters.studentId && { key: "student", label: `Student: ${students.find((student) => student.id === paymentFilters.studentId)?.first_name || "Selected"}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, studentId: "" })) },
+          paymentFilters.className && { key: "class", label: `Class: ${paymentFilters.className}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, className: "" })) },
+          paymentFilters.method && { key: "method", label: `Method: ${paymentFilters.method}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, method: "" })) },
+          paymentFilters.incomeType && { key: "income", label: `Income: ${paymentFilters.incomeType}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, incomeType: "" })) },
+          paymentFilters.bankAccountId && { key: "bank", label: `Bank: ${bankAccounts.find((account) => account.id === paymentFilters.bankAccountId)?.account_name || "Selected"}`, onRemove: () => setPaymentFilters((filters) => ({ ...filters, bankAccountId: "" })) },
+        ].filter(Boolean) as SchoolFilterChip[])}
+        onClearAll={() => setPaymentFilters({ studentId: "", className: "", method: "", bankAccountId: "", incomeType: "", from: "", to: "", month: "" })}
+        resultSummary={<>{visiblePayments.length} payment{visiblePayments.length === 1 ? "" : "s"} shown</>}
+      >
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           <input type="month" aria-label="Payments month" value={paymentFilters.month} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, month: event.target.value, from: "", to: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          <input type="date" aria-label="Payments from date" value={paymentFilters.from} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, from: event.target.value, month: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-          <input type="date" aria-label="Payments to date" value={paymentFilters.to} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, to: event.target.value, month: "" }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
           <SearchableCombobox
             value={paymentFilters.studentId}
             onChange={(studentId) => setPaymentFilters((filters) => ({ ...filters, studentId }))}
@@ -1566,8 +1565,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
           <select aria-label="Filter payments by method" value={paymentFilters.method} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, method: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All methods</option>{SCHOOL_PAYMENT_METHODS.map((method) => <option key={method.code} value={method.code}>{method.label}</option>)}</select>
           <select aria-label="Filter payments by income type" value={paymentFilters.incomeType} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, incomeType: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All income types</option>{incomeTypes.map((incomeType) => <option key={incomeType} value={incomeType}>{incomeType}</option>)}</select>
           <select aria-label="Filter payments by deposited-to bank" value={paymentFilters.bankAccountId} onChange={(event) => setPaymentFilters((filters) => ({ ...filters, bankAccountId: event.target.value }))} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All deposited-to banks</option>{bankAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_code} — {account.account_name}</option>)}</select>
-        </div>}
-      </section>
+        </div>
+      </SchoolFilterBar>
+      <div className="mb-3 flex justify-end"><label className="whitespace-nowrap text-xs text-slate-700"><input type="checkbox" checked={showBankColumn} onChange={(event) => setShowBankColumn(event.target.checked)} className="mr-1" /> Show deposited-to column</label></div>
       <div className="rounded-xl border border-slate-200 overflow-x-auto bg-white">
         <table className="w-full min-w-[640px] text-sm">
           <thead className="bg-slate-50 border-b border-slate-200">

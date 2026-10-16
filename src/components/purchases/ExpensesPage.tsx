@@ -10,6 +10,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { GlAccountPicker } from "../common/GlAccountPicker";
 import { SourceDocumentsCell } from "../common/SourceDocumentsCell";
 import { SearchableCombobox } from "../common/SearchableCombobox";
+import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBar";
 import { buildStoragePath, uploadSourceDocument, type SourceDocumentRef } from "../../lib/sourceDocuments";
 import { loadJournalAccountSettings, resolveJournalAccountSettings } from "../../lib/journalAccountSettings";
 import { randomUuid } from "../../lib/randomUuid";
@@ -652,8 +653,10 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const [saving, setSaving] = useState(false);
   const saveExpenseInFlightRef = useRef(false);
   const [expenseAttachmentFiles, setExpenseAttachmentFiles] = useState<File[]>([]);
-  const [filterDateFrom, setFilterDateFrom] = useState(() => localDateISO());
-  const [filterDateTo, setFilterDateTo] = useState(() => localDateISO());
+  // Expenses are often posted for an earlier bank or voucher date. Start with
+  // an unfiltered list so a successfully saved back-dated entry is visible.
+  const [filterDateFrom, setFilterDateFrom] = useState("");
+  const [filterDateTo, setFilterDateTo] = useState("");
   const [filterVendorId, setFilterVendorId] = useState("");
   /** Filter list to expenses that have at least one line posting to this expense GL */
   const [filterExpenseGlAccountId, setFilterExpenseGlAccountId] = useState("");
@@ -1269,22 +1272,33 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     }
 
     if (String(user?.business_type || "").toLowerCase() === "school") {
-      if (!schoolExpenseBudgetEntries.length) { alert(schoolBudgetError || "Expense blocked: the active budget has no lines linked to school expense accounts for this date."); return; }
-      if (schoolBudgetLoading || schoolBudgetError) { alert(schoolBudgetError || "Wait for the annual budget check to finish."); return; }
+      // Bank and mobile-money charges are transaction charges imposed by the
+      // financial institution. They can occur without a separately approved
+      // budget line, so do not hold up an otherwise valid bank-charge entry.
+      const isBankChargeGl = (glId: string) => {
+        const account = glAccounts.find((item) => item.id === glId);
+        const name = String(account?.account_name || "").toLowerCase();
+        return account?.account_code === "6230" || (name.includes("bank") && name.includes("charge"));
+      };
+      const budgetCheckedRows = journalRows
+        .map((row, index) => ({ row, index }))
+        .filter(({ row }) => !isBankChargeGl(row.expense_gl_account_id));
+      if (budgetCheckedRows.length > 0 && !schoolExpenseBudgetEntries.length) { alert(schoolBudgetError || "Expense blocked: the active budget has no lines linked to school expense accounts for this date."); return; }
+      if (budgetCheckedRows.length > 0 && (schoolBudgetLoading || schoolBudgetError)) { alert(schoolBudgetError || "Wait for the annual budget check to finish."); return; }
       const requestedSubvotes = new Map<string, number>();
-      for (let i = 0; i < journalRows.length; i++) {
+      for (const { row, index: i } of budgetCheckedRows) {
         const id = subvoteIdsPerJournalRow[i];
         if (!id) continue;
         const subvote = schoolSubvotes.find(s => s.id === id);
-        if (!subvote || subvote.default_gl_account_id !== journalRows[i].expense_gl_account_id) { alert("The subvote has no matching active GL mapping. Select the subvote again or ask your accountant to update it."); return; }
-        requestedSubvotes.set(id, (requestedSubvotes.get(id) || 0) + Number(journalRows[i].amount || 0) + Number(journalRows[i].vat_amount || 0));
+        if (!subvote || subvote.default_gl_account_id !== row.expense_gl_account_id) { alert("The subvote has no matching active GL mapping. Select the subvote again or ask your accountant to update it."); return; }
+        requestedSubvotes.set(id, (requestedSubvotes.get(id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
       }
       for (const [id, amount] of requestedSubvotes) {
         const available = Math.max(0, (schoolBudgetBySubvote.get(id) || 0) - (schoolSpentBySubvote.get(id) || 0));
         if (!schoolBudgetBySubvote.has(id) || amount > available) { alert(`Expense blocked: ${schoolSubvotes.find(s => s.id === id)?.subvote_name || "Subvote"} has ${available.toLocaleString()} available in the active budget. Review its allocation or request approval through Budget & Vote Book.`); return; }
       }
       const requested = new Map<string, number>();
-      for (const row of journalRows) requested.set(row.expense_gl_account_id, (requested.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
+      for (const { row } of budgetCheckedRows) requested.set(row.expense_gl_account_id, (requested.get(row.expense_gl_account_id) || 0) + Number(row.amount || 0) + Number(row.vat_amount || 0));
       const unbudgeted = [...requested.keys()].find((glId) => !schoolBudgetByGl.has(glId));
       if (unbudgeted) { const account=glAccounts.find((a)=>a.id===unbudgeted); alert(`Expense blocked: ${account?.account_name || "this expense"} has no approved budget line.`); return; }
       const exceeded = [...requested.entries()].find(([glId, amount]) => amount > Math.max(0, (schoolBudgetByGl.get(glId) || 0) - (schoolSpentByGl.get(glId) || 0)));
@@ -1839,28 +1853,19 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         </div>
       )}
 
-      <div className="bg-white rounded-xl border border-slate-200 p-4 mb-4">
-        <p className="text-sm font-medium text-slate-700 mb-3">Filters</p>
-        <div className="flex flex-wrap items-end gap-3">
+      <SchoolFilterBar
+        period={<><input type="date" aria-label="Expenses from date" value={filterDateFrom} onChange={(e) => setFilterDateFrom(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="text-sm text-slate-400">to</span><input type="date" aria-label="Expenses to date" value={filterDateTo} onChange={(e) => setFilterDateTo(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /></>}
+        activeFilters={([
+          filterDateFrom && { key: "from", label: `From: ${filterDateFrom}`, onRemove: () => setFilterDateFrom("") },
+          filterDateTo && { key: "to", label: `To: ${filterDateTo}`, onRemove: () => setFilterDateTo("") },
+          filterVendorId && { key: "vendor", label: `Vendor: ${vendors.find((vendor) => vendor.id === filterVendorId)?.name || "Selected"}`, onRemove: () => setFilterVendorId("") },
+          filterExpenseGlAccountId && { key: "gl", label: `GL: ${expenseGlOptions.find((account) => account.id === filterExpenseGlAccountId)?.account_name || "Selected"}`, onRemove: () => setFilterExpenseGlAccountId("") },
+        ].filter(Boolean) as SchoolFilterChip[])}
+        onClearAll={() => { setFilterDateFrom(""); setFilterDateTo(""); setFilterVendorId(""); setFilterExpenseGlAccountId(""); }}
+        resultSummary={<>{totalCount ?? expenses.length} expense{(totalCount ?? expenses.length) === 1 ? "" : "s"}</>}
+      >
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
           <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">From date</label>
-            <input
-              type="date"
-              value={filterDateFrom}
-              onChange={(e) => setFilterDateFrom(e.target.value)}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-slate-600 mb-1">To date</label>
-            <input
-              type="date"
-              value={filterDateTo}
-              onChange={(e) => setFilterDateTo(e.target.value)}
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm"
-            />
-          </div>
-          <div className="min-w-[12rem]">
             <label className="block text-xs font-medium text-slate-600 mb-1">Vendor</label>
             <select
               value={filterVendorId}
@@ -1890,27 +1895,6 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
               ))}
             </select>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              const t = localDateISO();
-              setFilterDateFrom(t);
-              setFilterDateTo(t);
-            }}
-            className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50"
-          >
-            Today
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              setFilterDateFrom("");
-              setFilterDateTo("");
-            }}
-            className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50"
-          >
-            All dates
-          </button>
           {!simpleExpenseMode ? (
             <div className="min-w-[14rem]">
               <label className="block text-xs font-medium text-slate-600 mb-1">Expense GL (line)</label>
@@ -1928,24 +1912,8 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
               </select>
             </div>
           ) : null}
-          <button
-            type="button"
-            onClick={() => {
-              const t = localDateISO();
-              setFilterDateFrom(t);
-              setFilterDateTo(t);
-              setFilterVendorId("");
-              setFilterExpenseGlAccountId("");
-            }}
-            className="px-3 py-2 text-sm border border-slate-300 rounded-lg hover:bg-slate-50"
-          >
-            Clear filters
-          </button>
         </div>
-        <p className="text-xs text-slate-500 mt-2">
-          Default view is today (local date). Use &quot;All dates&quot; if older expenses do not appear.
-        </p>
-      </div>
+      </SchoolFilterBar>
 
       {loading ? (
         <p className="text-slate-500 py-4">Loading…</p>

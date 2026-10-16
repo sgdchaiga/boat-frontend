@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBar";
 
 type Student = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null; class_id: string | null; class_name: string; is_boarding?: boolean | null };
 type Invoice = { student_id: string; invoice_number: string; academic_year: string; term_name: string; status: string; issue_date?: string | null };
@@ -36,10 +37,16 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
     </label>
   );
   const simpleOptions = (values: string[]) => options(values).map((value) => ({ value, label: value }));
+  const activeFilters = Object.entries(filters).flatMap(([key, value]) => value ? [{ key, label: `${({ residency: "Residency", student: "Student", className: "Class", chargeType: "Charge", year: "Year", term: "Term", status: "Status", from: "From", to: "To", search: "Search" } as Record<string, string>)[key]}: ${key === "student" ? students.find((student) => student.id === value)?.first_name || value : value}`, onRemove: () => setFilters((current) => ({ ...current, [key]: "" })) }] : []) as SchoolFilterChip[];
   const controls = (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-        <label className="text-xs text-slate-600 space-y-1"><span>Search student / invoice</span><input className={controlClass} placeholder="Name, admission, SchoolPay or invoice" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} /></label>
+    <SchoolFilterBar
+      search={<input className={controlClass} aria-label="Search student or invoice" placeholder="Search student, admission, SchoolPay or invoice" value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} />}
+      period={<><input type="date" aria-label="Issue date from" className={controlClass} value={filters.from} max={filters.to || undefined} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /><span className="text-sm text-slate-400">to</span><input type="date" aria-label="Issue date to" className={controlClass} value={filters.to} min={filters.from || undefined} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></>}
+      activeFilters={activeFilters}
+      onClearAll={() => { setFilters(emptyFilters); setShowCancelled(!optionsConfig.hideCancelledByDefault); }}
+      resultSummary={<>{filteredRows.length} of {rows.length} invoices</>}
+    >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {select("Students", "student", students.map((student) => ({ value: student.id, label: `${student.first_name} ${student.last_name}` })).sort((a, b) => a.label.localeCompare(b.label)))}
         {optionsConfig.showResidency && select("Day/Boarding", "residency", [{ value: "day", label: "Day" }, { value: "boarding", label: "Boarding" }])}
         {select("Classes", "className", simpleOptions(students.map((student) => student.class_name?.trim() || "")))}
@@ -47,12 +54,10 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
         {select("Academic years", "year", simpleOptions(rows.map((row) => row.academic_year)))}
         {select("Terms", "term", simpleOptions(rows.map((row) => row.term_name)))}
         {select("Statuses", "status", simpleOptions(rows.map((row) => row.status)))}
-        <label className="text-xs text-slate-600 space-y-1"><span>Issue date from</span><input type="date" className={controlClass} value={filters.from} max={filters.to || undefined} onChange={(event) => setFilters((current) => ({ ...current, from: event.target.value }))} /></label>
-        <label className="text-xs text-slate-600 space-y-1"><span>Issue date to</span><input type="date" className={controlClass} value={filters.to} min={filters.from || undefined} onChange={(event) => setFilters((current) => ({ ...current, to: event.target.value }))} /></label>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 text-sm text-slate-600"><span>{filteredRows.length} of {rows.length} invoices</span><div className="flex items-center gap-4"><label className="inline-flex items-center gap-2"><input type="checkbox" checked={showCancelled} onChange={(event) => setShowCancelled(event.target.checked)} /> Show cancelled invoices</label><button type="button" onClick={() => { setFilters(emptyFilters); setShowCancelled(!optionsConfig.hideCancelledByDefault); }} className="font-medium text-indigo-700">Clear filters</button></div></div>
+      <label className="mt-3 inline-flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showCancelled} onChange={(event) => setShowCancelled(event.target.checked)} /> Show cancelled invoices</label>
       {filters.from && filters.to && filters.from > filters.to && <p role="alert" className="text-sm text-red-600">The end date must be on or after the start date.</p>}
-    </div>
+    </SchoolFilterBar>
   );
   return { filteredRows, controls };
 }

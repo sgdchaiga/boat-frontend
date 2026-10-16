@@ -101,25 +101,35 @@ ALTER TABLE public.sacco_member_payment_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sacco_mini_apps ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sacco_mini_app_payment_intents ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS sacco_member_payment_settings_staff ON public.sacco_member_payment_settings;
 CREATE POLICY sacco_member_payment_settings_staff ON public.sacco_member_payment_settings FOR ALL TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid())) WITH CHECK (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
+DROP POLICY IF EXISTS sacco_member_payment_risk_events_staff ON public.sacco_member_payment_risk_events;
 CREATE POLICY sacco_member_payment_risk_events_staff ON public.sacco_member_payment_risk_events FOR SELECT TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
+DROP POLICY IF EXISTS sacco_member_payment_disputes_staff ON public.sacco_member_payment_disputes;
 CREATE POLICY sacco_member_payment_disputes_staff ON public.sacco_member_payment_disputes FOR SELECT TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
+DROP POLICY IF EXISTS sacco_member_payment_disputes_member ON public.sacco_member_payment_disputes;
 CREATE POLICY sacco_member_payment_disputes_member ON public.sacco_member_payment_disputes FOR SELECT TO authenticated
   USING (opened_by=auth.uid());
+DROP POLICY IF EXISTS sacco_member_payment_notifications_member ON public.sacco_member_payment_notifications;
 CREATE POLICY sacco_member_payment_notifications_member ON public.sacco_member_payment_notifications FOR SELECT TO authenticated
   USING (member_id=public.current_sacco_member_id());
+DROP POLICY IF EXISTS sacco_member_payment_notifications_staff ON public.sacco_member_payment_notifications;
 CREATE POLICY sacco_member_payment_notifications_staff ON public.sacco_member_payment_notifications FOR SELECT TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
+DROP POLICY IF EXISTS sacco_mini_apps_member_read ON public.sacco_mini_apps;
 CREATE POLICY sacco_mini_apps_member_read ON public.sacco_mini_apps FOR SELECT TO authenticated
   USING (organization_id=public.current_sacco_member_org_id() AND is_active=true);
+DROP POLICY IF EXISTS sacco_mini_apps_staff ON public.sacco_mini_apps;
 CREATE POLICY sacco_mini_apps_staff ON public.sacco_mini_apps FOR ALL TO authenticated
   USING (EXISTS (SELECT 1 FROM public.staff s WHERE s.id=auth.uid() AND s.organization_id=sacco_mini_apps.organization_id AND lower(coalesce(s.role,'')) IN ('admin','super_admin','manager')))
   WITH CHECK (EXISTS (SELECT 1 FROM public.staff s WHERE s.id=auth.uid() AND s.organization_id=sacco_mini_apps.organization_id AND lower(coalesce(s.role,'')) IN ('admin','super_admin','manager')));
+DROP POLICY IF EXISTS sacco_mini_app_payment_intents_member ON public.sacco_mini_app_payment_intents;
 CREATE POLICY sacco_mini_app_payment_intents_member ON public.sacco_mini_app_payment_intents FOR SELECT TO authenticated
   USING (payer_member_id=public.current_sacco_member_id());
+DROP POLICY IF EXISTS sacco_mini_app_payment_intents_staff ON public.sacco_mini_app_payment_intents;
 CREATE POLICY sacco_mini_app_payment_intents_staff ON public.sacco_mini_app_payment_intents FOR SELECT TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
 GRANT SELECT, INSERT, UPDATE ON public.sacco_member_payment_settings, public.sacco_mini_apps TO authenticated;

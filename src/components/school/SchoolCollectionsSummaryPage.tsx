@@ -3,6 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { SearchableCombobox } from "@/components/common/SearchableCombobox";
+import { SchoolFilterBar, type SchoolFilterChip } from "@/components/common/SchoolFilterBar";
 import { Download } from "lucide-react";
 import { fetchAllPages } from "@/lib/supabasePagination";
 
@@ -286,25 +287,15 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
       </div>
       {err && <p className="text-red-600 text-sm">{err}</p>}
 
-      <div className="rounded-xl border border-slate-200 bg-white p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        <label className="flex flex-col gap-1 text-xs text-slate-600">
-          From date
-          <input
-            type="date"
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900"
-            value={filters.dateFrom}
-            onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))}
-          />
-        </label>
-        <label className="flex flex-col gap-1 text-xs text-slate-600">
-          To date
-          <input
-            type="date"
-            className="border border-slate-300 rounded-lg px-3 py-2 text-sm text-slate-900"
-            value={filters.dateTo}
-            onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))}
-          />
-        </label>
+      <SchoolFilterBar
+        period={<><input type="date" aria-label="Collections from date" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900" value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} /><span className="text-sm text-slate-400">to</span><input type="date" aria-label="Collections to date" className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-900" value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} /></>}
+        activeFilters={([
+          filters.dateFrom && { key: "from", label: `From: ${filters.dateFrom}`, onRemove: () => setFilters((f) => ({ ...f, dateFrom: "" })) }, filters.dateTo && { key: "to", label: `To: ${filters.dateTo}`, onRemove: () => setFilters((f) => ({ ...f, dateTo: "" })) }, filters.method && { key: "method", label: `Method: ${METHOD_LABEL[filters.method]}`, onRemove: () => setFilters((f) => ({ ...f, method: "" })) }, filters.feeType && { key: "fee", label: `Income: ${filters.feeType}`, onRemove: () => setFilters((f) => ({ ...f, feeType: "" })) }, filters.studentId && { key: "student", label: `Student: ${students.find((student) => student.id === filters.studentId)?.first_name || "Selected"}`, onRemove: () => setFilters((f) => ({ ...f, studentId: "" })) }, filters.classId && { key: "class", label: `Class: ${classes.find((item) => item.id === filters.classId)?.name || "Selected"}`, onRemove: () => setFilters((f) => ({ ...f, classId: "" })) }, filters.bankAccountId && { key: "bank", label: `Bank: ${bankAccounts.find((account) => account.id === filters.bankAccountId)?.account_name || "Selected"}`, onRemove: () => setFilters((f) => ({ ...f, bankAccountId: "" })) },
+        ].filter(Boolean) as SchoolFilterChip[])}
+        onClearAll={clearFilters}
+        resultSummary={<>{pageStart.toLocaleString()}–{pageEnd.toLocaleString()} of {totalPayments.toLocaleString()} payments</>}
+      >
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         <select
           className="border border-slate-300 rounded-lg px-3 py-2 text-sm self-end"
           value={filters.method}
@@ -346,16 +337,8 @@ export function SchoolCollectionsSummaryPage({ readOnly: _readOnly }: Props) {
             </option>
           ))}
         </select>
-        <div className="flex items-end">
-          <button
-            type="button"
-            onClick={clearFilters}
-            className="px-4 py-2 text-sm font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50"
-          >
-            Clear filters
-          </button>
-        </div>
       </div>
+      </SchoolFilterBar>
 
       <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 flex flex-wrap gap-6 text-sm">
         <div>

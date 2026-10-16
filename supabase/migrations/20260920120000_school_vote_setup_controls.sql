@@ -55,12 +55,14 @@ CREATE POLICY "org_gl_accounts_write" ON public.gl_accounts FOR ALL TO authentic
 DROP POLICY IF EXISTS school_budget_votes_org ON public.school_budget_votes;
 CREATE POLICY school_budget_votes_org ON public.school_budget_votes FOR SELECT TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
+DROP POLICY IF EXISTS school_budget_votes_write ON public.school_budget_votes;
 CREATE POLICY school_budget_votes_write ON public.school_budget_votes FOR ALL TO authenticated
   USING (public.caller_can_manage_school_finance(organization_id))
   WITH CHECK (public.caller_can_manage_school_finance(organization_id));
 DROP POLICY IF EXISTS school_budget_subvotes_org ON public.school_budget_subvotes;
 CREATE POLICY school_budget_subvotes_org ON public.school_budget_subvotes FOR SELECT TO authenticated
   USING (organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
+DROP POLICY IF EXISTS school_budget_subvotes_write ON public.school_budget_subvotes;
 CREATE POLICY school_budget_subvotes_write ON public.school_budget_subvotes FOR ALL TO authenticated
   USING (public.caller_can_manage_school_finance(organization_id))
   WITH CHECK (public.caller_can_manage_school_finance(organization_id));

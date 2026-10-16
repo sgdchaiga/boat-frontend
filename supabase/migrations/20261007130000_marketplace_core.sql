@@ -89,13 +89,19 @@ $$;
 
 DO $$ DECLARE t text; BEGIN
   FOREACH t IN ARRAY ARRAY['marketplace_merchant_profiles','marketplace_listings','marketplace_orders','marketplace_commission_rules','marketplace_settlements'] LOOP
+    EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I', 'marketplace_org_' || t, t);
     EXECUTE format('CREATE POLICY %I ON public.%I FOR ALL TO authenticated USING (public.marketplace_org_access(organization_id)) WITH CHECK (public.marketplace_org_access(organization_id))', 'marketplace_org_' || t, t);
   END LOOP;
 END $$;
+DROP POLICY IF EXISTS marketplace_categories_read ON public.marketplace_categories;
 CREATE POLICY marketplace_categories_read ON public.marketplace_categories FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS marketplace_customers_self ON public.marketplace_customers;
 CREATE POLICY marketplace_customers_self ON public.marketplace_customers FOR ALL TO authenticated USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+DROP POLICY IF EXISTS marketplace_carts_self ON public.marketplace_carts;
 CREATE POLICY marketplace_carts_self ON public.marketplace_carts FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM public.marketplace_customers c WHERE c.id = customer_id AND c.user_id = auth.uid())) WITH CHECK (EXISTS (SELECT 1 FROM public.marketplace_customers c WHERE c.id = customer_id AND c.user_id = auth.uid()));
+DROP POLICY IF EXISTS marketplace_cart_items_self ON public.marketplace_cart_items;
 CREATE POLICY marketplace_cart_items_self ON public.marketplace_cart_items FOR ALL TO authenticated USING (EXISTS (SELECT 1 FROM public.marketplace_carts c JOIN public.marketplace_customers u ON u.id = c.customer_id WHERE c.id = cart_id AND u.user_id = auth.uid())) WITH CHECK (EXISTS (SELECT 1 FROM public.marketplace_carts c JOIN public.marketplace_customers u ON u.id = c.customer_id WHERE c.id = cart_id AND u.user_id = auth.uid()));
+DROP POLICY IF EXISTS marketplace_order_items_org ON public.marketplace_order_items;
 CREATE POLICY marketplace_order_items_org ON public.marketplace_order_items FOR SELECT TO authenticated USING (EXISTS (SELECT 1 FROM public.marketplace_orders o WHERE o.id = order_id AND public.marketplace_org_access(o.organization_id)));
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.marketplace_customers, public.marketplace_merchant_profiles, public.marketplace_categories, public.marketplace_listings, public.marketplace_carts, public.marketplace_cart_items, public.marketplace_orders, public.marketplace_order_items, public.marketplace_commission_rules, public.marketplace_settlements TO authenticated;

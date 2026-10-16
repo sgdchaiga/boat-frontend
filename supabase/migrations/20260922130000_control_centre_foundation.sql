@@ -219,12 +219,19 @@ ALTER TABLE public.control_exception_sources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.control_actions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.control_audit_events ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS control_features_read ON public.subscription_features;
 CREATE POLICY control_features_read ON public.subscription_features FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS control_plan_features_read ON public.subscription_plan_features;
 CREATE POLICY control_plan_features_read ON public.subscription_plan_features FOR SELECT TO authenticated USING (true);
+DROP POLICY IF EXISTS control_feature_overrides_manage ON public.organization_feature_overrides;
 CREATE POLICY control_feature_overrides_manage ON public.organization_feature_overrides FOR ALL TO authenticated USING (public.is_platform_admin()) WITH CHECK (public.is_platform_admin());
+DROP POLICY IF EXISTS control_exceptions_read ON public.control_exceptions;
 CREATE POLICY control_exceptions_read ON public.control_exceptions FOR SELECT TO authenticated USING (public.control_centre_can(organization_id, 'view'));
+DROP POLICY IF EXISTS control_sources_access ON public.control_exception_sources;
 CREATE POLICY control_sources_access ON public.control_exception_sources FOR SELECT TO authenticated USING (public.control_centre_can(organization_id, 'view'));
+DROP POLICY IF EXISTS control_actions_read ON public.control_actions;
 CREATE POLICY control_actions_read ON public.control_actions FOR SELECT TO authenticated USING (public.control_centre_can(organization_id, 'view'));
+DROP POLICY IF EXISTS control_audit_read ON public.control_audit_events;
 CREATE POLICY control_audit_read ON public.control_audit_events FOR SELECT TO authenticated USING (public.control_centre_can(organization_id, 'view'));
 
 REVOKE INSERT, UPDATE, DELETE ON public.control_audit_events FROM anon, authenticated;

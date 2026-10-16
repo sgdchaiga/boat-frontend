@@ -19,6 +19,7 @@ import { postStockInFromPurchaseOrderForBill, reverseStockInForBill } from "../.
 import { createJournalForBill, deleteJournalEntryByReference, reverseJournalEntriesByReference } from "../../lib/journal";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
+import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBar";
 import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
 import { randomUuid } from "../../lib/randomUuid";
 import { clearCashbookDraft } from "../../lib/cashbookDraft";
@@ -1418,54 +1419,22 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
         </button>
         </div>
       </div>
-      <div className="mb-4 grid gap-3 rounded-xl border border-slate-200 bg-white p-4 md:grid-cols-[1fr_1fr_1fr_auto]">
-        <label className="text-sm font-medium text-slate-700">
-          Date from
-          <input
-            type="date"
-            value={billDateFromFilter}
-            onChange={(e) => setBillDateFromFilter(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          Date to
-          <input
-            type="date"
-            value={billDateToFilter}
-            onChange={(e) => setBillDateToFilter(e.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          />
-        </label>
-        <label className="text-sm font-medium text-slate-700">
-          Payment status
-          <select
-            value={paymentStatusFilter}
-            onChange={(e) => setPaymentStatusFilter(e.target.value as PaymentStatusFilter)}
-            className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-          >
-            <option value="all">All payment statuses</option>
-            <option value="fully_paid">Fully paid with identified date</option>
-            <option value="not_fully_paid_or_date_unavailable">Not fully paid / date unavailable</option>
-            <option value="unpaid">Unpaid</option>
-            <option value="partially_paid">Partially paid</option>
-            <option value="date_unavailable">Fully paid, date unavailable</option>
+      <SchoolFilterBar
+        period={<><input type="date" aria-label="Bill date from" value={billDateFromFilter} onChange={(e) => setBillDateFromFilter(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="text-sm text-slate-400">to</span><input type="date" aria-label="Bill date to" value={billDateToFilter} onChange={(e) => setBillDateToFilter(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /></>}
+        activeFilters={([
+          billDateFromFilter && { key: "from", label: `From: ${billDateFromFilter}`, onRemove: () => setBillDateFromFilter("") },
+          billDateToFilter && { key: "to", label: `To: ${billDateToFilter}`, onRemove: () => setBillDateToFilter("") },
+          paymentStatusFilter !== "all" && { key: "status", label: `Payment: ${formatPaymentFilterLabel(paymentStatusFilter)}`, onRemove: () => setPaymentStatusFilter("all") },
+        ].filter(Boolean) as SchoolFilterChip[])}
+        onClearAll={() => { setBillDateFromFilter(""); setBillDateToFilter(""); setPaymentStatusFilter("all"); }}
+        resultSummary={<>{filteredBills.length} bills · {filteredAmountTotal.toFixed(2)} total value</>}
+      >
+        <label className="block max-w-md text-xs font-medium text-slate-600">Payment status
+          <select value={paymentStatusFilter} onChange={(e) => setPaymentStatusFilter(e.target.value as PaymentStatusFilter)} className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm">
+            <option value="all">All payment statuses</option><option value="fully_paid">Fully paid with identified date</option><option value="not_fully_paid_or_date_unavailable">Not fully paid / date unavailable</option><option value="unpaid">Unpaid</option><option value="partially_paid">Partially paid</option><option value="date_unavailable">Fully paid, date unavailable</option>
           </select>
         </label>
-        <div className="flex items-end">
-          <button
-            type="button"
-            className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 md:w-auto"
-            onClick={() => {
-              setBillDateFromFilter("");
-              setBillDateToFilter("");
-              setPaymentStatusFilter("all");
-            }}
-          >
-            Reset
-          </button>
-        </div>
-      </div>
+      </SchoolFilterBar>
 
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         <div className="rounded-xl border border-slate-200 bg-white p-4">

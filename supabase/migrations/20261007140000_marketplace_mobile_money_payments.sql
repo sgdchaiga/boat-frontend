@@ -31,8 +31,10 @@ CREATE TRIGGER trg_marketplace_payment_requests_touch
   FOR EACH ROW EXECUTE FUNCTION public.touch_marketplace_payment_requests_updated_at();
 
 ALTER TABLE public.marketplace_payment_requests ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_payment_requests_customer_read ON public.marketplace_payment_requests;
 CREATE POLICY marketplace_payment_requests_customer_read ON public.marketplace_payment_requests FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM public.marketplace_customers customer WHERE customer.id = customer_id AND customer.user_id = auth.uid()));
+DROP POLICY IF EXISTS marketplace_payment_requests_org_read ON public.marketplace_payment_requests;
 CREATE POLICY marketplace_payment_requests_org_read ON public.marketplace_payment_requests FOR SELECT TO authenticated
   USING (public.marketplace_org_access(organization_id));
 GRANT SELECT ON public.marketplace_payment_requests TO authenticated;

@@ -13,6 +13,7 @@ import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { desktopApi } from "../../lib/desktopApi";
 import { loadHotelConfig } from "../../lib/hotelConfig";
 import { randomUuid } from "../../lib/randomUuid";
+import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBar";
 
 const SIMPLE_MODE_KEY = "boat.record_purchases.simple_mode";
 const DEFAULT_LOCAL_ORG_ID = "00000000-0000-0000-0000-000000000001";
@@ -1135,13 +1136,24 @@ const approvedAt = new Date().toISOString();
         </div>
         <div className="mb-4 rounded-xl border border-slate-200 bg-white p-3">
           <div className="flex flex-wrap gap-2 border-b border-slate-100 pb-3">{[["all","All"],["draft","Draft"],["pending_approval","Pending Approval"],["approved","Approved"],["completed","Completed"],["cancelled","Cancelled"]].map(([value,label]) => <button key={value} type="button" onClick={() => setStatusFilter(value)} className={`rounded-full px-3 py-1.5 text-xs font-medium ${statusFilter === value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600 hover:bg-slate-200"}`}>{label}</button>)}</div>
-          <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-6">
-            <label className="relative xl:col-span-2"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"/><input value={search} onChange={(e) => setSearch(e.target.value)} className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm" placeholder="Search PO, supplier or department"/></label>
+          <SchoolFilterBar
+            search={<label className="relative block"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400"/><input value={search} onChange={(e) => setSearch(e.target.value)} className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm" placeholder="Search PO, supplier or department"/></label>}
+            period={<><input aria-label="Orders from date" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="text-sm text-slate-400">to</span><input aria-label="Orders to date" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /></>}
+            activeFilters={([
+              search && { key: "search", label: `Search: ${search}`, onRemove: () => setSearch("") },
+              departmentFilter && { key: "department", label: `Department: ${departments.find((department) => department.id === departmentFilter)?.name || "Selected"}`, onRemove: () => setDepartmentFilter("") },
+              supplierFilter && { key: "supplier", label: `Supplier: ${vendors.find((vendor) => vendor.id === supplierFilter)?.name || "Selected"}`, onRemove: () => setSupplierFilter("") },
+              dateFrom && { key: "from", label: `From: ${dateFrom}`, onRemove: () => setDateFrom("") },
+              dateTo && { key: "to", label: `To: ${dateTo}`, onRemove: () => setDateTo("") },
+            ].filter(Boolean) as SchoolFilterChip[])}
+            onClearAll={() => { setSearch(""); setStatusFilter("all"); setDepartmentFilter(""); setSupplierFilter(""); setDateFrom(""); setDateTo(""); }}
+            resultSummary={<>{filteredOrders.length} purchase order{filteredOrders.length === 1 ? "" : "s"}</>}
+          >
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-2">
             <select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All departments</option>{departments.map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}</select>
             <select value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm"><option value="">All suppliers</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select>
-            <input aria-label="Orders from date" type="date" value={dateFrom} onChange={(e) => setDateFrom(e.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-            <div className="flex gap-2"><input aria-label="Orders to date" type="date" value={dateTo} onChange={(e) => setDateTo(e.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"/><button type="button" onClick={() => { setSearch(""); setStatusFilter("all"); setDepartmentFilter(""); setSupplierFilter(""); setDateFrom(""); setDateTo(""); }} className="rounded-lg border border-slate-300 px-3 py-2 text-xs font-medium text-slate-600 hover:bg-slate-50">Clear</button></div>
           </div>
+          </SchoolFilterBar>
         </div>
       </>}
 

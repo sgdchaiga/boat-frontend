@@ -1,11 +1,14 @@
 -- Public catalogue reads and a customer-safe order creation path.
 -- Prices, publication status and commission are all verified here, rather than trusted from the browser.
+DROP POLICY IF EXISTS marketplace_categories_public_read ON public.marketplace_categories;
 CREATE POLICY marketplace_categories_public_read
   ON public.marketplace_categories FOR SELECT TO anon USING (is_active = true);
 
+DROP POLICY IF EXISTS marketplace_merchant_profiles_public_read ON public.marketplace_merchant_profiles;
 CREATE POLICY marketplace_merchant_profiles_public_read
   ON public.marketplace_merchant_profiles FOR SELECT TO anon, authenticated USING (is_published = true);
 
+DROP POLICY IF EXISTS marketplace_listings_public_read ON public.marketplace_listings;
 CREATE POLICY marketplace_listings_public_read
   ON public.marketplace_listings FOR SELECT TO anon, authenticated
   USING (
@@ -16,6 +19,7 @@ CREATE POLICY marketplace_listings_public_read
     )
   );
 
+DROP POLICY IF EXISTS marketplace_orders_customer_read ON public.marketplace_orders;
 CREATE POLICY marketplace_orders_customer_read
   ON public.marketplace_orders FOR SELECT TO authenticated
   USING (
@@ -25,6 +29,7 @@ CREATE POLICY marketplace_orders_customer_read
     )
   );
 
+DROP POLICY IF EXISTS marketplace_order_items_customer_read ON public.marketplace_order_items;
 CREATE POLICY marketplace_order_items_customer_read
   ON public.marketplace_order_items FOR SELECT TO authenticated
   USING (

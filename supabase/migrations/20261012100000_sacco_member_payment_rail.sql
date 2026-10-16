@@ -40,20 +40,30 @@ CREATE INDEX IF NOT EXISTS idx_sacco_member_payment_qr_recipient ON public.sacco
 
 ALTER TABLE public.sacco_member_payment_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sacco_member_payment_qr_intents ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sacco_member_payment_transactions_member_read ON public.sacco_member_payment_transactions;
 CREATE POLICY sacco_member_payment_transactions_member_read ON public.sacco_member_payment_transactions FOR SELECT TO authenticated
   USING (source_member_id = public.current_sacco_member_id() OR destination_member_id = public.current_sacco_member_id());
+DROP POLICY IF EXISTS sacco_member_payment_transactions_staff_read ON public.sacco_member_payment_transactions;
 CREATE POLICY sacco_member_payment_transactions_staff_read ON public.sacco_member_payment_transactions FOR SELECT TO authenticated
   USING (organization_id = (SELECT organization_id FROM public.staff WHERE id = auth.uid()));
+DROP POLICY IF EXISTS sacco_member_payment_qr_intents_member_read ON public.sacco_member_payment_qr_intents;
 CREATE POLICY sacco_member_payment_qr_intents_member_read ON public.sacco_member_payment_qr_intents FOR SELECT TO authenticated
   USING (recipient_member_id = public.current_sacco_member_id());
+DROP POLICY IF EXISTS sacco_member_payment_qr_intents_staff_read ON public.sacco_member_payment_qr_intents;
 CREATE POLICY sacco_member_payment_qr_intents_staff_read ON public.sacco_member_payment_qr_intents FOR SELECT TO authenticated
   USING (organization_id = (SELECT organization_id FROM public.staff WHERE id = auth.uid()));
 GRANT SELECT ON public.sacco_member_payment_transactions, public.sacco_member_payment_qr_intents TO authenticated;
 
 -- Queue processing is not a member capability.  Preserve the existing staff workflow,
 -- but derive the audit actor from auth.uid() instead of accepting caller supplied identity.
-ALTER FUNCTION public.process_sacco_member_transfer_request(uuid, uuid)
-  RENAME TO process_sacco_member_transfer_request_guarded;
+DO $$
+BEGIN
+  IF to_regprocedure('public.process_sacco_member_transfer_request_guarded(uuid,uuid)') IS NULL
+     AND to_regprocedure('public.process_sacco_member_transfer_request(uuid,uuid)') IS NOT NULL THEN
+    ALTER FUNCTION public.process_sacco_member_transfer_request(uuid, uuid)
+      RENAME TO process_sacco_member_transfer_request_guarded;
+  END IF;
+END $$;
 REVOKE ALL ON FUNCTION public.process_sacco_member_transfer_request_guarded(uuid, uuid) FROM PUBLIC, authenticated;
 
 CREATE OR REPLACE FUNCTION public.process_sacco_member_transfer_request(p_request_id uuid, p_processed_by uuid DEFAULT NULL)

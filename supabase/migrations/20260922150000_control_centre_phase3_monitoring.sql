@@ -1,33 +1,33 @@
 -- BOAT Control Centre, phase 3: monitoring runs, risk intelligence, trends and branch benchmarking.
 
-CREATE TABLE public.control_rule_runs (
+CREATE TABLE IF NOT EXISTS public.control_rule_runs (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
   rule_id uuid REFERENCES public.control_rules(id) ON DELETE SET NULL, run_key text NOT NULL, run_type text NOT NULL DEFAULT 'scheduled' CHECK(run_type IN ('scheduled','manual','backfill')),
   status text NOT NULL DEFAULT 'running' CHECK(status IN ('running','completed','failed')), started_at timestamptz NOT NULL DEFAULT now(), completed_at timestamptz,
   findings_count integer NOT NULL DEFAULT 0, exceptions_created integer NOT NULL DEFAULT 0, error_message text, UNIQUE(organization_id, run_key)
 );
-CREATE TABLE public.control_findings (
+CREATE TABLE IF NOT EXISTS public.control_findings (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
   rule_run_id uuid NOT NULL REFERENCES public.control_rule_runs(id) ON DELETE CASCADE, rule_id uuid REFERENCES public.control_rules(id) ON DELETE SET NULL,
   fingerprint text NOT NULL, severity text NOT NULL CHECK(severity IN ('critical','high','warning','low')), score numeric(8,2) NOT NULL DEFAULT 0,
   title text NOT NULL, details jsonb NOT NULL DEFAULT '{}'::jsonb, exception_id uuid REFERENCES public.control_exceptions(id) ON DELETE SET NULL, detected_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(organization_id, rule_run_id, fingerprint)
 );
-CREATE TABLE public.control_risk_snapshots (
+CREATE TABLE IF NOT EXISTS public.control_risk_snapshots (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
   branch_id uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000', branch_type text NOT NULL DEFAULT 'organization', snapshot_date date NOT NULL, risk_score numeric(8,2) NOT NULL, open_exceptions integer NOT NULL, critical_exceptions integer NOT NULL,
   overdue_exceptions integer NOT NULL, value_at_risk numeric(14,2) NOT NULL, created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(organization_id, branch_id, branch_type, snapshot_date)
 );
-CREATE TABLE public.control_benchmark_snapshots (
+CREATE TABLE IF NOT EXISTS public.control_benchmark_snapshots (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
   branch_id uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000', branch_type text NOT NULL DEFAULT 'organization', snapshot_date date NOT NULL, metric_key text NOT NULL, metric_value numeric(14,2) NOT NULL,
   organization_average numeric(14,2), deviation_from_average numeric(14,2), created_at timestamptz NOT NULL DEFAULT now(),
   UNIQUE(organization_id, branch_id, branch_type, snapshot_date, metric_key)
 );
-CREATE INDEX control_rule_runs_org_started_idx ON public.control_rule_runs(organization_id, started_at DESC);
-CREATE INDEX control_findings_org_detected_idx ON public.control_findings(organization_id, detected_at DESC);
-CREATE INDEX control_risk_snapshots_org_date_idx ON public.control_risk_snapshots(organization_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS control_rule_runs_org_started_idx ON public.control_rule_runs(organization_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS control_findings_org_detected_idx ON public.control_findings(organization_id, detected_at DESC);
+CREATE INDEX IF NOT EXISTS control_risk_snapshots_org_date_idx ON public.control_risk_snapshots(organization_id, snapshot_date DESC);
 
 CREATE OR REPLACE FUNCTION public.refresh_control_centre_metrics(p_organization_id uuid, p_snapshot_date date DEFAULT CURRENT_DATE)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
@@ -67,9 +67,13 @@ BEGIN
 END; $$;
 
 ALTER TABLE public.control_rule_runs ENABLE ROW LEVEL SECURITY; ALTER TABLE public.control_findings ENABLE ROW LEVEL SECURITY; ALTER TABLE public.control_risk_snapshots ENABLE ROW LEVEL SECURITY; ALTER TABLE public.control_benchmark_snapshots ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS control_rule_runs_read ON public.control_rule_runs;
 CREATE POLICY control_rule_runs_read ON public.control_rule_runs FOR SELECT TO authenticated USING(public.control_centre_can(organization_id,'view'));
+DROP POLICY IF EXISTS control_findings_read ON public.control_findings;
 CREATE POLICY control_findings_read ON public.control_findings FOR SELECT TO authenticated USING(public.control_centre_can(organization_id,'view'));
+DROP POLICY IF EXISTS control_risk_snapshots_read ON public.control_risk_snapshots;
 CREATE POLICY control_risk_snapshots_read ON public.control_risk_snapshots FOR SELECT TO authenticated USING(public.control_centre_can(organization_id,'view'));
+DROP POLICY IF EXISTS control_benchmarks_read ON public.control_benchmark_snapshots;
 CREATE POLICY control_benchmarks_read ON public.control_benchmark_snapshots FOR SELECT TO authenticated USING(public.control_centre_can(organization_id,'view'));
 REVOKE INSERT,UPDATE,DELETE ON public.control_rule_runs,public.control_findings,public.control_risk_snapshots,public.control_benchmark_snapshots FROM anon,authenticated;
 GRANT SELECT ON public.control_rule_runs,public.control_findings,public.control_risk_snapshots,public.control_benchmark_snapshots TO authenticated;

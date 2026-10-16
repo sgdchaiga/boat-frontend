@@ -1,5 +1,5 @@
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, CreditCard, Pencil, Plus, Undo2, X } from "lucide-react";
+import { Fragment, useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Columns3, CreditCard, Download, Pencil, Plus, Printer, Undo2, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { createJournalForExpenseWithLines, createJournalForVendorPayment, deleteJournalEntryByReference, reverseJournalEntriesByReference, type ExpenseJournalLineInput, type VendorPaymentJournalAllocation } from "../../lib/journal";
 import { isBillApproved, parseBillAllocationsJson, syncBillStatusInDb } from "../../lib/billStatus";
@@ -9,6 +9,7 @@ import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
 import { SourceDocumentsCell } from "../common/SourceDocumentsCell";
 import { SearchableCombobox } from "../common/SearchableCombobox";
+import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBar";
 
 interface VendorPayment {
   id: string;
@@ -21,6 +22,11 @@ interface VendorPayment {
   payment_method?: string | null;
   cheque_number?: string | null;
   payment_voucher?: string | null;
+  bank_name?: string | null;
+  import_batch_id?: string | null;
+  import_fingerprint?: string | null;
+  import_vote?: string | null;
+  import_subvote?: string | null;
   reference?: string | null;
   created_at?: string;
   status?: "active" | "reversed" | null;
@@ -88,7 +94,9 @@ function formatSupabaseError(e: unknown): string {
   }
 }
 
-function supplierPaymentBatchId(reference: string | null | undefined): string | null {
+function supplierPaymentBatchId(payment: VendorPayment | string | null | undefined): string | null {
+  if (payment && typeof payment !== "string" && payment.import_batch_id) return payment.import_batch_id.trim() || null;
+  const reference = typeof payment === "string" ? payment : payment?.reference;
   return reference?.match(/\[BATCH:([^\]]+)\]/i)?.[1]?.trim() || null;
 }
 
@@ -96,6 +104,17 @@ function referenceWithBank(reference: string | null | undefined, bankName: strin
   const withoutBank = String(reference || "").replace(/\s*\/?\s*Bank:\s*[^/\[]+/gi, "").replace(/\s*\/\s*$/, "").trim();
   return bankName.trim() ? [withoutBank, `Bank: ${bankName.trim()}`].filter(Boolean).join(" / ") : withoutBank;
 }
+
+function bankNameFromPayment(payment: VendorPayment): string {
+  return payment.bank_name?.trim() || payment.reference?.match(/(?:^|\/\s*)Bank:\s*([^/\[]+)/i)?.[1]?.trim() || "";
+}
+
+type PaymentColumn = "date" | "recorded" | "vendor" | "method" | "bank" | "cheque" | "voucher" | "vote" | "subvote" | "reference" | "amount" | "documents";
+const paymentColumns: Array<{ id: PaymentColumn; label: string }> = [
+  { id: "date", label: "Date" }, { id: "recorded", label: "Recorded at" }, { id: "vendor", label: "Vendor" },
+  { id: "method", label: "Method" }, { id: "bank", label: "Bank name" }, { id: "cheque", label: "Cheque no." },
+  { id: "voucher", label: "PV no." }, { id: "vote", label: "Vote" }, { id: "subvote", label: "Subvote" }, { id: "reference", label: "Reference" }, { id: "amount", label: "Amount" }, { id: "documents", label: "Documents" },
+];
 
 export function VendorPaymentsPage({
   payBillId,
@@ -109,6 +128,10 @@ export function VendorPaymentsPage({
   const isAdmin = user?.role === "admin" || user?.role === "super_admin" || user?.isSuperAdmin === true;
   const isSuperAdmin = user?.role === "super_admin" || user?.isSuperAdmin === true;
   const [payments, setPayments] = useState<VendorPayment[]>([]);
+  const paymentRequestRef = useRef(0);
+  const [paymentPage, setPaymentPage] = useState(0);
+  const paymentPageSize = 100;
+  const [paymentTotalCount, setPaymentTotalCount] = useState(0);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -138,6 +161,10 @@ export function VendorPaymentsPage({
   const [toDateFilter, setToDateFilter] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
   const [batchFilter, setBatchFilter] = useState("");
+  const [bankFilter, setBankFilter] = useState("");
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState<Set<PaymentColumn>>(() => new Set<PaymentColumn>(["date", "vendor", "method", "bank", "cheque", "voucher", "reference", "amount", "documents"]));
+  const [columnOrder, setColumnOrder] = useState<PaymentColumn[]>(() => paymentColumns.map((column) => column.id));
   const [batchEdit, setBatchEdit] = useState<{ id: string; paymentDate: string; paymentMethod: "" | "cash" | "card" | "bank_transfer" | "wallet"; bankName: string } | null>(null);
   const [batchEditing, setBatchEditing] = useState(false);
   const [batchEditProgress, setBatchEditProgress] = useState({ completed: 0, total: 0 });
@@ -250,7 +277,11 @@ export function VendorPaymentsPage({
 
   useEffect(() => {
     void fetchData();
-  }, []);
+  }, [paymentPage, vendorFilter, methodFilter, bankFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
+
+  useEffect(() => {
+    setPaymentPage(0);
+  }, [vendorFilter, methodFilter, bankFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
 
   useEffect(() => {
     if (!showModal || !vendorId) {
@@ -305,20 +336,36 @@ export function VendorPaymentsPage({
   }, [detailPayment]);
 
   const fetchData = async () => {
+    const requestId = ++paymentRequestRef.current;
     setLoading(true);
     try {
+      let paymentsQuery = supabase.from("vendor_payments").select("*, vendors(name)", { count: "exact" }).order("payment_date", { ascending: false });
+      if (orgId) paymentsQuery = paymentsQuery.eq("organization_id", orgId);
+      if (vendorFilter) paymentsQuery = paymentsQuery.eq("vendor_id", vendorFilter);
+      if (methodFilter) paymentsQuery = paymentsQuery.eq("payment_method", methodFilter);
+      if (fromDateFilter) paymentsQuery = paymentsQuery.gte("payment_date", fromDateFilter);
+      if (toDateFilter) paymentsQuery = paymentsQuery.lte("payment_date", toDateFilter);
+      // Keep historical payments filterable until their import metadata
+      // migration has run: older rows retain these values in Reference.
+      if (bankFilter) paymentsQuery = paymentsQuery.or(`bank_name.eq.${bankFilter},reference.ilike.*Bank: ${bankFilter}*`);
+      if (batchFilter) paymentsQuery = paymentsQuery.or(`import_batch_id.eq.${batchFilter},reference.ilike.*[BATCH:${batchFilter}]*`);
+      if (searchFilter.trim()) paymentsQuery = paymentsQuery.ilike("reference", `%${searchFilter.trim()}%`);
       const [payRes, venRes] = await Promise.all([
-        supabase.from("vendor_payments").select("*, vendors(name)").order("payment_date", { ascending: false }),
+        paymentsQuery.range(paymentPage * paymentPageSize, paymentPage * paymentPageSize + paymentPageSize - 1),
         supabase.from("vendors").select("id, name").order("name"),
       ]);
+      if (requestId !== paymentRequestRef.current) return;
       if (payRes.error) throw payRes.error;
       setPayments(payRes.data || []);
+      setPaymentTotalCount(payRes.count || 0);
       setVendors(venRes.data || []);
     } catch (e) {
+      if (requestId !== paymentRequestRef.current) return;
       console.error("Error fetching vendor payments:", e);
       setPayments([]);
+      setPaymentTotalCount(0);
     } finally {
-      setLoading(false);
+      if (requestId === paymentRequestRef.current) setLoading(false);
     }
   };
 
@@ -397,8 +444,8 @@ export function VendorPaymentsPage({
     setAmount(String(payment.amount || ""));
     setPaymentDate(payment.payment_date || new Date().toISOString().slice(0, 10));
     setPaymentMethod((payment.payment_method as "cash" | "card" | "bank_transfer" | "wallet") || "bank_transfer");
-    setBankName(payment.reference?.match(/(?:^|\/\s*)Bank:\s*([^/]+)/i)?.[1]?.trim() || "");
-    setReference(payment.reference || "");
+    setBankName(bankNameFromPayment(payment));
+    setReference((payment.reference || "").replace(/\s*\/?\s*Bank:\s*[^/\[]+/gi, "").replace(/\s*\[(?:IMP|BATCH):[^\]]+\]/gi, "").replace(/\s*\/\s*$/, "").trim());
     setChequeNumber(payment.cheque_number || payment.reference?.match(/\bCHQ\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "");
     setPaymentVoucher(payment.payment_voucher || payment.reference?.match(/\bPV\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "");
     setAllocationInputs(Object.fromEntries(lines.map((line) => [line.bill_id, line.amount.toFixed(2)])));
@@ -621,7 +668,7 @@ export function VendorPaymentsPage({
       alert("Enter a bank name when setting the payment method to Bank Transfer.");
       return;
     }
-    const batchPayments = payments.filter((payment) => supplierPaymentBatchId(payment.reference) === batchEdit.id && payment.status !== "reversed");
+    const batchPayments = payments.filter((payment) => supplierPaymentBatchId(payment) === batchEdit.id && payment.status !== "reversed");
     if (!batchPayments.length) return;
     if (!window.confirm(`Update ${batchPayments.length} active payment${batchPayments.length === 1 ? "" : "s"} in batch ${batchEdit.id}?`)) return;
     setBatchEditing(true);
@@ -632,8 +679,7 @@ export function VendorPaymentsPage({
         try {
           const paymentDate = batchEdit.paymentDate || payment.payment_date || new Date().toISOString().slice(0, 10);
           const paymentMethod = batchEdit.paymentMethod || payment.payment_method || "bank_transfer";
-          const reference = batchEdit.bankName.trim() ? referenceWithBank(payment.reference, batchEdit.bankName) : payment.reference;
-          const { error } = await supabase.from("vendor_payments").update({ payment_date: paymentDate, payment_method: paymentMethod, reference }).eq("id", payment.id);
+          const { error } = await supabase.from("vendor_payments").update({ payment_date: paymentDate, payment_method: paymentMethod, bank_name: batchEdit.bankName.trim() || payment.bank_name || null }).eq("id", payment.id);
           if (error) throw error;
           if (batchEdit.paymentDate) {
             const journalUpdate = await supabase.from("journal_entries").update({ entry_date: paymentDate }).eq("reference_type", "vendor_payment").eq("reference_id", payment.id);
@@ -714,8 +760,7 @@ export function VendorPaymentsPage({
     setSaving(true);
     try {
       const payDate = paymentDate || new Date().toISOString().slice(0, 10);
-      const referenceWithoutBank = reference.trim().replace(/\s*\/?\s*Bank:\s*[^/]+/gi, "").replace(/\s*\/\s*$/, "").trim();
-      const paymentReference = [referenceWithoutBank, paymentMethod === "bank_transfer" && bankName.trim() ? `Bank: ${bankName.trim()}` : ""].filter(Boolean).join(" / ");
+      const paymentReference = reference.trim().replace(/\s*\/?\s*Bank:\s*[^/]+/gi, "").replace(/\s*\/\s*$/, "").trim();
       const savePayload: Record<string, unknown> = {
         vendor_id: vendorId,
         bill_id: useLegacySingleBill ? lines[0].billId : null,
@@ -724,6 +769,7 @@ export function VendorPaymentsPage({
         payment_method: paymentMethod,
         cheque_number: chequeNumber.trim() || null,
         payment_voucher: paymentVoucher.trim() || null,
+        bank_name: paymentMethod === "bank_transfer" ? bankName.trim() || null : null,
         reference: paymentReference || null,
       };
       if (needsAllocationRows) {
@@ -802,20 +848,32 @@ export function VendorPaymentsPage({
       if (!showReversedPayments && payment.status === "reversed") return false;
       if (vendorFilter && payment.vendor_id !== vendorFilter) return false;
       if (methodFilter && payment.payment_method !== methodFilter) return false;
-      if (batchFilter && supplierPaymentBatchId(payment.reference) !== batchFilter) return false;
+      if (bankFilter && bankNameFromPayment(payment) !== bankFilter) return false;
+      if (batchFilter && supplierPaymentBatchId(payment) !== batchFilter) return false;
       if (fromDateFilter && String(payment.payment_date || "") < fromDateFilter) return false;
       if (toDateFilter && String(payment.payment_date || "") > toDateFilter) return false;
       if (search && !`${payment.vendors?.name || ""} ${payment.reference || ""}`.toLowerCase().includes(search)) return false;
       return true;
     });
-  }, [payments, showReversedPayments, vendorFilter, methodFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
+  }, [payments, showReversedPayments, vendorFilter, methodFilter, bankFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
 
-  const hasPaymentFilters = Boolean(searchFilter.trim() || vendorFilter || methodFilter || batchFilter || fromDateFilter || toDateFilter);
+  const hasPaymentFilters = Boolean(searchFilter.trim() || vendorFilter || methodFilter || bankFilter || batchFilter || fromDateFilter || toDateFilter);
   // Reversed payments remain visible for audit purposes, but never contribute to the active-payment total.
   const filteredPaymentTotal = useMemo(() => filteredPayments
     .filter((payment) => payment.status !== "reversed")
     .reduce((sum, payment) => sum + Number(payment.amount || 0), 0), [filteredPayments]);
-  const importBatches = useMemo(() => [...new Set(payments.map((payment) => supplierPaymentBatchId(payment.reference)).filter((value): value is string => Boolean(value)))].sort().reverse(), [payments]);
+  const importBatches = useMemo(() => [...new Set(payments.map((payment) => supplierPaymentBatchId(payment)).filter((value): value is string => Boolean(value)))].sort().reverse(), [payments]);
+  const paymentBanks = useMemo(() => [...new Set(payments.map(bankNameFromPayment).filter(Boolean))].sort((a, b) => a.localeCompare(b)), [payments]);
+  const clearPaymentFilters = () => { setSearchFilter(""); setVendorFilter(""); setMethodFilter(""); setBankFilter(""); setBatchFilter(""); setFromDateFilter(""); setToDateFilter(""); };
+  const activePaymentFilters = useMemo<SchoolFilterChip[]>(() => [
+    searchFilter.trim() && { key: "search", label: `Search: ${searchFilter.trim()}`, onRemove: () => setSearchFilter("") },
+    vendorFilter && { key: "vendor", label: `Supplier: ${vendors.find((vendor) => vendor.id === vendorFilter)?.name || "Selected"}`, onRemove: () => setVendorFilter("") },
+    methodFilter && { key: "method", label: `Method: ${methodFilter.replace("_", " ")}`, onRemove: () => setMethodFilter("") },
+    bankFilter && { key: "bank", label: `Bank: ${bankFilter}`, onRemove: () => setBankFilter("") },
+    batchFilter && { key: "batch", label: `Batch: ${batchFilter}`, onRemove: () => setBatchFilter("") },
+    fromDateFilter && { key: "from", label: `From: ${fromDateFilter}`, onRemove: () => setFromDateFilter("") },
+    toDateFilter && { key: "to", label: `To: ${toDateFilter}`, onRemove: () => setToDateFilter("") },
+  ].filter(Boolean) as SchoolFilterChip[], [searchFilter, vendorFilter, methodFilter, bankFilter, batchFilter, fromDateFilter, toDateFilter, vendors]);
 
   const sortedPayments = useMemo(() => filteredPayments.slice().sort((left, right) => {
     const vendorName = (payment: VendorPayment) => payment.vendors?.name || "";
@@ -824,13 +882,79 @@ export function VendorPaymentsPage({
     const compared = typeof leftValue === "number" && typeof rightValue === "number" ? leftValue - rightValue : String(leftValue).localeCompare(String(rightValue), undefined, { numeric: true, sensitivity: "base" });
     return sortDirection === "asc" ? compared : -compared;
   }), [filteredPayments, sortBy, sortDirection]);
+  const paymentPageCount = Math.max(1, Math.ceil(paymentTotalCount / paymentPageSize));
+  const paymentRangeStart = paymentTotalCount === 0 ? 0 : paymentPage * paymentPageSize + 1;
+  const paymentRangeEnd = Math.min(paymentTotalCount, (paymentPage + 1) * paymentPageSize);
 
   const changeSort = (column: typeof sortBy) => {
     if (sortBy === column) setSortDirection((direction) => direction === "asc" ? "desc" : "asc");
     else { setSortBy(column); setSortDirection(column === "payment_date" || column === "created_at" || column === "amount" ? "desc" : "asc"); }
   };
+  const toggleColumn = (column: PaymentColumn) => setVisibleColumns((current) => {
+    const next = new Set(current);
+    if (next.has(column)) next.delete(column); else next.add(column);
+    return next;
+  });
+  const moveColumn = (column: PaymentColumn, direction: -1 | 1) => setColumnOrder((current) => {
+    const index = current.indexOf(column); const destination = index + direction;
+    if (index < 0 || destination < 0 || destination >= current.length) return current;
+    const next = [...current]; [next[index], next[destination]] = [next[destination], next[index]];
+    return next;
+  });
+  const orderedVisibleColumns = columnOrder.filter((id) => visibleColumns.has(id)).map((id) => paymentColumns.find((column) => column.id === id)!).filter(Boolean);
+  const csvValue = (value: unknown) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+  const columnValue = (payment: VendorPayment, column: PaymentColumn) => {
+    if (column === "date") return payment.payment_date || "";
+    if (column === "recorded") return payment.created_at || "";
+    if (column === "vendor") return payment.vendors?.name || "";
+    if (column === "method") return (payment.payment_method || "").replace("_", " ");
+    if (column === "bank") return bankNameFromPayment(payment);
+    if (column === "cheque") return payment.cheque_number || payment.reference?.match(/\bCHQ\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "";
+    if (column === "voucher") return payment.payment_voucher || payment.reference?.match(/\bPV\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "";
+    if (column === "vote") return payment.import_vote || "";
+    if (column === "subvote") return payment.import_subvote || "";
+    if (column === "reference") return payment.reference || "";
+    if (column === "amount") return Number(payment.amount || 0).toFixed(2);
+    return "";
+  };
+  const exportPayments = () => {
+    const columns = orderedVisibleColumns.filter((column) => column.id !== "documents");
+    const csv = [columns.map((column) => csvValue(column.label)).join(","), ...sortedPayments.map((payment) => columns.map((column) => csvValue(columnValue(payment, column.id))).join(","))].join("\n");
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+    const link = document.createElement("a"); link.href = url; link.download = "supplier-payments.csv"; link.click(); URL.revokeObjectURL(url);
+  };
+  const printPayments = () => {
+    const columns = orderedVisibleColumns.filter((column) => column.id !== "documents");
+    const escape = (value: unknown) => String(value ?? "").replace(/[&<>\"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[character] || character);
+    const page = window.open("", "_blank", "noopener,noreferrer");
+    if (!page) return alert("Allow pop-ups to print the supplier-payment register.");
+    page.document.write(`<!doctype html><title>Supplier payments</title><style>body{font-family:Arial;padding:24px}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #bbb;padding:7px;text-align:left}th{background:#f1f5f9}h1{font-size:20px}</style><h1>Supplier payments</h1><p>Filtered total: ${escape(filteredPaymentTotal.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}))}</p><table><thead><tr>${columns.map((column) => `<th>${escape(column.label)}</th>`).join("")}</tr></thead><tbody>${sortedPayments.map((payment) => `<tr>${columns.map((column) => `<td>${escape(columnValue(payment, column.id))}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+    page.document.close(); page.focus(); page.print();
+  };
 
   const sortHeader = (column: typeof sortBy, label: string, align: "left" | "right" = "left") => <th className={`p-0 text-${align}`}><button type="button" onClick={() => changeSort(column)} className={`inline-flex w-full items-center gap-1 px-3 py-3 font-semibold hover:bg-slate-100 ${align === "right" ? "justify-end" : "justify-start"}`}><span>{label}</span>{sortBy === column ? sortDirection === "asc" ? <ArrowUp className="h-3.5 w-3.5" /> : <ArrowDown className="h-3.5 w-3.5" /> : <ArrowUpDown className="h-3.5 w-3.5 text-slate-400" />}</button></th>;
+  const renderPaymentHeader = (column: PaymentColumn) => {
+    if (column === "date") return sortHeader("payment_date", "Date");
+    if (column === "vendor") return sortHeader("vendor", "Vendor");
+    if (column === "method") return sortHeader("payment_method", "Method");
+    if (column === "reference") return sortHeader("reference", "Reference");
+    if (column === "amount") return sortHeader("amount", "Amount", "right");
+    return <th className={`p-3 text-left ${column === "documents" ? "min-w-20" : "whitespace-nowrap"}`}>{paymentColumns.find((item) => item.id === column)?.label}</th>;
+  };
+  const renderPaymentCell = (payment: VendorPayment, column: PaymentColumn) => {
+    if (column === "date") return <td className="p-3 whitespace-nowrap">{payment.payment_date ? new Date(payment.payment_date).toLocaleDateString() : "—"}</td>;
+    if (column === "recorded") return <td className="p-3 whitespace-nowrap text-xs text-slate-600">{payment.created_at ? new Date(payment.created_at).toLocaleString() : "—"}</td>;
+    if (column === "vendor") return <td className="p-3 min-w-40">{payment.vendor_id && onNavigate ? <button type="button" className="block max-w-56 truncate text-left font-medium text-brand-700 hover:underline" onClick={() => onNavigate("purchases_vendors", { highlightVendorId: payment.vendor_id })}>{payment.vendors?.name || "—"}</button> : payment.vendors?.name || "—"}</td>;
+    if (column === "method") return <td className="p-3 whitespace-nowrap capitalize">{(payment.payment_method || "—").replace("_", " ")}</td>;
+    if (column === "bank") return <td className="p-3 min-w-44 whitespace-nowrap">{bankNameFromPayment(payment) || "—"}</td>;
+    if (column === "cheque") return <td className="p-3 whitespace-nowrap">{columnValue(payment, "cheque") || "—"}</td>;
+    if (column === "voucher") return <td className="p-3 whitespace-nowrap">{columnValue(payment, "voucher") || "—"}</td>;
+    if (column === "vote") return <td className="p-3 min-w-48">{payment.import_vote || "—"}</td>;
+    if (column === "subvote") return <td className="p-3 min-w-48">{payment.import_subvote || "—"}</td>;
+    if (column === "reference") return <td className="p-3 min-w-64 max-w-96"><p className="break-words" title={payment.reference || "—"}>{payment.reference || "—"}</p>{supplierPaymentBatchId(payment) && <p className="mt-1 text-xs font-medium text-indigo-700">Batch: {supplierPaymentBatchId(payment)}</p>}{payment.status === "reversed" && <p className="text-xs font-semibold text-rose-700">Reversed</p>}</td>;
+    if (column === "amount") return <td className="p-3 whitespace-nowrap text-right"><button type="button" className="font-semibold text-brand-700 hover:underline tabular-nums" title="View payment line details" onClick={() => setDetailPayment(payment)}>{Number(payment.amount || 0).toFixed(2)}</button></td>;
+    return <td className="p-3 align-top"><SourceDocumentsCell table="vendor_payments" recordId={payment.id} organizationId={orgId} rawDocuments={payment.source_documents} readOnly={readOnly} onUpdated={fetchData} /></td>;
+  };
 
   return (
     <div className="p-6 md:p-8">
@@ -854,15 +978,22 @@ export function VendorPaymentsPage({
         </button></div>
       </div>
 
-      <div className="mb-4 grid gap-2 rounded-xl border border-slate-200 bg-white p-3 md:grid-cols-2 xl:grid-cols-6">
-        <input value={searchFilter} onChange={(event) => setSearchFilter(event.target.value)} placeholder="Search vendor or reference" className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-        <select value={vendorFilter} onChange={(event) => setVendorFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All suppliers</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select>
-        <select value={methodFilter} onChange={(event) => setMethodFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All methods</option>{[...new Set(payments.map((payment) => payment.payment_method).filter(Boolean))].sort().map((method) => <option key={method} value={method!}>{String(method).replace("_", " ")}</option>)}</select>
-        <select value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All upload batches</option>{importBatches.map((batch) => <option key={batch} value={batch}>{batch}</option>)}</select>
-        <input type="date" aria-label="Payments from date" value={fromDateFilter} onChange={(event) => setFromDateFilter(event.target.value)} className="rounded-lg border border-slate-300 px-3 py-2 text-sm" />
-        <div className="flex gap-2"><input type="date" aria-label="Payments to date" value={toDateFilter} onChange={(event) => setToDateFilter(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><button type="button" onClick={() => { setSearchFilter(""); setVendorFilter(""); setMethodFilter(""); setBatchFilter(""); setFromDateFilter(""); setToDateFilter(""); }} className="app-btn-secondary text-sm">Clear</button></div>
-      </div>
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-slate-500">Showing {filteredPayments.length} of {payments.length} supplier payment{payments.length === 1 ? "" : "s"} · Filtered total: <span className="font-semibold tabular-nums text-slate-700">{filteredPaymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></p>{batchFilter && isAdmin && !readOnly && <button type="button" onClick={() => setBatchEdit({ id: batchFilter, paymentDate: "", paymentMethod: "", bankName: "" })} className="app-btn-secondary text-sm">Edit batch {batchFilter}</button>}</div>
+      <SchoolFilterBar
+        search={<input value={searchFilter} onChange={(event) => setSearchFilter(event.target.value)} placeholder="Search vendor or reference" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm" />}
+        period={<><input type="date" aria-label="Payments from date" value={fromDateFilter} onChange={(event) => setFromDateFilter(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /><span className="text-sm text-slate-400">to</span><input type="date" aria-label="Payments to date" value={toDateFilter} onChange={(event) => setToDateFilter(event.target.value)} className="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" /></>}
+        activeFilters={activePaymentFilters}
+        onClearAll={clearPaymentFilters}
+        resultSummary={<>Showing {paymentRangeStart}–{paymentRangeEnd} of {paymentTotalCount} payments</>}
+      >
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <label className="text-xs font-medium text-slate-600">Supplier<select value={vendorFilter} onChange={(event) => setVendorFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All suppliers</option>{vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.name}</option>)}</select></label>
+          <label className="text-xs font-medium text-slate-600">Payment method<select value={methodFilter} onChange={(event) => setMethodFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All methods</option>{[...new Set(payments.map((payment) => payment.payment_method).filter(Boolean))].sort().map((method) => <option key={method} value={method!}>{String(method).replace("_", " ")}</option>)}</select></label>
+          <label className="text-xs font-medium text-slate-600">Bank<select value={bankFilter} onChange={(event) => setBankFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All banks</option>{paymentBanks.map((bank) => <option key={bank} value={bank}>{bank}</option>)}</select></label>
+          <label className="text-xs font-medium text-slate-600">Upload batch<select value={batchFilter} onChange={(event) => setBatchFilter(event.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"><option value="">All upload batches</option>{importBatches.map((batch) => <option key={batch} value={batch}>{batch}</option>)}</select></label>
+        </div>
+      </SchoolFilterBar>
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-slate-500">Showing {paymentRangeStart}–{paymentRangeEnd} of {paymentTotalCount} supplier payment{paymentTotalCount === 1 ? "" : "s"} · Page total: <span className="font-semibold tabular-nums text-slate-700">{filteredPaymentTotal.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span></p><div className="flex flex-wrap gap-2">{batchFilter && isAdmin && !readOnly && <button type="button" onClick={() => setBatchEdit({ id: batchFilter, paymentDate: "", paymentMethod: "", bankName: "" })} className="app-btn-secondary text-sm">Edit batch {batchFilter}</button>}<button type="button" onClick={() => setShowColumnPicker((open) => !open)} className="app-btn-secondary text-sm"><Columns3 className="h-4 w-4" />Columns</button><button type="button" onClick={exportPayments} className="app-btn-secondary text-sm"><Download className="h-4 w-4" />Export CSV</button><button type="button" onClick={printPayments} className="app-btn-secondary text-sm"><Printer className="h-4 w-4" />Print</button></div></div>
+      {showColumnPicker && <div className="mb-4 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm"><p className="mb-2 font-medium text-slate-700">Show columns and set their left-to-right order:</p><div className="flex flex-wrap gap-2">{columnOrder.map((id, index) => { const column = paymentColumns.find((item) => item.id === id)!; return <div key={id} className="inline-flex items-center gap-1 rounded-md border bg-white px-2 py-1.5"><label className="inline-flex items-center gap-1.5"><input type="checkbox" checked={visibleColumns.has(id)} onChange={() => toggleColumn(id)} />{column.label}</label><button type="button" aria-label={`Move ${column.label} left`} disabled={index === 0} onClick={() => moveColumn(id, -1)} className="ml-1 rounded px-1 text-slate-600 hover:bg-slate-100 disabled:opacity-30">←</button><button type="button" aria-label={`Move ${column.label} right`} disabled={index === columnOrder.length - 1} onClick={() => moveColumn(id, 1)} className="rounded px-1 text-slate-600 hover:bg-slate-100 disabled:opacity-30">→</button></div>; })}</div></div>}
 
       {isSuperAdmin && !readOnly && selectedPaymentIds.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3">
@@ -874,21 +1005,14 @@ export function VendorPaymentsPage({
       {loading ? (
         <p className="text-slate-500 py-4">Loading…</p>
       ) : (
-        <div className="app-card overflow-hidden">
-          <table className="min-w-full text-sm">
+        <>
+        <div className="app-card overflow-x-auto">
+          <table className="min-w-max text-sm">
             <thead className="bg-slate-50">
               <tr>
                 {isSuperAdmin && !readOnly && <th className="p-3 text-left"><input type="checkbox" aria-label="Select all active supplier payments" checked={payments.filter((payment) => payment.status !== "reversed").length > 0 && selectedPaymentIds.length === payments.filter((payment) => payment.status !== "reversed").length} onChange={toggleAllActivePayments} /></th>}
-                {sortHeader("payment_date", "Date")}
-                {sortHeader("created_at", "Recorded at")}
-                {sortHeader("vendor", "Vendor")}
-                {sortHeader("payment_method", "Method")}
-                <th className="text-left p-3">Cheque no.</th>
-                <th className="text-left p-3">PV no.</th>
-                {sortHeader("reference", "Reference")}
-                {sortHeader("amount", "Amount", "right")}
-                <th className="text-left p-3 w-28">Documents</th>
-                <th className="text-right p-3">Actions</th>
+                {orderedVisibleColumns.map((column) => <Fragment key={column.id}>{renderPaymentHeader(column.id)}</Fragment>)}
+                <th className="w-24 p-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -898,45 +1022,7 @@ export function VendorPaymentsPage({
                   className={`border-t ${p.status === "reversed" ? "bg-rose-50/60 text-slate-500" : ""} ${highlightVendorPaymentId === p.id ? "bg-amber-50 ring-2 ring-inset ring-amber-300/80" : ""}`}
                 >
                   {isSuperAdmin && !readOnly && <td className="p-3"><input type="checkbox" aria-label={`Select payment ${p.reference || p.id}`} disabled={p.status === "reversed" || bulkReversing} checked={selectedPaymentIds.includes(p.id)} onChange={() => togglePaymentSelection(p.id)} /></td>}
-                  <td className="p-3">{p.payment_date ? new Date(p.payment_date).toLocaleDateString() : "—"}</td>
-                  <td className="p-3 whitespace-nowrap text-xs text-slate-600">{p.created_at ? new Date(p.created_at).toLocaleString() : "—"}</td>
-                  <td className="p-3">
-                    {p.vendor_id && onNavigate ? (
-                      <button
-                        type="button"
-                        className="text-left text-brand-700 hover:underline font-medium truncate max-w-[220px]"
-                        onClick={() => onNavigate("purchases_vendors", { highlightVendorId: p.vendor_id })}
-                      >
-                        {p.vendors?.name || "—"}
-                      </button>
-                    ) : (
-                      p.vendors?.name || "—"
-                    )}
-                  </td>
-                  <td className="p-3 capitalize">{(p.payment_method || "—").replace("_", " ")}</td>
-                  <td className="p-3 whitespace-nowrap">{p.cheque_number || p.reference?.match(/\bCHQ\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "—"}</td>
-                  <td className="p-3 whitespace-nowrap">{p.payment_voucher || p.reference?.match(/\bPV\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "—"}</td>
-                  <td className="p-3">{p.reference || "—"}{supplierPaymentBatchId(p.reference) && <p className="mt-1 text-xs font-medium text-indigo-700">Upload batch: {supplierPaymentBatchId(p.reference)}</p>}{p.status === "reversed" && <p className="text-xs font-semibold text-rose-700">Reversed</p>}</td>
-                  <td className="p-3 text-right">
-                    <button
-                      type="button"
-                      className="font-semibold text-brand-700 hover:underline tabular-nums"
-                      title="View payment line details"
-                      onClick={() => setDetailPayment(p)}
-                    >
-                      {Number(p.amount || 0).toFixed(2)}
-                    </button>
-                  </td>
-                  <td className="p-3 align-top">
-                    <SourceDocumentsCell
-                      table="vendor_payments"
-                      recordId={p.id}
-                      organizationId={orgId}
-                      rawDocuments={p.source_documents}
-                      readOnly={readOnly}
-                      onUpdated={fetchData}
-                    />
-                  </td>
+                  {orderedVisibleColumns.map((column) => <Fragment key={column.id}>{renderPaymentCell(p, column.id)}</Fragment>)}
                   <td className="p-3 text-right">
                     {isAdmin && !readOnly && p.status !== "reversed" && (
                       <span className="inline-flex gap-1">
@@ -956,6 +1042,8 @@ export function VendorPaymentsPage({
           </table>
           {sortedPayments.length === 0 && <p className="p-8 text-center text-slate-500">{payments.length === 0 ? "No payments recorded yet." : hasPaymentFilters ? "No supplier payments match these filters. Clear or adjust the search, supplier, method, or date range." : !showReversedPayments ? "No active payments. Show reversed payments to view the audit trail." : "No supplier payments to display."}</p>}
         </div>
+        {paymentTotalCount > paymentPageSize && <div className="mt-4 flex items-center justify-between gap-3"><p className="text-sm text-slate-600">Page {paymentPage + 1} of {paymentPageCount}</p><div className="flex gap-2"><button type="button" disabled={paymentPage === 0 || loading} onClick={() => setPaymentPage((page) => Math.max(0, page - 1))} className="app-btn-secondary disabled:opacity-50">Previous</button><button type="button" disabled={paymentPage >= paymentPageCount - 1 || loading} onClick={() => setPaymentPage((page) => Math.min(paymentPageCount - 1, page + 1))} className="app-btn-secondary disabled:opacity-50">Next</button></div></div>}
+        </>
       )}
 
       {detailPayment && (
@@ -1101,7 +1189,7 @@ export function VendorPaymentsPage({
         <div className="mt-6 flex justify-end gap-2"><button type="button" disabled={reclassifying} onClick={() => setReclassifyDraft(null)} className="app-btn-secondary">Cancel</button><button type="button" disabled={reclassifying} onClick={() => void completeReclassification()} className="app-btn-primary">{reclassifying ? "Reclassifying…" : "Create replacement and reverse original"}</button></div>
       </div></div>}
 
-      {batchEdit && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => !batchEditing && setBatchEdit(null)}><div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-bold text-slate-900">Edit imported batch</h2><p className="mt-1 text-sm text-slate-500">{batchEdit.id} · {payments.filter((payment) => supplierPaymentBatchId(payment.reference) === batchEdit.id && payment.status !== "reversed").length} active payment(s)</p></div><button type="button" onClick={() => !batchEditing && setBatchEdit(null)} className="text-slate-500 hover:text-slate-800"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm text-slate-600">Leave a field blank to keep its current value across the batch.</p><div className="mt-4 space-y-3"><label className="block text-sm font-medium text-slate-700">Payment date<input type="date" value={batchEdit.paymentDate} onChange={(event) => setBatchEdit({ ...batchEdit, paymentDate: event.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label><label className="block text-sm font-medium text-slate-700">Payment method<select value={batchEdit.paymentMethod} onChange={(event) => setBatchEdit({ ...batchEdit, paymentMethod: event.target.value as typeof batchEdit.paymentMethod })} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">Keep current method</option><option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank Transfer</option><option value="wallet">Wallet</option></select></label><label className="block text-sm font-medium text-slate-700">Bank name<input value={batchEdit.bankName} onChange={(event) => setBatchEdit({ ...batchEdit, bankName: event.target.value })} placeholder="Leave blank to keep current bank" className="mt-1 w-full rounded-lg border px-3 py-2" /></label></div>{batchEditing && batchEditProgress.total > 0 && <div className="mt-4"><div className="mb-1 flex justify-between text-xs text-slate-600"><span>Updating batch…</span><span>{batchEditProgress.completed} / {batchEditProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(batchEditProgress.completed / batchEditProgress.total * 100)}%` }} /></div></div>}<div className="mt-6 flex justify-end gap-2"><button type="button" onClick={() => setBatchEdit(null)} disabled={batchEditing} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void applyBatchEdit()} disabled={batchEditing} className="app-btn-primary">{batchEditing ? "Updating…" : "Update batch"}</button></div></div></div>}
+      {batchEdit && <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4" onClick={() => !batchEditing && setBatchEdit(null)}><div className="w-full max-w-lg rounded-xl bg-white p-6 shadow-xl" onClick={(event) => event.stopPropagation()}><div className="flex items-start justify-between gap-3"><div><h2 className="text-xl font-bold text-slate-900">Edit imported batch</h2><p className="mt-1 text-sm text-slate-500">{batchEdit.id} · {payments.filter((payment) => supplierPaymentBatchId(payment) === batchEdit.id && payment.status !== "reversed").length} active payment(s)</p></div><button type="button" onClick={() => !batchEditing && setBatchEdit(null)} className="text-slate-500 hover:text-slate-800"><X className="h-5 w-5" /></button></div><p className="mt-4 text-sm text-slate-600">Leave a field blank to keep its current value across the batch.</p><div className="mt-4 space-y-3"><label className="block text-sm font-medium text-slate-700">Payment date<input type="date" value={batchEdit.paymentDate} onChange={(event) => setBatchEdit({ ...batchEdit, paymentDate: event.target.value })} className="mt-1 w-full rounded-lg border px-3 py-2" /></label><label className="block text-sm font-medium text-slate-700">Payment method<select value={batchEdit.paymentMethod} onChange={(event) => setBatchEdit({ ...batchEdit, paymentMethod: event.target.value as typeof batchEdit.paymentMethod })} className="mt-1 w-full rounded-lg border px-3 py-2"><option value="">Keep current method</option><option value="cash">Cash</option><option value="card">Card</option><option value="bank_transfer">Bank Transfer</option><option value="wallet">Wallet</option></select></label><label className="block text-sm font-medium text-slate-700">Bank name<input value={batchEdit.bankName} onChange={(event) => setBatchEdit({ ...batchEdit, bankName: event.target.value })} placeholder="Leave blank to keep current bank" className="mt-1 w-full rounded-lg border px-3 py-2" /></label></div>{batchEditing && batchEditProgress.total > 0 && <div className="mt-4"><div className="mb-1 flex justify-between text-xs text-slate-600"><span>Updating batch…</span><span>{batchEditProgress.completed} / {batchEditProgress.total}</span></div><div className="h-2 overflow-hidden rounded-full bg-indigo-100"><div className="h-full bg-indigo-600 transition-all" style={{ width: `${Math.round(batchEditProgress.completed / batchEditProgress.total * 100)}%` }} /></div></div>}<div className="mt-6 flex justify-end gap-2"><button type="button" onClick={() => setBatchEdit(null)} disabled={batchEditing} className="app-btn-secondary">Cancel</button><button type="button" onClick={() => void applyBatchEdit()} disabled={batchEditing} className="app-btn-primary">{batchEditing ? "Updating…" : "Update batch"}</button></div></div></div>}
 
       {showModal && (
         <div
@@ -1162,6 +1250,38 @@ export function VendorPaymentsPage({
                   className="w-full border rounded-lg px-3 py-2"
                   placeholder="0.00"
                 />
+              </div>
+
+              <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 sm:grid-cols-2">
+                <div>
+                  <label className="block text-sm font-medium mb-1">Payment date</label>
+                  <input type="date" value={paymentDate} onChange={(e) => setPaymentDate(e.target.value)} className="w-full border rounded-lg px-3 py-2" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Payment method</label>
+                  <select value={paymentMethod} onChange={(e) => setPaymentMethod(e.target.value as "cash" | "card" | "bank_transfer")} className="w-full border rounded-lg px-3 py-2">
+                    <option value="cash">Cash</option>
+                    <option value="card">Card</option>
+                    <option value="bank_transfer">Bank Transfer</option>
+                    <option value="wallet">Wallet</option>
+                  </select>
+                </div>
+                {paymentMethod === "bank_transfer" && <div>
+                  <label className="block text-sm font-medium mb-1">Bank name *</label>
+                  <input value={bankName} onChange={(e) => setBankName(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, Centenary Bank" required />
+                </div>}
+                <div>
+                  <label className="block text-sm font-medium mb-1">Cheque number</label>
+                  <input value={chequeNumber} onChange={(e) => setChequeNumber(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, 007380" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Payment voucher no.</label>
+                  <input value={paymentVoucher} onChange={(e) => setPaymentVoucher(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, PV-11427" />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1">Reference</label>
+                  <input value={reference} onChange={(e) => setReference(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="Optional" />
+                </div>
               </div>
 
               <div>
@@ -1261,43 +1381,6 @@ export function VendorPaymentsPage({
                 </div>
               )}
 
-              <div>
-                <label className="block text-sm font-medium mb-1">Payment Date</label>
-                <input
-                  type="date"
-                  value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Payment Method</label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as "cash" | "card" | "bank_transfer")}
-                  className="w-full border rounded-lg px-3 py-2"
-                >
-                  <option value="cash">Cash</option>
-                  <option value="card">Card</option>
-                  <option value="bank_transfer">Bank Transfer</option>
-                  <option value="wallet">Wallet</option>
-                </select>
-              </div>
-              {paymentMethod === "bank_transfer" && <div>
-                <label className="block text-sm font-medium mb-1">Bank name *</label>
-                <input value={bankName} onChange={(e) => setBankName(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, Centenary Bank" required />
-              </div>}
-              <div><label className="block text-sm font-medium mb-1">Cheque number</label><input value={chequeNumber} onChange={(e) => setChequeNumber(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, 007380" /></div>
-              <div><label className="block text-sm font-medium mb-1">Payment voucher no.</label><input value={paymentVoucher} onChange={(e) => setPaymentVoucher(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, PV-11427" /></div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Reference</label>
-                <input
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
-                  className="w-full border rounded-lg px-3 py-2"
-                  placeholder="Optional"
-                />
-              </div>
               <div>
                 <label className="block text-sm font-medium mb-1">Attachments (optional)</label>
                 <input

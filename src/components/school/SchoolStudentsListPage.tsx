@@ -5,6 +5,7 @@ import * as XLSX from "xlsx";
 import { canUseSchoolApi, listSchoolRows, updateSchoolRow } from "@/lib/schoolApiData";
 import { toSchoolTitleCase } from "@/lib/schoolTextCase";
 import { fetchAllPages } from "@/lib/supabasePagination";
+import { SchoolFilterBar, type SchoolFilterChip } from "@/components/common/SchoolFilterBar";
 
 type StudentRow = {
   id: string;
@@ -288,22 +289,26 @@ export function StudentsListPage() {
       <h1 className="text-xl font-bold">Students List</h1>
       {error && <p className="text-sm text-red-600">{error}</p>}
 
-      {/* FILTERS */}
-      <div className="flex gap-2">
-        <input
+      <SchoolFilterBar
+        search={<input
           placeholder="Search name, admission or SchoolPay"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          className="border p-2 rounded"
-        />
-
+          className="w-full border p-2 rounded"
+        />}
+        activeFilters={([search && { key: "search", label: `Search: ${search}`, onRemove: () => setSearch("") }, classFilter && { key: "class", label: `Class: ${classFilter}`, onRemove: () => setClassFilter("") }].filter(Boolean) as SchoolFilterChip[])}
+        onClearAll={() => { setSearch(""); setClassFilter(""); }}
+        resultSummary={<>{filtered.length} of {rows.length} students</>}
+      >
         <input
           placeholder="Filter class"
           value={classFilter}
           onChange={e => setClassFilter(e.target.value)}
-          className="border p-2 rounded"
+          className="w-full max-w-sm border p-2 rounded"
         />
+      </SchoolFilterBar>
 
+      <div className="flex gap-2">
         <button onClick={exportExcel} className="bg-green-600 text-white px-3 py-2 rounded">
           Excel
         </button>

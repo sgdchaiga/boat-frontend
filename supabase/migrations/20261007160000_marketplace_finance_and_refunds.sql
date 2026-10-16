@@ -57,12 +57,16 @@ CREATE TRIGGER trg_marketplace_refunds_touch BEFORE UPDATE ON public.marketplace
 ALTER TABLE public.marketplace_finance_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.marketplace_settlement_orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.marketplace_refunds ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_finance_settings_org ON public.marketplace_finance_settings;
 CREATE POLICY marketplace_finance_settings_org ON public.marketplace_finance_settings FOR ALL TO authenticated
   USING (public.marketplace_org_access(organization_id)) WITH CHECK (public.marketplace_org_access(organization_id));
+DROP POLICY IF EXISTS marketplace_settlement_orders_org_read ON public.marketplace_settlement_orders;
 CREATE POLICY marketplace_settlement_orders_org_read ON public.marketplace_settlement_orders FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM public.marketplace_settlements settlement WHERE settlement.id = settlement_id AND public.marketplace_org_access(settlement.organization_id)));
+DROP POLICY IF EXISTS marketplace_refunds_org_read ON public.marketplace_refunds;
 CREATE POLICY marketplace_refunds_org_read ON public.marketplace_refunds FOR SELECT TO authenticated
   USING (public.marketplace_org_access(organization_id));
+DROP POLICY IF EXISTS marketplace_refunds_customer_read ON public.marketplace_refunds;
 CREATE POLICY marketplace_refunds_customer_read ON public.marketplace_refunds FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM public.marketplace_customers customer WHERE customer.id = customer_id AND customer.user_id = auth.uid()));
 GRANT SELECT, INSERT, UPDATE ON public.marketplace_finance_settings TO authenticated;
@@ -70,6 +74,7 @@ GRANT SELECT ON public.marketplace_settlement_orders, public.marketplace_refunds
 
 -- Settlement state changes are controlled by RPC rather than broad table writes.
 DROP POLICY IF EXISTS marketplace_org_marketplace_settlements ON public.marketplace_settlements;
+DROP POLICY IF EXISTS marketplace_settlements_org_read ON public.marketplace_settlements;
 CREATE POLICY marketplace_settlements_org_read ON public.marketplace_settlements FOR SELECT TO authenticated
   USING (public.marketplace_org_access(organization_id));
 

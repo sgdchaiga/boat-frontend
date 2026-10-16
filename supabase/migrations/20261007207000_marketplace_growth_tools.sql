@@ -6,6 +6,7 @@ CREATE TABLE IF NOT EXISTS public.marketplace_wishlist_items (
   PRIMARY KEY (customer_id, listing_id)
 );
 ALTER TABLE public.marketplace_wishlist_items ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_wishlist_items_self ON public.marketplace_wishlist_items;
 CREATE POLICY marketplace_wishlist_items_self ON public.marketplace_wishlist_items FOR ALL TO authenticated
   USING (EXISTS (SELECT 1 FROM public.marketplace_customers customer WHERE customer.id = customer_id AND customer.user_id = auth.uid()))
   WITH CHECK (EXISTS (SELECT 1 FROM public.marketplace_customers customer WHERE customer.id = customer_id AND customer.user_id = auth.uid()));
@@ -28,8 +29,10 @@ CREATE TABLE IF NOT EXISTS public.marketplace_promotion_codes (
   UNIQUE (merchant_id, code)
 );
 ALTER TABLE public.marketplace_promotion_codes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_promotion_codes_merchant ON public.marketplace_promotion_codes;
 CREATE POLICY marketplace_promotion_codes_merchant ON public.marketplace_promotion_codes FOR ALL TO authenticated
   USING (public.marketplace_org_access(organization_id)) WITH CHECK (public.marketplace_org_access(organization_id));
+DROP POLICY IF EXISTS marketplace_promotion_codes_public_read ON public.marketplace_promotion_codes;
 CREATE POLICY marketplace_promotion_codes_public_read ON public.marketplace_promotion_codes FOR SELECT TO authenticated
   USING (is_active AND starts_at <= now() AND (ends_at IS NULL OR ends_at >= now()));
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.marketplace_promotion_codes TO authenticated;

@@ -270,6 +270,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     }
   }, [businessType, generalBusinessCashbookEnabled, generalBusinessMode, setGeneralBusinessMode]);
   const standardSchoolMode = user?.school_layout_mode === 'standard';
+  const schoolFinanceWorkspaceMode = user?.school_layout_mode === 'finance_workspace';
   const subscriptionStatus = user?.subscription_status ?? "none";
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [litePreference, setLitePreference] = useState<MobileLitePreference>(readMobileLitePreference);
@@ -1299,6 +1300,82 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Intelligence', page: 'industry_intelligence' },
     ] },
   ];
+  /**
+   * School Finance Workspace groups pages by the real school workflow rather
+   * than repeating the same destination in several sidebar sections.
+   */
+  const schoolFinanceWorkspaceNavigation: NavItem[] = [
+    { name: 'Dashboard', icon: LayoutDashboard, page: SCHOOL_PAGE.dashboard },
+    { name: 'Students', icon: UsersRound, children: [
+      { name: 'Student register', page: SCHOOL_PAGE.studentsList },
+      { name: 'Admissions', page: SCHOOL_PAGE.students },
+      { name: 'Parents & guardians', page: SCHOOL_PAGE.parents },
+      { name: 'Health alerts', page: SCHOOL_PAGE.healthIssues },
+      { name: 'Classes & streams', page: SCHOOL_PAGE.classes },
+      { name: 'Subjects & teaching', page: SCHOOL_PAGE.subjects },
+    ] },
+    { name: 'Billing & Collections', icon: Receipt, children: [
+      { name: 'Fee structures', page: SCHOOL_PAGE.feeStructures },
+      { name: 'Special fee structures', page: SCHOOL_PAGE.specialFeeStructures },
+      { name: 'Fee invoices', page: SCHOOL_PAGE.invoices },
+      { name: 'Fee payments', page: SCHOOL_PAGE.payments },
+      { name: 'Collections & statements', page: SCHOOL_PAGE.collections },
+      { name: 'Bursaries, discounts & waivers', page: SCHOOL_PAGE.bursary },
+      { name: 'Rental charges', page: SCHOOL_PAGE.rentalRegister },
+      { name: 'Rent collections', page: SCHOOL_PAGE.rentalPayments },
+      { name: 'Other income', page: SCHOOL_PAGE.otherRevenue },
+    ] },
+    { name: 'Procurement & Stock', icon: ShoppingCart, children: [
+      { name: 'Purchase orders', page: 'purchases_orders' },
+      { name: 'Goods received & supplier bills', page: 'purchases_bills' },
+      { name: 'Suppliers', page: 'purchases_vendors' },
+      { name: 'Purchase returns', page: 'purchases_credits' },
+      ...(user?.school_enable_inventory === true ? [{ group: 'Inventory', items: [
+        { name: 'Stock overview', page: 'Products' },
+        { name: 'Stock issues', page: 'inventory_store_requisitions' },
+        { name: 'Stock counts & adjustments', page: 'inventory_stock_adjustments' },
+        { name: 'Stock movement report', page: 'reports_stock_movement' },
+      ] }] : []),
+    ] },
+    { name: 'Finance', icon: Landmark, children: [
+      { name: 'Finance overview', page: 'finance_overview' },
+      { name: 'Expenses', page: 'purchases_expenses' },
+      { name: 'Supplier payments', page: 'purchases_payments' },
+      ...(generalBusinessCashbookEnabled ? [{ name: 'Petty cash', page: 'school_cashbook_register' }] : []),
+      { name: 'Staff advances', page: 'payroll_loans' },
+      { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
+      { group: 'Cash & bank', items: [
+        { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
+        { name: 'Daily money summary', page: 'treasury', state: { treasuryTab: 'daily-method' } },
+        { name: 'Cashier closing', page: 'treasury', state: { treasuryTab: 'end-of-day' } },
+        { name: 'Transfers', page: 'treasury', state: { treasuryTab: 'movements' } },
+      ] },
+      ...(canUseAdvancedAccounting ? [{ group: 'Accounting', items: [
+        { name: 'Chart of accounts', page: 'gl_accounts' },
+        { name: 'Journal register', page: 'accounting_journal' },
+        { name: 'Manual journals', page: 'accounting_manual' },
+        { name: 'Reconciliation', page: 'accounting_bank_reconciliation' },
+      ] }] : []),
+    ] },
+    { name: 'Planning & Budget', icon: BookOpen, children: [
+      { name: 'Budget setup', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'formulation' } },
+      { name: 'Review & approval', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'formulation' } },
+      { name: 'Vote book', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'vote' } },
+      { name: 'Commitments', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'approvals' } },
+      { name: 'Budget adjustments', page: SCHOOL_PAGE.voteBook, state: { voteBookTab: 'transfers' } },
+      { name: 'Budget performance', page: 'reports_budget_variance' },
+    ] },
+    ...(enablePayroll && canUseSchoolPayroll ? [{ name: 'Payroll', icon: Wallet, children: [
+      { name: 'Overview', page: PAYROLL_PAGE.hub }, { name: 'Employees', page: PAYROLL_PAGE.staff }, { name: 'Process payroll', page: PAYROLL_PAGE.run }, { name: 'Review & approve', page: PAYROLL_PAGE.review }, { name: 'Payments', page: PAYROLL_PAGE.payments }, { name: 'Payroll reports', page: PAYROLL_PAGE.reports },
+    ] } as NavItem] : []),
+    { name: 'Reports', icon: TrendingUp, page: 'reports' },
+    { name: 'Settings', icon: Settings, children: [
+      { name: 'School profile & security', page: 'admin', state: { adminTab: 'business' } },
+      { name: 'Users & roles', page: 'admin', state: { adminTab: 'users' } },
+      { name: 'Bulk import', page: 'admin', state: { adminTab: 'local_import' } },
+      { name: 'Data migration', page: 'data_migration' },
+    ] },
+  ];
 
   const cashbookModeNavigation: NavItem[] | null = generalBusinessMode !== 'cashbook' ? null
     : businessType === 'sacco'
@@ -1342,7 +1419,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       : businessType === 'microfinance'
         ? mfiNavigation
       : businessType === 'school'
-        ? (standardSchoolMode ? professionalSchoolNavigation : schoolNavigation)
+        ? (schoolFinanceWorkspaceMode ? schoolFinanceWorkspaceNavigation : standardSchoolMode ? professionalSchoolNavigation : schoolNavigation)
     : businessType === 'vsla'
       ? vslaNavigation
           : simpleNavigation;
@@ -1579,7 +1656,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     const query = schoolSearch.trim().toLowerCase();
     if (!query) return [];
     const rows: Array<{ name: string; page: string; state?: Record<string, unknown> }> = [];
-    for (const item of professionalSchoolNavigation) {
+    const schoolNavigationForSearch = schoolFinanceWorkspaceMode ? schoolFinanceWorkspaceNavigation : professionalSchoolNavigation;
+    for (const item of schoolNavigationForSearch) {
       if ('page' in item && item.page) rows.push({ name: item.name, page: item.page, state: item.state });
       if ('children' in item) for (const child of item.children) {
         if ('page' in child) rows.push({ name: child.name, page: child.page, state: child.state });
@@ -1587,7 +1665,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       }
     }
     return rows.filter((row) => row.name.toLowerCase().includes(query) && canShowPage(row.page)).slice(0, 7);
-  }, [schoolSearch, professionalSchoolNavigation, canShowPage]);
+  }, [schoolSearch, professionalSchoolNavigation, schoolFinanceWorkspaceNavigation, schoolFinanceWorkspaceMode, canShowPage]);
   const isReadOnlyPage = (page: string) => {
     const moduleId = pageToModuleId(page);
     if (!moduleId) return false;
@@ -2185,7 +2263,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
               <div className="flex flex-wrap items-center gap-3">
                 <div className="mr-auto min-w-0">
                   <p className="truncate text-sm font-bold text-slate-900">{user?.organization_name || 'School workspace'}</p>
-                  <p className="text-xs text-slate-500">Student administration · Billing · Finance</p>
+                  <p className="text-xs text-slate-500">{schoolFinanceWorkspaceMode ? 'School Finance Workspace · Billing · Procurement · Finance' : 'Student administration · Billing · Finance'}</p>
                 </div>
                 <label className="relative order-last w-full sm:order-none sm:w-64">
                   <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />

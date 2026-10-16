@@ -38,12 +38,17 @@ CREATE TRIGGER trg_marketplace_reviews_touch BEFORE UPDATE ON public.marketplace
 
 ALTER TABLE public.marketplace_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.marketplace_reviews ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS marketplace_notifications_customer_read ON public.marketplace_notifications;
 CREATE POLICY marketplace_notifications_customer_read ON public.marketplace_notifications FOR SELECT TO authenticated
   USING (recipient_user_id = auth.uid());
+DROP POLICY IF EXISTS marketplace_notifications_org_read ON public.marketplace_notifications;
 CREATE POLICY marketplace_notifications_org_read ON public.marketplace_notifications FOR SELECT TO authenticated
   USING (organization_id IS NOT NULL AND public.marketplace_org_access(organization_id));
+DROP POLICY IF EXISTS marketplace_reviews_public_read ON public.marketplace_reviews;
 CREATE POLICY marketplace_reviews_public_read ON public.marketplace_reviews FOR SELECT TO anon, authenticated USING (is_published = true);
+DROP POLICY IF EXISTS marketplace_reviews_org_read ON public.marketplace_reviews;
 CREATE POLICY marketplace_reviews_org_read ON public.marketplace_reviews FOR SELECT TO authenticated USING (public.marketplace_org_access(organization_id));
+DROP POLICY IF EXISTS marketplace_reviews_customer_read ON public.marketplace_reviews;
 CREATE POLICY marketplace_reviews_customer_read ON public.marketplace_reviews FOR SELECT TO authenticated
   USING (EXISTS (SELECT 1 FROM public.marketplace_customers customer WHERE customer.id = customer_id AND customer.user_id = auth.uid()));
 GRANT SELECT ON public.marketplace_notifications, public.marketplace_reviews TO authenticated;

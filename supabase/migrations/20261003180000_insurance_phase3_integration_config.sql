@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS public.insurance_notification_rules (
  id uuid PRIMARY KEY DEFAULT gen_random_uuid(), organization_id uuid NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE, event_type text NOT NULL, channel text NOT NULL CHECK(channel IN ('sms','whatsapp','email','boat')), days_before integer, active boolean NOT NULL DEFAULT false, template_text text, created_at timestamptz NOT NULL DEFAULT now()
 );
 ALTER TABLE public.insurance_integration_settings ENABLE ROW LEVEL SECURITY; ALTER TABLE public.insurance_notification_rules ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS insurance_org_integrations ON public.insurance_integration_settings;
 CREATE POLICY insurance_org_integrations ON public.insurance_integration_settings FOR ALL TO authenticated USING(public.insurance_org_access(organization_id)) WITH CHECK(public.insurance_org_access(organization_id));
+DROP POLICY IF EXISTS insurance_org_notifications ON public.insurance_notification_rules;
 CREATE POLICY insurance_org_notifications ON public.insurance_notification_rules FOR ALL TO authenticated USING(public.insurance_org_access(organization_id)) WITH CHECK(public.insurance_org_access(organization_id));
 GRANT SELECT,INSERT,UPDATE,DELETE ON public.insurance_integration_settings,public.insurance_notification_rules TO authenticated;

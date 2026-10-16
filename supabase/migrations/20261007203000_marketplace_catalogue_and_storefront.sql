@@ -12,6 +12,7 @@ CREATE INDEX IF NOT EXISTS idx_marketplace_customer_listing_preferences_customer
 
 ALTER TABLE public.marketplace_customer_listing_preferences ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS marketplace_customer_listing_preferences_self ON public.marketplace_customer_listing_preferences;
 CREATE POLICY marketplace_customer_listing_preferences_self
   ON public.marketplace_customer_listing_preferences
   FOR ALL TO authenticated

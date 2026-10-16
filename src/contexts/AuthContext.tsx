@@ -145,7 +145,7 @@ interface AuthUser {
   /** Platform: General Business Cashbook workspace toggle. */
   enable_cashbook_mode?: boolean;
   /** Platform Super Admin-selected school navigation experience. */
-  school_layout_mode?: "legacy" | "standard";
+  school_layout_mode?: "legacy" | "standard" | "finance_workspace";
   /** Platform: BOAT Connect data integration and reporting layer toggle. */
   enable_boat_connect?: boolean;
   /** Platform: Assessment & onboarding module (prospect hotels). */
@@ -331,7 +331,7 @@ type TenantProfile = {
   enable_agent: boolean;
   enable_assistant: boolean;
   enable_cashbook_mode: boolean;
-  school_layout_mode: "legacy" | "standard";
+  school_layout_mode: "legacy" | "standard" | "finance_workspace";
   enable_boat_connect: boolean;
   enable_hotel_assessment: boolean;
   enable_manufacturing: boolean;
@@ -430,7 +430,7 @@ function localTenantDefaults(): TenantProfile {
     enable_agent: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_AGENT, true),
     enable_assistant: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_ASSISTANT, false),
     enable_cashbook_mode: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_CASHBOOK_MODE, false),
-    school_layout_mode: import.meta.env.VITE_LOCAL_SCHOOL_LAYOUT_MODE === "standard" ? "standard" : "legacy",
+    school_layout_mode: import.meta.env.VITE_LOCAL_SCHOOL_LAYOUT_MODE === "finance_workspace" ? "finance_workspace" : import.meta.env.VITE_LOCAL_SCHOOL_LAYOUT_MODE === "standard" ? "standard" : "legacy",
     enable_boat_connect: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_BOAT_CONNECT, true),
     enable_hotel_assessment: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_HOTEL_ASSESSMENT, true),
     enable_manufacturing: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_MANUFACTURING, true),
@@ -685,7 +685,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_agent?: boolean | null;
       enable_assistant?: boolean | null;
       enable_cashbook_mode?: boolean | null;
-      school_layout_mode?: "legacy" | "standard" | null;
+      school_layout_mode?: "legacy" | "standard" | "finance_workspace" | null;
       enable_boat_connect?: boolean | null;
       enable_hotel_assessment?: boolean | null;
       enable_manufacturing?: boolean | null;
@@ -743,7 +743,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
       enable_agent: org?.enable_agent !== false,
       enable_assistant: org?.enable_assistant === true,
       enable_cashbook_mode: org?.enable_cashbook_mode === true,
-      school_layout_mode: org?.school_layout_mode === "standard" ? "standard" : "legacy",
+      school_layout_mode: org?.school_layout_mode === "finance_workspace" ? "finance_workspace" : org?.school_layout_mode === "standard" ? "standard" : "legacy",
       enable_boat_connect: org?.enable_boat_connect !== false,
       enable_hotel_assessment: org?.enable_hotel_assessment !== false,
       enable_manufacturing: org?.enable_manufacturing !== false,
