@@ -18,6 +18,7 @@ export async function postStockInFromPurchaseOrderForBill(
   const organizationId = (purchaseOrder as { organization_id?: string | null } | null)?.organization_id ?? null;
 
   let poItems: Array<{
+    id?: string;
     product_id?: string | null;
     description?: string | null;
     quantity?: number | null;
@@ -27,7 +28,7 @@ export async function postStockInFromPurchaseOrderForBill(
 
   const withProduct = await supabase
     .from("purchase_order_items")
-    .select("product_id, description, quantity, cost_price")
+    .select("id, product_id, description, quantity, cost_price")
     .eq("purchase_order_id", purchaseOrderId);
 
   if (withProduct.error) {
@@ -35,13 +36,32 @@ export async function postStockInFromPurchaseOrderForBill(
     if (!msg.includes("product_id")) throw withProduct.error;
     const fallback = await supabase
       .from("purchase_order_items")
-      .select("description, quantity, cost_price")
+      .select("id, description, quantity, cost_price")
       .eq("purchase_order_id", purchaseOrderId);
     if (fallback.error) throw fallback.error;
     poItems = (fallback.data || []) as typeof poItems;
   } else {
     poItems = (withProduct.data || []) as typeof poItems;
   }
+
+  // A completed receipt is the operational truth. When one exists, receive only
+  // the quantity actually accepted rather than the original ordered quantity.
+  const receiptLines = await supabase
+    .from("school_purchase_receipt_lines")
+    .select("purchase_order_item_id, accepted_quantity, school_purchase_receipts!inner(purchase_order_id, status)")
+    .eq("school_purchase_receipts.purchase_order_id", purchaseOrderId)
+    .eq("school_purchase_receipts.status", "completed");
+  const acceptedByPoItem = new Map<string, number>();
+  if (!receiptLines.error) {
+    (receiptLines.data || []).forEach((line: { purchase_order_item_id?: string | null; accepted_quantity?: number | null }) => {
+      if (!line.purchase_order_item_id) return;
+      acceptedByPoItem.set(
+        line.purchase_order_item_id,
+        (acceptedByPoItem.get(line.purchase_order_item_id) || 0) + Number(line.accepted_quantity || 0)
+      );
+    });
+  }
+  const useAcceptedReceiptQuantities = acceptedByPoItem.size > 0;
 
   const missingDescriptions = Array.from(
     new Set(
@@ -78,7 +98,7 @@ export async function postStockInFromPurchaseOrderForBill(
       const normalizedDesc = String(it.description || "").trim();
       const productId =
         (it.product_id as string | null) || productByName.get(normalizedDesc.toLowerCase()) || null;
-      const qty = Number(it.quantity) || 0;
+      const qty = useAcceptedReceiptQuantities && it.id ? acceptedByPoItem.get(it.id) || 0 : Number(it.quantity) || 0;
       const unitCost = Number(it.cost_price) || 0;
       if (!productId) {
         if (normalizedDesc) unmatchedDescriptions.add(normalizedDesc);

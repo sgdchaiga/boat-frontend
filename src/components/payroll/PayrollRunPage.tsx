@@ -38,6 +38,11 @@ type ProfileRow = {
   other_allowances: unknown;
   is_on_payroll: boolean;
 };
+type PayrollCostClassificationRow = {
+  id: string;
+  name: string;
+  salary_expense_gl_account_id: string | null;
+};
 type SettingsRow = {
   paye_tax_bands: unknown;
   paye_personal_relief_monthly: number;
@@ -526,8 +531,12 @@ export function PayrollRunPage({ readOnly, onNavigate }: Props) {
       setBusy(false);
       return;
     }
-    const classificationById = new Map((classifications || []).map((c) => [c.id, c]));
-    const profileByStaffId = new Map((profiles || []).map((p) => [p.staff_id, p]));
+    const classificationById = new Map(
+      ((classifications || []) as PayrollCostClassificationRow[]).map((c) => [c.id, c])
+    );
+    const profileByStaffId = new Map(
+      ((profiles || []) as Pick<ProfileRow, "staff_id" | "payroll_cost_classification_id">[]).map((p) => [p.staff_id, p])
+    );
     const allocationMap = new Map<string, PayrollSalaryAllocation>();
     for (const line of lines) {
       const classification = classificationById.get(profileByStaffId.get(line.staff_id)?.payroll_cost_classification_id || "");

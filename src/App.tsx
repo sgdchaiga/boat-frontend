@@ -139,6 +139,8 @@ const ExpensesPage = lazyNamed(() => import('./components/purchases/ExpensesPage
 const PurchaseOrdersPage = lazyNamed(() => import('./components/purchases/PurchaseOrdersPage'), 'PurchaseOrdersPage');
 const BillsPage = lazyNamed(() => import('./components/purchases/BillsPage'), 'BillsPage');
 const VendorPaymentsPage = lazyNamed(() => import('./components/purchases/VendorPaymentsPage'), 'VendorPaymentsPage');
+const ProcureToPayControlPage = lazyNamed(() => import('./components/purchases/ProcureToPayControlPage'), 'ProcureToPayControlPage');
+const SchoolThreeWayMatchPage = lazyNamed(() => import('./components/purchases/SchoolThreeWayMatchPage'), 'SchoolThreeWayMatchPage');
 const VendorCreditsPage = lazyNamed(() => import('./components/purchases/VendorCreditsPage'), 'VendorCreditsPage');
 const CashOutReconciliationPage = lazyNamed(() => import('./components/purchases/CashOutReconciliationPage'), 'CashOutReconciliationPage');
 const AdminPage = lazyNamed(() => import('./components/admin/AdminPage'), 'AdminPage');
@@ -147,6 +149,8 @@ const JournalEntriesPage = lazyNamed(() => import('./components/accounting/Journ
 const ManualJournalsPage = lazyNamed(() => import('./components/accounting/ManualJournalsPage'), 'ManualJournalsPage');
 const GeneralLedgerPage = lazyNamed(() => import('./components/accounting/GeneralLedgerPage'), 'GeneralLedgerPage');
 const BankReconciliationPage = lazyNamed(() => import('./components/accounting/BankReconciliationPage'), 'BankReconciliationPage');
+const CashControlCenterPage = lazyNamed(() => import('./components/accounting/CashControlCenterPage'), 'CashControlCenterPage');
+const FinancialCloseWorkspacePage = lazyNamed(() => import('./components/accounting/FinancialCloseWorkspacePage'), 'FinancialCloseWorkspacePage');
 const FinanceOverviewPage = lazyNamed(() => import('./components/accounting/FinanceOverviewPage'), 'FinanceOverviewPage');
 const PracticeWorkspacePage = lazyNamed(() => import('./components/accounting-practice/PracticeWorkspacePage'), 'PracticeWorkspacePage');
 const PracticeOperationsPage = lazyNamed(() => import('./components/accounting-practice/PracticeOperationsPage'), 'PracticeOperationsPage');
@@ -254,6 +258,10 @@ const SchoolFeeStructuresPage = lazyNamed(() => import('./components/school/Scho
 const SchoolSpecialFeeStructuresPage = lazyNamed(() => import('./components/school/SchoolSpecialFeeStructuresPage'), 'SchoolSpecialFeeStructuresPage');
 const SchoolBursaryPage = lazyNamed(() => import('./components/school/SchoolBursaryPage'), 'SchoolBursaryPage');
 const SchoolStudentInvoicesPage = lazyNamed(() => import('./components/school/SchoolStudentInvoicesPage'), 'SchoolStudentInvoicesPage');
+const SchoolCreditControlPage = lazyNamed(() => import('./components/school/SchoolCreditControlPage'), 'SchoolCreditControlPage');
+const SchoolCollectionAutomationPage = lazyNamed(() => import('./components/school/SchoolCollectionAutomationPage'), 'SchoolCollectionAutomationPage');
+const SchoolApprovalMatrixPage = lazyNamed(() => import('./components/school/SchoolApprovalMatrixPage'), 'SchoolApprovalMatrixPage');
+const SchoolFinanceOperationsPage = lazyNamed(() => import('./components/school/SchoolFinanceOperationsPage'), 'SchoolFinanceOperationsPage');
 const SchoolRentalRegisterPage = lazyNamed(() => import('./components/school/SchoolRentalRegisterPage'), 'SchoolRentalRegisterPage');
 const SchoolFeePaymentsPage = lazyNamed(() => import('./components/school/SchoolFeePaymentsPage'), 'SchoolFeePaymentsPage');
 const SchoolOtherRevenuePage = lazyNamed(() => import('./components/school/SchoolOtherRevenuePage'), 'SchoolOtherRevenuePage');
@@ -1373,6 +1381,14 @@ function AppContent() {
         return <SchoolBursaryPage readOnly={access.readOnly} />;
       case SCHOOL_PAGE.invoices:
         return <SchoolStudentInvoicesPage readOnly={access.readOnly} />;
+      case SCHOOL_PAGE.creditControl:
+        return <SchoolCreditControlPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case SCHOOL_PAGE.collectionAutomation:
+        return <SchoolCollectionAutomationPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case SCHOOL_PAGE.approvalMatrix:
+        return <SchoolApprovalMatrixPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case SCHOOL_PAGE.financeOperations:
+        return <SchoolFinanceOperationsPage readOnly={access.readOnly} onNavigate={navigate} />;
       case SCHOOL_PAGE.payments:
         return (
           <SchoolFeePaymentsPage
@@ -1792,6 +1808,10 @@ function AppContent() {
             onNavigate={navigate}
           />
         );
+      case 'purchases_procure_to_pay':
+        return <ProcureToPayControlPage readOnly={access.readOnly} onNavigate={navigate} />;
+      case 'school_three_way_match':
+        return <SchoolThreeWayMatchPage readOnly={access.readOnly} onNavigate={navigate} />;
       case 'purchases_credits':
         return <VendorCreditsPage readOnly={access.readOnly} />;
       case 'purchases_cash_out_reconciliation':
@@ -1803,7 +1823,16 @@ function AppContent() {
       case 'accounting_gl':
         return <GeneralLedgerPage />;
       case 'accounting_bank_reconciliation':
-        return <BankReconciliationPage readOnly={access.readOnly} />;
+        return <BankReconciliationPage
+          readOnly={access.readOnly}
+          initialAccountId={pageState?.reconciliationAccountId as string | undefined}
+          initialPeriodStart={pageState?.reconciliationPeriodStart as string | undefined}
+          initialPeriodEnd={pageState?.reconciliationPeriodEnd as string | undefined}
+        />;
+      case 'cash_control_center':
+        return <CashControlCenterPage onNavigate={navigate} initialMonth={pageState?.cashControlMonth as string | undefined} />;
+      case 'financial_close_workspace':
+        return <FinancialCloseWorkspacePage readOnly={access.readOnly} initialMonth={pageState?.closeMonth as string | undefined} onNavigate={navigate} />;
       case 'accounting_trial':
         return <TrialBalancePage />;
       case 'accounting_income':

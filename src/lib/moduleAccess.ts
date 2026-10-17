@@ -58,6 +58,7 @@ type ModuleAudience =
   | "microfinance"
   | "school"
   | "manufacturing"
+  | "insurance"
   | "production"
   | "vsla"
   | "financial_modelling";
@@ -599,6 +600,8 @@ const ACCOUNTING_PRACTICE_PAGE_IDS = new Set([
 
 /** True when page may be shown for `businessType` (subscription/feature gates still applied separately via getModuleAccess). */
 export function isPageAllowedForBusinessType(page: string, businessType?: BusinessType | null): boolean {
+  // Academy is a shared cross-module service, not an Accounting Practice-only page.
+  if (page === "learning_centre") return true;
   if (businessType === "financial_modelling") {
     return ["financial_modelling_studio", "admin", "staff"].includes(page);
   }
@@ -719,7 +722,8 @@ export function pageToModuleId(page: string): ModuleId | null {
     "manufacturing_cost_allocation",
     "manufacturing_price_lists",
   ].includes(page)) return "manufacturing";
-  if (["purchases_vendors", "purchases_expenses", "purchases_orders", "purchases_bills", "purchases_payments", "purchases_credits", "purchases_cash_out_reconciliation"].includes(page)) return "purchases";
+  if (["purchases_vendors", "purchases_expenses", "purchases_orders", "purchases_bills", "purchases_payments", "purchases_procure_to_pay", "school_three_way_match", "purchases_credits", "purchases_cash_out_reconciliation"].includes(page)) return "purchases";
+  if (page === "school_finance_operations") return "accounting";
   if ([
     "reports",
     "reports_daily_sales",
@@ -764,6 +768,8 @@ export function pageToModuleId(page: string): ModuleId | null {
     "accounting_balance",
     "accounting_cashflow",
     "accounting_cost_allocation",
+    "cash_control_center",
+    "financial_close_workspace",
   ].includes(page)) return "accounting";
   if (page === "accounting_bank_reconciliation") return "reconciliation";
   if (["accounting_budgeting", "reports_budget_variance"].includes(page)) return "budget";

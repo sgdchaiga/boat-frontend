@@ -289,7 +289,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const [schoolYear, setSchoolYear] = useState(() => localStorage.getItem('boat.school.academic_year') || String(new Date().getFullYear()));
   const [schoolTerm, setSchoolTerm] = useState(() => localStorage.getItem('boat.school.term') || 'Term 1');
 
-  const toggleSection = (key: string) => setExpandedSections((s) => ({ ...s, [key]: !s[key] }));
+  const toggleSection = (key: string) => setExpandedSections((s) => {
+    const isOpening = !s[key];
+    // The Finance Workspace uses a single-accordion sidebar so an open workflow
+    // section never competes with the next one for vertical space.
+    if (schoolFinanceWorkspaceMode && isOpening) return { [key]: true };
+    return { ...s, [key]: isOpening };
+  });
 
   useEffect(() => {
     const refresh = () => {
@@ -1169,6 +1175,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Student invoices & balances', page: SCHOOL_PAGE.invoices },
       { name: 'Receive fee payment', page: SCHOOL_PAGE.payments },
       { name: 'Statements & collections', page: SCHOOL_PAGE.collections },
+      { name: 'Arrears & credit control', page: SCHOOL_PAGE.creditControl },
+      { name: 'Fee reminder automation', page: SCHOOL_PAGE.collectionAutomation },
       { name: 'Discounts, bursaries & waivers', page: SCHOOL_PAGE.bursary },
     ] },
     { name: 'School Operations', icon: Building2, children: [
@@ -1205,6 +1213,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { group: 'Cash & Bank', items: [
         { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
+        ...(canUseAdvancedAccounting ? [{ name: 'Control Centre', page: 'cash_control_center' }] : []),
         { name: 'Daily Money Summary', page: 'treasury', state: { treasuryTab: 'daily-method' } },
         { name: 'Cashier Closing', page: 'treasury', state: { treasuryTab: 'end-of-day' } },
         { name: 'Transfers', page: 'treasury', state: { treasuryTab: 'movements' } },
@@ -1215,6 +1224,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Manual Journal Entries', page: 'accounting_manual' },
         { name: 'Reconciliation', page: 'accounting_bank_reconciliation' },
         { name: 'Journal Register', page: 'accounting_journal' },
+        { name: 'Financial Close', page: 'financial_close_workspace' },
+        { name: 'Approval matrix', page: SCHOOL_PAGE.approvalMatrix },
+        { name: 'Payments, reporting & assurance', page: SCHOOL_PAGE.financeOperations },
       ] }] : []),
       { name: 'Reports', page: 'reports' },
     ] },
@@ -1225,6 +1237,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Goods Received', page: 'purchases_bills' },
         { name: 'Supplier Bills', page: 'purchases_bills' },
         { name: 'Supplier Payments', page: 'purchases_payments' },
+        { name: 'Procure-to-pay control', page: 'purchases_procure_to_pay' },
+        { name: 'PO, goods receipt & bill match', page: 'school_three_way_match' },
         { name: 'Suppliers', page: 'purchases_vendors' },
         { name: 'Purchase Returns', page: 'purchases_credits' },
       ] },
@@ -1290,6 +1304,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'General ledger', page: 'accounting_gl' },
         { name: 'Trial balance', page: 'accounting_trial' },
         { name: 'Financial statements', page: 'accounting_income' },
+        { name: 'Financial close', page: 'financial_close_workspace' },
+        { name: 'Approval matrix', page: SCHOOL_PAGE.approvalMatrix },
+        { name: 'Payments, reporting & assurance', page: SCHOOL_PAGE.financeOperations },
         { name: 'Journal account settings', page: 'admin', state: { adminTab: 'journal_accounts' } },
         { name: 'Opening balances & migration', page: 'data_migration' },
       ] }] : []),
@@ -1320,6 +1337,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Fee invoices', page: SCHOOL_PAGE.invoices },
       { name: 'Fee payments', page: SCHOOL_PAGE.payments },
       { name: 'Collections & statements', page: SCHOOL_PAGE.collections },
+      { name: 'Arrears & credit control', page: SCHOOL_PAGE.creditControl },
+      { name: 'Fee reminder automation', page: SCHOOL_PAGE.collectionAutomation },
       { name: 'Bursaries, discounts & waivers', page: SCHOOL_PAGE.bursary },
       { name: 'Rental charges', page: SCHOOL_PAGE.rentalRegister },
       { name: 'Rent collections', page: SCHOOL_PAGE.rentalPayments },
@@ -1328,6 +1347,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { name: 'Procurement & Stock', icon: ShoppingCart, children: [
       { name: 'Purchase orders', page: 'purchases_orders' },
       { name: 'Goods received & supplier bills', page: 'purchases_bills' },
+      { name: 'Procure-to-pay control', page: 'purchases_procure_to_pay' },
+      { name: 'PO, goods receipt & bill match', page: 'school_three_way_match' },
       { name: 'Suppliers', page: 'purchases_vendors' },
       { name: 'Purchase returns', page: 'purchases_credits' },
       ...(user?.school_enable_inventory === true ? [{ group: 'Inventory', items: [
@@ -1346,6 +1367,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { group: 'Cash & bank', items: [
         { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
+        ...(canUseAdvancedAccounting ? [{ name: 'Control centre', page: 'cash_control_center' }] : []),
         { name: 'Daily money summary', page: 'treasury', state: { treasuryTab: 'daily-method' } },
         { name: 'Cashier closing', page: 'treasury', state: { treasuryTab: 'end-of-day' } },
         { name: 'Transfers', page: 'treasury', state: { treasuryTab: 'movements' } },
@@ -1355,6 +1377,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Journal register', page: 'accounting_journal' },
         { name: 'Manual journals', page: 'accounting_manual' },
         { name: 'Reconciliation', page: 'accounting_bank_reconciliation' },
+        { name: 'Financial close', page: 'financial_close_workspace' },
       ] }] : []),
     ] },
     { name: 'Planning & Budget', icon: BookOpen, children: [
@@ -1428,6 +1451,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ? [...baseNavigation, { name: 'Asset Verification', icon: PackageCheck, page: 'asset_verification' }]
       : baseNavigation;
     if (enableInsurance) navigation.push({ name: 'Insurance', icon: Shield, page: 'insurance' });
+    // Academy is shared by every operational workspace. Accounting Practice already
+    // includes it in its own role-scoped menu; the de-duplication below handles that.
+    navigation.push({ name: 'BOAT Academy', icon: GraduationCap, page: 'learning_centre' });
     if (allowMarketplace) {
       navigation.push({ name: 'BOAT Market', icon: ShoppingCart, page: 'marketplace' });
       if (canManageMarketplace) {
@@ -1719,6 +1745,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { id: 'purchasing', label: 'Purchasing', items: [
       { name: 'Suppliers', page: 'purchases_vendors' }, { name: 'Purchase orders', page: 'purchases_orders' },
       { name: 'Goods received & bills', page: 'purchases_bills' }, { name: 'Supplier payments', page: 'purchases_payments' },
+      { name: 'Procure-to-pay control', page: 'purchases_procure_to_pay' },
+      { name: 'PO, goods receipt & bill match', page: 'school_three_way_match' },
       { name: 'Supplier returns', page: 'purchases_credits' },
     ] },
     { id: 'stock', label: 'Stock', items: [

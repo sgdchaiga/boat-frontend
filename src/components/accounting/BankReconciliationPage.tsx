@@ -61,7 +61,17 @@ function schemaHelp(message: string): string {
   return message;
 }
 
-export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolean }) {
+export function BankReconciliationPage({
+  readOnly = false,
+  initialAccountId,
+  initialPeriodStart,
+  initialPeriodEnd,
+}: {
+  readOnly?: boolean;
+  initialAccountId?: string;
+  initialPeriodStart?: string;
+  initialPeriodEnd?: string;
+}) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? null;
   const [accounts, setAccounts] = useState<BankAccount[]>([]);
@@ -255,6 +265,15 @@ export function BankReconciliationPage({ readOnly = false }: { readOnly?: boolea
   useEffect(() => {
     void loadAccounts().catch((error) => setMessage(error instanceof Error ? error.message : String(error)));
   }, [loadAccounts]);
+
+  useEffect(() => {
+    if (initialAccountId && accounts.some((account) => account.id === initialAccountId)) setAccountId(initialAccountId);
+  }, [accounts, initialAccountId]);
+
+  useEffect(() => {
+    if (initialPeriodStart) setPeriodStart(initialPeriodStart);
+    if (initialPeriodEnd) setPeriodEnd(initialPeriodEnd);
+  }, [initialPeriodEnd, initialPeriodStart]);
 
   useEffect(() => {
     void loadWorkspace();

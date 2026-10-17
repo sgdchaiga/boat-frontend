@@ -784,6 +784,22 @@ export function PurchaseOrdersPage({ onNavigate, readOnly = false }: PurchaseOrd
     if (readOnly) return;
     if (order.status !== "pending") return;
     try {
+      const { data: routedRequest, error: routedRequestError } = await supabase
+        .from("school_approval_requests")
+        .select("id")
+        .eq("transaction_type", "purchase_order")
+        .eq("source_id", order.id)
+        .eq("status", "pending")
+        .maybeSingle();
+      if (routedRequestError && !String(routedRequestError.message || "").toLowerCase().includes("school_approval_requests")) throw routedRequestError;
+      if (routedRequest?.id) {
+        const { data: decision, error: decisionError } = await supabase.rpc("school_decide_approval", { p_request_id: routedRequest.id, p_decision: "approved", p_note: null });
+        if (decisionError) throw decisionError;
+        const final = Boolean((decision as { final?: boolean } | null)?.final);
+        if (!final) alert("Your approval was recorded. This purchase order is now waiting for the next approval step.");
+        fetchData();
+        return;
+      }
       const { error } = await supabase
         .from("purchase_orders")
         .update({ status: "approved", approved_at: new Date().toISOString() })

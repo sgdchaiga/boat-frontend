@@ -445,6 +445,23 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
     if (isBillApproved(bill)) return;
     setApprovingId(bill.id);
     try {
+      const { data: routedRequest, error: routedRequestError } = await supabase
+        .from("school_approval_requests")
+        .select("id")
+        .eq("transaction_type", "supplier_bill")
+        .eq("source_id", bill.id)
+        .eq("status", "pending")
+        .maybeSingle();
+      if (routedRequestError && !String(routedRequestError.message || "").toLowerCase().includes("school_approval_requests")) throw routedRequestError;
+      if (routedRequest?.id) {
+        const { data: decision, error: decisionError } = await supabase.rpc("school_decide_approval", { p_request_id: routedRequest.id, p_decision: "approved", p_note: null });
+        if (decisionError) throw decisionError;
+        if (!Boolean((decision as { final?: boolean } | null)?.final)) {
+          alert("Your approval was recorded. This bill is now waiting for the next approval step.");
+          fetchData();
+          return;
+        }
+      } else {
       const { data: staffRow } = await supabase
         .from("staff")
         .select("id")
@@ -480,6 +497,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
         }
       }
       if (error) throw error;
+      }
 
       await syncBillStatusInDb(bill.id);
 

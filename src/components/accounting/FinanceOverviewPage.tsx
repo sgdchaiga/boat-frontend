@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertCircle, ArrowRight, BarChart3, BookOpenCheck, CircleDollarSign, Clock3, FileText, Landmark, Receipt, ShieldCheck, ShoppingCart, Wallet } from "lucide-react";
+import { AlertCircle, ArrowRight, BarChart3, BookOpenCheck, CircleDollarSign, ClipboardCheck, Clock3, FileText, Landmark, MessageSquare, Receipt, ShieldCheck, ShoppingCart, Wallet } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
 type TabId = "receive" | "spend" | "approve" | "balances" | "reconcile" | "reports";
@@ -45,6 +45,8 @@ export function FinanceOverviewPage({ onNavigate }: Props) {
   const tabs = useMemo(() => [
     { id: "receive" as const, label: "Receive", actions: [
       { title: "Receive school fees", description: "Record and allocate a student-fee payment.", page: "school_fee_payments", icon: Receipt },
+      { title: "Student receivables", description: "Age unpaid fees, log reminders and track promises to pay.", page: "school_credit_control", icon: AlertCircle },
+      { title: "Fee reminder automation", description: "Queue and send controlled fee reminders, then hold clearance where necessary.", page: "school_collection_automation", icon: MessageSquare },
       { title: "Rent collections", description: "Record rent received from school properties and tenants.", page: "school_other_revenue", icon: Landmark },
       { title: "Record other income", description: "Record grants, donations and other school income.", page: "school_other_revenue", icon: Wallet },
       { title: "Daily collections", description: "Review money received by method and date.", page: "school_collections_summary", icon: BarChart3 },
@@ -54,19 +56,22 @@ export function FinanceOverviewPage({ onNavigate }: Props) {
       { title: "Petty cash", description: "Record and review small cash payments.", page: "school_cashbook_register", icon: Wallet },
       { title: "Staff advances", description: "Issue and track staff advances and recoveries.", page: "payroll_loans", icon: CircleDollarSign },
       { title: "Direct stock purchase", description: "Record a purchase that goes directly into stock.", page: "purchases_bills", icon: ShoppingCart },
+      { title: "Procure-to-pay control", description: "Trace purchase orders through supplier bills and payment release.", page: "purchases_procure_to_pay", icon: ShieldCheck },
+      { title: "Three-way matching", description: "Record goods received and reconcile ordered, received and billed quantities.", page: "school_three_way_match", icon: ClipboardCheck },
       ...payables,
     ] },
-    { id: "approve" as const, label: "Approve", actions: [{ title: "Approval inbox", description: "Review expenses, supplier bills and payments awaiting action.", page: "treasury", state: { treasuryTab: "approvals" }, icon: ShieldCheck }] },
+    { id: "approve" as const, label: "Approve", actions: [{ title: "Approval inbox", description: "Review expenses, supplier bills and payments awaiting action.", page: "treasury", state: { treasuryTab: "approvals" }, icon: ShieldCheck }, { title: "Approval matrix", description: "Configure amount-based maker-checker routes and approve assigned steps.", page: "school_approval_matrix", icon: ShieldCheck }] },
     { id: "balances" as const, label: "Balances", actions: [
       { title: "Accounts & balances", description: "See where school money is held and what is available.", page: "treasury", state: { treasuryTab: "overview" }, icon: Wallet },
       { title: "Account statements", description: "Review money received, money paid and running balances.", page: "treasury", state: { treasuryTab: "history" }, icon: FileText },
       { title: "Daily money summary", description: "Review daily totals by cash, bank and payment method.", page: "treasury", state: { treasuryTab: "daily-method" }, icon: BarChart3 },
     ] },
     { id: "reconcile" as const, label: "Review & Close", actions: [
+      ...(canUseAccountingControl ? [{ title: "Cash & bank control centre", description: "Review every cash, bank, mobile-money and wallet account before reconciliation or close.", page: "cash_control_center", icon: Landmark }] : []),
       { title: "Daily money summary", description: "Compare today’s money received, paid and expected closing balances.", page: "treasury", state: { treasuryTab: "daily-method" }, icon: BarChart3 },
       { title: "Cashier closing", description: "Count, explain and hand over the cashier’s closing money.", page: "treasury", state: { treasuryTab: "end-of-day" }, icon: Clock3 },
       { title: "Transaction history", description: "Review the transactions that affected each account.", page: "treasury", state: { treasuryTab: "history" }, icon: FileText },
-      ...(canUseAccountingControl ? [{ title: "Formal reconciliation", description: "Match external statements and investigate differences.", page: "accounting_bank_reconciliation", icon: Landmark }] : []),
+      ...(canUseAccountingControl ? [{ title: "Formal reconciliation", description: "Match external statements and investigate differences.", page: "accounting_bank_reconciliation", icon: Landmark }, { title: "Financial close workspace", description: "Complete the month-end checklist, lock the period and retain an audit trail.", page: "financial_close_workspace", icon: ShieldCheck }] : []),
     ] },
     { id: "reports" as const, label: "Reports", actions: reports },
   ], [canUseAccountingControl]);

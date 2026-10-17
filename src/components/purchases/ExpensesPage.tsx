@@ -1605,6 +1605,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         const l = lr as {
           amount: number;
           vat_amount: number;
+          quantity: number | null;
         };
         const net = Number(l.amount) || 0;
         const quantity = Math.max(0, Number(l.quantity ?? 1)) || 1;
@@ -1637,6 +1638,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           comment: string | null;
         };
         const net = Number(l.amount) || 0;
+        const quantity = Math.max(0, Number(l.quantity ?? 1)) || 1;
         const vat = Number(l.vat_amount) || 0;
         return {
           key: randomUuid(),

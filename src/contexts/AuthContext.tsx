@@ -417,6 +417,7 @@ function localTenantDefaults(): TenantProfile {
     subscription_plan_code: localSubscription?.plan_code ?? "desktop-local",
     subscription_period_end: localSubscription?.period_end ?? null,
     enable_fixed_assets: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_FIXED_ASSETS, true),
+    enable_insurance: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_INSURANCE, false),
     enable_asset_verification:
       businessType === "accounting_practice" || parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_ASSET_VERIFICATION, false),
     enable_communications: parseLocalBool(import.meta.env.VITE_LOCAL_ENABLE_COMMUNICATIONS, true),
@@ -587,6 +588,7 @@ async function loadTenantProfile(userId: string, explicitOrganizationId?: string
     subscription_plan_code: null,
     subscription_period_end: null,
     enable_fixed_assets: false,
+    enable_insurance: false,
     enable_asset_verification: false,
     enable_communications: true,
     enable_wallet: true,
@@ -985,7 +987,7 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       if (portalAccess?.customer_id) {
         const tenant = await loadTenantProfile(sessionUser.id, portalAccess.organization_id);
         setMemberships([]); setNeedsOrganizationPicker(false);
-        setUser({ ...buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta), organization_id: portalAccess.organization_id, role: undefined, full_name: portalAccess.insurance_customers?.display_name ?? (meta?.full_name as string | undefined), phone: portalAccess.insurance_customers?.phone ?? null, isInsuranceCustomer: true, insurance_customer_id: portalAccess.customer_id, insurance_customer_access_status: portalAccess.status as AuthUser["insurance_customer_access_status"], isHotelStaff: false });
+        setUser({ ...buildAuthUser({ id: sessionUser.id, email: sessionUser.email }, flags, tenant, null, meta), organization_id: portalAccess.organization_id, role: undefined, full_name: portalAccess.insurance_customers?.display_name ?? (meta?.full_name as string | undefined), phone: portalAccess.insurance_customers?.phone ?? (meta?.phone as string | undefined), isInsuranceCustomer: true, insurance_customer_id: portalAccess.customer_id, insurance_customer_access_status: portalAccess.status as AuthUser["insurance_customer_access_status"], isHotelStaff: false });
         if (["invited","active"].includes(portalAccess.status || "")) void supabase.rpc("insurance_portal_mark_login");
         return;
       }

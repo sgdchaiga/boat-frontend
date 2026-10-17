@@ -551,7 +551,9 @@ export function SchoolFeePaymentsPage({ readOnly, initialStudentId, initialInvoi
         .then((data) => ({ data, error: null }))
         .catch((error: unknown) => ({ data: null, error })),
     ]);
-    setErr(pRes.error?.message || (studentResult.error instanceof Error ? studentResult.error.message : studentResult.error ? String(studentResult.error) : null));
+    const paymentError = pRes.error instanceof Error ? pRes.error.message : pRes.error ? String(pRes.error) : null;
+    const studentError = studentResult.error instanceof Error ? studentResult.error.message : studentResult.error ? String(studentResult.error) : null;
+    setErr(paymentError || studentError);
     setRows((pRes.data as PayRow[]) || []);
     setStudents(studentResult.data || []);
     setLoading(false);

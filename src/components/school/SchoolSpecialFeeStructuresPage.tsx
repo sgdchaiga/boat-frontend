@@ -3,7 +3,7 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { PageNotes } from "@/components/common/PageNotes";
 import { syncStudentInvoiceAccounting } from "@/lib/schoolFeeJournal";
-import { canUseSchoolApi, createSchoolRow } from "@/lib/schoolApiData";
+import { canUseSchoolApi, createSchoolRow, listSchoolRows } from "@/lib/schoolApiData";
 import { fetchAllPages } from "@/lib/supabasePagination";
 
 type ClassOpt = { id: string; name: string };
