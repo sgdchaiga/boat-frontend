@@ -4,21 +4,33 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { fetchAllPages } from "@/lib/supabasePagination";
 
-type Student = { id:string; first_name:string; last_name:string; admission_number:string; class_id:string|null; class_name:string|null; stream_name?:string|null };
+type Student = { id:string; first_name:string; last_name:string; admission_number:string; class_id:string|null; stream_id:string|null; class_name:string|null; stream_name:string|null };
+type SchoolLookup = { id:string; name:string };
 type Invoice = { id:string; student_id:string; total_due:number; amount_paid:number; status:string; created_at:string };
 type Payment = { id:string; student_id:string; amount:number; method:string; paid_at:string };
 const money=(n:number)=>new Intl.NumberFormat("en-UG",{style:"currency",currency:"UGX",maximumFractionDigits:0}).format(n||0);
 const pct=(a:number,b:number)=>b?`${((a/b)*100).toFixed(1)}%`:"0.0%";
+const errorMessage=(error:unknown)=>{
+ if(error&&typeof error==="object"){
+  const details=error as {message?:unknown;details?:unknown;hint?:unknown;code?:unknown};
+  const message=typeof details.message==="string"?details.message:"Unable to load fees performance data.";
+  const context=[details.details,details.hint,details.code?`Code: ${details.code}`:null].filter((item):item is string=>typeof item==="string"&&item.trim().length>0);
+  return context.length?`${message} (${context.join(" · ")})`:message;
+ }
+ return error instanceof Error&&error.message?error.message:"Unable to load fees performance data.";
+};
 
 export function SchoolFeesPerformanceReportPage(){
  const {user}=useAuth(); const orgId=user?.organization_id;
  const [students,setStudents]=useState<Student[]>([]),[invoices,setInvoices]=useState<Invoice[]>([]),[payments,setPayments]=useState<Payment[]>([]),[loading,setLoading]=useState(true),[classFilter,setClassFilter]=useState(""),[statusFilter,setStatusFilter]=useState(""),[error,setError]=useState("");
- const load=useCallback(async()=>{if(!orgId)return;setLoading(true);setError("");try{const [s,i,p]=await Promise.all([
-  fetchAllPages<Student>((a,b)=>supabase.from("students").select("id,first_name,last_name,admission_number,class_id,class_name,stream_name").eq("organization_id",orgId).eq("status","active").range(a,b)),
+ const load=useCallback(async()=>{if(!orgId)return;setLoading(true);setError("");try{const [studentRows,i,p,classRows,streamRows]=await Promise.all([
+  fetchAllPages<Omit<Student,"class_name"|"stream_name">>((a,b)=>supabase.from("students").select("id,first_name,last_name,admission_number,class_id,stream_id").eq("organization_id",orgId).eq("status","active").range(a,b)),
   fetchAllPages<Invoice>((a,b)=>supabase.from("student_invoices").select("id,student_id,total_due,amount_paid,status,created_at").eq("organization_id",orgId).neq("status","cancelled").range(a,b)),
-  fetchAllPages<Payment>((a,b)=>supabase.from("school_payments").select("id,student_id,amount,method,paid_at").eq("organization_id",orgId).range(a,b))]);setStudents(s);setInvoices(i);setPayments(p)}catch(e){setError(e instanceof Error?e.message:"Unable to load fees performance data.")}finally{setLoading(false)}},[orgId]);
+  fetchAllPages<Payment>((a,b)=>supabase.from("school_payments").select("id,student_id,amount,method,paid_at").eq("organization_id",orgId).range(a,b)),
+  fetchAllPages<SchoolLookup>((a,b)=>supabase.from("classes").select("id,name").eq("organization_id",orgId).range(a,b)),
+  fetchAllPages<SchoolLookup>((a,b)=>supabase.from("streams").select("id,name").eq("organization_id",orgId).range(a,b)),
+ ]);const classNames=new Map(classRows.map(item=>[item.id,item.name]));const streamNames=new Map(streamRows.map(item=>[item.id,item.name]));setStudents(studentRows.map(student=>({...student,class_name:student.class_id?classNames.get(student.class_id)??null:null,stream_name:student.stream_id?streamNames.get(student.stream_id)??null:null})));setInvoices(i);setPayments(p)}catch(e){setError(errorMessage(e))}finally{setLoading(false)}},[orgId]);
  useEffect(()=>{void load()},[load]);
- const studentMap=useMemo(()=>new Map(students.map(s=>[s.id,s])),[students]);
  const rows=useMemo(()=>students.map(s=>{const inv=invoices.filter(i=>i.student_id===s.id);const billed=inv.reduce((x,i)=>x+Number(i.total_due||0),0),paid=inv.reduce((x,i)=>x+Number(i.amount_paid||0),0),balance=Math.max(0,billed-paid);const status=billed===0?"No invoice":balance===0?"Fully Paid":paid===0?"No Payment":paid/billed<.5?"Low Payment":"Partial";return {...s,billed,paid,balance,status}}).filter(r=>(!classFilter||r.class_id===classFilter||r.class_name===classFilter)&&(!statusFilter||r.status===statusFilter)),[students,invoices,classFilter,statusFilter]);
  const totals=useMemo(()=>rows.reduce((a,r)=>({billed:a.billed+r.billed,paid:a.paid+r.paid,balance:a.balance+r.balance}),{billed:0,paid:0,balance:0}),[rows]);
  const classes=useMemo(()=>Array.from(new Map(students.map(s=>[s.class_id||s.class_name||"unassigned",s.class_name||"Unassigned"])).entries()),[students]);

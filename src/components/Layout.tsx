@@ -279,8 +279,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
   const [browserOnline, setBrowserOnline] = useState(() => typeof navigator === 'undefined' ? true : navigator.onLine);
   /** Submenus stay collapsed until the user clicks the section header (no auto-expand on navigation). */
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
-  /** Collapsible subgroups under Reports (e.g. Sales, Operations). Undefined = expand if current page is in group. */
-  const [reportSubgroupExpanded, setReportSubgroupExpanded] = useState<Record<string, boolean | undefined>>({});
+  /** The open subgroup for each accordion parent (for example Reports).
+   *  An unset parent falls back to the subgroup containing the current page. */
+  const [reportSubgroupExpanded, setReportSubgroupExpanded] = useState<Record<string, string | undefined>>({});
   const [pendingSyncCount, setPendingSyncCount] = useState(0);
   const [syncLastAttemptAt, setSyncLastAttemptAt] = useState<number | null>(null);
   const [syncLastSuccessAt, setSyncLastSuccessAt] = useState<number | null>(null);
@@ -333,9 +334,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     setMobileLite(next === 'on');
   };
 
-  const isReportSubgroupOpen = (groupName: string, itemPages: string[]) => {
-    const v = reportSubgroupExpanded[groupName];
-    if (v !== undefined) return v;
+  const isReportSubgroupOpen = (sectionName: string, groupName: string, itemPages: string[]) => {
+    const selectedGroup = reportSubgroupExpanded[sectionName];
+    if (selectedGroup !== undefined) return selectedGroup === groupName;
     return itemPages.includes(currentPage);
   };
 
@@ -1284,7 +1285,27 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Settings & Accounting', page: PAYROLL_PAGE.settings },
       { name: 'Audit Trail', page: PAYROLL_PAGE.audit },
     ] } as NavItem] : []),
-    { name: 'Reports', icon: TrendingUp, page: 'reports_school_fee_collections' },
+    { name: 'Reports', icon: TrendingUp, children: [
+      { name: 'Overview', page: 'reports' },
+      { group: 'Fees & collections', items: [
+        { name: 'Fee collections', page: 'reports_school_fee_collections' },
+        { name: 'Fees performance', page: 'reports_school_fees_performance' },
+        { name: 'Outstanding balances', page: 'reports_school_outstanding' },
+        { name: 'Daily cash', page: 'reports_school_daily_cash' },
+        { name: 'Income & expenditure', page: 'reports_school_income_expenditure' },
+      ] },
+      { group: 'Management', items: [
+        { name: 'Enrollment statistics', page: 'reports_school_enrollment' },
+        { name: 'Fee payment trends', page: 'reports_school_fee_trends' },
+        { name: 'Top defaulters', page: 'reports_school_top_defaulters' },
+        { name: 'Term performance', page: 'reports_school_term_performance' },
+      ] },
+      { group: 'Operations', items: [
+        { name: 'Daily purchases summary', page: 'reports_daily_purchases_summary' },
+        { name: 'Stock movement', page: 'reports_stock_movement' },
+        { name: 'Stock summary', page: 'reports_stock_summary' },
+      ] },
+    ] },
     { name: 'Admin', icon: Settings, children: [
       { group: 'School administration', items: [
         { name: 'School profile & security', page: 'admin', state: { adminTab: 'business' } },
@@ -1391,7 +1412,27 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ...(enablePayroll && canUseSchoolPayroll ? [{ name: 'Payroll', icon: Wallet, children: [
       { name: 'Overview', page: PAYROLL_PAGE.hub }, { name: 'Employees', page: PAYROLL_PAGE.staff }, { name: 'Process payroll', page: PAYROLL_PAGE.run }, { name: 'Review & approve', page: PAYROLL_PAGE.review }, { name: 'Payments', page: PAYROLL_PAGE.payments }, { name: 'Payroll reports', page: PAYROLL_PAGE.reports },
     ] } as NavItem] : []),
-    { name: 'Reports', icon: TrendingUp, page: 'reports' },
+    { name: 'Reports', icon: TrendingUp, children: [
+      { name: 'Overview', page: 'reports' },
+      { group: 'Fees & collections', items: [
+        { name: 'Fee collections', page: 'reports_school_fee_collections' },
+        { name: 'Fees performance', page: 'reports_school_fees_performance' },
+        { name: 'Outstanding balances', page: 'reports_school_outstanding' },
+        { name: 'Daily cash', page: 'reports_school_daily_cash' },
+        { name: 'Income & expenditure', page: 'reports_school_income_expenditure' },
+      ] },
+      { group: 'Management', items: [
+        { name: 'Enrollment statistics', page: 'reports_school_enrollment' },
+        { name: 'Fee payment trends', page: 'reports_school_fee_trends' },
+        { name: 'Top defaulters', page: 'reports_school_top_defaulters' },
+        { name: 'Term performance', page: 'reports_school_term_performance' },
+      ] },
+      { group: 'Operations', items: [
+        { name: 'Daily purchases summary', page: 'reports_daily_purchases_summary' },
+        { name: 'Stock movement', page: 'reports_stock_movement' },
+        { name: 'Stock summary', page: 'reports_stock_summary' },
+      ] },
+    ] },
     { name: 'Settings', icon: Settings, children: [
       { name: 'School profile & security', page: 'admin', state: { adminTab: 'business' } },
       { name: 'Users & roles', page: 'admin', state: { adminTab: 'users' } },
@@ -1997,7 +2038,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                   const isCollapsibleSubgroup = item.name === 'Reports' || item.name === 'Settings';
                                   const reportSubOpen =
                                     isCollapsibleSubgroup
-                                      ? isReportSubgroupOpen(child.group, itemPages)
+                                      ? isReportSubgroupOpen(item.name, child.group, itemPages)
                                       : true;
                                   return (
                                     <li key={child.group} className="list-none">
@@ -2006,12 +2047,18 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                           <button
                                             type="button"
                                             onClick={() => {
-                                              const cur = isReportSubgroupOpen(child.group, itemPages);
-                                              setReportSubgroupExpanded((s) => ({
-                                                ...s,
-                                                [child.group]: !cur,
+                                              const cur = isReportSubgroupOpen(item.name, child.group, itemPages);
+                                              const key = item.name;
+                                              // Reports use a true accordion: opening one category
+                                              // folds the other report categories, keeping the sidebar
+                                              // compact on smaller laptop and tablet screens.
+                                              setReportSubgroupExpanded((openGroups) => ({
+                                                ...openGroups,
+                                                [key]: cur ? '' : child.group,
                                               }));
                                             }}
+                                            aria-expanded={reportSubOpen}
+                                            aria-controls={`nav-${item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${child.group.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
                                             className={`w-full flex items-center gap-1 px-2 py-1.5 rounded-md text-[10px] font-semibold uppercase tracking-wide transition ${
                                               itemPages.includes(currentPage)
                                                 ? item.name === 'Reports' ? 'text-rose-200 bg-slate-800/30' : 'text-slate-100 bg-slate-800/60'
@@ -2026,7 +2073,10 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                             <span className="flex-1 text-left">{child.group}</span>
                                           </button>
                                           {reportSubOpen && (
-                                            <ul className="space-y-0 ml-1 border-l border-slate-700/80 pl-1.5 mt-0.5">
+                                            <ul
+                                              id={`nav-${item.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${child.group.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`}
+                                              className="space-y-0 ml-1 border-l border-slate-700/80 pl-1.5 mt-0.5"
+                                            >
                                               {child.items.map((sub) => {
                                                 const isChildActive = isSidebarLeafActive(
                                                   { page: sub.page, state: 'state' in sub ? sub.state : undefined },

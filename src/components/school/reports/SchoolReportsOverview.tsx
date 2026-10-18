@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { ArrowLeft, BarChart3, ChevronRight, Download, GraduationCap, Receipt, Users, Wallet } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { ArrowLeft, BarChart3, ChevronRight, Clock3, Download, GraduationCap, Receipt, Search, Star, Users, Wallet } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
@@ -60,6 +60,18 @@ const REPORT_CATEGORIES = [
   ] },
 ] as const;
 
+type ReportLink = { page: string; label: string; desc: string; category?: string };
+
+function ReportQuickLink({ report, favorite, onOpen, onToggleFavorite }: { report: ReportLink; favorite: boolean; onOpen: (page: string) => void; onToggleFavorite: (page: string) => void }) {
+  return <article className="group rounded-xl border border-slate-200 p-4 transition hover:border-indigo-300 hover:bg-indigo-50/40"><div className="flex items-start justify-between gap-2"><button type="button" onClick={() => onOpen(report.page)} className="min-w-0 text-left"><strong className="block text-sm text-indigo-800">{report.label}</strong><p className="mt-1 text-xs leading-5 text-slate-600">{report.desc}</p>{report.category && <span className="mt-2 block text-xs font-medium text-slate-500">{report.category}</span>}</button><button type="button" onClick={() => onToggleFavorite(report.page)} aria-label={favorite ? `Remove ${report.label} from favorites` : `Add ${report.label} to favorites`} className={`rounded p-1.5 ${favorite ? "text-amber-500" : "text-slate-400 hover:text-amber-500"}`}><Star className="h-4 w-4" fill={favorite ? "currentColor" : "none"}/></button></div></article>;
+}
+
+function ReportList({ title, icon, pages, reports, onOpen }: { title: string; icon: ReactNode; pages: string[]; reports: readonly ReportLink[]; onOpen: (page: string) => void }) {
+  const selected = pages.map((page) => reports.find((report) => report.page === page)).filter((report): report is ReportLink => Boolean(report));
+  if (!selected.length) return null;
+  return <section className="rounded-xl border border-slate-200 bg-slate-50 p-4"><h3 className="flex items-center gap-2 text-sm font-bold text-slate-800">{icon}{title}</h3><div className="mt-3 space-y-1">{selected.map((report) => <button key={report.page} type="button" onClick={() => onOpen(report.page)} className="block w-full rounded px-2 py-1.5 text-left text-sm text-indigo-800 hover:bg-white hover:shadow-sm">{report.label}</button>)}</div></section>;
+}
+
 export function SchoolReportsOverview({ onNavigate }: Props) {
   const { user } = useAuth();
   const orgId = user?.organization_id;
@@ -77,6 +89,29 @@ export function SchoolReportsOverview({ onNavigate }: Props) {
   const [rangeTo, setRangeTo] = useState("");
   const [exportFormat, setExportFormat] = useState<"pdf" | "excel">("pdf");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  const [reportSearch, setReportSearch] = useState("");
+  const [favoritePages, setFavoritePages] = useState<string[]>([]);
+  const [recentPages, setRecentPages] = useState<string[]>([]);
+  const reportStorageKey = `boat.school.reports.${orgId ?? "guest"}`;
+  const allReports = useMemo(() => REPORT_CATEGORIES.flatMap((category) => category.reports.map((report) => ({ ...report, category: category.label }))), []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      const saved = JSON.parse(localStorage.getItem(reportStorageKey) ?? "{}") as { favorites?: string[]; recent?: string[] };
+      setFavoritePages(saved.favorites ?? []); setRecentPages(saved.recent ?? []);
+    } catch { setFavoritePages([]); setRecentPages([]); }
+  }, [reportStorageKey]);
+
+  const saveReportPreferences = (favorites: string[], recent: string[]) => {
+    setFavoritePages(favorites); setRecentPages(recent);
+    localStorage.setItem(reportStorageKey, JSON.stringify({ favorites, recent }));
+  };
+  const openReport = (page: string) => {
+    const nextRecent = [page, ...recentPages.filter((item) => item !== page)].slice(0, 6);
+    saveReportPreferences(favoritePages, nextRecent); onNavigate?.(page);
+  };
+  const toggleFavorite = (page: string) => saveReportPreferences(favoritePages.includes(page) ? favoritePages.filter((item) => item !== page) : [...favoritePages, page], recentPages);
 
   const load = useCallback(async () => {
     if (!orgId) {
@@ -301,7 +336,13 @@ export function SchoolReportsOverview({ onNavigate }: Props) {
         </div>
       </div>
 
-      <section className="hidden mb-8 rounded-xl border border-slate-200 bg-white p-6" aria-hidden="true">
+      <section className="mb-8 rounded-xl border border-slate-200 bg-white p-6">
+        <div className="mb-5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+          <div><h2 className="text-lg font-bold text-slate-900">Report centre</h2><p className="mt-1 text-sm text-slate-600">Find, pin and reopen the reports your school uses most.</p></div>
+          <label className="relative block w-full lg:w-80"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400"/><input value={reportSearch} onChange={(event) => { setReportSearch(event.target.value); setSelectedCategory(null); }} placeholder="Search reports" className="w-full rounded-lg border border-slate-300 py-2 pl-9 pr-3 text-sm"/></label>
+        </div>
+        {reportSearch.trim() && <div className="mb-6 grid gap-3 md:grid-cols-2 lg:grid-cols-3">{allReports.filter((report) => `${report.label} ${report.desc} ${report.category}`.toLowerCase().includes(reportSearch.toLowerCase())).map((report) => <ReportQuickLink key={report.page} report={report} favorite={favoritePages.includes(report.page)} onOpen={openReport} onToggleFavorite={toggleFavorite}/>)}</div>}
+        {!reportSearch.trim() && (favoritePages.length > 0 || recentPages.length > 0) && <div className="mb-6 grid gap-4 lg:grid-cols-2">{favoritePages.length > 0 && <ReportList title="Favorites" icon={<Star className="h-4 w-4 text-amber-500"/>} pages={favoritePages} reports={allReports} onOpen={openReport}/>} {recentPages.length > 0 && <ReportList title="Recently opened" icon={<Clock3 className="h-4 w-4 text-slate-500"/>} pages={recentPages} reports={allReports} onOpen={openReport}/>}</div>}
         {!selectedCategory ? <>
           <div className="mb-5"><h2 className="text-lg font-bold text-slate-900">Report categories</h2><p className="mt-1 text-sm text-slate-600">Choose a category to view its available reports.</p></div>
           <div className="grid gap-4 md:grid-cols-2">{REPORT_CATEGORIES.map((category) => { const Icon=category.icon; return <button key={category.id} type="button" onClick={() => setSelectedCategory(category.id)} className="group flex items-center gap-4 rounded-xl border border-slate-200 p-5 text-left transition hover:border-indigo-300 hover:bg-indigo-50/30"><span className="rounded-lg bg-indigo-50 p-3 text-indigo-700"><Icon className="h-6 w-6" /></span><span className="min-w-0 flex-1"><strong className="block text-slate-900">{category.label}</strong><span className="mt-1 block text-sm text-slate-600">{category.description}</span><span className="mt-2 block text-xs font-semibold text-indigo-700">{category.reports.length} reports</span></span><ChevronRight className="h-5 w-5 text-slate-400 group-hover:text-indigo-600" /></button>; })}</div>
