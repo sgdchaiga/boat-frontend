@@ -25,6 +25,7 @@ export const SCHOOL_PAGE = {
   receipts: "school_receipts",
   collections: "school_collections_summary",
   fixedDeposit: "school_fixed_deposit",
+  pettyCash: "school_petty_cash",
   voteBook: "school_vote_book",
 } as const;
 

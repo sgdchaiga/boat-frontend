@@ -38,7 +38,8 @@ export type JournalReferenceType =
   | "school_payment"
   | "payroll_loan_disbursement"
   | "manufacturing_costing"
-  | "cost_allocation";
+  | "cost_allocation"
+  | "school_petty_cash";
 
 export interface JournalLine {
   gl_account_id: string;

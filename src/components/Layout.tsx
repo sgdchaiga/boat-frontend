@@ -1207,7 +1207,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ] },
       { group: 'Spend', items: [
         { name: 'Expenses', page: 'purchases_expenses' },
-        ...(generalBusinessCashbookEnabled ? [{ name: 'Petty Cash', page: 'school_cashbook_register' }] : []),
+        { name: 'Petty Cash', page: SCHOOL_PAGE.pettyCash },
         { name: 'Supplier Payments', page: 'purchases_payments' },
         { name: 'Staff Advances', page: 'payroll_loans' },
       ] },
@@ -1383,7 +1383,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Finance overview', page: 'finance_overview' },
       { name: 'Expenses', page: 'purchases_expenses' },
       { name: 'Supplier payments', page: 'purchases_payments' },
-      ...(generalBusinessCashbookEnabled ? [{ name: 'Petty cash', page: 'school_cashbook_register' }] : []),
+       { name: 'Petty cash', page: SCHOOL_PAGE.pettyCash },
       { name: 'Staff advances', page: 'payroll_loans' },
       { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { group: 'Cash & bank', items: [

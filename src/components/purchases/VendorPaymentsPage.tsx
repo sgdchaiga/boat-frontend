@@ -36,6 +36,7 @@ interface VendorPayment {
 }
 
 type ReclassificationAccount = { id: string; account_code: string; account_name: string; account_type: string };
+type BankAccount = { id: string; account_code: string; account_name: string; category?: string | null };
 type ReclassificationSubvote = { id: string; subvote_code: string; subvote_name: string; default_gl_account_id: string | null };
 type ReclassificationDraft = {
   payment: VendorPayment;
@@ -133,6 +134,7 @@ export function VendorPaymentsPage({
   const paymentPageSize = 100;
   const [paymentTotalCount, setPaymentTotalCount] = useState(0);
   const [vendors, setVendors] = useState<{ id: string; name: string }[]>([]);
+  const [bankAccounts, setBankAccounts] = useState<BankAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [vendorId, setVendorId] = useState("");
@@ -277,7 +279,7 @@ export function VendorPaymentsPage({
 
   useEffect(() => {
     void fetchData();
-  }, [paymentPage, vendorFilter, methodFilter, bankFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
+  }, [orgId, paymentPage, vendorFilter, methodFilter, bankFilter, batchFilter, fromDateFilter, toDateFilter, searchFilter]);
 
   useEffect(() => {
     setPaymentPage(0);
@@ -350,15 +352,31 @@ export function VendorPaymentsPage({
       if (bankFilter) paymentsQuery = paymentsQuery.or(`bank_name.eq.${bankFilter},reference.ilike.*Bank: ${bankFilter}*`);
       if (batchFilter) paymentsQuery = paymentsQuery.or(`import_batch_id.eq.${batchFilter},reference.ilike.*[BATCH:${batchFilter}]*`);
       if (searchFilter.trim()) paymentsQuery = paymentsQuery.ilike("reference", `%${searchFilter.trim()}%`);
-      const [payRes, venRes] = await Promise.all([
+       const [payRes, venRes, accountsRes] = await Promise.all([
         paymentsQuery.range(paymentPage * paymentPageSize, paymentPage * paymentPageSize + paymentPageSize - 1),
         supabase.from("vendors").select("id, name").order("name"),
+         orgId
+           ? supabase
+             .from("gl_accounts")
+             .select("id,account_code,account_name,category")
+             .eq("organization_id", orgId)
+             .eq("is_active", true)
+             .order("account_code")
+           : Promise.resolve({ data: [], error: null }),
       ]);
       if (requestId !== paymentRequestRef.current) return;
       if (payRes.error) throw payRes.error;
       setPayments(payRes.data || []);
       setPaymentTotalCount(payRes.count || 0);
       setVendors(venRes.data || []);
+       if (accountsRes.error) throw accountsRes.error;
+       // Bank accounts are maintained in the chart of accounts. Category alone is not
+       // sufficient because the school chart also uses "cash" for petty cash and wallets.
+       setBankAccounts(
+         ((accountsRes.data || []) as BankAccount[]).filter((account) =>
+           /\bbank\b/i.test(`${account.account_code} ${account.account_name}`),
+         ),
+       );
     } catch (e) {
       if (requestId !== paymentRequestRef.current) return;
       console.error("Error fetching vendor payments:", e);
@@ -379,6 +397,19 @@ export function VendorPaymentsPage({
     }
     return s;
   }, [outstandingBills, allocationInputs]);
+
+  const bankAccountOptions = useMemo(() => {
+    const options = bankAccounts.map((account) => ({
+      id: account.id,
+      label: `${account.account_code} — ${account.account_name}`,
+    }));
+    // Keep a historic saved value visible when editing, but require the user to
+    // choose an active chart account before it can be saved again.
+    if (bankName && !options.some((option) => option.id === bankName)) {
+      options.unshift({ id: bankName, label: `${bankName} (not in Chart of Accounts)` });
+    }
+    return options;
+  }, [bankAccounts, bankName]);
 
   const fillPaymentAcrossBills = () => {
     const total = parseFloat(amount);
@@ -444,7 +475,8 @@ export function VendorPaymentsPage({
     setAmount(String(payment.amount || ""));
     setPaymentDate(payment.payment_date || new Date().toISOString().slice(0, 10));
     setPaymentMethod((payment.payment_method as "cash" | "card" | "bank_transfer" | "wallet") || "bank_transfer");
-    setBankName(bankNameFromPayment(payment));
+    const savedBankName = bankNameFromPayment(payment);
+    setBankName(bankAccounts.find((account) => account.account_name === savedBankName)?.id || savedBankName);
     setReference((payment.reference || "").replace(/\s*\/?\s*Bank:\s*[^/\[]+/gi, "").replace(/\s*\[(?:IMP|BATCH):[^\]]+\]/gi, "").replace(/\s*\/\s*$/, "").trim());
     setChequeNumber(payment.cheque_number || payment.reference?.match(/\bCHQ\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "");
     setPaymentVoucher(payment.payment_voucher || payment.reference?.match(/\bPV\s*(?:NO\.?\s*)?([^/\[]+)/i)?.[1]?.trim() || "");
@@ -712,7 +744,11 @@ export function VendorPaymentsPage({
       return;
     }
     if (paymentMethod === "bank_transfer" && !bankName.trim()) {
-      alert("Enter the bank name for this bank payment.");
+      alert("Select the bank account for this bank payment.");
+      return;
+    }
+    if (paymentMethod === "bank_transfer" && !bankAccounts.some((account) => account.id === bankName)) {
+      alert("Select an active bank account from the Chart of Accounts.");
       return;
     }
 
@@ -769,7 +805,9 @@ export function VendorPaymentsPage({
         payment_method: paymentMethod,
         cheque_number: chequeNumber.trim() || null,
         payment_voucher: paymentVoucher.trim() || null,
-        bank_name: paymentMethod === "bank_transfer" ? bankName.trim() || null : null,
+        bank_name: paymentMethod === "bank_transfer"
+          ? bankAccounts.find((account) => account.id === bankName)?.account_name || null
+          : null,
         reference: paymentReference || null,
       };
       if (needsAllocationRows) {
@@ -1267,8 +1305,17 @@ export function VendorPaymentsPage({
                   </select>
                 </div>
                 {paymentMethod === "bank_transfer" && <div>
-                  <label className="block text-sm font-medium mb-1">Bank name *</label>
-                  <input value={bankName} onChange={(e) => setBankName(e.target.value)} className="w-full border rounded-lg px-3 py-2" placeholder="For example, Centenary Bank" required />
+                  <label className="block text-sm font-medium mb-1">Bank account *</label>
+                  <SearchableCombobox
+                    value={bankName}
+                    onChange={setBankName}
+                    options={bankAccountOptions}
+                    placeholder="Search active bank accounts…"
+                    emptyOption={{ label: "Select bank account" }}
+                    inputAriaLabel="Search bank accounts from chart of accounts"
+                    clearable
+                  />
+                  {bankAccounts.length === 0 && <p className="mt-1 text-xs text-amber-700">No active bank account was found in the Chart of Accounts. Add or activate a bank account first.</p>}
                 </div>}
                 <div>
                   <label className="block text-sm font-medium mb-1">Cheque number</label>

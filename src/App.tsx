@@ -80,6 +80,7 @@ const RetailDashboard = lazyNamed(() => import('./components/RetailDashboard'), 
 const GeneralBusinessDashboard = lazyNamed(() => import('./components/general-business/GeneralBusinessDashboard'), 'GeneralBusinessDashboard');
 const GeneralBusinessProjectsPage = lazyNamed(() => import('./components/general-business/GeneralBusinessProjectsPage'), 'GeneralBusinessProjectsPage');
 const GeneralBusinessCashbookPage = lazyNamed(() => import('./components/general-business/GeneralBusinessCashbookPage'), 'GeneralBusinessCashbookPage');
+const SchoolPettyCashPage = lazyNamed(() => import('./components/school/SchoolPettyCashPage'), 'SchoolPettyCashPage');
 const RoomsPage = lazyNamed(() => import('./components/RoomsPage'), 'RoomsPage');
 const ReservationsPage = lazyNamed(() => import('./components/ReservationsPage'), 'ReservationsPage');
 const CheckInPage = lazyNamed(() => import('./components/CheckInPage'), 'CheckInPage');
@@ -1189,8 +1190,9 @@ function AppContent() {
         return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" />;
       case 'general_business_daily_summary':
         return <GeneralBusinessCashbookPage onNavigate={navigate} view="daily" />;
+      case 'school_petty_cash':
       case 'school_cashbook_register':
-        return <GeneralBusinessCashbookPage onNavigate={navigate} view="register" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
+        return <SchoolPettyCashPage readOnly={access.readOnly} />;
       case 'school_cashbook_entry':
         return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
       case 'school_cashbook_daily':

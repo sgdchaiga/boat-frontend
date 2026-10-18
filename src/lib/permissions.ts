@@ -189,6 +189,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "accounting_budgeting", label: "Budgeting", group: "Accounting" },
   { page: "admin_school_budget_completion", label: "School implementation completion centre", group: "Admin" },
   { page: "school_cashbook_register", label: "School cashbook register", group: "Accounting" },
+  { page: "school_petty_cash", label: "School petty cash", group: "Accounting" },
   { page: "school_credit_control", label: "Student receivables & credit control", group: "Accounting" },
   { page: "school_collection_automation", label: "School collection automation", group: "Accounting" },
   { page: "school_approval_matrix", label: "School approval matrix", group: "Accounting" },
