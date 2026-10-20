@@ -51,6 +51,11 @@ type PurchaseSourceRow =
 const JOURNAL_ENTRY_ID_CHUNK_SIZE = 100;
 const LEDGER_PAGE_SIZE = 25;
 
+function formatLedgerPrintDate(value: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
 function chunkEntryIds(entryIds: string[]): string[][] {
   const chunks: string[][] = [];
   for (let index = 0; index < entryIds.length; index += JOURNAL_ENTRY_ID_CHUNK_SIZE) {
@@ -820,7 +825,7 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
     const acctLabel = acct ? `${acct.account_code} – ${acct.account_name}` : "Cash account";
     exportAccountingPdf({
       title: "Cash account ledger",
-      subtitle: `${periodLabel} · ${acctLabel}`,
+      subtitle: `${periodLabel.split(" to ").map(formatLedgerPrintDate).join(" to ")} · ${acctLabel}`,
       filename: `cash-flow-ledger-${fileStamp}.pdf`,
       sections: [
         {
@@ -828,7 +833,7 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
           head: ["Transaction ID", "Date", "Description", "Cheque no.", "Payment voucher", "In", "Out", "Balance"],
           body: movements.map((m) => [
             m.transaction_id ?? "—",
-            m.entry_date,
+            formatLedgerPrintDate(m.entry_date),
             m.description,
             m.cheque_number ?? "—",
             m.payment_voucher ?? "—",
