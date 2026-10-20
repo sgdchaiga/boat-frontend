@@ -1844,7 +1844,9 @@ function AppContent() {
       case 'accounting_balance':
         return <BalanceSheetPage />;
       case 'accounting_cashflow':
-        return <CashflowPage />;
+        return <CashflowPage mode="statement" />;
+      case 'accounting_account_ledger':
+        return <CashflowPage mode="ledger" />;
       case 'accounting_budgeting':
         return <BudgetingPage readOnly={access.readOnly} />;
       case 'reports_budget_variance':

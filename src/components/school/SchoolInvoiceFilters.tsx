@@ -4,10 +4,12 @@ import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBa
 type Student = { id: string; first_name: string; last_name: string; admission_number: string; school_pay_number?: string | null; class_id: string | null; class_name: string; is_boarding?: boolean | null };
 type Invoice = { student_id: string; invoice_number: string; academic_year: string; term_name: string; status: string; issue_date?: string | null };
 const emptyFilters = { residency: "", search: "", student: "", className: "", chargeType: "", year: "", term: "", status: "", from: "", to: "" };
+type VisibleFilter = "student" | "residency" | "className" | "chargeType" | "year" | "term" | "status";
 
 export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: Student[], optionsConfig: { showResidency?: boolean; getChargeTypes?: (invoice: T) => string[]; hideCancelledByDefault?: boolean } = {}) {
   const [filters, setFilters] = useState(emptyFilters);
   const [showCancelled, setShowCancelled] = useState(!optionsConfig.hideCancelledByDefault);
+  const [visibleFilters, setVisibleFilters] = useState<VisibleFilter[]>(["student", "residency", "className", "chargeType", "year", "term", "status"]);
   const studentMap = useMemo(() => new Map(students.map((student) => [student.id, student])), [students]);
   const filteredRows = useMemo(() => rows.filter((row) => {
     const student = studentMap.get(row.student_id);
@@ -37,6 +39,13 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
     </label>
   );
   const simpleOptions = (values: string[]) => options(values).map((value) => ({ value, label: value }));
+  const canShowFilter = (filter: VisibleFilter) => visibleFilters.includes(filter)
+    && (filter !== "residency" || Boolean(optionsConfig.showResidency))
+    && (filter !== "chargeType" || Boolean(optionsConfig.getChargeTypes));
+  const filterChoices = ([
+    ["student", "Student"], ["residency", "Day/Boarding"], ["className", "Class"], ["chargeType", "Charge type"], ["year", "Academic year"], ["term", "Term"], ["status", "Status"],
+  ] as const).filter(([filter]) => (filter !== "residency" || optionsConfig.showResidency) && (filter !== "chargeType" || optionsConfig.getChargeTypes));
+  const toggleVisibleFilter = (filter: VisibleFilter) => setVisibleFilters((current) => current.includes(filter) ? current.filter((item) => item !== filter) : [...current, filter]);
   const activeFilters = Object.entries(filters).flatMap(([key, value]) => value ? [{ key, label: `${({ residency: "Residency", student: "Student", className: "Class", chargeType: "Charge", year: "Year", term: "Term", status: "Status", from: "From", to: "To", search: "Search" } as Record<string, string>)[key]}: ${key === "student" ? students.find((student) => student.id === value)?.first_name || value : value}`, onRemove: () => setFilters((current) => ({ ...current, [key]: "" })) }] : []) as SchoolFilterChip[];
   const controls = (
     <SchoolFilterBar
@@ -46,14 +55,15 @@ export function useSchoolInvoiceFilters<T extends Invoice>(rows: T[], students: 
       onClearAll={() => { setFilters(emptyFilters); setShowCancelled(!optionsConfig.hideCancelledByDefault); }}
       resultSummary={<>{filteredRows.length} of {rows.length} invoices</>}
     >
+      <fieldset className="mb-3 rounded-lg border border-slate-200 bg-slate-50 p-3"><legend className="px-1 text-xs font-semibold text-slate-700">Choose filters to show</legend><div className="flex flex-wrap gap-x-4 gap-y-2">{filterChoices.map(([filter, label]) => <label key={filter} className="inline-flex items-center gap-2 text-sm text-slate-700"><input type="checkbox" checked={visibleFilters.includes(filter)} onChange={() => toggleVisibleFilter(filter)} />{label}</label>)}</div></fieldset>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        {select("Students", "student", students.map((student) => ({ value: student.id, label: `${student.first_name} ${student.last_name}` })).sort((a, b) => a.label.localeCompare(b.label)))}
-        {optionsConfig.showResidency && select("Day/Boarding", "residency", [{ value: "day", label: "Day" }, { value: "boarding", label: "Boarding" }])}
-        {select("Classes", "className", simpleOptions(students.map((student) => student.class_name?.trim() || "")))}
-        {optionsConfig.getChargeTypes && select("Charge type", "chargeType", simpleOptions(rows.flatMap((row) => optionsConfig.getChargeTypes?.(row) || [])))}
-        {select("Academic years", "year", simpleOptions(rows.map((row) => row.academic_year)))}
-        {select("Terms", "term", simpleOptions(rows.map((row) => row.term_name)))}
-        {select("Statuses", "status", simpleOptions(rows.map((row) => row.status)))}
+        {canShowFilter("student") && select("Students", "student", students.map((student) => ({ value: student.id, label: `${student.first_name} ${student.last_name}` })).sort((a, b) => a.label.localeCompare(b.label)))}
+        {canShowFilter("residency") && select("Day/Boarding", "residency", [{ value: "day", label: "Day" }, { value: "boarding", label: "Boarding" }])}
+        {canShowFilter("className") && select("Classes", "className", simpleOptions(students.map((student) => student.class_name?.trim() || "")))}
+        {canShowFilter("chargeType") && select("Charge type", "chargeType", simpleOptions(rows.flatMap((row) => optionsConfig.getChargeTypes?.(row) || [])))}
+        {canShowFilter("year") && select("Academic years", "year", simpleOptions(rows.map((row) => row.academic_year)))}
+        {canShowFilter("term") && select("Terms", "term", simpleOptions(rows.map((row) => row.term_name)))}
+        {canShowFilter("status") && select("Statuses", "status", simpleOptions(rows.map((row) => row.status)))}
       </div>
       <label className="mt-3 inline-flex items-center gap-2 text-sm text-slate-600"><input type="checkbox" checked={showCancelled} onChange={(event) => setShowCancelled(event.target.checked)} /> Show cancelled invoices</label>
       {filters.from && filters.to && filters.from > filters.to && <p role="alert" className="text-sm text-red-600">The end date must be on or after the start date.</p>}

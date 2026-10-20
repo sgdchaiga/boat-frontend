@@ -1214,6 +1214,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { group: 'Cash & Bank', items: [
         { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
+        { name: 'Account Ledger', page: 'accounting_account_ledger' },
         ...(canUseAdvancedAccounting ? [{ name: 'Control Centre', page: 'cash_control_center' }] : []),
         { name: 'Daily Money Summary', page: 'treasury', state: { treasuryTab: 'daily-method' } },
         { name: 'Cashier Closing', page: 'treasury', state: { treasuryTab: 'end-of-day' } },
@@ -1388,6 +1389,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
       { group: 'Cash & bank', items: [
         { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
+        { name: 'Account ledger', page: 'accounting_account_ledger' },
         ...(canUseAdvancedAccounting ? [{ name: 'Control centre', page: 'cash_control_center' }] : []),
         { name: 'Daily money summary', page: 'treasury', state: { treasuryTab: 'daily-method' } },
         { name: 'Cashier closing', page: 'treasury', state: { treasuryTab: 'end-of-day' } },

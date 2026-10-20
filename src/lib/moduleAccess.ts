@@ -767,6 +767,7 @@ export function pageToModuleId(page: string): ModuleId | null {
     "accounting_income",
     "accounting_balance",
     "accounting_cashflow",
+    "accounting_account_ledger",
     "accounting_cost_allocation",
     "cash_control_center",
     "financial_close_workspace",

@@ -32,12 +32,19 @@ type CashMovement = {
   transaction_id: string | null;
   entry_date: string;
   description: string;
+  reference_type: string | null;
+  reference_id: string | null;
   debit: number;
   credit: number;
   balance: number;
 };
 
 type StatementMethod = "direct" | "indirect";
+
+type PurchaseSourceRow =
+  | { id: string; vendor_id: string | null; type: "vendor_payment"; reference: string | null; cheque_number: string | null; payment_voucher: string | null }
+  | { id: string; vendor_id: string | null; type: "bill"; description: string | null }
+  | { id: string; vendor_id: string | null; type: "expense"; description: string | null };
 
 const JOURNAL_ENTRY_ID_CHUNK_SIZE = 100;
 const LEDGER_PAGE_SIZE = 25;
@@ -83,11 +90,91 @@ async function fetchStatementLines(entryIds: string[]) {
   return results.flatMap((result) => result.data || []) as (JournalLineRow & { journal_entry_id: string })[];
 }
 
-export function CashflowPage() {
+/**
+ * Journal descriptions are intentionally short and accounting-focused.  The cash
+ * ledger is customer-facing, so enrich its source-backed rows with the party
+ * recorded on the original payment or purchase document.
+ */
+async function fetchLedgerPartyLabels(
+  entries: Array<{ reference_type: string | null; reference_id: string | null }>,
+  organizationId: string | undefined,
+  isSuperAdmin: boolean
+): Promise<Map<string, string>> {
+  const idsFor = (referenceType: string) => Array.from(new Set(
+    entries
+      .filter((entry) => entry.reference_type === referenceType && entry.reference_id)
+      .map((entry) => entry.reference_id as string)
+  ));
+  const schoolPaymentIds = idsFor("school_payment");
+  const vendorPaymentIds = idsFor("vendor_payment");
+  const billIds = idsFor("bill");
+  const expenseIds = idsFor("expense");
+  const labels = new Map<string, string>();
+
+  const request = <T,>(query: T) => filterByOrganizationId(query, organizationId, isSuperAdmin);
+  const [schoolPaymentsResult, vendorPaymentsResult, billsResult, expensesResult] = await Promise.all([
+    schoolPaymentIds.length
+      ? request(supabase.from("school_payments").select("id, student_id, reference").in("id", schoolPaymentIds))
+      : Promise.resolve({ data: [], error: null }),
+    vendorPaymentIds.length
+      ? request(supabase.from("vendor_payments").select("id, vendor_id, reference, cheque_number, payment_voucher").in("id", vendorPaymentIds))
+      : Promise.resolve({ data: [], error: null }),
+    billIds.length
+      ? request(supabase.from("bills").select("id, vendor_id, description").in("id", billIds))
+      : Promise.resolve({ data: [], error: null }),
+    expenseIds.length
+      ? request(supabase.from("expenses").select("id, vendor_id, description").in("id", expenseIds))
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+
+  const schoolPayments = (schoolPaymentsResult.data || []) as Array<{ id: string; student_id: string; reference: string | null }>;
+  const purchaseRows: PurchaseSourceRow[] = [
+    ...((vendorPaymentsResult.data || []) as Array<{ id: string; vendor_id: string | null; reference: string | null; cheque_number: string | null; payment_voucher: string | null }>).map((row) => ({ ...row, type: "vendor_payment" as const })),
+    ...((billsResult.data || []) as Array<{ id: string; vendor_id: string | null; description: string | null }>).map((row) => ({ ...row, type: "bill" as const })),
+    ...((expensesResult.data || []) as Array<{ id: string; vendor_id: string | null; description: string | null }>).map((row) => ({ ...row, type: "expense" as const })),
+  ];
+  const studentIds = Array.from(new Set(schoolPayments.map((row) => row.student_id).filter(Boolean)));
+  const vendorIds = Array.from(new Set(purchaseRows.map((row) => row.vendor_id).filter((id): id is string => !!id)));
+  const [studentsResult, vendorsResult] = await Promise.all([
+    studentIds.length
+      ? request(supabase.from("students").select("id, first_name, last_name, admission_number").in("id", studentIds))
+      : Promise.resolve({ data: [], error: null }),
+    vendorIds.length
+      ? request(supabase.from("vendors").select("id, name").in("id", vendorIds))
+      : Promise.resolve({ data: [], error: null }),
+  ]);
+  const studentsById = new Map(
+    ((studentsResult.data || []) as Array<{ id: string; first_name: string | null; last_name: string | null; admission_number: string | null }>)
+      .map((student) => [student.id, [student.admission_number, student.first_name, student.last_name].filter(Boolean).join(" · ")])
+  );
+  const vendorsById = new Map(
+    ((vendorsResult.data || []) as Array<{ id: string; name: string | null }>)
+      .map((vendor) => [vendor.id, vendor.name || ""])
+  );
+
+  schoolPayments.forEach((payment) => {
+    const student = studentsById.get(payment.student_id);
+    if (student) labels.set(`school_payment:${payment.id}`, `Student: ${student}${payment.reference ? ` · Ref: ${payment.reference}` : ""}`);
+  });
+  purchaseRows.forEach((row) => {
+    const vendor = row.vendor_id ? vendorsById.get(row.vendor_id) : "";
+    if (!vendor) return;
+    const details = [`Supplier: ${vendor}`];
+    if (row.type === "vendor_payment") {
+      if (row.cheque_number) details.push(`Cheque: ${row.cheque_number}`);
+      if (row.payment_voucher) details.push(`Voucher: ${row.payment_voucher}`);
+      if (row.reference) details.push(`Ref: ${row.reference}`);
+    }
+    labels.set(`${row.type}:${row.id}`, details.join(" · "));
+  });
+  return labels;
+}
+
+export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "ledger" }) {
   const { user } = useAuth();
   const orgId = user?.organization_id ?? undefined;
   const superAdmin = !!user?.isSuperAdmin;
-  const [view, setView] = useState<"statement" | "ledger">("statement");
+  const [view, setView] = useState<"statement" | "ledger">(mode);
   const [method, setMethod] = useState<StatementMethod>("indirect");
   const [dateRange, setDateRange] = useState<DateRangeKey>("this_month");
   const [customFrom, setCustomFrom] = useState("");
@@ -171,7 +258,7 @@ export function CashflowPage() {
     const { data: entriesData, error: eEnt } = await filterByOrganizationId(
       supabase
         .from("journal_entries")
-        .select("id, transaction_id, entry_date, description")
+        .select("id, transaction_id, entry_date, description, reference_type, reference_id")
         .gte("entry_date", fromStr)
         .lte("entry_date", toStr)
         .eq("is_posted", true)
@@ -212,9 +299,24 @@ export function CashflowPage() {
       linesByEntry[l.journal_entry_id].credit += Number(l.credit) || 0;
     });
 
+    const ledgerEntries = (entriesData || []) as Array<{
+      id: string;
+      transaction_id: string | null;
+      entry_date: string;
+      description: string;
+      reference_type: string | null;
+      reference_id: string | null;
+    }>;
+    let partyLabels = new Map<string, string>();
+    try {
+      partyLabels = await fetchLedgerPartyLabels(ledgerEntries, orgId, superAdmin);
+    } catch {
+      // Do not prevent the ledger from loading if an optional source record was removed or is unavailable.
+    }
+
     let running = opening;
     const mov: CashMovement[] = [];
-    (entriesData as { id: string; transaction_id: string | null; entry_date: string; description: string }[])
+    ledgerEntries
       .sort((a, b) => a.entry_date.localeCompare(b.entry_date) || a.id.localeCompare(b.id))
       .forEach((e) => {
         const l = linesByEntry[e.id];
@@ -226,7 +328,11 @@ export function CashflowPage() {
           entry_id: e.id,
           transaction_id: e.transaction_id,
           entry_date: e.entry_date,
-          description: e.description,
+          description: partyLabels.get(`${e.reference_type}:${e.reference_id}`)
+            ? `${e.description} — ${partyLabels.get(`${e.reference_type}:${e.reference_id}`)}`
+            : e.description,
+          reference_type: e.reference_type,
+          reference_id: e.reference_id,
           debit,
           credit,
           balance: running,
@@ -529,6 +635,10 @@ export function CashflowPage() {
   }, [fetchAccountsForLedger]);
 
   useEffect(() => {
+    setView(mode);
+  }, [mode]);
+
+  useEffect(() => {
     if (view === "ledger" && cashAccountId) fetchLedger();
   }, [view, cashAccountId, fetchLedger]);
 
@@ -710,12 +820,10 @@ export function CashflowPage() {
     <div className="p-6 md:p-8">
       <div className="mb-8">
         <div className="flex flex-wrap items-center gap-2">
-          <h1 className="text-3xl font-bold text-slate-900">Cash Flow</h1>
-          <PageNotes ariaLabel="Cash flow help">
+          <h1 className="text-3xl font-bold text-slate-900">{view === "ledger" ? "Account Ledger" : "Cash Flow"}</h1>
+          <PageNotes ariaLabel={view === "ledger" ? "Account ledger help" : "Cash flow help"}>
             <p>
-              <strong>Statement of cash flows</strong> (direct or indirect operating section) plus optional <strong>cash account ledger</strong>.
-              Cash pool includes GL accounts flagged as cash equivalents (category &quot;cash&quot;, bank, mobile money) and journal default
-              cash/bank/mobile accounts.
+              {view === "ledger" ? <><strong>Account ledger</strong> shows movements and running balances for each cash, bank, or mobile-money account. Descriptions include the linked student, supplier, cheque number, and payment voucher where recorded.</> : <><strong>Statement of cash flows</strong> shows direct or indirect operating cash flow. Cash pool includes GL accounts flagged as cash equivalents (category &quot;cash&quot;, bank, mobile money) and journal default cash/bank/mobile accounts.</>}
             </p>
           </PageNotes>
         </div>
@@ -728,22 +836,6 @@ export function CashflowPage() {
       )}
 
       <div className="flex flex-wrap gap-3 mb-4">
-        <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-100">
-          <button
-            type="button"
-            onClick={() => setView("statement")}
-            className={`px-4 py-2 rounded-md text-sm font-medium ${view === "statement" ? "bg-white shadow text-slate-900" : "text-slate-600"}`}
-          >
-            Statement
-          </button>
-          <button
-            type="button"
-            onClick={() => setView("ledger")}
-            className={`px-4 py-2 rounded-md text-sm font-medium ${view === "ledger" ? "bg-white shadow text-slate-900" : "text-slate-600"}`}
-          >
-            Account ledger
-          </button>
-        </div>
         {view === "statement" && (
           <div className="inline-flex rounded-lg border border-slate-200 p-0.5 bg-slate-100">
             <button

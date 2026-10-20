@@ -186,6 +186,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "accounting_income", label: "Income statement", group: "Accounting" },
   { page: "accounting_balance", label: "Balance sheet", group: "Accounting" },
   { page: "accounting_cashflow", label: "Cash flow", group: "Accounting" },
+  { page: "accounting_account_ledger", label: "Account ledger", group: "Accounting" },
   { page: "accounting_budgeting", label: "Budgeting", group: "Accounting" },
   { page: "admin_school_budget_completion", label: "School implementation completion centre", group: "Admin" },
   { page: "school_cashbook_register", label: "School cashbook register", group: "Accounting" },
@@ -220,6 +221,7 @@ const SUPER_ADMIN_REPORT_PAGES = new Set([
   "accounting_income",
   "accounting_balance",
   "accounting_cashflow",
+  "accounting_account_ledger",
 ]);
 
 export function isSuperAdminControlledReportPage(page: PageAccessDef): boolean {
