@@ -56,7 +56,7 @@ const ENTITY_OPTIONS: Array<{ id: ImportEntity; label: string; required: string[
   { id: "school-subjects", label: "School - Subjects", required: ["name"] },
   { id: "school-teachers", label: "School - Teachers", required: ["full_name"] },
   { id: "school-fee-structures", label: "School - Fee Structures", required: ["class_name", "academic_year", "term_name", "tuition"] },
-  { id: "school-expenses", label: "School - Expenses", required: ["expense_date", "amount", "description", "expense_account_code", "cash_account_code"] },
+  { id: "school-expenses", label: "School - Expenses", required: ["date", "particulars", "amount", "source_of_funds_code", "subvote or expense_gl_code"] },
   { id: "school-other-income", label: "School - Other Income", required: ["revenue_type", "amount"] },
   { id: "school-purchases", label: "School - Purchases / Supplier Bills", required: ["vendor_name", "bill_date", "amount", "description"] },
   { id: "school-payments", label: "School - Supplier Payments", required: ["vendor or particulars", "amount", "date"] },
@@ -111,10 +111,10 @@ const ENTITY_TEMPLATES: Record<ImportEntity, Record<string, string>[]> = {
   "school-subjects": [{ id: "", name: "Mathematics", code: "MATH", sort_order: "1", is_active: "1" }],
   "school-teachers": [{ id: "", full_name: "Grace Namusoke", employee_number: "T001", phone: "+256700000002", email: "", notes: "Mathematics", is_active: "1" }],
   "school-fee-structures": [{ id: "", class_name: "Senior 1", stream: "", academic_year: "2026", term_name: "Term 2", currency: "UGX", tuition: "450000", boarding: "300000", meals: "150000", transport: "0", other: "0", is_active: "1" }],
-  "school-expenses": [{ expense_date: "2026-08-27", amount: "150000", description: "Examination stationery", vendor_name: "Kampala Stationers", payee: "Kampala Stationers", cheque_number: "000123", voucher_number: "PV-2026-001", expense_account_code: "6100", cash_account_code: "1000", notes: "Term 2 exams" }],
+  "school-expenses": [{ date: "27/08/2026", vendor: "Kampala Stationers", particulars: "Examination stationery", amount: "150000", source_of_funds_code: "1121", vote: "01 — Academic Programmes", subvote: "01.iv — Internal Examinations", expense_gl_code: "5120", chq_no: "000123", pv_no: "PV-2026-001", notes: "Term 2 exams" }],
   "school-other-income": [{ revenue_type: "Hall hire", payer_name: "Community Association", amount: "300000", method: "bank", reference: "DEP-1001", received_at: "2026-08-27", notes: "Weekend hall hire" }],
   "school-purchases": [{ vendor_name: "Kampala Stationers", bill_date: "2026-08-27", due_date: "2026-09-27", amount: "800000", description: "Exercise books", reference: "INV-4102" }],
-  "school-payments": [{ date: "2026-08-27", vendor: "Kampala Stationers Ltd", particulars: "Examination stationery", reference: "Examination stationery", chq_no: "000123", pv_no: "PV-2026-001", amount: "400000", vote: "Academic Expenses", subvote: "Examinations", payment_method: "bank_transfer", bank_name: "Centenary Bank" }],
+  "school-payments": [{ date: "27/08/2026", vendor: "Kampala Stationers Ltd", particulars: "Examination stationery", reference: "Examination stationery", chq_no: "000123", pv_no: "PV-2026-001", amount: "400000", vote: "Academic Expenses", subvote: "Examinations", payment_method: "bank_transfer", bank_name: "Centenary Bank" }],
 };
 
 function normalizeRow(row: Record<string, unknown>): ParsedRow {
@@ -133,7 +133,17 @@ function normalizeRow(row: Record<string, unknown>): ParsedRow {
   if (!out.voucher_number && out.pv_number) out.voucher_number = out.pv_number;
   if (!out.payment_date && out.date) out.payment_date = out.date;
   if (!out.amount && out.total) out.amount = out.total;
+  // Expense template aliases. The current names match the School Expenses
+  // screen, while the legacy column names remain accepted for older files.
+  if (!out.expense_date && out.date) out.expense_date = out.date;
+  if (!out.description && out.particulars) out.description = out.particulars;
+  if (!out.description && out.narration) out.description = out.narration;
+  if (!out.cash_account_code && out.source_of_funds_code) out.cash_account_code = out.source_of_funds_code;
+  if (!out.cash_account_code && out.source_account_code) out.cash_account_code = out.source_account_code;
+  if (!out.expense_account_code && out.expense_gl_code) out.expense_account_code = out.expense_gl_code;
+  if (!out.expense_account_code && out.gl_account_code) out.expense_account_code = out.gl_account_code;
   if (out.payment_date) out.payment_date = normaliseImportDate(out.payment_date);
+  if (out.expense_date) out.expense_date = normaliseImportDate(out.expense_date);
   return out;
 }
 
@@ -142,7 +152,7 @@ function asText(value: unknown): string {
   return String(value).trim();
 }
 
-/** Convert Excel serial dates (for example 46029) into the ISO dates expected by Supabase. */
+/** Convert Excel serial dates and school-style dd/mm/yyyy values into ISO dates for Supabase. */
 function normaliseImportDate(value: unknown): string {
   if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString().slice(0, 10);
   const raw = asText(value);
@@ -150,6 +160,19 @@ function normaliseImportDate(value: unknown): string {
   if (/^\d+(?:\.\d+)?$/.test(raw)) {
     const parts = XLSX.SSF.parse_date_code(Number(raw));
     if (parts?.y && parts.m && parts.d) return `${parts.y}-${String(parts.m).padStart(2, "0")}-${String(parts.d).padStart(2, "0")}`;
+  }
+  // Interpret slash and dot dates as day/month/year before using the browser's
+  // date parser. This avoids treating 07/01/2026 as July 1 on some devices.
+  const dayMonthYear = raw.match(/^(\d{1,2})[/.\-](\d{1,2})[/.\-](\d{4})$/);
+  if (dayMonthYear) {
+    const day = Number(dayMonthYear[1]);
+    const month = Number(dayMonthYear[2]);
+    const year = Number(dayMonthYear[3]);
+    const candidate = new Date(Date.UTC(year, month - 1, day));
+    if (candidate.getUTCFullYear() === year && candidate.getUTCMonth() === month - 1 && candidate.getUTCDate() === day) {
+      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    }
+    return raw;
   }
   const parsed = Date.parse(raw);
   if (!Number.isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
@@ -246,6 +269,7 @@ export function AdminLocalImportPage() {
   const [running, setRunning] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [paymentImportFailures, setPaymentImportFailures] = useState<string[]>([]);
+  const [expenseImportFailures, setExpenseImportFailures] = useState<string[]>([]);
   const [supplierPaymentImportProgress, setSupplierPaymentImportProgress] = useState({ completed: 0, total: 0 });
   const [updatePreview, setUpdatePreview] = useState<UpdatePreviewRow[]>([]);
   // Voucher exports often have no date per row. The operator explicitly sets
@@ -704,33 +728,64 @@ export function AdminLocalImportPage() {
   const importCloudExpenses = async (rows: ParsedRow[]) => {
     const organizationId = requireOrganizationId();
     const approvalEnabled = await isSpendMoneyApprovalEnabled(organizationId);
-    const accounts = await supabase.from("gl_accounts").select("id,account_code").eq("organization_id", organizationId).eq("is_active", true);
-    if (accounts.error) throw accounts.error;
+    const [accounts, votes, subvotes] = await Promise.all([
+      supabase.from("gl_accounts").select("id,account_code").eq("organization_id", organizationId).eq("is_active", true),
+      supabase.from("school_budget_votes").select("id,vote_code,vote_name").eq("organization_id", organizationId).eq("is_active", true),
+      supabase.from("school_budget_subvotes").select("id,vote_id,subvote_code,subvote_name,default_gl_account_id").eq("organization_id", organizationId).eq("is_active", true),
+    ]);
+    if (accounts.error || votes.error || subvotes.error) throw accounts.error || votes.error || subvotes.error;
     const byCode = new Map<string, string>((accounts.data || []).map((account) => [String(account.account_code).trim().toLowerCase(), String(account.id)]));
-    let imported = 0;
-    for (const row of rows) {
-      const expenseDate = asText(row.expense_date);
-      const description = asText(row.description);
-      const amount = asNumber(row.amount);
-      const expenseGl = byCode.get(asText(row.expense_account_code).toLowerCase());
-      const cashGl = byCode.get(asText(row.cash_account_code).toLowerCase());
-      if (!expenseDate || !description || amount <= 0 || !expenseGl || !cashGl) continue;
-      const vendorId = asText(row.vendor_name) ? await findOrCreateVendor(organizationId, asText(row.vendor_name)) : null;
-      const payee = asText(row.payee) || asText(row.payee_name) || asText(row.vendor_name);
-      const chequeNumber = asText(row.cheque_number) || asText(row.cheque_no);
-      const voucherNumber = asText(row.voucher_number) || asText(row.voucher_no);
-      const expense = await supabase.from("expenses").insert({ organization_id: organizationId, vendor_id: vendorId, amount, description, expense_date: expenseDate, payee_name: payee || null, cheque_number: chequeNumber || null, voucher_number: voucherNumber || null }).select("id").single();
-      if (expense.error) throw expense.error;
-      const line = { expense_gl_account_id: expenseGl, source_cash_gl_account_id: cashGl, amount, bank_charges: 0, vat_amount: 0, vat_gl_account_id: null, bank_charges_gl_account_id: null, comment: asText(row.notes) || null, quantity: 1, sort_order: 0, vendor_id: vendorId };
-      const lineResult = await supabase.from("expense_lines").insert({ expense_id: expense.data.id, ...line });
-      if (lineResult.error) throw lineResult.error;
-      if (!approvalEnabled) {
-        const journal = await createJournalForExpenseWithLines(expense.data.id, expenseDate, [line], user?.id || null);
-        if (!journal.ok) throw new Error(journal.error);
-      }
-      await queueExpenseForTreasury({ organizationId, sourceId: expense.data.id, amount, purpose: description, requestedBy: user?.id || null, vendorId, payeeName: payee || null });
-      imported += 1;
+    const normaliseLookup = (value: unknown) => asText(value).toLowerCase().replace(/[^a-z0-9]/g, "");
+    const voteByValue = new Map<string, { id: string }>();
+    for (const vote of votes.data || []) {
+      for (const value of [vote.vote_code, vote.vote_name, `${vote.vote_code} ${vote.vote_name}`]) voteByValue.set(normaliseLookup(value), { id: vote.id });
     }
+    const subvoteByValue = new Map<string, { id: string; vote_id: string; default_gl_account_id: string | null }>();
+    for (const subvote of subvotes.data || []) {
+      const value = { id: subvote.id, vote_id: subvote.vote_id, default_gl_account_id: subvote.default_gl_account_id };
+      for (const label of [subvote.subvote_code, subvote.subvote_name, `${subvote.subvote_code} ${subvote.subvote_name}`]) subvoteByValue.set(normaliseLookup(label), value);
+    }
+    let imported = 0;
+    const failures: string[] = [];
+    for (const [index, row] of rows.entries()) {
+      const rowLabel = `Row ${index + 2}`;
+      try {
+        const expenseDate = asText(row.expense_date);
+        const description = asText(row.description);
+        const amount = asNumber(row.amount);
+        const voteInput = asText(row.vote || row.vote_code || row.vote_name);
+        const subvoteInput = asText(row.subvote || row.subvote_code || row.subvote_name);
+        const vote = voteInput ? voteByValue.get(normaliseLookup(voteInput)) : null;
+        const subvote = subvoteInput ? subvoteByValue.get(normaliseLookup(subvoteInput)) : null;
+        if ((voteInput && !vote) || (subvoteInput && !subvote)) throw new Error("vote or subvote was not found in this school's active vote book");
+        if (vote && subvote && vote.id !== subvote.vote_id) throw new Error("the selected vote does not match the subvote");
+        const expenseGl = byCode.get(asText(row.expense_account_code).toLowerCase()) || subvote?.default_gl_account_id || undefined;
+        const cashGl = byCode.get(asText(row.cash_account_code).toLowerCase());
+        if (!expenseDate) throw new Error("a valid date is required");
+        if (!description) throw new Error("particulars are required");
+        if (amount <= 0) throw new Error("a positive amount is required");
+        if (!cashGl) throw new Error("source of funds code was not found among active chart-of-account entries");
+        if (!expenseGl) throw new Error("provide a valid expense GL code or a subvote with a mapped expense GL");
+        const vendorId = asText(row.vendor_name) ? await findOrCreateVendor(organizationId, asText(row.vendor_name)) : null;
+        const payee = asText(row.payee) || asText(row.payee_name) || asText(row.vendor_name);
+        const chequeNumber = asText(row.cheque_number) || asText(row.cheque_no);
+        const voucherNumber = asText(row.voucher_number) || asText(row.voucher_no);
+        const expense = await supabase.from("expenses").insert({ organization_id: organizationId, vendor_id: vendorId, amount, description, expense_date: expenseDate, payee_name: payee || null, cheque_number: chequeNumber || null, voucher_number: voucherNumber || null }).select("id").single();
+        if (expense.error) throw expense.error;
+        const line = { expense_gl_account_id: expenseGl, source_cash_gl_account_id: cashGl, amount, bank_charges: 0, vat_amount: 0, vat_gl_account_id: null, bank_charges_gl_account_id: null, comment: asText(row.notes) || null, quantity: 1, sort_order: 0, vendor_id: vendorId, school_subvote_id: subvote?.id || null };
+        const lineResult = await supabase.from("expense_lines").insert({ expense_id: expense.data.id, ...line });
+        if (lineResult.error) throw lineResult.error;
+        if (!approvalEnabled) {
+          const journal = await createJournalForExpenseWithLines(expense.data.id, expenseDate, [line], user?.id || null);
+          if (!journal.ok) throw new Error(journal.error);
+        }
+        await queueExpenseForTreasury({ organizationId, sourceId: expense.data.id, amount, purpose: description, requestedBy: user?.id || null, vendorId, payeeName: payee || null });
+        imported += 1;
+      } catch (error) {
+        failures.push(`${rowLabel}: ${importFailureReason(error)}`);
+      }
+    }
+    setExpenseImportFailures(failures);
     return imported;
   };
 
@@ -1037,6 +1092,7 @@ export function AdminLocalImportPage() {
   const runImport = async () => {
     setMessage(null);
     setPaymentImportFailures([]);
+    setExpenseImportFailures([]);
     setSupplierPaymentImportProgress({ completed: 0, total: 0 });
     if (!file) {
       setMessage("Choose a CSV or XLSX file first.");
@@ -1153,8 +1209,8 @@ export function AdminLocalImportPage() {
         {entity === "school-students" ? <p className="text-xs text-amber-700">Student import adds new records only. Existing identifiers are rejected and never overwritten.</p> : null}
         {entity === "school-fee-structures" ? <p className="text-xs text-amber-700">Fee structures are added as new records so prior terms remain unchanged.</p> : null}
         {entity === "school-purchases" ? <p className="text-xs text-amber-700">Imported supplier bills are saved as pending approval and are not posted until approved.</p> : null}
-        {entity === "school-payments" ? <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><p>Upload: <strong>DATE, VENDOR, PARTICULARS, REFERENCE (optional), CHQ NO, PV NO, Amount, Vote, Subvote, Payment Method, Bank Name</strong>. Put the expense details in <strong>PARTICULARS</strong>. If supplied, <strong>REFERENCE</strong> is shown exactly as uploaded; otherwise Particulars is used. No bill matching is required. BOAT creates the vendor if needed and records every payment as unallocated, ready to be matched later. Cheque, voucher, bank, vote, subvote, import fingerprint, and batch are kept in separate fields.</p><label className="flex max-w-xs items-center gap-2 font-medium">Batch payment date <input type="date" value={supplierPaymentBatchDate} onChange={(event) => setSupplierPaymentBatchDate(event.target.value)} className="rounded border border-amber-300 bg-white px-2 py-1" /></label><p>Rows with a Date/Payment Date column use that date; the batch date fills rows without one. Re-uploading the same file skips rows already imported and adds only new ones.</p></div> : null}
-        {entity === "school-expenses" ? <p className="text-xs text-amber-700">GL account codes must already exist. Organization spend-approval settings are respected. Payee, cheque_number and voucher_number are optional. Format cheque and voucher numbers as text to preserve leading zeros. If payee is blank, vendor_name is used.</p> : null}
+        {entity === "school-payments" ? <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><p>Upload: <strong>DATE, VENDOR, PARTICULARS, REFERENCE (optional), CHQ NO, PV NO, Amount, Vote, Subvote, Payment Method, Bank Name</strong>. Use <strong>DD/MM/YYYY</strong> for date cells, for example <strong>27/08/2026</strong>. Put the expense details in <strong>PARTICULARS</strong>. If supplied, <strong>REFERENCE</strong> is shown exactly as uploaded; otherwise Particulars is used. No bill matching is required. BOAT creates the vendor if needed and records every payment as unallocated, ready to be matched later. Cheque, voucher, bank, vote, subvote, import fingerprint, and batch are kept in separate fields.</p><label className="flex max-w-xs items-center gap-2 font-medium">Batch payment date <input type="date" value={supplierPaymentBatchDate} onChange={(event) => setSupplierPaymentBatchDate(event.target.value)} className="rounded border border-amber-300 bg-white px-2 py-1" /></label><p>Rows with a Date/Payment Date column use that date; the batch date fills rows without one. Re-uploading the same file skips rows already imported and adds only new ones.</p></div> : null}
+        {entity === "school-expenses" ? <div className="space-y-1 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900"><p>Upload: <strong>DATE, VENDOR, PARTICULARS, AMOUNT, SOURCE OF FUNDS CODE, VOTE, SUBVOTE, EXPENSE GL CODE, CHQ NO, PV NO, NOTES</strong>.</p><p>Use the school date format <strong>DD/MM/YYYY</strong>, for example <strong>27/08/2026</strong>. Excel date cells and existing ISO dates are also accepted.</p><p><strong>Source of funds code</strong> must be an active cash, bank, wallet, or mobile-money account code from the Chart of Accounts. Enter either a valid <strong>Subvote</strong> (which supplies its mapped expense GL) or an <strong>Expense GL code</strong>; supplying both keeps the selected subvote and GL together. Vote is checked against the selected subvote when supplied.</p><p>Payee and document references are optional. Format cheque and PV numbers as text to preserve leading zeros. Organization spend-approval settings are respected.</p></div> : null}
       </> : <p className="text-xs text-amber-700">Keep {entity === "school-students" ? "admission_number" : "id"} unchanged. For SchoolPay corrections, use the SchoolPay update template and enter only corrected_schoolpay_code. Blank cells are ignored; use {CLEAR_VALUE} to clear an optional field.</p>}
 
       <div className="flex items-center gap-3">
@@ -1183,6 +1239,7 @@ export function AdminLocalImportPage() {
 
       {message ? <p className="text-sm text-slate-700">{message}</p> : null}
       {entity === "school-payments" && paymentImportFailures.length > 0 ? <div className="max-h-56 overflow-auto rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900"><p className="font-semibold">Supplier-payment import issues</p><ul className="mt-2 list-disc space-y-1 pl-4">{paymentImportFailures.map((reason, index) => <li key={`${index}-${reason}`}>{reason}</li>)}</ul></div> : null}
+      {entity === "school-expenses" && expenseImportFailures.length > 0 ? <div className="max-h-56 overflow-auto rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900"><p className="font-semibold">Expense-import issues</p><ul className="mt-2 list-disc space-y-1 pl-4">{expenseImportFailures.map((reason, index) => <li key={`${index}-${reason}`}>{reason}</li>)}</ul></div> : null}
     </div>
   );
 }

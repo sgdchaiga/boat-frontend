@@ -1,0 +1,21 @@
+import { useState } from "react";
+import { BookOpen, CheckCircle2, X } from "lucide-react";
+
+export function SchoolSpendingGuideButton({ focus }: { focus: "expense" | "petty_cash" }) {
+  const [open, setOpen] = useState(false);
+  return <><button type="button" onClick={() => setOpen(true)} className="app-btn-secondary"><BookOpen className="h-4 w-4" />Guide</button>{open && <SpendingGuide focus={focus} onClose={() => setOpen(false)} />}</>;
+}
+
+function SpendingGuide({ focus, onClose }: { focus: "expense" | "petty_cash"; onClose: () => void }) {
+  return <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/45 p-4" onMouseDown={onClose}>
+    <article className="max-h-[90vh] w-full max-w-4xl overflow-y-auto rounded-2xl bg-white p-6 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+      <div className="flex items-start justify-between gap-4"><div><p className="text-xs font-semibold uppercase tracking-wide text-teal-700">School finance guide</p><h2 className="mt-1 text-2xl font-bold text-slate-900">Expenses and petty cash</h2><p className="mt-2 text-sm text-slate-600">Choose the right workflow first; both routes post to the general ledger and appear in financial reporting after approval.</p></div><button type="button" onClick={onClose} className="rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Close guide"><X className="h-5 w-5" /></button></div>
+      <div className="mt-6 grid gap-4 md:grid-cols-2"><GuideCard title="Use Expenses" active={focus === "expense"} items={["A supplier, bank, mobile-money or direct operational payment is being recorded.", "You need a standard expense entry with vendor, payment source, VAT and supporting documents.", "The payment is not drawn from a separately controlled physical cash float."]} /><GuideCard title="Use Petty Cash" active={focus === "petty_cash"} items={["A custodian pays a small, immediate item from an approved physical cash float.", "You need a petty-cash voucher, custodian accountability and later physical cash counting.", "You need to replenish a float from a bank, cash or wallet account."]} /></div>
+      <section className="mt-6 rounded-xl border border-slate-200 p-4"><h3 className="font-bold text-slate-900">Correct workflow</h3><ol className="mt-3 grid gap-3 text-sm text-slate-700 md:grid-cols-2"><li><b>1. Classify:</b> Select the subvote first where possible. BOAT fills its vote and GL mapping. If you start with a GL shared by several subvotes, choose the intended subvote before saving.</li><li><b>2. Evidence:</b> Record the narration, payee, date, amount and receipt, invoice or transfer reference. Attach source documents where the screen provides attachments.</li><li><b>3. Review:</b> Submit the entry. A different authorized finance user approves and posts it; do not approve your own petty-cash voucher.</li><li><b>4. Reconcile:</b> For petty cash, count physical cash regularly. Investigate a shortage or surplus before any adjustment. Replenish only from an approved source account.</li></ol></section>
+      <section className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><h3 className="font-bold">Avoid these common errors</h3><ul className="mt-2 list-disc space-y-1 pl-5"><li>Do not record supplier invoices or cheque payments as petty cash merely because the amount is small.</li><li>Do not use a generic GL when a mapped vote and subvote exist.</li><li>Do not treat a replenishment as a new expense—it restores the float; the expense is recorded on the individual voucher.</li><li>Do not hide cash-count differences. Keep the count, explanation and any approved correction in the audit trail.</li></ul></section>
+      <div className="mt-6 flex justify-end"><button type="button" onClick={onClose} className="app-btn-primary">Got it</button></div>
+    </article>
+  </div>;
+}
+
+function GuideCard({ title, active, items }: { title: string; active: boolean; items: string[] }) { return <section className={`rounded-xl border p-4 ${active ? "border-teal-300 bg-teal-50" : "border-slate-200 bg-white"}`}><h3 className="font-bold text-slate-900">{title}</h3><ul className="mt-3 space-y-2 text-sm text-slate-700">{items.map((item) => <li key={item} className="flex gap-2"><CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-teal-700" />{item}</li>)}</ul></section>; }

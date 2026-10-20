@@ -18,6 +18,7 @@ import { loadHotelConfig } from "../../lib/hotelConfig";
 import { approveExpenseAndPost, isSpendMoneyApprovalEnabled, queueExpenseForTreasury, setSpendMoneyApprovalEnabled } from "../../lib/treasuryWorkflow";
 import { clearCashbookDraft } from "../../lib/cashbookDraft";
 import { isGlAccountRelevantForBusinessType } from "../../lib/glAccountBusinessScope";
+import { SchoolSpendingGuideButton } from "../school/SchoolSpendingGuide";
 
 import { schoolSpendingPeriod, schoolBudgetCoversDate, schoolBudgetIsSpendable, schoolBudgetUnavailableMessage, schoolBudgetLeafLines, type SchoolSpendingBudget } from "../../lib/schoolSpendingBudget";
 
@@ -1787,6 +1788,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <SchoolSpendingGuideButton focus="expense" />
           {canManageApprovalWorkflow && <button type="button" onClick={() => void toggleApprovalWorkflow()} className={`rounded-lg border px-3 py-2 text-xs font-semibold ${approvalEnabled ? "border-amber-300 bg-amber-50 text-amber-800" : "border-emerald-300 bg-emerald-50 text-emerald-800"}`}>Approvals {approvalEnabled ? "on" : "off"}</button>}
           <div
             className="inline-flex rounded-lg border border-slate-300 bg-slate-50 p-0.5 text-xs font-medium"
