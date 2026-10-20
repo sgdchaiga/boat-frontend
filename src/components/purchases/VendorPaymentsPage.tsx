@@ -781,10 +781,15 @@ export function VendorPaymentsPage({
       if (!ok) return;
     }
 
-    const allocation: VendorPaymentJournalAllocation | undefined =
-      unearnedExcessAmount > 0.001 || payableAmount < amt - 0.02
-        ? { payableAmount, unearnedExcessAmount }
-        : undefined;
+    // A bank-transfer payment must credit the bank GL selected on the form.
+    // Previously this was only saved as payment metadata, while the journal
+    // fell back to the default cash GL, so the bank account ledger showed no
+    // corresponding outflow.
+    const allocation: VendorPaymentJournalAllocation = {
+      payableAmount,
+      unearnedExcessAmount,
+      sourceFundsGlAccountId: paymentMethod === "bank_transfer" ? bankName : undefined,
+    };
 
     if (vendorPaymentInFlightRef.current) return;
     vendorPaymentInFlightRef.current = true;
