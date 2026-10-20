@@ -34,6 +34,8 @@ type CashMovement = {
   description: string;
   reference_type: string | null;
   reference_id: string | null;
+  cheque_number: string | null;
+  payment_voucher: string | null;
   debit: number;
   credit: number;
   balance: number;
@@ -62,7 +64,7 @@ async function fetchCashAccountLines(entryIds: string[], cashAccountId: string) 
     chunkEntryIds(entryIds).map((ids) =>
       supabase
         .from("journal_entry_lines")
-        .select("journal_entry_id, debit, credit")
+        .select("journal_entry_id, debit, credit, dimensions")
         .eq("gl_account_id", cashAccountId)
         .in("journal_entry_id", ids)
     )
@@ -73,6 +75,7 @@ async function fetchCashAccountLines(entryIds: string[], cashAccountId: string) 
     journal_entry_id: string;
     debit: number;
     credit: number;
+    dimensions?: Record<string, unknown> | null;
   }>;
 }
 
@@ -96,10 +99,10 @@ async function fetchStatementLines(entryIds: string[]) {
  * recorded on the original payment or purchase document.
  */
 async function fetchLedgerPartyLabels(
-  entries: Array<{ reference_type: string | null; reference_id: string | null }>,
+  entries: Array<{ reference_type: string | null; reference_id: string | null; student_id?: string | null }>,
   organizationId: string | undefined,
   isSuperAdmin: boolean
-): Promise<Map<string, string>> {
+): Promise<{ labels: Map<string, string>; paymentDetails: Map<string, { cheque_number: string | null; payment_voucher: string | null }> }> {
   const idsFor = (referenceType: string) => Array.from(new Set(
     entries
       .filter((entry) => entry.reference_type === referenceType && entry.reference_id)
@@ -110,6 +113,7 @@ async function fetchLedgerPartyLabels(
   const billIds = idsFor("bill");
   const expenseIds = idsFor("expense");
   const labels = new Map<string, string>();
+  const paymentDetails = new Map<string, { cheque_number: string | null; payment_voucher: string | null }>();
 
   const request = <T,>(query: T) => filterByOrganizationId(query, organizationId, isSuperAdmin);
   const [schoolPaymentsResult, vendorPaymentsResult, billsResult, expensesResult] = await Promise.all([
@@ -133,7 +137,10 @@ async function fetchLedgerPartyLabels(
     ...((billsResult.data || []) as Array<{ id: string; vendor_id: string | null; description: string | null }>).map((row) => ({ ...row, type: "bill" as const })),
     ...((expensesResult.data || []) as Array<{ id: string; vendor_id: string | null; description: string | null }>).map((row) => ({ ...row, type: "expense" as const })),
   ];
-  const studentIds = Array.from(new Set(schoolPayments.map((row) => row.student_id).filter(Boolean)));
+  const studentIds = Array.from(new Set([
+    ...schoolPayments.map((row) => row.student_id),
+    ...entries.map((entry) => entry.student_id),
+  ].filter((id): id is string => !!id)));
   const vendorIds = Array.from(new Set(purchaseRows.map((row) => row.vendor_id).filter((id): id is string => !!id)));
   const [studentsResult, vendorsResult] = await Promise.all([
     studentIds.length
@@ -152,22 +159,26 @@ async function fetchLedgerPartyLabels(
       .map((vendor) => [vendor.id, vendor.name || ""])
   );
 
-  schoolPayments.forEach((payment) => {
-    const student = studentsById.get(payment.student_id);
-    if (student) labels.set(`school_payment:${payment.id}`, `Student: ${student}${payment.reference ? ` · Ref: ${payment.reference}` : ""}`);
+  const schoolPaymentById = new Map(schoolPayments.map((payment) => [payment.id, payment]));
+  entries.filter((entry) => entry.reference_type === "school_payment" && entry.reference_id).forEach((entry) => {
+    const payment = schoolPaymentById.get(entry.reference_id!);
+    const student = studentsById.get(payment?.student_id || entry.student_id || "");
+    if (student) labels.set(`school_payment:${entry.reference_id}`, `Student: ${student}${payment?.reference ? ` · Ref: ${payment.reference}` : ""}`);
   });
   purchaseRows.forEach((row) => {
     const vendor = row.vendor_id ? vendorsById.get(row.vendor_id) : "";
+    if (row.type === "vendor_payment") {
+      paymentDetails.set(`vendor_payment:${row.id}`, {
+        cheque_number: row.cheque_number,
+        payment_voucher: row.payment_voucher,
+      });
+    }
     if (!vendor) return;
     const details = [`Supplier: ${vendor}`];
-    if (row.type === "vendor_payment") {
-      if (row.cheque_number) details.push(`Cheque: ${row.cheque_number}`);
-      if (row.payment_voucher) details.push(`Voucher: ${row.payment_voucher}`);
-      if (row.reference) details.push(`Ref: ${row.reference}`);
-    }
+    if (row.type === "vendor_payment" && row.reference) details.push(`Ref: ${row.reference}`);
     labels.set(`${row.type}:${row.id}`, details.join(" · "));
   });
-  return labels;
+  return { labels, paymentDetails };
 }
 
 export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "ledger" }) {
@@ -292,11 +303,13 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
       return;
     }
 
-    const linesByEntry: Record<string, { debit: number; credit: number }> = {};
-    (linesData || []).forEach((l: { journal_entry_id: string; debit: number; credit: number }) => {
-      if (!linesByEntry[l.journal_entry_id]) linesByEntry[l.journal_entry_id] = { debit: 0, credit: 0 };
+    const linesByEntry: Record<string, { debit: number; credit: number; student_id: string | null }> = {};
+    (linesData || []).forEach((l: { journal_entry_id: string; debit: number; credit: number; dimensions?: Record<string, unknown> | null }) => {
+      if (!linesByEntry[l.journal_entry_id]) linesByEntry[l.journal_entry_id] = { debit: 0, credit: 0, student_id: null };
       linesByEntry[l.journal_entry_id].debit += Number(l.debit) || 0;
       linesByEntry[l.journal_entry_id].credit += Number(l.credit) || 0;
+      const studentId = typeof l.dimensions?.student_id === "string" ? l.dimensions.student_id : null;
+      if (studentId) linesByEntry[l.journal_entry_id].student_id = studentId;
     });
 
     const ledgerEntries = (entriesData || []) as Array<{
@@ -308,8 +321,15 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
       reference_id: string | null;
     }>;
     let partyLabels = new Map<string, string>();
+    let paymentDetails = new Map<string, { cheque_number: string | null; payment_voucher: string | null }>();
     try {
-      partyLabels = await fetchLedgerPartyLabels(ledgerEntries, orgId, superAdmin);
+      const partyData = await fetchLedgerPartyLabels(
+        ledgerEntries.map((entry) => ({ ...entry, student_id: linesByEntry[entry.id]?.student_id ?? null })),
+        orgId,
+        superAdmin
+      );
+      partyLabels = partyData.labels;
+      paymentDetails = partyData.paymentDetails;
     } catch {
       // Do not prevent the ledger from loading if an optional source record was removed or is unavailable.
     }
@@ -324,15 +344,19 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
         const debit = l.debit,
           credit = l.credit;
         running += debit - credit;
+        const key = `${e.reference_type}:${e.reference_id}`;
+        const paymentDetail = paymentDetails.get(key);
         mov.push({
           entry_id: e.id,
           transaction_id: e.transaction_id,
           entry_date: e.entry_date,
-          description: partyLabels.get(`${e.reference_type}:${e.reference_id}`)
-            ? `${e.description} — ${partyLabels.get(`${e.reference_type}:${e.reference_id}`)}`
+          description: partyLabels.get(key)
+            ? `${e.description} — ${partyLabels.get(key)}`
             : e.description,
           reference_type: e.reference_type,
           reference_id: e.reference_id,
+          cheque_number: paymentDetail?.cheque_number ?? null,
+          payment_voucher: paymentDetail?.payment_voucher ?? null,
           debit,
           credit,
           balance: running,
@@ -774,11 +798,13 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
       ["Cash account ledger", periodLabel, acctLabel],
       ["Opening balance", openingBalance.toFixed(2)],
       [],
-      ["Transaction ID", "Date", "Description", "In", "Out", "Balance"],
+      ["Transaction ID", "Date", "Description", "Cheque no.", "Payment voucher", "In", "Out", "Balance"],
       ...movements.map((m) => [
         m.transaction_id ?? "",
         m.entry_date,
         m.description,
+        m.cheque_number ?? "",
+        m.payment_voucher ?? "",
         formatDrCrCell(m.debit),
         formatDrCrCell(m.credit),
         m.balance.toFixed(2),
@@ -799,11 +825,13 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
       sections: [
         {
           title: "Movements",
-          head: ["Transaction ID", "Date", "Description", "In", "Out", "Balance"],
+          head: ["Transaction ID", "Date", "Description", "Cheque no.", "Payment voucher", "In", "Out", "Balance"],
           body: movements.map((m) => [
             m.transaction_id ?? "—",
             m.entry_date,
             m.description,
+            m.cheque_number ?? "—",
+            m.payment_voucher ?? "—",
             formatDrCrCell(m.debit),
             formatDrCrCell(m.credit),
             m.balance.toFixed(2),
@@ -915,7 +943,7 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
         !cashAccountId ? (
           <p className="text-slate-500">No asset accounts found.</p>
         ) : (
-          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden max-w-3xl">
+          <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto max-w-6xl">
             <div className="p-4 border-b bg-slate-50 flex justify-between">
               <span className="font-medium">Opening balance</span>
               <span>{openingBalance.toFixed(2)}</span>
@@ -926,6 +954,8 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
                   <th className="p-2 text-left">Transaction ID</th>
                   <th className="p-2 text-left">Date</th>
                   <th className="p-2 text-left">Description</th>
+                  <th className="p-2 text-left whitespace-nowrap">Cheque no.</th>
+                  <th className="p-2 text-left whitespace-nowrap">Payment voucher</th>
                   <th className="p-2 text-right">In</th>
                   <th className="p-2 text-right">Out</th>
                   <th className="p-2 text-right">Balance</th>
@@ -937,6 +967,8 @@ export function CashflowPage({ mode = "statement" }: { mode?: "statement" | "led
                     <td className="p-2 font-mono text-slate-600">{m.transaction_id ?? "—"}</td>
                     <td className="p-2">{m.entry_date}</td>
                     <td className="p-2">{m.description}</td>
+                    <td className="p-2 whitespace-nowrap">{m.cheque_number ?? "—"}</td>
+                    <td className="p-2 whitespace-nowrap">{m.payment_voucher ?? "—"}</td>
                     <td className="p-2 text-right">{formatDrCrCell(m.debit)}</td>
                     <td className="p-2 text-right">{formatDrCrCell(m.credit)}</td>
                     <td className="p-2 text-right font-medium">{m.balance.toFixed(2)}</td>
