@@ -39,8 +39,13 @@ function normalizeStudentCase(row: StudentRow): StudentRow {
 }
 
 function studentName(student: Pick<StudentRow, "first_name" | "other_names" | "last_name">) {
-  return [student.first_name, student.other_names, student.last_name].filter(Boolean).join(" ");
+  return [student.first_name, student.other_names, student.last_name]
+    .map((part) => part?.trim())
+    .filter(Boolean)
+    .join(" ");
 }
+
+type StudentSortKey = "admission" | "name" | "class" | "type" | "status" | "schoolPay";
 
 export function StudentsListPage() {
   const { user, isSuperAdmin } = useAuth();
@@ -57,6 +62,8 @@ export function StudentsListPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [sortKey, setSortKey] = useState<StudentSortKey>("admission");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
   useEffect(() => {
     void load();
@@ -98,8 +105,31 @@ export function StudentsListPage() {
     !classFilter || (r.class_name || "").toLowerCase().includes(classFilter.toLowerCase())
   );
 
+  const sortedStudents = [...filtered].sort((left, right) => {
+    const valueFor = (student: StudentRow) => {
+      switch (sortKey) {
+        case "name": return studentName(student);
+        case "class": return student.class_name || "";
+        case "type": return student.is_boarding ? "boarding" : "day";
+        case "status": return student.status || "active";
+        case "schoolPay": return student.school_pay_number || "";
+        default: return student.admission_number || "";
+      }
+    };
+    const comparison = valueFor(left).localeCompare(valueFor(right), undefined, { numeric: true, sensitivity: "base" });
+    return sortDirection === "asc" ? comparison : -comparison;
+  });
+
+  const toggleSort = (key: StudentSortKey) => {
+    if (sortKey === key) setSortDirection((direction) => direction === "asc" ? "desc" : "asc");
+    else {
+      setSortKey(key);
+      setSortDirection("asc");
+    }
+  };
+
   const exportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(filtered);
+    const ws = XLSX.utils.json_to_sheet(sortedStudents);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Students");
     XLSX.writeFile(wb, "students.xlsx");
@@ -322,12 +352,13 @@ export function StudentsListPage() {
       <table className="w-full border bg-white">
         <thead>
           <tr>
-            <th>Admission</th>
-            <th>Name</th>
-            <th>Class</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th>SchoolPay code</th>
+            {([ ["admission", "Admission"], ["name", "Name"], ["class", "Class"], ["type", "Type"], ["status", "Status"], ["schoolPay", "SchoolPay code"] ] as Array<[StudentSortKey, string]>).map(([key, label]) => (
+              <th key={key} aria-sort={sortKey === key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}>
+                <button type="button" onClick={() => toggleSort(key)} className="inline-flex items-center gap-1 px-2 py-2 hover:text-indigo-700">
+                  {label}<span aria-hidden="true" className={sortKey === key ? "text-indigo-700" : "text-slate-400"}>{sortKey === key && sortDirection === "desc" ? "▼" : "▲"}</span>
+                </button>
+              </th>
+            ))}
             <th>Actions</th>
           </tr>
         </thead>
@@ -342,7 +373,7 @@ export function StudentsListPage() {
               <td colSpan={7} className="p-4 text-slate-500">No students found.</td>
             </tr>
           ) : (
-            filtered.map((r) =>
+            sortedStudents.map((r) =>
               editingId === r.id && editDraft ? (
                 <tr key={r.id} className="border-t bg-indigo-50/40">
                   <td className="p-2">
