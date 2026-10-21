@@ -4,7 +4,8 @@ import { useAuth } from "@/contexts/AuthContext";
 
 type TabId = "receive" | "spend" | "approve" | "balances" | "reconcile" | "reports";
 type Props = { onNavigate: (page: string, state?: Record<string, unknown>) => void };
-type Action = { title: string; description: string; page: string; icon: typeof Wallet; state?: Record<string, unknown> };
+type ActionTone = "direct" | "controlled";
+type Action = { title: string; description: string; page: string; icon: typeof Wallet; state?: Record<string, unknown>; tone?: ActionTone };
 
 const operational: Action[] = [
   { title: "Treasury & cashbook", description: "Review cash, bank movements, approvals and available funds.", page: "treasury", icon: Wallet },
@@ -14,10 +15,10 @@ const operational: Action[] = [
 ];
 const payables: Action[] = [
   { title: "Suppliers", description: "Maintain the approved supplier register.", page: "purchases_vendors", icon: ShoppingCart },
-  { title: "Purchase orders", description: "Create and follow purchase approvals.", page: "purchases_orders", icon: FileText },
-  { title: "Supplier bills", description: "Record GRNs and bills without duplicate accounting entry.", page: "purchases_bills", icon: Receipt },
-  { title: "Supplier payments", description: "Review and release approved supplier payments.", page: "purchases_payments", icon: Wallet },
-  { title: "Supplier returns", description: "Record returns and supplier credits.", page: "purchases_credits", icon: FileText },
+  { title: "Purchase orders", description: "Create and follow purchase approvals.", page: "purchases_orders", icon: FileText, tone: "controlled" },
+  { title: "Supplier bills", description: "Record GRNs and bills without duplicate accounting entry.", page: "purchases_bills", icon: Receipt, tone: "controlled" },
+  { title: "Supplier payments", description: "Review and release approved supplier payments.", page: "purchases_payments", icon: Wallet, tone: "controlled" },
+  { title: "Supplier returns", description: "Record returns and supplier credits.", page: "purchases_credits", icon: FileText, tone: "controlled" },
 ];
 const control: Action[] = [
   { title: "Journal entries", description: "Review system-generated and approved accounting entries.", page: "accounting_journal", icon: ShieldCheck },
@@ -30,7 +31,7 @@ const control: Action[] = [
 const reports: Action[] = [
   { title: "Daily collections", description: "Review receipts by date and payment method.", page: "school_collections_summary", icon: Receipt },
   { title: "Account statements", description: "View money in, money out and running balances.", page: "treasury", state: { treasuryTab: "history" }, icon: FileText },
-  { title: "Cashbook", description: "Review the school’s unified receipt and payment register.", page: "school_cashbook_register", icon: BookOpenCheck },
+  { title: "Cashbook register", description: "Review direct cashbook receipts and payments, including voucher and cheque references.", page: "school_cashbook_register", icon: BookOpenCheck },
   { title: "Cash flow", description: "Review how cash moved through the school.", page: "accounting_cashflow", icon: Wallet },
   { title: "Income and expenditure", description: "Review financial performance for the selected period.", page: "accounting_income", icon: BarChart3 },
   { title: "Budget performance", description: "Compare approved budgets with actual spending.", page: "reports_budget_variance", icon: BarChart3 },
@@ -45,6 +46,7 @@ export function FinanceOverviewPage({ onNavigate }: Props) {
   const tabs = useMemo(() => [
     { id: "receive" as const, label: "Receive", actions: [
       { title: "Receive school fees", description: "Record and allocate a student-fee payment.", page: "school_fee_payments", icon: Receipt },
+      { title: "Direct cash or bank receipt", description: "Record a non-student receipt straight into the cashbook and chosen income or liability vote.", page: "school_cashbook_entry", icon: BookOpenCheck, tone: "direct" as const },
       { title: "Student receivables", description: "Age unpaid fees, log reminders and track promises to pay.", page: "school_credit_control", icon: AlertCircle },
       { title: "Fee reminder automation", description: "Queue and send controlled fee reminders, then hold clearance where necessary.", page: "school_collection_automation", icon: MessageSquare },
       { title: "Rent collections", description: "Record rent received from school properties and tenants.", page: "school_other_revenue", icon: Landmark },
@@ -52,18 +54,19 @@ export function FinanceOverviewPage({ onNavigate }: Props) {
       { title: "Daily collections", description: "Review money received by method and date.", page: "school_collections_summary", icon: BarChart3 },
     ] },
     { id: "spend" as const, label: "Spend", actions: [
-      { title: "Record expense", description: "Enter day-to-day expenditure and attach supporting documents.", page: "purchases_expenses", icon: Receipt },
-      { title: "Cashbook entry", description: "Enter a voucher, cheque or payment and allocate it across school vote heads.", page: "school_cashbook_entry", icon: BookOpenCheck },
-      { title: "Petty cash", description: "Control float custody, vouchers, replenishment and cash counts.", page: "school_petty_cash", icon: Wallet },
-      { title: "Staff advances", description: "Issue and track staff advances and recoveries.", page: "payroll_loans", icon: CircleDollarSign },
-      { title: "Direct stock purchase", description: "Record a purchase that goes directly into stock.", page: "purchases_bills", icon: ShoppingCart },
-      { title: "Procure-to-pay control", description: "Trace purchase orders through supplier bills and payment release.", page: "purchases_procure_to_pay", icon: ShieldCheck },
-      { title: "Three-way matching", description: "Record goods received and reconcile ordered, received and billed quantities.", page: "school_three_way_match", icon: ClipboardCheck },
+      { title: "Direct payment or receipt", description: "Post an immediate cash or bank transaction with voucher, cheque and vote allocation details.", page: "school_cashbook_entry", icon: BookOpenCheck, tone: "direct" as const },
+      { title: "Direct stock purchase", description: "Receive stock and record its immediate payment without sending a supplier bill for approval.", page: "purchases_bills", state: { cashPurchaseOpen: true }, icon: ShoppingCart, tone: "direct" as const },
+      { title: "Expense request", description: "Enter day-to-day expenditure and submit supporting documents into the approval workflow.", page: "purchases_expenses", icon: Receipt, tone: "controlled" as const },
+      { title: "Petty cash", description: "Control float custody, vouchers, replenishment and cash counts.", page: "school_petty_cash", icon: Wallet, tone: "controlled" as const },
+      { title: "Staff advances", description: "Issue and track staff advances and recoveries.", page: "payroll_loans", icon: CircleDollarSign, tone: "controlled" as const },
+      { title: "Procure-to-pay control", description: "Trace purchase orders through supplier bills and payment release.", page: "purchases_procure_to_pay", icon: ShieldCheck, tone: "controlled" as const },
+      { title: "Three-way matching", description: "Record goods received and reconcile ordered, received and billed quantities.", page: "school_three_way_match", icon: ClipboardCheck, tone: "controlled" as const },
       ...payables,
     ] },
     { id: "approve" as const, label: "Approve", actions: [{ title: "Approval inbox", description: "Review expenses, supplier bills and payments awaiting action.", page: "treasury", state: { treasuryTab: "approvals" }, icon: ShieldCheck }, { title: "Approval matrix", description: "Configure amount-based maker-checker routes and approve assigned steps.", page: "school_approval_matrix", icon: ShieldCheck }] },
     { id: "balances" as const, label: "Balances", actions: [
       { title: "Accounts & balances", description: "See where school money is held and what is available.", page: "treasury", state: { treasuryTab: "overview" }, icon: Wallet },
+      { title: "Account ledger", description: "Review every inflow and outflow for a selected cash or bank account.", page: "accounting_account_ledger", icon: FileText },
       { title: "Account statements", description: "Review money received, money paid and running balances.", page: "treasury", state: { treasuryTab: "history" }, icon: FileText },
       { title: "Daily money summary", description: "Review daily totals by cash, bank and payment method.", page: "treasury", state: { treasuryTab: "daily-method" }, icon: BarChart3 },
     ] },
@@ -95,13 +98,35 @@ export function FinanceOverviewPage({ onNavigate }: Props) {
     sky: "bg-sky-50 text-sky-700",
   };
 
+  const actionTone = {
+    direct: {
+      card: "border-emerald-200 bg-emerald-50/40 hover:border-emerald-400",
+      icon: "bg-emerald-100 text-emerald-700 group-hover:bg-emerald-200",
+      link: "text-emerald-700",
+    },
+    controlled: {
+      card: "border-amber-200 bg-amber-50/40 hover:border-amber-400",
+      icon: "bg-amber-100 text-amber-700 group-hover:bg-amber-200",
+      link: "text-amber-800",
+    },
+    standard: {
+      card: "border-slate-200 bg-white hover:border-indigo-300",
+      icon: "bg-indigo-50 text-indigo-700 group-hover:bg-indigo-100",
+      link: "text-indigo-700",
+    },
+  };
+
   return <div className="mx-auto max-w-7xl space-y-6 p-6 lg:p-8">
     <div><p className="text-xs font-bold uppercase tracking-wider text-indigo-600">Finance</p><h1 className="mt-1 text-3xl font-bold text-slate-900">Finance Overview</h1><p className="mt-1 text-sm text-slate-600">Receive, spend, approve and review school money while BOAT handles the accounting entries in the background.</p></div>
+    <section className="grid gap-3 md:grid-cols-2" aria-label="How to record transactions">
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><p className="text-sm font-bold text-emerald-900">Direct entry</p><p className="mt-1 text-sm leading-5 text-emerald-800">Use green actions for a payment or non-student receipt that is already complete. It posts immediately to the selected cash or bank account and vote.</p></div>
+      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4"><p className="text-sm font-bold text-amber-900">Approval-led spending</p><p className="mt-1 text-sm leading-5 text-amber-800">Use amber actions when the school needs requests, supplier bills, approvals or payment release before money is posted.</p></div>
+    </section>
     <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6" aria-label="Finance summary">
       {summaries.map((item) => { const Icon = item.icon; return <button key={item.label} type="button" onClick={() => onNavigate(item.page, "state" in item ? item.state : undefined)} className="rounded-xl border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md"><span className={`inline-flex rounded-lg p-2 ${tones[item.tone]}`}><Icon className="h-4 w-4" /></span><p className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">{item.label}</p><p className="mt-1 flex items-center gap-1 text-sm font-bold text-slate-900">{item.value}<ArrowRight className="h-3.5 w-3.5" /></p></button>; })}
     </section>
     <nav className="flex gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5" aria-label="Finance sections">{tabs.map((item) => <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`whitespace-nowrap rounded-lg px-4 py-2.5 text-sm font-semibold transition ${active.id === item.id ? "bg-slate-900 text-white shadow-sm" : "text-slate-600 hover:bg-slate-100"}`}>{item.label}</button>)}</nav>
-    <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{active.actions.map((action) => { const Icon=action.icon; return <button key={action.title} type="button" onClick={() => onNavigate(action.page, action.state)} className="group rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-indigo-300 hover:shadow-md"><span className="inline-flex rounded-lg bg-indigo-50 p-2.5 text-indigo-700 group-hover:bg-indigo-100"><Icon className="h-5 w-5" /></span><h2 className="mt-4 font-bold text-slate-900">{action.title}</h2><p className="mt-1 text-sm leading-6 text-slate-600">{action.description}</p><span className="mt-4 inline-block text-sm font-semibold text-indigo-700">Open →</span></button>; })}</section>
+    <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{active.actions.map((action) => { const Icon=action.icon; const style=actionTone[action.tone ?? "standard"]; return <button key={action.title} type="button" onClick={() => onNavigate(action.page, action.state)} className={`group rounded-xl border p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${style.card}`}><span className={`inline-flex rounded-lg p-2.5 ${style.icon}`}><Icon className="h-5 w-5" /></span><h2 className="mt-4 font-bold text-slate-900">{action.title}</h2><p className="mt-1 text-sm leading-6 text-slate-600">{action.description}</p><span className={`mt-4 inline-block text-sm font-semibold ${style.link}`}>Open →</span></button>; })}</section>
     <section className="grid gap-4 lg:grid-cols-2">
       <div className="rounded-xl border border-slate-200 bg-white p-5 shadow-sm"><div className="flex items-center justify-between"><div><h2 className="font-bold text-slate-900">Recent money activity</h2><p className="mt-1 text-sm text-slate-500">Review the latest receipts and payments.</p></div><Clock3 className="h-5 w-5 text-slate-400" /></div><button type="button" onClick={() => onNavigate("school_collections_summary")} className="mt-5 flex w-full items-center justify-between rounded-lg bg-slate-50 px-4 py-3 text-left text-sm font-semibold text-slate-700 hover:bg-slate-100"><span>Open daily collections</span><ArrowRight className="h-4 w-4" /></button></div>
       <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-5 shadow-sm"><div className="flex items-center justify-between"><div><h2 className="font-bold text-slate-900">Requires attention</h2><p className="mt-1 text-sm text-slate-600">Approvals, unmatched receipts, open cashier sessions and accountabilities needing follow-up.</p></div><AlertCircle className="h-5 w-5 text-amber-600" /></div><button type="button" onClick={() => onNavigate("treasury", { treasuryTab: "approvals" })} className="mt-5 flex w-full items-center justify-between rounded-lg bg-white px-4 py-3 text-left text-sm font-semibold text-amber-800 ring-1 ring-amber-200 hover:bg-amber-50"><span>Review finance approvals</span><ArrowRight className="h-4 w-4" /></button></div>
