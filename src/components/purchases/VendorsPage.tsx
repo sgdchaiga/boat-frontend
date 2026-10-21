@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { GitMerge, Pencil, Plus, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { enqueueSyncOutbox } from "../../lib/syncOutbox";
@@ -22,6 +22,8 @@ interface VendorWithFinance extends Vendor {
   returns: number;
   balance: number;
 }
+
+type VendorSortKey = "name" | "contact" | "email" | "phone" | "bills" | "payments" | "returns" | "balance";
 
 function formatErrorMessage(e: unknown): string {
   if (e instanceof Error) return e.message;
@@ -55,6 +57,11 @@ export function VendorsPage({ highlightVendorId }: { highlightVendorId?: string 
   const [masterVendorId, setMasterVendorId] = useState("");
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
   const [merging, setMerging] = useState(false);
+  const [search, setSearch] = useState("");
+  const [balanceFilter, setBalanceFilter] = useState<"all" | "outstanding" | "credit" | "settled">("all");
+  const [activityFilter, setActivityFilter] = useState<"all" | "bills" | "payments" | "returns">("all");
+  const [sortKey, setSortKey] = useState<VendorSortKey>("name");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const role = String(user?.role || "").trim().toLowerCase();
   const canMerge = Boolean(isSuperAdmin || user?.isSuperAdmin || role === "admin" || role === "super_admin");
 
@@ -95,6 +102,51 @@ export function VendorsPage({ highlightVendorId }: { highlightVendorId?: string 
   };
 
   const selectedVendors = vendors.filter((vendor) => selectedVendorIds.includes(vendor.id));
+
+  const displayedVendors = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    const filtered = vendors.filter((vendor) => {
+      const matchesSearch = !term || [vendor.name, vendor.contact_name, vendor.email, vendor.phone]
+        .some((value) => (value || "").toLowerCase().includes(term));
+      const matchesBalance = balanceFilter === "all"
+        || (balanceFilter === "outstanding" && vendor.balance > 0.005)
+        || (balanceFilter === "credit" && vendor.balance < -0.005)
+        || (balanceFilter === "settled" && Math.abs(vendor.balance) <= 0.005);
+      const matchesActivity = activityFilter === "all"
+        || (activityFilter === "bills" && vendor.billAmount > 0)
+        || (activityFilter === "payments" && vendor.payments > 0)
+        || (activityFilter === "returns" && vendor.returns > 0);
+      return matchesSearch && matchesBalance && matchesActivity;
+    });
+    const valueFor = (vendor: VendorWithFinance): string | number => {
+      switch (sortKey) {
+        case "contact": return vendor.contact_name || "";
+        case "email": return vendor.email || "";
+        case "phone": return vendor.phone || "";
+        case "bills": return vendor.billAmount;
+        case "payments": return vendor.payments;
+        case "returns": return vendor.returns;
+        case "balance": return vendor.balance;
+        default: return vendor.name || "";
+      }
+    };
+    return filtered.sort((left, right) => {
+      const a = valueFor(left);
+      const b = valueFor(right);
+      const comparison = typeof a === "number" && typeof b === "number"
+        ? a - b
+        : String(a).localeCompare(String(b), undefined, { numeric: true, sensitivity: "base" });
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+  }, [vendors, search, balanceFilter, activityFilter, sortKey, sortDirection]);
+
+  const toggleSort = (key: VendorSortKey) => {
+    if (sortKey === key) setSortDirection((direction) => direction === "asc" ? "desc" : "asc");
+    else {
+      setSortKey(key);
+      setSortDirection("asc");
+    }
+  };
 
   const toggleVendorSelection = (vendorId: string) => {
     setSelectedVendorIds((current) => current.includes(vendorId)
@@ -282,23 +334,23 @@ export function VendorsPage({ highlightVendorId }: { highlightVendorId?: string 
         <p className="text-slate-500 py-4">Loading…</p>
       ) : (
         <div className="app-card overflow-x-auto">
+          <div className="flex flex-wrap items-end gap-3 border-b border-slate-200 p-4">
+            <label className="min-w-64 flex-1 text-sm font-medium text-slate-700">Search suppliers<input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Name, contact, email or phone" className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 font-normal" /></label>
+            <label className="text-sm font-medium text-slate-700">Balance<select value={balanceFilter} onChange={(event) => setBalanceFilter(event.target.value as typeof balanceFilter)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 font-normal"><option value="all">All balances</option><option value="outstanding">Outstanding</option><option value="credit">Credit balance</option><option value="settled">Settled</option></select></label>
+            <label className="text-sm font-medium text-slate-700">Activity<select value={activityFilter} onChange={(event) => setActivityFilter(event.target.value as typeof activityFilter)} className="mt-1 block rounded-lg border border-slate-300 px-3 py-2 font-normal"><option value="all">All activity</option><option value="bills">Has bills</option><option value="payments">Has payments</option><option value="returns">Has returns</option></select></label>
+            {(search || balanceFilter !== "all" || activityFilter !== "all") && <button type="button" onClick={() => { setSearch(""); setBalanceFilter("all"); setActivityFilter("all"); }} className="rounded-lg border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50">Clear filters</button>}
+          </div>
+          <p className="px-4 pt-3 text-sm text-slate-500">Showing {displayedVendors.length} of {vendors.length} suppliers</p>
           <table className="min-w-full text-sm">
             <thead className="bg-slate-50">
               <tr>
-                {canMerge && <th className="p-3 w-10"><input type="checkbox" aria-label="Select all suppliers" checked={vendors.length > 0 && selectedVendorIds.length === vendors.length} onChange={(event) => setSelectedVendorIds(event.target.checked ? vendors.map((vendor) => vendor.id) : [])} /></th>}
-                <th className="text-left p-3">Name</th>
-                <th className="text-left p-3">Contact</th>
-                <th className="text-left p-3">Email</th>
-                <th className="text-left p-3">Phone</th>
-                <th className="text-right p-3 whitespace-nowrap">Bill amount</th>
-                <th className="text-right p-3 whitespace-nowrap">Payments</th>
-                <th className="text-right p-3 whitespace-nowrap">Returns</th>
-                <th className="text-right p-3 whitespace-nowrap">Balance</th>
+                {canMerge && <th className="p-3 w-10"><input type="checkbox" aria-label="Select all visible suppliers" checked={displayedVendors.length > 0 && displayedVendors.every((vendor) => selectedVendorIds.includes(vendor.id))} onChange={(event) => setSelectedVendorIds((current) => event.target.checked ? Array.from(new Set([...current, ...displayedVendors.map((vendor) => vendor.id)])) : current.filter((id) => !displayedVendors.some((vendor) => vendor.id === id)))} /></th>}
+                {([ ["name", "Name", "text-left"], ["contact", "Contact", "text-left"], ["email", "Email", "text-left"], ["phone", "Phone", "text-left"], ["bills", "Bill amount", "text-right"], ["payments", "Payments", "text-right"], ["returns", "Returns", "text-right"], ["balance", "Balance", "text-right"] ] as Array<[VendorSortKey, string, string]>).map(([key, label, align]) => <th key={key} className={`${align} p-3 whitespace-nowrap`} aria-sort={sortKey === key ? (sortDirection === "asc" ? "ascending" : "descending") : "none"}><button type="button" onClick={() => toggleSort(key)} className={`inline-flex items-center gap-1 font-semibold hover:text-brand-700 ${align === "text-right" ? "ml-auto" : ""}`}>{label}<span aria-hidden="true" className={sortKey === key ? "text-brand-700" : "text-slate-400"}>{sortKey === key && sortDirection === "desc" ? "▼" : "▲"}</span></button></th>)}
                 <th className="text-right p-3 w-24"> </th>
               </tr>
             </thead>
             <tbody>
-              {vendors.map((v) => (
+              {displayedVendors.map((v) => (
                 <tr
                   key={v.id}
                   ref={highlightVendorId === v.id ? highlightRef : undefined}
@@ -327,8 +379,8 @@ export function VendorsPage({ highlightVendorId }: { highlightVendorId?: string 
               ))}
             </tbody>
           </table>
-          {vendors.length === 0 && (
-            <p className="p-8 text-center text-slate-500">No vendors yet. Add one to get started.</p>
+          {displayedVendors.length === 0 && (
+            <p className="p-8 text-center text-slate-500">{vendors.length === 0 ? "No vendors yet. Add one to get started." : "No suppliers match the selected filters."}</p>
           )}
         </div>
       )}
