@@ -1383,6 +1383,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ] },
     { name: 'Finance', icon: Landmark, children: [
       { name: 'Finance overview', page: 'finance_overview' },
+      { name: 'Cashbook Entry', page: 'school_cashbook_entry' },
       { name: 'Expenses', page: 'purchases_expenses' },
       { name: 'Supplier payments', page: 'purchases_payments' },
        { name: 'Petty cash', page: SCHOOL_PAGE.pettyCash },
