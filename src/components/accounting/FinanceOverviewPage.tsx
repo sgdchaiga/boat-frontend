@@ -53,6 +53,7 @@ export function FinanceOverviewPage({ onNavigate }: Props) {
     ] },
     { id: "spend" as const, label: "Spend", actions: [
       { title: "Record expense", description: "Enter day-to-day expenditure and attach supporting documents.", page: "purchases_expenses", icon: Receipt },
+      { title: "Cashbook entry", description: "Enter a voucher, cheque or payment and allocate it across school vote heads.", page: "school_cashbook_entry", icon: BookOpenCheck },
       { title: "Petty cash", description: "Control float custody, vouchers, replenishment and cash counts.", page: "school_petty_cash", icon: Wallet },
       { title: "Staff advances", description: "Issue and track staff advances and recoveries.", page: "payroll_loans", icon: CircleDollarSign },
       { title: "Direct stock purchase", description: "Record a purchase that goes directly into stock.", page: "purchases_bills", icon: ShoppingCart },
