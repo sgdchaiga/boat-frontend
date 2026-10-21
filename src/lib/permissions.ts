@@ -152,6 +152,7 @@ export const PAGE_ACCESS_DEFS: PageAccessDef[] = [
   { page: "inventory_stock_adjustments", label: "Inventory movements", group: "Inventory" },
   { page: "inventory_stock_balances", label: "Stock balances", group: "Inventory" },
   { page: "inventory_store_requisitions", label: "Store requisitions", group: "Inventory" },
+  { page: "school_scheduled_inventory_consumption", label: "Scheduled consumption", group: "Inventory" },
   { page: "reports", label: "Reports hub", group: "Reports" },
   { page: "reports_daily_sales", label: "Daily sales", group: "Reports" },
   { page: "reports_pos_cash_collections", label: "POS cash collections", group: "Reports" },

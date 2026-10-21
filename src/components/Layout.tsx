@@ -1010,6 +1010,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Inventory Movements', page: 'inventory_stock_adjustments' },
         { name: 'Stock Balances', page: 'inventory_stock_balances' },
         { name: 'Store Requisitions', page: 'inventory_store_requisitions' },
+        { name: 'Scheduled Consumption', page: SCHOOL_PAGE.scheduledConsumption },
       ],
     },
     ...(allowManufacturing
@@ -1272,6 +1273,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ...(user?.school_enable_inventory === true ? [{ group: 'Inventory', items: [
         { name: 'Stock Overview', page: 'Products' },
         { name: 'Stock Issues', page: 'inventory_store_requisitions' },
+        { name: 'Scheduled Consumption', page: SCHOOL_PAGE.scheduledConsumption },
         { name: 'Stock Counts', page: 'inventory_stock_adjustments' },
         { name: 'Stock Adjustments', page: 'inventory_stock_adjustments' },
         { name: 'Stock Movement Report', page: 'reports_stock_movement' },
@@ -1401,6 +1403,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
       ...(user?.school_enable_inventory === true ? [{ group: 'Inventory', items: [
         { name: 'Stock overview', page: 'Products' },
         { name: 'Stock issues', page: 'inventory_store_requisitions' },
+        { name: 'Scheduled consumption', page: SCHOOL_PAGE.scheduledConsumption },
         { name: 'Stock counts & adjustments', page: 'inventory_stock_adjustments' },
         { name: 'Stock movement report', page: 'reports_stock_movement' },
       ] }] : []),
@@ -1823,6 +1826,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     { id: 'stock', label: 'Stock', items: [
       { name: 'Items', page: 'Products' }, { name: 'Stock balances', page: 'inventory_stock_balances' },
       { name: 'Movements & adjustments', page: 'inventory_stock_adjustments' }, { name: 'Store requisitions', page: 'inventory_store_requisitions' },
+       { name: 'Scheduled consumption', page: SCHOOL_PAGE.scheduledConsumption },
       { name: 'Barcodes', page: 'inventory_barcodes' },
     ] },
     { id: 'assets', label: 'Assets', items: [{ name: 'Asset verification', page: 'asset_verification' }] },

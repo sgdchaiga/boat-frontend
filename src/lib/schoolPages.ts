@@ -26,6 +26,7 @@ export const SCHOOL_PAGE = {
   collections: "school_collections_summary",
   fixedDeposit: "school_fixed_deposit",
   pettyCash: "school_petty_cash",
+  scheduledConsumption: "school_scheduled_inventory_consumption",
   voteBook: "school_vote_book",
 } as const;
 

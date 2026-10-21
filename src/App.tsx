@@ -184,6 +184,7 @@ const FixedAssetsPage = lazyNamed(() => import('./components/fixedAssets/FixedAs
 const InsurancePage = lazyNamed(() => import('./components/insurance/InsurancePage'), 'InsurancePage');
 const AdminStockAdjustmentsPage = lazyNamed(() => import('./components/admin/AdminStockAdjustmentsPage'), 'AdminStockAdjustmentsPage');
 const StoreRequisitionsPage = lazyNamed(() => import('./components/inventory/StoreRequisitionsPage'), 'StoreRequisitionsPage');
+const SchoolScheduledConsumptionPage = lazyNamed(() => import('./components/inventory/SchoolScheduledConsumptionPage'), 'SchoolScheduledConsumptionPage');
 const StockBalancesPage = lazyNamed(() => import('./components/inventory/StockBalancesPage'), 'StockBalancesPage');
 const ManufacturingPage = lazyNamed(() => import('./components/manufacturing/ManufacturingVersionedPages'), 'ManufacturingPage');
 const ManufacturingBomPage = lazyNamed(() => import('./components/manufacturing/ManufacturingBomPage'), 'ManufacturingBomPage');
@@ -1694,6 +1695,8 @@ function AppContent() {
         return <StockBalancesPage />;
       case 'inventory_store_requisitions':
         return <StoreRequisitionsPage highlightRequisitionId={pageState?.highlightRequisitionId as string | undefined} />;
+      case SCHOOL_PAGE.scheduledConsumption:
+        return <SchoolScheduledConsumptionPage readOnly={access.readOnly} />;
       case 'inventory_barcodes':
         return <InventoryBarcodesPage readOnly={access.readOnly} />;
       case 'manufacturing':
