@@ -96,9 +96,17 @@ type NavLeaf = { name: string; icon: typeof FileText; page: string; state?: Reco
 type NavDivider = { kind: 'divider'; id: string };
 type NavSectionHeader = { kind: 'section-header'; id: string; title: string };
 /** Single link or a labeled subgroup (used under Reports). Optional `state` syncs to URL (e.g. SACCO Teller desk). */
+type NavChildTone = 'direct' | 'controlled';
+type NavChildLink = {
+  name: string;
+  page: string;
+  state?: Record<string, unknown>;
+  /** A visual cue for an immediate-posting route versus an approval-led route. */
+  tone?: NavChildTone;
+};
 export type NavChild =
-  | { name: string; page: string; state?: Record<string, unknown> }
-  | { group: string; items: { name: string; page: string; state?: Record<string, unknown> }[] };
+  | NavChildLink
+  | { group: string; items: NavChildLink[] };
 
 type NavItem =
   | NavLeaf
@@ -184,14 +192,6 @@ function navSectionAccent(sectionName: string) {
       activeChild: 'bg-teal-500 text-white shadow-sm',
       groupHeader: 'text-teal-100 bg-slate-800/50 border-l-2 border-teal-500',
     },
-    'Direct transactions': {
-      activeChild: 'bg-emerald-500 text-white shadow-sm',
-      groupHeader: 'text-emerald-100 bg-slate-800/50 border-l-2 border-emerald-500',
-    },
-    'Controlled spending': {
-      activeChild: 'bg-amber-500 text-white shadow-sm',
-      groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
-    },
     'Money spent': {
       activeChild: 'bg-amber-500 text-white shadow-sm',
       groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
@@ -243,6 +243,22 @@ function navSectionAccent(sectionName: string) {
       groupHeader: 'text-brand-100 bg-slate-800/50 border-l-2 border-brand-500',
     }
   );
+}
+
+function navChildClasses(tone: NavChildTone | undefined, isActive: boolean, defaultActiveClass: string) {
+  if (tone === 'direct') {
+    return isActive
+      ? 'border-l-2 border-emerald-300 bg-emerald-500 text-white shadow-sm'
+      : 'border-l-2 border-emerald-500/70 text-emerald-200 hover:text-emerald-100 hover:bg-emerald-500/15';
+  }
+  if (tone === 'controlled') {
+    return isActive
+      ? 'border-l-2 border-amber-200 bg-amber-500 text-white shadow-sm'
+      : 'border-l-2 border-amber-500/70 text-amber-200 hover:text-amber-100 hover:bg-amber-500/15';
+  }
+  return isActive
+    ? defaultActiveClass
+    : 'text-slate-400 hover:text-white hover:bg-slate-800/60';
 }
 
 const singleNavActive = 'bg-brand-600 text-white shadow-sm';
@@ -1391,18 +1407,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ] },
     { name: 'Finance', icon: Landmark, children: [
       { name: 'Finance overview', page: 'finance_overview' },
-      { group: 'Direct transactions', items: [
-        { name: 'Direct payments & receipts', page: 'school_cashbook_entry' },
-        { name: 'Direct purchases', page: 'purchases_bills', state: { cashPurchaseOpen: true } },
-      ] },
-      { group: 'Controlled spending', items: [
-        { name: 'Expense requests', page: 'purchases_expenses' },
-        { name: 'Supplier bills', page: 'purchases_bills' },
-        { name: 'Supplier payments', page: 'purchases_payments' },
-        { name: 'Petty cash', page: SCHOOL_PAGE.pettyCash },
-        { name: 'Staff advances', page: 'payroll_loans' },
-        { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
-      ] },
+      { name: 'Direct payments & receipts', page: 'school_cashbook_entry', tone: 'direct' },
+      { name: 'Direct purchases', page: 'purchases_bills', state: { cashPurchaseOpen: true }, tone: 'direct' },
+      { name: 'Expense requests', page: 'purchases_expenses', tone: 'controlled' },
+      { name: 'Supplier bills', page: 'purchases_bills', tone: 'controlled' },
+      { name: 'Supplier payments', page: 'purchases_payments', tone: 'controlled' },
+      { name: 'Petty cash', page: SCHOOL_PAGE.pettyCash, tone: 'controlled' },
+      { name: 'Staff advances', page: 'payroll_loans', tone: 'controlled' },
+      { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' }, tone: 'controlled' },
       { group: 'Cash & bank', items: [
         { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
         { name: 'Account ledger', page: 'accounting_account_ledger' },
@@ -2110,11 +2122,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                                         onNavigate(sub.page, 'state' in sub ? sub.state : undefined);
                                                         setSidebarOpen(false);
                                                       }}
-                                                      className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${
-                                                        isChildActive
-                                                          ? accent.activeChild
-                                                          : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                                                      }`}
+                                                      className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${navChildClasses(sub.tone, isChildActive, accent.activeChild)}`}
                                                     >
                                                       <span className="font-medium">{sub.name}</span>
                                                       {readOnly && (
@@ -2154,11 +2162,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                                       onNavigate(sub.page, 'state' in sub ? sub.state : undefined);
                                                       setSidebarOpen(false);
                                                     }}
-                                                    className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${
-                                                      isChildActive
-                                                        ? accent.activeChild
-                                                        : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                                                    }`}
+                                                  className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${navChildClasses(sub.tone, isChildActive, accent.activeChild)}`}
                                                   >
                                                     <span className="font-medium">{sub.name}</span>
                                                     {readOnly && (
@@ -2195,11 +2199,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                                         onNavigate(child.page, 'state' in child ? child.state : undefined);
                                         setSidebarOpen(false);
                                       }}
-                                      className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${
-                                        isChildActive
-                                          ? accent.activeChild
-                                          : 'text-slate-400 hover:text-white hover:bg-slate-800/60'
-                                      }`}
+                                      className={`w-full flex items-center gap-1.5 px-2 py-1.5 rounded-md text-[13px] transition ${navChildClasses(child.tone, isChildActive, accent.activeChild)}`}
                                     >
                                       <span className="font-medium">{child.name}</span>
                                       {readOnly && (
