@@ -615,9 +615,41 @@ export function BankReconciliationPage({
           <div className="flex items-center gap-2">
             <Landmark className="h-7 w-7 text-brand-700" />
             <h1 className="text-3xl font-bold text-slate-900">Cash & float reconciliation</h1>
-            <PageNotes ariaLabel="Cash and float reconciliation help">
-              <p>Compare bank, cash-count, till-float, vault, mobile-money, and wallet control lines against posted BOAT ledger activity.</p>
-              <p>Control-side amounts use signed values: receipts/balances are positive and payments/withdrawals are negative.</p>
+            <PageNotes ariaLabel="Cash and float reconciliation guide" variant="guide" triggerLabel="Guide">
+              <div className="space-y-3">
+                <div>
+                  <p className="font-semibold text-slate-900">What this page does</p>
+                  <p>Use it to compare an external control record—such as a bank statement, cash count, till float, mobile-money statement or wallet—with the transactions already posted in BOAT. Matching does not create or change accounting entries.</p>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Before you begin</p>
+                  <ul className="list-disc space-y-1 pl-4">
+                    <li>Choose the exact cash, bank, mobile-money or float GL account being checked.</li>
+                    <li>Have the statement or physical-count record for one clear period ready.</li>
+                    <li>Check that cashbook entries for the period have been posted before reconciling.</li>
+                  </ul>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Step-by-step</p>
+                  <ol className="list-decimal space-y-1 pl-4">
+                    <li>Choose the reconciliation account, period and work mode, then select <strong>Start workspace</strong>.</li>
+                    <li>Enter the closing statement balance and cashbook balance in the reconciliation statement section.</li>
+                    <li>Upload a CSV/Excel statement and confirm the Date, Description, Reference and Amount columns—or use <strong>Record cash, float, or control balance</strong> for a physical count.</li>
+                    <li>Select <strong>Auto reconcile</strong> for exact amount/date matches. Review its results before closing.</li>
+                    <li>For unmatched items, select one or more lines on both sides. Their selected totals must be equal before <strong>Reconcile selected</strong> is available.</li>
+                    <li>Investigate the remaining difference. Typical reconciling items are deposits in transit, unpresented payments, bank charges and bank credits not yet recorded in the cashbook.</li>
+                    <li>When the statement balances, print it. In a shared workspace, mark the cashbook and statement ready, resolve exceptions, then the reviewer selects <strong>Approve and close</strong>.</li>
+                  </ol>
+                </div>
+                <div>
+                  <p className="font-semibold text-slate-900">Important checks</p>
+                  <ul className="list-disc space-y-1 pl-4">
+                    <li>Control-side receipts and balances are positive; payments and withdrawals are negative.</li>
+                    <li>Do not force a mismatch. Keep it as an exception and correct or explain the source transaction separately.</li>
+                    <li><strong>Refresh</strong> reloads the latest ledger and control lines; it does not delete saved matches.</li>
+                  </ul>
+                </div>
+              </div>
             </PageNotes>
           </div>
           <p className="mt-1 text-sm text-slate-500">Unified two-way reconciliation with automatic and manual matching.</p>
