@@ -81,6 +81,7 @@ const GeneralBusinessDashboard = lazyNamed(() => import('./components/general-bu
 const GeneralBusinessProjectsPage = lazyNamed(() => import('./components/general-business/GeneralBusinessProjectsPage'), 'GeneralBusinessProjectsPage');
 const GeneralBusinessCashbookPage = lazyNamed(() => import('./components/general-business/GeneralBusinessCashbookPage'), 'GeneralBusinessCashbookPage');
 const SchoolPettyCashPage = lazyNamed(() => import('./components/school/SchoolPettyCashPage'), 'SchoolPettyCashPage');
+const SchoolCashbookEntryPage = lazyNamed(() => import('./components/school/SchoolCashbookEntryPage'), 'SchoolCashbookEntryPage');
 const RoomsPage = lazyNamed(() => import('./components/RoomsPage'), 'RoomsPage');
 const ReservationsPage = lazyNamed(() => import('./components/ReservationsPage'), 'ReservationsPage');
 const CheckInPage = lazyNamed(() => import('./components/CheckInPage'), 'CheckInPage');
@@ -682,11 +683,6 @@ function AppContent() {
       setPageState({});
       return;
     }
-    if (user.business_type === "school" && user.enable_cashbook_mode !== true && currentPage.startsWith("school_cashbook")) {
-      setCurrentPage(SCHOOL_PAGE.dashboard);
-      setPageState({});
-      return;
-    }
     if (user.business_type === "accounting_practice" && (currentPage === "dashboard" || currentPage === "retail_dashboard")) {
       setCurrentPage("practice_clients");
       return;
@@ -1194,7 +1190,7 @@ function AppContent() {
       case 'school_cashbook_register':
         return <SchoolPettyCashPage readOnly={access.readOnly} />;
       case 'school_cashbook_entry':
-        return <GeneralBusinessCashbookPage onNavigate={navigate} view="entry" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
+        return <SchoolCashbookEntryPage />;
       case 'school_cashbook_daily':
         return <GeneralBusinessCashbookPage onNavigate={navigate} view="daily" workspaceLabel="School" routes={{ dashboard: SCHOOL_PAGE.dashboard, register: 'school_cashbook_register', entry: 'school_cashbook_entry', daily: 'school_cashbook_daily' }} />;
       case 'sacco_cashbook_register':
