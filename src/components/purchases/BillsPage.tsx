@@ -1405,6 +1405,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
       {readOnly && (
         <ReadOnlyNotice />
       )}
+      {openCashPurchase && <div className="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900"><strong>Direct purchase mode.</strong> Receive stock and record its immediate payment; this route does not enter the supplier-bill approval workflow.</div>}
       <div className="flex items-center justify-between mb-4">
         <div>
           <div className="flex flex-wrap items-center gap-2">

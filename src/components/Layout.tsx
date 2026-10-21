@@ -184,6 +184,14 @@ function navSectionAccent(sectionName: string) {
       activeChild: 'bg-teal-500 text-white shadow-sm',
       groupHeader: 'text-teal-100 bg-slate-800/50 border-l-2 border-teal-500',
     },
+    'Direct transactions': {
+      activeChild: 'bg-emerald-500 text-white shadow-sm',
+      groupHeader: 'text-emerald-100 bg-slate-800/50 border-l-2 border-emerald-500',
+    },
+    'Controlled spending': {
+      activeChild: 'bg-amber-500 text-white shadow-sm',
+      groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
+    },
     'Money spent': {
       activeChild: 'bg-amber-500 text-white shadow-sm',
       groupHeader: 'text-amber-100 bg-slate-800/50 border-l-2 border-amber-500',
@@ -1383,12 +1391,18 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
     ] },
     { name: 'Finance', icon: Landmark, children: [
       { name: 'Finance overview', page: 'finance_overview' },
-      { name: 'Cashbook Entry', page: 'school_cashbook_entry' },
-      { name: 'Expenses', page: 'purchases_expenses' },
-      { name: 'Supplier payments', page: 'purchases_payments' },
-       { name: 'Petty cash', page: SCHOOL_PAGE.pettyCash },
-      { name: 'Staff advances', page: 'payroll_loans' },
-      { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
+      { group: 'Direct transactions', items: [
+        { name: 'Direct payments & receipts', page: 'school_cashbook_entry' },
+        { name: 'Direct purchases', page: 'purchases_bills', state: { cashPurchaseOpen: true } },
+      ] },
+      { group: 'Controlled spending', items: [
+        { name: 'Expense requests', page: 'purchases_expenses' },
+        { name: 'Supplier bills', page: 'purchases_bills' },
+        { name: 'Supplier payments', page: 'purchases_payments' },
+        { name: 'Petty cash', page: SCHOOL_PAGE.pettyCash },
+        { name: 'Staff advances', page: 'payroll_loans' },
+        { name: 'Approvals', page: 'treasury', state: { treasuryTab: 'approvals' } },
+      ] },
       { group: 'Cash & bank', items: [
         { name: 'Accounts', page: 'treasury', state: { treasuryTab: 'overview' } },
         { name: 'Account ledger', page: 'accounting_account_ledger' },
