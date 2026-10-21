@@ -1206,8 +1206,8 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         { name: 'Daily Collections', page: SCHOOL_PAGE.collections },
       ] },
       { group: 'Spend', items: [
-        { name: 'Expenses', page: 'purchases_expenses' },
         { name: 'Cashbook Entry', page: 'school_cashbook_entry' },
+        { name: 'Expenses', page: 'purchases_expenses' },
         { name: 'Petty Cash', page: SCHOOL_PAGE.pettyCash },
         { name: 'Supplier Payments', page: 'purchases_payments' },
         { name: 'Staff Advances', page: 'payroll_loans' },
