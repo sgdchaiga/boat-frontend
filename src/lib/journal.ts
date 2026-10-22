@@ -418,7 +418,7 @@ type StockAdjustmentMovementForJournal = {
   quantity_out: number | null;
   unit_cost: number | null;
   note: string | null;
-  products?: { name?: string | null; cost_price?: number | null; department_id?: string | null; stock_account?: string | null } | null;
+  products?: { name?: string | null; cost_price?: number | null; department_id?: string | null; stock_account?: string | null; purchases_account?: string | null } | null;
 };
 
 type StockAdjustmentReason =
@@ -499,16 +499,18 @@ function resolveStockAdjustmentLineAccounts(args: {
   departmentId: string | null;
   context: Awaited<ReturnType<typeof loadStockAdjustmentGlContext>>;
   productInventoryGlAccountId: string | null;
+  productExpenseGlAccountId: string | null;
   legacyInventoryGlAccountId: string | null;
   legacyPurchasesGlAccountId: string | null;
 }): { debitGlAccountId: string | null; creditGlAccountId: string | null; label: string; missingAccountMessage?: string } {
-  const { reason, deltaQty, departmentId, context, productInventoryGlAccountId, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
+  const { reason, deltaQty, departmentId, context, productInventoryGlAccountId, productExpenseGlAccountId, legacyInventoryGlAccountId, legacyPurchasesGlAccountId } = args;
   const departmentGl = departmentId ? context.deptGlMap.get(departmentId) : null;
   // A material may legitimately have its own inventory control account (for example,
   // Steel Wire Inventory) instead of sharing the department's generic production stock account.
   const departmentStock = productInventoryGlAccountId ?? departmentGl?.stock ?? legacyInventoryGlAccountId ?? context.defaults.purchasesInventory ?? context.defaults.posInvKitchen ?? context.defaults.posInvBar ?? null;
   const payableOrCash = context.defaults.payable ?? context.defaults.cash ?? null;
   const departmentExpense =
+    productExpenseGlAccountId ??
     departmentGl?.purchases ??
     legacyPurchasesGlAccountId ??
     context.defaults.stockAdjustmentInternalConsumptionExpense ??
@@ -561,9 +563,8 @@ function resolveStockAdjustmentLineAccounts(args: {
     case "purchase":
       return { debitGlAccountId: departmentStock, creditGlAccountId: payableOrCash, label: "Purchase" };
     case "consumption": {
-      // A scheduled-use rule can nominate its P&L account in [PL_GL:<uuid>].
       // A positive delta is a return/reversal of earlier expected consumption.
-      const consumptionExpense = legacyPurchasesGlAccountId ?? departmentExpense;
+      const consumptionExpense = departmentExpense;
       return deltaQty > 0
         ? { debitGlAccountId: departmentStock, creditGlAccountId: consumptionExpense, label: "Consumption reversal" }
         : { debitGlAccountId: consumptionExpense, creditGlAccountId: departmentStock, label: "Consumption" };
@@ -654,7 +655,7 @@ export async function createJournalForStockAdjustment(
   const { data: movements, error } = await filterByOrganizationId(
     supabase
       .from("product_stock_movements")
-       .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price,department_id,stock_account)")
+       .select("id,product_id,movement_date,quantity_in,quantity_out,unit_cost,note,products(name,cost_price,department_id,stock_account,purchases_account)")
       .eq("source_type", "adjustment")
       .eq("source_id", sourceId)
       .order("movement_date", { ascending: true }),
@@ -692,6 +693,7 @@ export async function createJournalForStockAdjustment(
        departmentId: movement.products?.department_id ? String(movement.products.department_id) : null,
        context: glContext,
        productInventoryGlAccountId: movement.products?.stock_account?.trim() || null,
+        productExpenseGlAccountId: movement.products?.purchases_account?.trim() || null,
         legacyInventoryGlAccountId: extractGlIdFromStockNote(movement.note, "INV_GL") ?? accounts.inventoryGlAccountId,
        legacyPurchasesGlAccountId: extractGlIdFromStockNote(movement.note, "PL_GL") ?? accounts.stockGainLossGlAccountId,
     });
