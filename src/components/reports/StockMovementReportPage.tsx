@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Columns3, SlidersHorizontal, X } from "lucide-react";
 import { supabase } from "../../lib/supabase";
 import { computeRangeInTimezone, businessDayRangeForDateString, toBusinessDateString, type DateRangeKey } from "../../lib/timezone";
 import { useAuth } from "../../contexts/AuthContext";
@@ -56,6 +57,45 @@ interface DailyRow {
   closingQty: number;
 }
 
+type MovementColumnKey = "location" | "product" | "opening" | "purchases" | "produced" | "stockIn" | "available" | "sales" | "salesAmount" | "adjustments" | "closing";
+type MovementColumn = { key: MovementColumnKey; label: string; numeric?: boolean; width: number };
+
+const MOVEMENT_COLUMNS: MovementColumn[] = [
+  { key: "location", label: "Location", width: 22 },
+  { key: "product", label: "Product", width: 40 },
+  { key: "opening", label: "Opening stock", numeric: true, width: 18 },
+  { key: "purchases", label: "External purchases", numeric: true, width: 18 },
+  { key: "produced", label: "Produced", numeric: true, width: 16 },
+  { key: "stockIn", label: "Total stock in", numeric: true, width: 18 },
+  { key: "available", label: "Total available", numeric: true, width: 20 },
+  { key: "sales", label: "Sales", numeric: true, width: 16 },
+  { key: "salesAmount", label: "Sales amount", numeric: true, width: 20 },
+  { key: "adjustments", label: "Adjustments", numeric: true, width: 18 },
+  { key: "closing", label: "Closing stock", numeric: true, width: 18 },
+];
+
+const initialVisibleColumns = Object.fromEntries(MOVEMENT_COLUMNS.map((column) => [column.key, true])) as Record<MovementColumnKey, boolean>;
+
+function matchesColumnFilter(value: string | number, rawFilter: string, numeric = false) {
+  const filter = rawFilter.trim();
+  if (!filter) return true;
+  if (numeric) {
+    const match = /^(>=|<=|>|<|=)?\s*(-?\d+(?:\.\d+)?)$/.exec(filter);
+    if (match) {
+      const actual = Number(value);
+      const target = Number(match[2]);
+      switch (match[1] || "=") {
+        case ">": return actual > target;
+        case ">=": return actual >= target;
+        case "<": return actual < target;
+        case "<=": return actual <= target;
+        default: return Math.abs(actual - target) < 0.0001;
+      }
+    }
+  }
+  return String(value).toLocaleLowerCase().includes(filter.toLocaleLowerCase());
+}
+
 function initialProductIdFromUrl(): string {
   if (typeof window === "undefined") return "";
   const qp = new URLSearchParams(window.location.search);
@@ -76,6 +116,9 @@ export function StockMovementReportPage() {
   const [selectedLocation, setSelectedLocation] = useState<string>("");
   const [selectedProductId, setSelectedProductId] = useState<string>(() => initialProductIdFromUrl());
   const [productsList, setProductsList] = useState<{ id: string; name: string }[]>([]);
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<MovementColumnKey, string>>>({});
+  const [visibleColumns, setVisibleColumns] = useState<Record<MovementColumnKey, boolean>>(initialVisibleColumns);
+  const [showColumnPicker, setShowColumnPicker] = useState(false);
 
   const sourceTypeToPage = (sourceType: string | null | undefined): string | null => {
     const st = String(sourceType || "").toLowerCase();
@@ -420,9 +463,27 @@ export function StockMovementReportPage() {
     setLoading(false);
   };
 
+  const columnValue = (row: Row, column: MovementColumnKey): string | number => {
+    switch (column) {
+      case "location": return row.location;
+      case "product": return row.product_name;
+      case "opening": return row.openingQty;
+      case "purchases": return row.purchasedQty;
+      case "produced": return row.producedQty;
+      case "stockIn": return row.receivedQty;
+      case "available": return row.totalOsRec;
+      case "sales": return row.salesQty;
+      case "salesAmount": return row.salesAmount;
+      case "adjustments": return row.rejectsQty;
+      case "closing": return row.closingQty;
+    }
+  };
+
+  const activeColumns = MOVEMENT_COLUMNS.filter((column) => visibleColumns[column.key]);
   const filteredRows = rows.filter((r) => {
     if (selectedLocation && r.location !== selectedLocation) return false;
     if (selectedProductId && r.product_id !== selectedProductId) return false;
+    if (!MOVEMENT_COLUMNS.every((column) => matchesColumnFilter(columnValue(r, column.key), columnFilters[column.key] || "", column.numeric))) return false;
     return true;
   });
 
@@ -468,9 +529,9 @@ export function StockMovementReportPage() {
     ];
     const sections = [{
       title: "Stock Movement",
-      headers: ["Location", "Product", "Opening stock", "External purchases", "Produced", "Total stock in", "Total available", "Sales", "Sales amount", "Adjustments", "Closing stock"],
-      data: filteredRows.map((r) => [r.location, r.product_name, r.openingQty, r.purchasedQty, r.producedQty, r.receivedQty, r.totalOsRec, r.salesQty, r.salesAmount, r.rejectsQty, r.closingQty]),
-      widths: [22, 40, 18, 18, 16, 18, 20, 16, 20, 18, 18],
+      headers: activeColumns.map((column) => column.label),
+      data: filteredRows.map((row) => activeColumns.map((column) => columnValue(row, column.key))),
+      widths: activeColumns.map((column) => column.width),
     }];
     if (selectedProductId) sections.push({
       title: "Daily Movement",
@@ -522,6 +583,36 @@ export function StockMovementReportPage() {
     doc.save(`${filename}.pdf`);
   };
 
+  const sourceParams = (page: string, sourceId: string | null | undefined) => {
+    if (!sourceId) return undefined;
+    if (page === "purchases_bills") return { highlightBillId: sourceId };
+    if (page === "transactions") return { highlightTransactionId: sourceId };
+    if (page === "inventory_store_requisitions") return { highlightRequisitionId: sourceId };
+    if (page === "inventory_stock_adjustments") return { highlightAdjustmentSourceId: sourceId };
+    return undefined;
+  };
+
+  const linkedQuantity = (value: number, page: string | null | undefined, sourceId: string | null | undefined, mixed: boolean | undefined, fallbackTitle: string) => {
+    if (!page || value === 0) return value.toFixed(2);
+    return <a href={pageHref(page, sourceParams(page, sourceId))} target="_blank" rel="noreferrer" className="text-blue-700 underline hover:text-blue-900" title={mixed ? "Mixed sources — opening first source in new tab" : fallbackTitle}>{value.toFixed(2)}</a>;
+  };
+
+  const renderMovementCell = (row: Row, column: MovementColumnKey) => {
+    switch (column) {
+      case "location": return <span className="capitalize">{row.location}</span>;
+      case "product": return row.product_name;
+      case "opening": return row.openingQty.toFixed(2);
+      case "purchases": return linkedQuantity(row.purchasedQty, row.receivedSourcePage, row.receivedSourceId, row.receivedHasMixedSources, "Open source module in new tab");
+      case "produced": return row.producedQty.toFixed(2);
+      case "stockIn": return row.receivedQty.toFixed(2);
+      case "available": return row.totalOsRec.toFixed(2);
+      case "sales": return linkedQuantity(row.salesQty, row.salesSourcePage, row.salesSourceId, row.salesHasMixedSources, "Open source module in new tab");
+      case "salesAmount": return row.salesAmount.toFixed(2);
+      case "adjustments": return linkedQuantity(row.rejectsQty, row.rejectsSourcePage, row.rejectsSourceId, row.rejectsHasMixedSources, "Open stock adjustments");
+      case "closing": return row.closingQty.toFixed(2);
+    }
+  };
+
   return (
     <div className="p-6 md:p-8">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-6">
@@ -541,6 +632,16 @@ export function StockMovementReportPage() {
         <div className="flex flex-wrap gap-2 items-center">
           <button type="button" onClick={() => exportReport("pdf")} disabled={loading || filteredRows.length === 0} className="border rounded-lg px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">Export PDF</button>
           <button type="button" onClick={() => exportReport("xlsx")} disabled={loading || filteredRows.length === 0} className="border rounded-lg px-3 py-2 text-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed">Export Excel</button>
+          <div className="relative">
+            <button type="button" onClick={() => setShowColumnPicker((open) => !open)} className="inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-sm hover:bg-slate-50" aria-expanded={showColumnPicker}>
+              <Columns3 className="h-4 w-4" /> Columns
+            </button>
+            {showColumnPicker && <div className="absolute right-0 z-20 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-3 shadow-lg">
+              <div className="mb-2 flex items-center justify-between"><p className="text-sm font-semibold text-slate-800">Show columns</p><button type="button" onClick={() => setVisibleColumns(initialVisibleColumns)} className="text-xs font-medium text-brand-700 hover:underline">Reset</button></div>
+              <div className="space-y-1">{MOVEMENT_COLUMNS.map((column) => <label key={column.key} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-slate-50"><input type="checkbox" checked={visibleColumns[column.key]} onChange={(event) => setVisibleColumns((current) => ({ ...current, [column.key]: event.target.checked }))} /><span>{column.label}</span></label>)}</div>
+            </div>}
+          </div>
+          {Object.values(columnFilters).some(Boolean) && <button type="button" onClick={() => setColumnFilters({})} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50"><X className="h-4 w-4" /> Clear column filters</button>}
           <select
             value={dateRange}
             onChange={(e) => setDateRange(e.target.value as DateRangeKey)}
@@ -639,129 +740,19 @@ export function StockMovementReportPage() {
             </table>
           </div>
         )}
-        <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-          <table className="w-full text-sm min-w-[1160px]">
-            <thead className="bg-slate-50">
-              <tr>
-                <th className="p-3 text-left">Location</th>
-                <th className="p-3 text-left">Product</th>
-                <th className="p-3 text-right">Opening stock</th>
-                <th className="p-3 text-right">External purchases</th>
-                <th className="p-3 text-right">Produced</th>
-                <th className="p-3 text-right">Total stock in</th>
-                <th className="p-3 text-right">Total available</th>
-                <th className="p-3 text-right">Sales</th>
-                <th className="p-3 text-right">Sales amount</th>
-                <th className="p-3 text-right">Adjustments</th>
-                <th className="p-3 text-right">Closing stock</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredRows.map((r, idx) => (
-                <tr key={`${r.product_id}-${r.location}-${idx}`} className="border-t">
-                  <td className="p-3 capitalize">{r.location}</td>
-                  <td className="p-3">{r.product_name}</td>
-                  <td className="p-3 text-right tabular-nums">{r.openingQty.toFixed(2)}</td>
-                  <td className="p-3 text-right tabular-nums">
-                    {r.receivedSourcePage && r.purchasedQty > 0 ? (
-                      <a
-                        href={pageHref(
-                          r.receivedSourcePage,
-                          r.receivedSourcePage === "purchases_bills" && r.receivedSourceId
-                            ? { highlightBillId: r.receivedSourceId }
-                            : r.receivedSourcePage === "transactions" && r.receivedSourceId
-                              ? { highlightTransactionId: r.receivedSourceId }
-                              : r.receivedSourcePage === "inventory_store_requisitions" && r.receivedSourceId
-                                ? { highlightRequisitionId: r.receivedSourceId }
-                                : r.receivedSourcePage === "inventory_stock_adjustments" && r.receivedSourceId
-                                  ? { highlightAdjustmentSourceId: r.receivedSourceId }
-                                  : undefined
-                        )}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-700 hover:text-blue-900 underline"
-                        title={
-                          r.receivedHasMixedSources
-                            ? "Mixed sources — opening first source in new tab"
-                            : "Open source module in new tab"
-                        }
-                      >
-                        {r.purchasedQty.toFixed(2)}
-                      </a>
-                    ) : (
-                      r.purchasedQty.toFixed(2)
-                    )}
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{r.producedQty.toFixed(2)}</td>
-                  <td className="p-3 text-right tabular-nums">{r.receivedQty.toFixed(2)}</td>
-                  <td className="p-3 text-right tabular-nums">{r.totalOsRec.toFixed(2)}</td>
-                  <td className="p-3 text-right tabular-nums">
-                    {r.salesSourcePage && r.salesQty > 0 ? (
-                      <a
-                        href={pageHref(
-                          r.salesSourcePage,
-                          r.salesSourcePage === "purchases_bills" && r.salesSourceId
-                            ? { highlightBillId: r.salesSourceId }
-                            : r.salesSourcePage === "transactions" && r.salesSourceId
-                              ? { highlightTransactionId: r.salesSourceId }
-                              : r.salesSourcePage === "inventory_store_requisitions" && r.salesSourceId
-                                ? { highlightRequisitionId: r.salesSourceId }
-                                : r.salesSourcePage === "inventory_stock_adjustments" && r.salesSourceId
-                                  ? { highlightAdjustmentSourceId: r.salesSourceId }
-                                  : undefined
-                        )}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-700 hover:text-blue-900 underline"
-                        title={
-                          r.salesHasMixedSources
-                            ? "Mixed sources — opening first source in new tab"
-                            : "Open source module in new tab"
-                        }
-                      >
-                        {r.salesQty.toFixed(2)}
-                      </a>
-                    ) : (
-                      r.salesQty.toFixed(2)
-                    )}
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{r.salesAmount.toFixed(2)}</td>
-                  <td className="p-3 text-right tabular-nums">
-                    {r.rejectsSourcePage && r.rejectsQty !== 0 ? (
-                      <a
-                        href={pageHref(
-                          r.rejectsSourcePage,
-                          r.rejectsSourcePage === "inventory_stock_adjustments" && r.rejectsSourceId
-                            ? { highlightAdjustmentSourceId: r.rejectsSourceId }
-                            : undefined
-                        )}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-700 hover:text-blue-900 underline"
-                        title={
-                          r.rejectsHasMixedSources
-                            ? "Mixed sources — opening first source in new tab"
-                            : "Open stock adjustments"
-                        }
-                      >
-                        {r.rejectsQty.toFixed(2)}
-                      </a>
-                    ) : (
-                      r.rejectsQty.toFixed(2)
-                    )}
-                  </td>
-                  <td className="p-3 text-right tabular-nums">{r.closingQty.toFixed(2)}</td>
-                </tr>
-              ))}
-              {rows.length === 0 && (
-                <tr>
-                  <td colSpan={11} className="p-6 text-center text-slate-500">
-                    No stock movements in this period.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
+        <div className="rounded-xl border border-slate-200 bg-white">
+          <div className="border-b border-slate-200 px-4 py-2 text-xs text-slate-500"><SlidersHorizontal className="mr-1 inline h-3.5 w-3.5" />Filter each visible column below. For quantities, use a number or comparison such as <strong>&gt;0</strong> or <strong>&lt;=10</strong>. Scroll sideways to see wide tables.</div>
+          <div className="overflow-x-scroll overscroll-x-contain scroll-smooth" aria-label="Stock movement table; scroll horizontally for more columns">
+            <table className="w-full min-w-max text-sm">
+              <thead className="bg-slate-50">
+                <tr>{activeColumns.map((column) => <th key={column.key} className={`min-w-36 p-3 align-top ${column.numeric ? "text-right" : "text-left"}`}><span className="block whitespace-nowrap">{column.label}</span><input value={columnFilters[column.key] || ""} onChange={(event) => setColumnFilters((current) => ({ ...current, [column.key]: event.target.value }))} placeholder={column.numeric ? ">0" : "Filter"} className={`mt-2 w-full rounded border border-slate-300 bg-white px-2 py-1 text-xs font-normal normal-case text-slate-700 placeholder:text-slate-400 ${column.numeric ? "text-right" : "text-left"}`} aria-label={`Filter ${column.label}`} /></th>)}</tr>
+              </thead>
+              <tbody>
+                {filteredRows.map((row, index) => <tr key={`${row.product_id}-${row.location}-${index}`} className="border-t hover:bg-slate-50">{activeColumns.map((column) => <td key={column.key} className={`p-3 tabular-nums ${column.numeric ? "text-right" : "text-left"}`}>{renderMovementCell(row, column.key)}</td>)}</tr>)}
+                {filteredRows.length === 0 && <tr><td colSpan={Math.max(activeColumns.length, 1)} className="p-6 text-center text-slate-500">{rows.length === 0 ? "No stock movements in this period." : "No rows match the selected filters."}</td></tr>}
+              </tbody>
+            </table>
+          </div>
         </div>
         </div>
       )}
