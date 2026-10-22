@@ -560,8 +560,14 @@ function resolveStockAdjustmentLineAccounts(args: {
   switch (reason) {
     case "purchase":
       return { debitGlAccountId: departmentStock, creditGlAccountId: payableOrCash, label: "Purchase" };
-    case "consumption":
-      return { debitGlAccountId: departmentExpense, creditGlAccountId: departmentStock, label: "Consumption" };
+    case "consumption": {
+      // A scheduled-use rule can nominate its P&L account in [PL_GL:<uuid>].
+      // A positive delta is a return/reversal of earlier expected consumption.
+      const consumptionExpense = legacyPurchasesGlAccountId ?? departmentExpense;
+      return deltaQty > 0
+        ? { debitGlAccountId: departmentStock, creditGlAccountId: consumptionExpense, label: "Consumption reversal" }
+        : { debitGlAccountId: consumptionExpense, creditGlAccountId: departmentStock, label: "Consumption" };
+    }
     case "physical_count_shortage":
       return { debitGlAccountId: inventoryVarianceExpense, creditGlAccountId: departmentStock, label: "Physical count shortage" };
     case "physical_count_surplus":
@@ -686,8 +692,8 @@ export async function createJournalForStockAdjustment(
        departmentId: movement.products?.department_id ? String(movement.products.department_id) : null,
        context: glContext,
        productInventoryGlAccountId: movement.products?.stock_account?.trim() || null,
-       legacyInventoryGlAccountId: accounts.inventoryGlAccountId,
-      legacyPurchasesGlAccountId: accounts.stockGainLossGlAccountId,
+        legacyInventoryGlAccountId: extractGlIdFromStockNote(movement.note, "INV_GL") ?? accounts.inventoryGlAccountId,
+       legacyPurchasesGlAccountId: extractGlIdFromStockNote(movement.note, "PL_GL") ?? accounts.stockGainLossGlAccountId,
     });
     if (!accountPair.debitGlAccountId || !accountPair.creditGlAccountId) {
       if (accountPair.missingAccountMessage) missingAccountMessages.add(accountPair.missingAccountMessage);
