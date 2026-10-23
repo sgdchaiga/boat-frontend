@@ -547,6 +547,13 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Interest', page: SACCOPRO_PAGE.savingsInterest },
         ],
       },
+      {
+        name: '🏦 Fixed deposits',
+        icon: PiggyBank,
+        children: [
+          { name: 'Deposit register', page: SACCOPRO_PAGE.fixedDeposit },
+        ],
+      },
       { kind: 'section-header', id: 'sacco-mgmt', title: 'Management' },
       {
         name: '📈 Performance',
@@ -683,6 +690,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
         children: [
           { name: "Find a member", page: SACCOPRO_PAGE.members },
           { name: "Member accounts", page: SACCOPRO_PAGE.savingsAccountsList },
+          { name: "Member portfolio", page: SACCOPRO_PAGE.clientPortfolio },
           { name: "Member statements", page: SACCOPRO_PAGE.savingsStatements },
         ],
       },
@@ -719,6 +727,14 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
                 { name: "Loan accounts", page: SACCOPRO_PAGE.loanList },
                 { name: "Loans in arrears", page: SACCOPRO_PAGE.loanRecovery, state: { recoveryView: "overdue" } },
                 { name: "Repayment schedules", page: SACCOPRO_PAGE.loanServicing },
+                { name: "Monthly loan provisions", page: SACCOPRO_PAGE.loanProvisioning },
+              ],
+            } as NavItem,
+            {
+              name: "Fixed deposits",
+              icon: PiggyBank,
+              children: [
+                { name: "Deposit register", page: SACCOPRO_PAGE.fixedDeposit },
               ],
             } as NavItem,
           ]
@@ -779,7 +795,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
               name: "Settings",
               icon: Settings,
               children: [
-                { name: "Products", page: SACCOPRO_PAGE.loanSettings },
+                { name: "Loan products & provisioning", page: SACCOPRO_PAGE.loanSettings },
                 { name: "Users & staff", page: "staff" },
                 ...(saccoPermissionsNav ? [{ name: "Roles & permissions", page: SACCOPRO_PAGE.permissions }] : []),
                 {

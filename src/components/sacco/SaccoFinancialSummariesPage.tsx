@@ -15,6 +15,7 @@ const SaccoFinancialSummariesPage: FC<SaccoFinancialSummariesPageProps> = ({ nav
     { title: "Income statement", subtitle: "Profit and loss at a glance.", page: "accounting_income" },
     { title: "Balance sheet", subtitle: "What the SACCO owns and owes.", page: "accounting_balance" },
     { title: "Cash flow", subtitle: "How cash moved in and out.", page: "accounting_cashflow" },
+    { title: "Prudential ratios", subtitle: "Performance, liquidity, portfolio quality and sustainability indicators.", page: "sacco_performance_dashboard" },
   ];
 
   return (

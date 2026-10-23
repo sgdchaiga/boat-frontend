@@ -25,6 +25,7 @@ import { memberMeetsLoanDisbursePolicy, loanProductSharesGate } from "@/lib/sacc
 import {
   fetchSaccoWorkspaceData,
   insertFixedDepositRow,
+  updateFixedDepositRow,
   insertLoanRow,
   calculateSaccoCreditAssessment,
   replaceLoanProductsForOrg,
@@ -106,6 +107,7 @@ export type AppContextValue = {
   fixedDeposits: FixedDeposit[];
   setFixedDeposits: React.Dispatch<React.SetStateAction<FixedDeposit[]>>;
   addFixedDeposit: (deposit: Omit<FixedDeposit, "id" | "interestEarned" | "status">) => Promise<void>;
+  updateFixedDeposit: (id: string, patch: Partial<Pick<FixedDeposit, "status" | "autoRenew">>) => Promise<void>;
   cashbook: CashbookEntry[];
   setCashbook: React.Dispatch<React.SetStateAction<CashbookEntry[]>>;
   fixedAssets: FixedAsset[];
@@ -261,6 +263,15 @@ export function AppProvider({
     },
     [organizationId]
   );
+
+  const updateFixedDeposit = useCallback(async (id: string, patch: Partial<Pick<FixedDeposit, "status" | "autoRenew">>) => {
+    if (!organizationId || !persistReadyRef.current) {
+      setFixedDeposits((prev) => prev.map((deposit) => deposit.id === id ? { ...deposit, ...patch } : deposit));
+      return;
+    }
+    const updated = await updateFixedDepositRow(id, patch);
+    setFixedDeposits((prev) => prev.map((deposit) => deposit.id === id ? updated : deposit));
+  }, [organizationId]);
 
   const setCurrentPage = useCallback(
     (page: string, state?: Record<string, unknown>) => {
@@ -469,6 +480,7 @@ export function AppProvider({
       fixedDeposits,
       setFixedDeposits,
       addFixedDeposit,
+      updateFixedDeposit,
       cashbook,
       setCashbook,
       fixedAssets,
@@ -492,6 +504,7 @@ export function AppProvider({
       loans,
       fixedDeposits,
       addFixedDeposit,
+      updateFixedDeposit,
       cashbook,
       fixedAssets,
       loanProductsInner,

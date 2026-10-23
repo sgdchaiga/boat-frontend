@@ -25,6 +25,7 @@ import { useAppContext } from "@/contexts/AppContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { supabase } from "@/lib/supabase";
+import { requestFixedDepositFromSavings } from "@/lib/saccoDb";
 import {
   fetchSavingsAccountsList,
   type SaccoSavingsAccountListRow,
@@ -45,6 +46,7 @@ type Props = {
 };
 type MemberAction = MemberRequestKind | "qr_pay" | "qr_request" | "mini_app_pay";
 type SaccoMiniApp = { id: string; display_name: string; description: string; icon_key: string; minimum_amount: number; maximum_amount: number | null };
+type FixedDepositProduct = { id: string; name: string; term_months: number; annual_rate: number; minimum_amount: number; allow_auto_renew: boolean };
 
 function statusClass(status: string): string {
   const s = status.toLowerCase();
@@ -87,6 +89,9 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
   const [selectedMiniApp, setSelectedMiniApp] = useState<SaccoMiniApp | null>(null);
   const [miniAppDraft, setMiniAppDraft] = useState({ displayName: "", description: "", settlementAccountId: "", active: true });
   const [miniAppSaving, setMiniAppSaving] = useState(false);
+  const [fdProducts, setFdProducts] = useState<FixedDepositProduct[]>([]);
+  const [fdOpening, setFdOpening] = useState(false);
+  const [fdDraft, setFdDraft] = useState({ productId: "", sourceAccountId: "", amount: "", autoRenew: false, acceptedTerms: false });
 
   useEffect(() => {
     if (!memberMode) return;
@@ -104,6 +109,11 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
       if (firstActive) setSelectedMemberId(firstActive.id);
     }
   }, [memberIdFromAuth, members, selectedMemberId]);
+
+  useEffect(() => {
+    if (!memberMode || !user?.organization_id) return;
+    void supabase.from("sacco_fixed_deposit_products").select("id,name,term_months,annual_rate,minimum_amount,allow_auto_renew").eq("organization_id", user.organization_id).eq("is_active", true).order("term_months").then(({ data }) => setFdProducts((data ?? []) as FixedDepositProduct[]));
+  }, [memberMode, user?.organization_id]);
 
   useEffect(() => {
     const orgId = user?.organization_id;
@@ -421,6 +431,26 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
       onClick: () => setActiveAction("qr_pay"),
     },
   ];
+
+  const submitFixedDepositRequest = async () => {
+    const amount = Number(fdDraft.amount);
+    if (!fdDraft.productId || !fdDraft.sourceAccountId || !Number.isFinite(amount) || amount <= 0) {
+      setActionMessage("Choose a product, savings account and amount.");
+      return;
+    }
+    try {
+      if (!fdDraft.acceptedTerms) {
+        setActionMessage("Please read and accept the fixed-deposit agreement before submitting.");
+        return;
+      }
+      await requestFixedDepositFromSavings(fdDraft.productId, fdDraft.sourceAccountId, amount, fdDraft.autoRenew, fdDraft.acceptedTerms);
+      setActionMessage("Your fixed-deposit request was sent for SACCO approval. Funds remain in savings until approval.");
+      setFdOpening(false);
+      setFdDraft({ productId: "", sourceAccountId: "", amount: "", autoRenew: false, acceptedTerms: false });
+    } catch (error) {
+      setActionMessage(error instanceof Error ? error.message : "Could not submit the fixed-deposit request.");
+    }
+  };
 
   return (
     <div className={memberMode ? "min-h-screen space-y-5 bg-slate-100 p-3 pb-10 sm:p-6" : "space-y-6"}>
@@ -875,11 +905,20 @@ const SaccoClientDashboard: React.FC<Props> = ({ navigate, readOnly, memberIdFro
         </section>
 
         <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-          <div className="border-b border-slate-100 px-4 py-3">
-            <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900">
-              <PiggyBank size={18} className="text-sky-600" /> Fixed deposits
-            </h2>
+          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+            <h2 className="flex items-center gap-2 text-sm font-bold text-slate-900"><PiggyBank size={18} className="text-sky-600" /> Fixed deposits</h2>
+            {memberMode && <button type="button" onClick={() => setFdOpening((value) => !value)} className="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-sky-700">Open fixed deposit</button>}
           </div>
+          {memberMode && fdOpening && <div className="space-y-3 border-b border-sky-100 bg-sky-50 p-4">
+            <p className="text-xs font-semibold text-sky-950">Fund a fixed deposit from your ordinary savings. A SACCO officer must approve it before money moves.</p>
+            <select value={fdDraft.productId} onChange={(e) => setFdDraft((value) => ({ ...value, productId: e.target.value }))} className="w-full rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm"><option value="">Choose product</option>{fdProducts.map((product) => <option key={product.id} value={product.id}>{product.name} · {product.term_months} months at {product.annual_rate}% · min {formatCurrency(product.minimum_amount)}</option>)}</select>
+            <select value={fdDraft.sourceAccountId} onChange={(e) => setFdDraft((value) => ({ ...value, sourceAccountId: e.target.value }))} className="w-full rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm"><option value="">Choose ordinary savings account</option>{ordinaryAccounts.map((account) => <option key={account.id} value={account.id}>{account.account_number} · {formatCurrency(account.balance)}</option>)}</select>
+            <input type="number" min="1" inputMode="decimal" placeholder="Amount (UGX)" value={fdDraft.amount} onChange={(e) => setFdDraft((value) => ({ ...value, amount: e.target.value }))} className="w-full rounded-lg border border-sky-200 bg-white px-3 py-2 text-sm" />
+            <label className="flex gap-2 text-xs font-medium text-slate-700"><input type="checkbox" checked={fdDraft.autoRenew} onChange={(e) => setFdDraft((value) => ({ ...value, autoRenew: e.target.checked }))} /> Auto-renew at maturity, where product rules allow</label>
+            <details className="rounded-lg border border-sky-200 bg-white p-3 text-xs text-slate-700"><summary className="cursor-pointer font-bold text-sky-900">Read fixed-deposit member agreement</summary><div className="mt-3 space-y-2 leading-relaxed"><p><strong>1. Term and return.</strong> Your selected amount is locked for the product term. The quoted annual rate and maturity date are confirmed only when the SACCO approves this request.</p><p><strong>2. Funding.</strong> On approval, the SACCO will debit the savings account you selected. If the balance is no longer sufficient, the request cannot be approved.</p><p><strong>3. Early access.</strong> Early withdrawal, if permitted, is subject to SACCO approval and the applicable product rules, including any reduced interest or charges.</p><p><strong>4. Maturity and renewal.</strong> Interest is subject to any applicable withholding tax. If you elect auto-renew, the SACCO will renew only where the selected product permits it; otherwise it will contact you at maturity.</p><p><strong>5. Approval and records.</strong> This is an application, not a completed deposit. The SACCO will retain this agreement acceptance and the transaction record.</p><p className="font-medium">Agreement version: FD-MEMBER-TERMS-2026-10</p></div></details>
+            <label className="flex gap-2 text-xs font-semibold text-slate-800"><input type="checkbox" checked={fdDraft.acceptedTerms} onChange={(e) => setFdDraft((value) => ({ ...value, acceptedTerms: e.target.checked }))} /> I have read and agree to the fixed-deposit member agreement.</label>
+            <button type="button" disabled={!fdDraft.acceptedTerms} onClick={() => void submitFixedDepositRequest()} className="w-full rounded-lg bg-sky-700 py-2 text-sm font-bold text-white hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-slate-300">Submit for approval</button>
+          </div>}
           <div className="divide-y divide-slate-100">
             {memberFDs.length === 0 ? (
               <p className="p-5 text-sm text-slate-500">No fixed deposits found.</p>

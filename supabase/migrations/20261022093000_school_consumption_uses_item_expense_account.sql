@@ -122,6 +122,6 @@ END;
 $$;
 
 COMMENT ON COLUMN public.school_inventory_consumption_rules.expense_gl_account_id IS
-  'Historic rule-level expense account. New consumption journals use the item's purchases/cost account.';
+  'Historic rule-level expense account. New consumption journals use the item''s purchases/cost account.';
 COMMENT ON COLUMN public.school_inventory_consumption_review_lines.expense_gl_account_id IS
-  'Historic account snapshot. New consumption journals use the item's purchases/cost account.';
+  'Historic account snapshot. New consumption journals use the item''s purchases/cost account.';

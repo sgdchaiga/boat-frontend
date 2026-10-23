@@ -231,6 +231,104 @@ export async function insertFixedDepositRow(
   return mapFdFromRow(data);
 }
 
+/** Updates operational fields only; money movement must be posted through the cashbook workflow. */
+export async function updateFixedDepositRow(
+  id: string,
+  patch: Partial<Pick<FixedDeposit, "status" | "autoRenew">>
+): Promise<FixedDeposit> {
+  const { data, error } = await sb
+    .from("sacco_fixed_deposits")
+    .update({
+      ...(patch.status === undefined ? {} : { status: patch.status }),
+      ...(patch.autoRenew === undefined ? {} : { auto_renew: patch.autoRenew }),
+    })
+    .eq("id", id)
+    .select("*")
+    .single();
+  if (error) throw error;
+  return mapFdFromRow(data);
+}
+
+/** Member-app flow: creates a maker-checker request; no funds move until a staff reviewer approves it. */
+export async function requestFixedDepositFromSavings(
+  productId: string,
+  sourceAccountId: string,
+  amount: number,
+  autoRenew: boolean,
+  acceptedTerms: boolean,
+): Promise<string> {
+  const { data, error } = await sb.rpc("request_sacco_fixed_deposit", {
+    p_product_id: productId,
+    p_source_account_id: sourceAccountId,
+    p_amount: amount,
+    p_auto_renew: autoRenew,
+    p_accept_terms: acceptedTerms,
+    p_terms_version: "FD-MEMBER-TERMS-2026-10",
+  });
+  if (error) throw error;
+  return String(data);
+}
+
+export async function reviewFixedDepositRequest(requestId: string, approve: boolean, note?: string): Promise<string | null> {
+  const { data, error } = await sb.rpc("review_sacco_fixed_deposit_request", {
+    p_request_id: requestId,
+    p_approve: approve,
+    p_note: note ?? null,
+  });
+  if (error) throw error;
+  return data ? String(data) : null;
+}
+
+export async function settleFixedDeposit(id: string, action: "mature" | "break" | "renew", savingsAccountId?: string): Promise<string> {
+  const { data, error } = await sb.rpc("settle_sacco_fixed_deposit", {
+    p_deposit_id: id,
+    p_action: action,
+    p_savings_account_id: savingsAccountId ?? null,
+  });
+  if (error) throw error;
+  return String(data);
+}
+
+/** Staff flow: opens a product-backed deposit and debits the selected savings account atomically. */
+export async function openFixedDepositForMember(
+  memberId: string,
+  productId: string,
+  sourceAccountId: string,
+  amount: number,
+  autoRenew: boolean,
+): Promise<string> {
+  const { data, error } = await sb.rpc("open_sacco_fixed_deposit_for_member", {
+    p_member_id: memberId,
+    p_product_id: productId,
+    p_source_account_id: sourceAccountId,
+    p_amount: amount,
+    p_auto_renew: autoRenew,
+  });
+  if (error) throw error;
+  return String(data);
+}
+
+/** Creates one immutable daily interest-accrual record per eligible active deposit through the selected date. */
+export async function accrueFixedDepositInterest(asAt: string): Promise<number> {
+  const { data, error } = await sb.rpc("accrue_sacco_fixed_deposit_interest", { p_as_at: asAt });
+  if (error) throw error;
+  return Number(data ?? 0);
+}
+
+/** Saves an as-at portfolio/delinquency snapshot for collections and provisioning reporting. */
+export async function snapshotSaccoLoanPortfolio(reportingDate: string): Promise<string> {
+  const { data, error } = await sb.rpc("snapshot_sacco_loan_portfolio", { p_reporting_date: reportingDate });
+  if (error) throw error;
+  return String(data);
+}
+
+/** Runs the controlled SACCO day-close workflow and returns its immutable run id. */
+export async function runSaccoEndOfDay(processingDate: string): Promise<string> {
+  const { data, error } = await sb.rpc("run_sacco_end_of_day", { p_processing_date: processingDate });
+  if (error) throw error;
+  return String(data);
+}
+
 function mapCbFromRow(row: {
   id: string;
   entry_date: string;

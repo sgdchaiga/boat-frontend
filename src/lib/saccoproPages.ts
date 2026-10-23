@@ -35,12 +35,15 @@ export const SACCOPRO_PAGE = {
   loanRecovery: "sacco_loan_recovery",
   /** Reschedule, restructure, write-off & WO recovery audit. */
   loanServicing: "sacco_loan_servicing",
+  loanProvisioning: "sacco_loan_provisioning",
   loanSettings: "sacco_loan_settings",
   loanInterestCalc: "sacco_loan_interest_calc",
   savingsInterest: "sacco_savings_interest",
   /** Read-only savings movements (from workspace cashbook lines). */
   savingsStatements: "sacco_savings_statements",
   fixedDeposit: "sacco_fixed_deposit",
+  /** Legacy-style all-member balances, savings products, fixed deposits and rankings. */
+  clientPortfolio: "sacco_client_portfolio",
   /** Member-facing account app for balances, loans, fixed deposits, and recent activity. */
   memberApp: "sacco_member_app",
   /** Legacy route kept for existing bookmarks. */

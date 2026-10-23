@@ -226,9 +226,12 @@ const SaccoLoanSettings = lazy(() => import('./components/sacco/SaccoLoanSetting
 const SaccoLoanInterestCalc = lazy(() => import('./components/sacco/SaccoLoanInterestCalc'));
 const SaccoPerformanceDashboardPage = lazy(() => import('./components/sacco/SaccoPerformanceDashboardPage'));
 const SaccoLoanServicingPage = lazy(() => import('./components/sacco/SaccoLoanServicingPage'));
+const SaccoLoanProvisionReport = lazy(() => import('./components/sacco/SaccoLoanProvisionReport'));
 const SaccoMemberProfilePage = lazy(() => import('./components/sacco/SaccoMemberProfilePage'));
 const SaccoFinancialSummariesPage = lazy(() => import('./components/sacco/SaccoFinancialSummariesPage'));
 const SaccoSavingsInterest = lazy(() => import('./components/sacco/SaccoSavingsInterest'));
+const SaccoFixedDeposit = lazy(() => import('./components/sacco/SaccoFixedDeposit'));
+const SaccoClientPortfolio = lazy(() => import('./components/sacco/SaccoClientPortfolio'));
 const SaccoClientDashboard = lazy(() => import('./components/sacco/SaccoClientDashboard'));
 const InsuranceCustomerPortal = lazyNamed(() => import('./components/insurance/InsuranceCustomerPortal'), 'InsuranceCustomerPortal');
 const VslaMemberDashboard = lazy(() => import('./components/vsla/VslaMemberDashboard'));
@@ -1333,6 +1336,8 @@ function AppContent() {
         );
       case SACCOPRO_PAGE.loanServicing:
         return <SaccoLoanServicingPage />;
+      case SACCOPRO_PAGE.loanProvisioning:
+        return <SaccoLoanProvisionReport />;
       case SACCOPRO_PAGE.loanSettings:
         return <SaccoLoanSettings />;
       case SACCOPRO_PAGE.loanInterestCalc:
@@ -1340,18 +1345,9 @@ function AppContent() {
       case SACCOPRO_PAGE.savingsInterest:
         return <SaccoSavingsInterest />;
       case SACCOPRO_PAGE.fixedDeposit:
-        return (
-          <div className="p-6 max-w-3xl mx-auto space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <h1 className="text-2xl font-bold text-slate-900">Fixed deposits</h1>
-              <PageNotes ariaLabel="Fixed deposits notes">
-                <p>
-                  Term deposits and maturity — wire to Supabase and GL when ready. Summary figures also appear on the admin dashboard.
-                </p>
-              </PageNotes>
-            </div>
-          </div>
-        );
+        return <SaccoFixedDeposit />;
+      case SACCOPRO_PAGE.clientPortfolio:
+        return <SaccoClientPortfolio />;
       case SCHOOL_PAGE.dashboard:
         return <SchoolDashboard onNavigate={navigate} />;
       case SCHOOL_PAGE.operations:

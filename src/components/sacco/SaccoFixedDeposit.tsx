@@ -1,215 +1,53 @@
-import React, { useState } from 'react';
-import { useAppContext } from '@/contexts/AppContext';
-import { PiggyBank, Plus, X, Eye, RefreshCw } from 'lucide-react';
-import { SaccoReportToolbar } from '@/components/common/SaccoReportToolbar';
-import { downloadFixedDepositsPdf } from '@/lib/saccoReportPdf';
-import { useAuth } from '@/contexts/AuthContext';
+import React, { useEffect, useMemo, useState } from "react";
+import toast from "react-hot-toast";
+import { Check, Info, Plus, RefreshCw, Search, Settings2, ShieldCheck, X } from "lucide-react";
+import { useAuth } from "@/contexts/AuthContext";
+import { useAppContext, type FixedDeposit } from "@/contexts/AppContext";
+import { accrueFixedDepositInterest, openFixedDepositForMember, reviewFixedDepositRequest, settleFixedDeposit } from "@/lib/saccoDb";
+import { supabase } from "@/lib/supabase";
 
-const FixedDeposit: React.FC = () => {
-  const { user } = useAuth();
-  const { fixedDeposits, addFixedDeposit, members, formatCurrency, setFixedDeposits } = useAppContext();
-  const [showForm, setShowForm] = useState(false);
-  const [statusFilter, setStatusFilter] = useState('all');
+type Product = { id: string; name: string; term_months: number; annual_rate: number; minimum_amount: number; withholding_tax_rate: number; allow_auto_renew: boolean; early_withdrawal_penalty_rate: number; is_active: boolean };
+type SavingsAccount = { id: string; sacco_member_id: string; account_number: string; balance: number; savings_product_code: string; is_active: boolean };
+type Request = { id: string; amount: number; status: string; requested_at: string; source_savings_account_id: string; sacco_members?: { name: string; account_number: string } | null; sacco_fixed_deposit_products?: Product | null };
+type Tab = "register" | "applications" | "products";
 
-  const interestTiers = [
-    { term: 3, rate: 7.5, label: '3 Months' },
-    { term: 6, rate: 8.5, label: '6 Months' },
-    { term: 12, rate: 9.5, label: '12 Months' },
-    { term: 24, rate: 10.5, label: '24 Months' },
-  ];
+const isoToday = () => new Date().toISOString().slice(0, 10);
+const money = new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 });
+const futureDate = (start: string, term: number) => { const date = new Date(`${start}T00:00:00`); date.setMonth(date.getMonth() + term); return date.toISOString().slice(0, 10); };
+const daysTo = (date: string) => Math.ceil((new Date(`${date}T00:00:00`).getTime() - new Date(new Date().toDateString()).getTime()) / 86_400_000);
+const canOperate = (role?: string | null, superAdmin?: boolean) => superAdmin || ["accountant", "manager", "admin", "super_admin"].includes(String(role).toLowerCase());
 
-  const [form, setForm] = useState({
-    memberId: '', memberName: '', amount: '', term: '12', interestRate: '9.5',
-    startDate: new Date().toISOString().split('T')[0], autoRenew: false,
-  });
-
-  const getMaturityDate = (start: string, months: number) => {
-    const d = new Date(start);
-    d.setMonth(d.getMonth() + months);
-    return d.toISOString().split('T')[0];
-  };
-
-  const filtered = fixedDeposits.filter(fd => statusFilter === 'all' || fd.status === statusFilter);
-  const totalActive = fixedDeposits.filter(f => f.status === 'active').reduce((s, f) => s + f.amount, 0);
-  const totalInterest = fixedDeposits.reduce((s, f) => s + f.interestEarned, 0);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    const amount = parseFloat(form.amount);
-    const term = parseInt(form.term);
-    if (isNaN(amount) || amount < 10000) return;
-    await addFixedDeposit({
-      memberId: form.memberId, memberName: form.memberName, amount,
-      interestRate: parseFloat(form.interestRate), term,
-      startDate: form.startDate,
-      maturityDate: getMaturityDate(form.startDate, term),
-      autoRenew: form.autoRenew,
-    });
-    setShowForm(false);
-    setForm({ memberId: '', memberName: '', amount: '', term: '12', interestRate: '9.5', startDate: new Date().toISOString().split('T')[0], autoRenew: false });
-  };
-
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Fixed Deposits</h1>
-          <p className="text-slate-500 text-sm">{fixedDeposits.length} deposits | {formatCurrency(totalActive)} active</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <SaccoReportToolbar
-            onPrint={() => window.print()}
-            onPdf={() => {
-              const today = new Date().toISOString().slice(0, 10);
-              void downloadFixedDepositsPdf(filtered, today, today, user?.organization_id);
-            }}
-          />
-          <button onClick={() => setShowForm(true)} className="flex items-center gap-2 px-4 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 text-sm font-medium">
-            <Plus size={16} /> New Fixed Deposit
-          </button>
-        </div>
-      </div>
-
-      {/* Summary */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        {[
-          { label: 'Total Deposits', value: formatCurrency(totalActive), color: 'text-emerald-600' },
-          { label: 'Interest Earned', value: formatCurrency(totalInterest), color: 'text-amber-600' },
-          { label: 'Active Deposits', value: fixedDeposits.filter(f => f.status === 'active').length.toString(), color: 'text-blue-600' },
-          { label: 'Maturing Soon', value: fixedDeposits.filter(f => f.status === 'active' && new Date(f.maturityDate) <= new Date('2026-06-01')).length.toString(), color: 'text-violet-600' },
-        ].map((s, i) => (
-          <div key={i} className="bg-white rounded-xl p-4 shadow-sm border border-slate-100">
-            <p className="text-xs text-slate-500">{s.label}</p>
-            <p className={`text-xl font-bold ${s.color}`}>{s.value}</p>
-          </div>
-        ))}
-      </div>
-
-      {/* Interest Rate Tiers */}
-      <div className="bg-white rounded-xl p-5 shadow-sm border border-slate-100">
-        <h3 className="text-sm font-semibold text-slate-900 mb-3">Interest Rate Tiers</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {interestTiers.map(t => (
-            <div key={t.term} className="p-4 bg-gradient-to-br from-emerald-50 to-cyan-50 rounded-lg border border-emerald-100 text-center">
-              <p className="text-2xl font-bold text-emerald-700">{t.rate}%</p>
-              <p className="text-xs text-slate-600 mt-1">{t.label}</p>
-              <p className="text-[10px] text-slate-400">Per annum</p>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Filter */}
-      <div className="flex gap-2">
-        {['all', 'active', 'matured', 'withdrawn'].map(s => (
-          <button key={s} onClick={() => setStatusFilter(s)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${statusFilter === s ? 'bg-emerald-600 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'}`}>
-            {s === 'all' ? 'All' : s.charAt(0).toUpperCase() + s.slice(1)}
-          </button>
-        ))}
-      </div>
-
-      {/* Table */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-100">
-                {['ID', 'Member', 'Amount', 'Rate', 'Term', 'Start', 'Maturity', 'Interest', 'Status', 'Auto-Renew'].map(h => (
-                  <th key={h} className="px-3 py-3 text-left text-xs font-semibold text-slate-600 uppercase">{h}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {filtered.map(fd => (
-                <tr key={fd.id} className="hover:bg-slate-50/50">
-                  <td className="px-3 py-2.5 text-sm font-mono">{fd.id}</td>
-                  <td className="px-3 py-2.5 text-sm font-medium">{fd.memberName}</td>
-                  <td className="px-3 py-2.5 text-sm font-medium">{formatCurrency(fd.amount)}</td>
-                  <td className="px-3 py-2.5 text-sm">{fd.interestRate}%</td>
-                  <td className="px-3 py-2.5 text-sm">{fd.term}m</td>
-                  <td className="px-3 py-2.5 text-sm text-slate-500">{fd.startDate}</td>
-                  <td className="px-3 py-2.5 text-sm text-slate-500">{fd.maturityDate}</td>
-                  <td className="px-3 py-2.5 text-sm font-medium text-amber-600">{formatCurrency(fd.interestEarned)}</td>
-                  <td className="px-3 py-2.5">
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${fd.status === 'active' ? 'bg-emerald-100 text-emerald-700' : fd.status === 'matured' ? 'bg-blue-100 text-blue-700' : 'bg-slate-100 text-slate-600'}`}>
-                      {fd.status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {fd.autoRenew && <RefreshCw size={14} className="text-emerald-500" />}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* New FD Modal */}
-      {showForm && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-lg" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-6 border-b border-slate-100">
-              <h2 className="text-lg font-bold">New Fixed Deposit</h2>
-              <button onClick={() => setShowForm(false)} className="p-1 hover:bg-slate-100 rounded-lg"><X size={20} /></button>
-            </div>
-            <form onSubmit={handleSubmit} className="p-6 space-y-4">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Member</label>
-                <select required value={form.memberId} onChange={e => {
-                  const m = members.find(m => m.id === e.target.value);
-                  setForm(p => ({ ...p, memberId: e.target.value, memberName: m?.name || '' }));
-                }} className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500">
-                  <option value="">Select Member</option>
-                  {members.filter(m => m.status === 'active').map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-                </select>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Amount (KES)</label>
-                  <input type="number" required min="10000" value={form.amount} onChange={e => setForm(p => ({ ...p, amount: e.target.value }))}
-                    className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1">Term</label>
-                  <select value={form.term} onChange={e => {
-                    const tier = interestTiers.find(t => t.term === parseInt(e.target.value));
-                    setForm(p => ({ ...p, term: e.target.value, interestRate: String(tier?.rate || 9.5) }));
-                  }} className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500">
-                    {interestTiers.map(t => <option key={t.term} value={t.term}>{t.label} ({t.rate}%)</option>)}
-                  </select>
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Start Date</label>
-                <input type="date" required value={form.startDate} onChange={e => setForm(p => ({ ...p, startDate: e.target.value }))}
-                  className="w-full px-3 py-2.5 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500" />
-              </div>
-              {form.amount && (
-                <div className="p-3 bg-emerald-50 rounded-lg border border-emerald-100">
-                  <p className="text-xs text-emerald-600">Estimated Interest at Maturity</p>
-                  <p className="text-lg font-bold text-emerald-700">
-                    {formatCurrency(Math.round(parseFloat(form.amount) * parseFloat(form.interestRate) / 100 * parseInt(form.term) / 12))}
-                  </p>
-                  <p className="text-xs text-slate-500">Maturity: {getMaturityDate(form.startDate, parseInt(form.term))}</p>
-                </div>
-              )}
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input type="checkbox" checked={form.autoRenew} onChange={e => setForm(p => ({ ...p, autoRenew: e.target.checked }))}
-                  className="w-4 h-4 text-emerald-600 rounded border-slate-300" />
-                <span className="text-sm text-slate-700">Auto-renew on maturity</span>
-              </label>
-              <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-                <button type="button" onClick={() => setShowForm(false)} className="px-4 py-2 text-sm text-slate-600 hover:bg-slate-100 rounded-lg">Cancel</button>
-                <button type="submit" className="px-6 py-2 bg-emerald-600 text-white text-sm font-medium rounded-lg hover:bg-emerald-700">Create Deposit</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-    </div>
-  );
+const SaccoFixedDeposit: React.FC = () => {
+  const { user, isSuperAdmin } = useAuth();
+  const { fixedDeposits, members, formatCurrency, refreshSaccoWorkspace } = useAppContext();
+  const [tab, setTab] = useState<Tab>("register"); const [query, setQuery] = useState(""); const [filter, setFilter] = useState("active");
+  const [products, setProducts] = useState<Product[]>([]); const [accounts, setAccounts] = useState<SavingsAccount[]>([]); const [requests, setRequests] = useState<Request[]>([]);
+  const [showOpen, setShowOpen] = useState(false); const [showProduct, setShowProduct] = useState(false); const [busy, setBusy] = useState<string | null>(null);
+  const operator = canOperate(user?.role, isSuperAdmin);
+  const loadControls = async () => { if (!user?.organization_id) return; const [productResult, accountResult, requestResult] = await Promise.all([supabase.from("sacco_fixed_deposit_products").select("*").eq("organization_id", user.organization_id).order("term_months"), supabase.from("sacco_member_savings_accounts").select("id,sacco_member_id,account_number,balance,savings_product_code,is_active").eq("organization_id", user.organization_id).eq("is_active", true), supabase.from("sacco_fixed_deposit_requests").select("*,sacco_members(name,account_number),sacco_fixed_deposit_products(*)").eq("organization_id", user.organization_id).order("requested_at", { ascending: false })]); if (!productResult.error) setProducts((productResult.data ?? []) as Product[]); if (!accountResult.error) setAccounts((accountResult.data ?? []) as SavingsAccount[]); if (!requestResult.error) setRequests((requestResult.data ?? []) as Request[]); };
+  useEffect(() => { void loadControls(); }, [user?.organization_id]);
+  const active = fixedDeposits.filter(d => d.status === "active");
+  const rows = useMemo(() => fixedDeposits.filter(d => (filter === "all" || d.status === filter) && `${d.memberName} ${d.id}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => a.maturityDate.localeCompare(b.maturityDate)), [filter, fixedDeposits, query]);
+  const refresh = async () => { await Promise.all([refreshSaccoWorkspace(), loadControls()]); };
+  const settle = async (deposit: FixedDeposit, action: "mature" | "renew" | "break") => { if (!window.confirm(`Confirm ${action === "break" ? "early settlement" : action} for ${deposit.memberName}?`)) return; setBusy(deposit.id); try { await settleFixedDeposit(deposit.id, action); toast.success(action === "renew" ? "Deposit renewed." : "Deposit settled to savings."); await refresh(); } catch (error) { toast.error(error instanceof Error ? error.message : "Settlement failed."); } finally { setBusy(null); } };
+  const review = async (request: Request, approve: boolean) => { const note = window.prompt(approve ? "Approval note (optional)" : "Reason for rejection (optional)"); if (note === null) return; setBusy(request.id); try { await reviewFixedDepositRequest(request.id, approve, note); toast.success(approve ? "Application approved and funded." : "Application rejected."); await refresh(); } catch (error) { toast.error(error instanceof Error ? error.message : "Could not process the application."); } finally { setBusy(null); } };
+  const pending = requests.filter(r => r.status === "pending");
+  const accrue = async () => { const date = window.prompt("Accrue interest through date (YYYY-MM-DD)", isoToday()); if (!date) return; setBusy("accrual"); try { const count = await accrueFixedDepositInterest(date); toast.success(`${count} deposit interest accrual(s) recorded.`); await refresh(); } catch (error) { toast.error(error instanceof Error ? error.message : "Accrual failed."); } finally { setBusy(null); } };
+  return <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6"><header className="rounded-2xl bg-slate-950 p-6 text-white"><div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between"><div><p className="flex items-center gap-2 text-sm font-semibold text-emerald-200"><ShieldCheck size={17}/> Term deposit operations</p><h1 className="mt-2 text-3xl font-bold">Fixed deposits</h1><p className="mt-1 text-sm text-slate-300">Product-led savings funding, approvals, maturity and renewal in one place.</p></div>{operator && <div className="flex flex-wrap gap-2"><button onClick={() => void accrue()} disabled={busy === "accrual"} className="rounded-lg border border-slate-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-40">Accrue interest</button><button onClick={() => setShowOpen(true)} className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-400 px-4 py-2.5 text-sm font-bold text-emerald-950"><Plus size={17}/> Open from savings</button></div>}</div></header><div className="grid gap-3 sm:grid-cols-4"><Metric label="Active principal" value={formatCurrency(active.reduce((sum, deposit) => sum + deposit.amount, 0))}/><Metric label="Maturing within 30 days" value={String(active.filter(d => daysTo(d.maturityDate) >= 0 && daysTo(d.maturityDate) <= 30).length)}/><Metric label="Overdue for action" value={String(active.filter(d => daysTo(d.maturityDate) < 0).length)}/><Metric label="Pending applications" value={String(pending.length)}/></div><nav className="flex flex-wrap gap-2 border-b"><TabButton active={tab === "register"} onClick={() => setTab("register")}>Deposit register</TabButton><TabButton active={tab === "applications"} onClick={() => setTab("applications")}>Applications{pending.length ? ` (${pending.length})` : ""}</TabButton><TabButton active={tab === "products"} onClick={() => setTab("products")}>Products</TabButton></nav>{tab === "register" && <section className="overflow-hidden rounded-2xl border bg-white shadow-sm"><div className="flex flex-wrap gap-3 border-b p-4"><label className="relative"><Search size={16} className="absolute left-3 top-2.5 text-slate-400"/><input value={query} onChange={e => setQuery(e.target.value)} placeholder="Member or deposit ID" className="rounded-lg border py-2 pl-9 pr-3 text-sm"/></label>{["active", "matured", "withdrawn", "renewed", "all"].map(value => <button key={value} onClick={() => setFilter(value)} className={`rounded-lg px-3 py-2 text-xs font-bold capitalize ${filter === value ? "bg-slate-900 text-white" : "bg-slate-100 text-slate-600"}`}>{value}</button>)}</div><DepositTable rows={rows} format={formatCurrency} busy={busy} onSettle={settle}/></section>}{tab === "applications" && <Applications requests={requests} format={formatCurrency} canReview={operator} busy={busy} review={review}/>} {tab === "products" && <Products products={products} format={formatCurrency} canManage={operator} openCreate={() => setShowProduct(true)}/>} {showOpen && <OpenDepositModal members={members} products={products.filter(p => p.is_active)} accounts={accounts} close={() => setShowOpen(false)} complete={async draft => { setBusy("opening"); try { await openFixedDepositForMember(draft.memberId, draft.productId, draft.accountId, draft.amount, draft.autoRenew); toast.success("Fixed deposit opened and funded from savings."); setShowOpen(false); await refresh(); } catch (error) { toast.error(error instanceof Error ? error.message : "Could not open deposit."); } finally { setBusy(null); } }}/>} {showProduct && <ProductModal close={() => setShowProduct(false)} complete={async () => { setShowProduct(false); await loadControls(); }}/>}</div>;
 };
 
-export default FixedDeposit;
+function Metric({ label, value }: { label: string; value: string }) { return <div className="rounded-xl border bg-white p-4 shadow-sm"><p className="text-sm text-slate-500">{label}</p><p className="mt-2 text-2xl font-bold">{value}</p></div>; }
+function TabButton({ active, onClick, children }: React.PropsWithChildren<{ active: boolean; onClick: () => void }>) { return <button onClick={onClick} className={`border-b-2 px-3 py-3 text-sm font-bold ${active ? "border-emerald-600 text-emerald-700" : "border-transparent text-slate-500"}`}>{children}</button>; }
+function DepositTable({ rows, format, busy, onSettle }: { rows: FixedDeposit[]; format: (value: number) => string; busy: string | null; onSettle: (d: FixedDeposit, a: "mature" | "renew" | "break") => void }) { return <div className="overflow-x-auto"><table className="w-full min-w-[940px] text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Member</th><th>Principal</th><th>Rate / term</th><th>Maturity</th><th>Projected interest</th><th>Status</th><th className="px-4 text-right">Actions</th></tr></thead><tbody className="divide-y">{rows.map(d => <tr key={d.id}><td className="px-4 py-3 font-semibold">{d.memberName}<span className="block font-mono text-xs text-slate-400">{d.id.slice(0, 8)}</span></td><td>{format(d.amount)}</td><td>{d.interestRate}% · {d.term} months</td><td>{d.maturityDate}<span className="block text-xs text-slate-500">{d.status === "active" && `${Math.max(0, daysTo(d.maturityDate))}d remaining`}</span></td><td>{format(d.interestEarned)}</td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold capitalize">{d.status}</span></td><td className="px-4 text-right">{d.status === "active" && <><button disabled={busy === d.id || daysTo(d.maturityDate) > 0} onClick={() => onSettle(d, "mature")} className="mr-2 rounded-lg border px-2 py-1 text-xs font-bold disabled:opacity-40">Mature</button><button disabled={busy === d.id || daysTo(d.maturityDate) > 0} onClick={() => onSettle(d, "renew")} className="mr-2 rounded-lg border px-2 py-1 text-xs font-bold text-emerald-700 disabled:opacity-40"><RefreshCw size={12} className="inline"/> Renew</button><button disabled={busy === d.id} onClick={() => onSettle(d, "break")} className="rounded-lg border px-2 py-1 text-xs font-bold text-rose-700 disabled:opacity-40">Early break</button></>}</td></tr>)}{!rows.length && <tr><td colSpan={7} className="p-10 text-center text-slate-500">No deposits found.</td></tr>}</tbody></table></div>; }
+function Applications({ requests, format, canReview, busy, review }: { requests: Request[]; format: (v: number) => string; canReview: boolean; busy: string | null; review: (r: Request, approve: boolean) => void }) { return <section className="overflow-hidden rounded-2xl border bg-white shadow-sm"><div className="border-b p-4"><h2 className="font-bold">Member applications</h2><p className="mt-1 text-sm text-slate-500">Savings are debited only after an authorized approval.</p></div><div className="overflow-x-auto"><table className="w-full min-w-[760px] text-sm"><thead className="bg-slate-50 text-left text-xs uppercase text-slate-500"><tr><th className="px-4 py-3">Member</th><th>Product</th><th>Funding account</th><th>Amount</th><th>Requested</th><th>Status</th><th className="px-4 text-right">Review</th></tr></thead><tbody className="divide-y">{requests.map(r => <tr key={r.id}><td className="px-4 py-3 font-semibold">{r.sacco_members?.name ?? "Member"}<span className="block text-xs text-slate-500">{r.sacco_members?.account_number}</span></td><td>{r.sacco_fixed_deposit_products?.name ?? "Product"}<span className="block text-xs text-slate-500">{r.sacco_fixed_deposit_products?.annual_rate}% · {r.sacco_fixed_deposit_products?.term_months}m</span></td><td className="font-mono text-xs">{r.source_savings_account_id.slice(0, 8)}</td><td>{format(Number(r.amount))}</td><td>{new Date(r.requested_at).toLocaleDateString()}</td><td><span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-bold capitalize">{r.status}</span></td><td className="px-4 text-right">{r.status === "pending" && canReview && <><button disabled={busy === r.id} onClick={() => review(r, true)} className="mr-2 rounded-lg bg-emerald-600 px-2 py-1 text-xs font-bold text-white disabled:opacity-40"><Check size={12} className="inline"/> Approve</button><button disabled={busy === r.id} onClick={() => review(r, false)} className="rounded-lg border px-2 py-1 text-xs font-bold text-rose-700 disabled:opacity-40">Reject</button></>}</td></tr>)}{!requests.length && <tr><td colSpan={7} className="p-10 text-center text-slate-500">No applications found.</td></tr>}</tbody></table></div></section>; }
+function Products({ products, format, canManage, openCreate }: { products: Product[]; format: (v: number) => string; canManage: boolean; openCreate: () => void }) { return <section className="rounded-2xl border bg-white shadow-sm"><div className="flex items-center justify-between border-b p-4"><div><h2 className="font-bold">Fixed-deposit products</h2><p className="mt-1 text-sm text-slate-500">Rates, minimums, tax and early-break handling are held here.</p></div>{canManage && <button onClick={openCreate} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-3 py-2 text-sm font-bold text-white"><Settings2 size={15}/> Add product</button>}</div><div className="grid gap-3 p-4 md:grid-cols-2 xl:grid-cols-3">{products.map(p => <article key={p.id} className="rounded-xl border p-4"><div className="flex justify-between gap-3"><h3 className="font-bold">{p.name}</h3><span className={`rounded-full px-2 py-1 text-xs font-bold ${p.is_active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"}`}>{p.is_active ? "Active" : "Inactive"}</span></div><p className="mt-2 text-2xl font-bold text-emerald-700">{p.annual_rate}% <span className="text-sm font-medium text-slate-500">p.a.</span></p><dl className="mt-3 grid grid-cols-2 gap-y-2 text-sm"><dt className="text-slate-500">Term</dt><dd className="text-right font-semibold">{p.term_months} months</dd><dt className="text-slate-500">Minimum</dt><dd className="text-right font-semibold">{format(p.minimum_amount)}</dd><dt className="text-slate-500">Tax</dt><dd className="text-right font-semibold">{p.withholding_tax_rate}%</dd><dt className="text-slate-500">Early-break penalty</dt><dd className="text-right font-semibold">{p.early_withdrawal_penalty_rate}%</dd></dl></article>)}{!products.length && <div className="col-span-full rounded-xl border border-dashed p-8 text-center text-slate-500">No active products yet. Add the SACCO's terms before accepting applications.</div>}</div></section>; }
+function OpenDepositModal({ members, products, accounts, close, complete }: { members: { id: string; name: string; status: string }[]; products: Product[]; accounts: SavingsAccount[]; close: () => void; complete: (draft: { memberId: string; productId: string; accountId: string; amount: number; autoRenew: boolean }) => Promise<void> }) { const [memberId, setMemberId] = useState(""); const [productId, setProductId] = useState(products[0]?.id ?? ""); const [accountId, setAccountId] = useState(""); const [amount, setAmount] = useState(""); const [autoRenew, setAutoRenew] = useState(true); const product = products.find(p => p.id === productId); const account = accounts.find(a => a.id === accountId); const principal = Number(amount) || 0; const interest = product ? principal * product.annual_rate / 100 * product.term_months / 12 : 0; const tax = product ? interest * product.withholding_tax_rate / 100 : 0; const suitableAccounts = accounts.filter(a => a.sacco_member_id === memberId && !["SHA", "SHARES", "EQUITY"].includes(a.savings_product_code.toUpperCase())); return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4"><form onSubmit={e => { e.preventDefault(); if (!product || !account || principal < product.minimum_amount) return toast.error("Choose product, account and a valid amount."); void complete({ memberId, productId, accountId, amount: principal, autoRenew }); }} className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl"><div className="flex items-center justify-between border-b p-5"><div><h2 className="font-bold">Open from savings</h2><p className="text-sm text-slate-500">Funds move only after the review below is confirmed.</p></div><button type="button" onClick={close} className="rounded-lg p-2 hover:bg-slate-100"><X size={19}/></button></div><div className="space-y-3 p-5"><select required value={memberId} onChange={e => { setMemberId(e.target.value); setAccountId(""); }} className="w-full rounded-lg border p-2.5"><option value="">Select member</option>{members.filter(m => m.status === "active").map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select><select required value={accountId} disabled={!memberId} onChange={e => setAccountId(e.target.value)} className="w-full rounded-lg border p-2.5 disabled:bg-slate-50"><option value="">Select ordinary savings account</option>{suitableAccounts.map(a => <option key={a.id} value={a.id}>{a.account_number} · {money.format(a.balance)}</option>)}</select><select required value={productId} onChange={e => setProductId(e.target.value)} className="w-full rounded-lg border p-2.5"><option value="">Select product</option>{products.map(p => <option key={p.id} value={p.id}>{p.name} · {p.term_months} months · {p.annual_rate}%</option>)}</select><input required min={product?.minimum_amount ?? 1} type="number" placeholder={product ? `Principal (minimum ${money.format(product.minimum_amount)})` : "Principal (UGX)"} value={amount} onChange={e => setAmount(e.target.value)} className="w-full rounded-lg border p-2.5"/>{product && principal > 0 && <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4"><div className="flex items-center gap-2 text-sm font-bold text-emerald-950"><Info size={16}/> Maturity illustration</div><div className="mt-3 grid grid-cols-2 gap-y-2 text-sm"><span className="text-slate-600">Maturity date</span><strong>{futureDate(isoToday(), product.term_months)}</strong><span className="text-slate-600">Gross interest</span><strong>{money.format(interest)}</strong><span className="text-slate-600">Withholding tax ({product.withholding_tax_rate}%)</span><strong>{money.format(tax)}</strong><span className="text-slate-600">Net interest</span><strong className="text-emerald-800">{money.format(interest - tax)}</strong><span className="font-semibold">Expected maturity value</span><strong className="text-emerald-800">{money.format(principal + interest - tax)}</strong></div><p className="mt-3 text-xs text-slate-500">Early break is subject to product rules and a {product.early_withdrawal_penalty_rate}% penalty.</p></div>}<label className="flex gap-2 text-sm"><input type="checkbox" disabled={!product?.allow_auto_renew} checked={autoRenew} onChange={e => setAutoRenew(e.target.checked)}/> Auto-renew at maturity {product && !product.allow_auto_renew && <span className="text-slate-400">(not available for this product)</span>}</label></div><div className="border-t p-4"><button disabled={!products.length} className="w-full rounded-lg bg-emerald-600 py-2.5 font-bold text-white disabled:bg-slate-300">Fund and open deposit</button></div></form></div>; }
+function ProductModal({ close, complete }: { close: () => void; complete: () => Promise<void> }) {
+  const { user } = useAuth();
+  const [name, setName] = useState(""); const [term, setTerm] = useState("12"); const [rate, setRate] = useState("");
+  const [minimum, setMinimum] = useState("10000"); const [tax, setTax] = useState("0"); const [penalty, setPenalty] = useState("0"); const [saving, setSaving] = useState(false);
+  const submit = async (event: React.FormEvent) => { event.preventDefault(); if (!user?.organization_id) return toast.error("Organization context is unavailable."); setSaving(true); const { error } = await supabase.from("sacco_fixed_deposit_products").insert({ organization_id: user.organization_id, name, term_months: Number(term), annual_rate: Number(rate), minimum_amount: Number(minimum), withholding_tax_rate: Number(tax), early_withdrawal_penalty_rate: Number(penalty) }); setSaving(false); if (error) return toast.error(error.message); toast.success("Fixed-deposit product added."); await complete(); };
+  const field = (label: string, value: string, setValue: (v: string) => void, props: React.InputHTMLAttributes<HTMLInputElement>) => { const { className, ...inputProps } = props; return <label className={`block text-sm font-semibold text-slate-700 ${className ?? ""}`}><span className="mb-1 block">{label}</span><input {...inputProps} value={value} onChange={e => setValue(e.target.value)} className="w-full rounded-lg border border-slate-200 p-2.5 font-normal outline-none focus:border-emerald-500"/></label>; };
+  return <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/55 p-4"><form onSubmit={submit} className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-2xl"><div className="flex items-center justify-between"><div><h2 className="font-bold">Add fixed-deposit product</h2><p className="mt-1 text-sm text-slate-500">Set the approved terms members will see.</p></div><button type="button" onClick={close} className="rounded-lg p-2 hover:bg-slate-100"><X size={19}/></button></div><div className="mt-4 grid gap-3 sm:grid-cols-2">{field("Product name", name, setName, { required: true, placeholder: "e.g. Premium 12-month deposit", className: "sm:col-span-2" })}{field("Term (months)", term, setTerm, { required: true, min: "1", type: "number" })}{field("Annual interest rate (%)", rate, setRate, { required: true, min: "0", step: "0.01", type: "number", placeholder: "e.g. 12.5" })}{field("Minimum opening amount (UGX)", minimum, setMinimum, { required: true, min: "1", type: "number" })}{field("Withholding tax (%)", tax, setTax, { required: true, min: "0", max: "100", step: "0.01", type: "number", title: "Tax deducted from the interest at maturity", placeholder: "e.g. 15" })}{field("Early-break penalty (%)", penalty, setPenalty, { required: true, min: "0", max: "100", step: "0.01", type: "number", className: "sm:col-span-2" })}</div><div className="mt-3 rounded-lg bg-sky-50 p-3 text-xs text-sky-950"><strong>Withholding tax:</strong> this percentage is deducted from earned interest—not from the member’s principal—when the deposit settles.</div><button disabled={saving} className="mt-4 w-full rounded-lg bg-slate-900 py-2.5 font-bold text-white disabled:opacity-40">{saving ? "Saving…" : "Add product"}</button></form></div>;
+}
+export default SaccoFixedDeposit;
