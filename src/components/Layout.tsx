@@ -316,9 +316,9 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
 
   const toggleSection = (key: string) => setExpandedSections((s) => {
     const isOpening = !s[key];
-    // The Finance Workspace uses a single-accordion sidebar so an open workflow
-    // section never competes with the next one for vertical space.
-    if (schoolFinanceWorkspaceMode && isOpening) return { [key]: true };
+    // Finance Workspace and SACCO use a single accordion. This keeps the dense
+    // operational menu usable without exposing every page at once.
+    if ((schoolFinanceWorkspaceMode || businessType === 'sacco') && isOpening) return { [key]: true };
     return { ...s, [key]: isOpening };
   });
 

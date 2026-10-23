@@ -431,7 +431,10 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
       .eq("organization_id", organizationId)
       .order("sort_order", { ascending: true }),
     sb.from("sacco_fixed_deposits").select("*").eq("organization_id", organizationId).order("start_date", { ascending: false }),
-    sb.from("sacco_cashbook_entries").select("*").eq("organization_id", organizationId).order("entry_date", { ascending: true }),
+    // The shared workspace is used by every SACCO page. Keep it responsive by
+    // loading the recent operational window; statement/report pages issue their
+    // own date-filtered queries when a longer history is needed.
+    sb.from("sacco_cashbook_entries").select("*").eq("organization_id", organizationId).order("entry_date", { ascending: false }).limit(500),
     sb.from("sacco_fixed_assets").select("*").eq("organization_id", organizationId).order("name"),
     sb.from("sacco_provisioning_settings").select("*").eq("organization_id", organizationId).maybeSingle(),
     sb.from("sacco_org_loan_policies").select("*").eq("organization_id", organizationId).maybeSingle(),
@@ -527,7 +530,7 @@ export async function fetchSaccoWorkspaceData(organizationId: string): Promise<{
   const loans = (loanRes.data ?? []).map((r: DbLoan) => mapLoanFromRow(r));
   const loanProducts = (prodRes.data ?? []).map((r: DbProduct) => mapProductFromRow(r));
   const fixedDeposits = (fdRes.data ?? []).map(mapFdFromRow);
-  const cashbook = (cbRes.data ?? []).map(mapCbFromRow);
+  const cashbook = (cbRes.data ?? []).map(mapCbFromRow).reverse();
   const fixedAssets = (faRes.data ?? []).map(mapFaFromRow);
 
   let provisioning: ProvisioningConfig | null = null;

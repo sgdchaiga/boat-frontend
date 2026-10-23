@@ -1,5 +1,5 @@
-import { useMemo } from "react";
-import { ArrowRight, BookMarked, Scale } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRight, BookMarked, CloudDownload, Link2, RefreshCw, Scale } from "lucide-react";
 import { SaccoReportToolbar } from "@/components/common/SaccoReportToolbar";
 import { downloadCashbookPdf } from "@/lib/saccoReportPdf";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -7,6 +7,7 @@ import { useAppContext } from "@/contexts/AppContext";
 import { SACCOPRO_PAGE } from "@/lib/saccoproPages";
 import { useAuth } from "@/contexts/AuthContext";
 import { normalizeSaccoTransactionType, saccoMemberDisplay } from "@/lib/saccoCashbookDisplay";
+import { supabase } from "@/lib/supabase";
 
 export type CashbookSacView = "journal" | "reconciliation";
 
@@ -19,6 +20,57 @@ export function SaccoCashbookPage({
 }) {
   const { user } = useAuth();
   const { cashbook, members, formatCurrency, saccoLoading } = useAppContext();
+  const canSync = Boolean(user?.isSuperAdmin || ["admin", "manager", "accountant", "super_admin"].includes(String(user?.role ?? "").toLowerCase()));
+  const [sources, setSources] = useState<Array<any>>([]);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetName, setSheetName] = useState("Cashbook");
+  const [savingSource, setSavingSource] = useState(false);
+  const [syncingId, setSyncingId] = useState<string | null>(null);
+  const [syncMessage, setSyncMessage] = useState("");
+
+  const loadSources = async () => {
+    if (!user?.organization_id || !canSync) return;
+    const { data, error } = await supabase.from("sacco_cashbook_sync_sources").select("*").eq("organization_id", user.organization_id).order("created_at", { ascending: false });
+    if (!error) setSources(data ?? []);
+  };
+  useEffect(() => { void loadSources(); }, [user?.organization_id, canSync]);
+
+  const extractSpreadsheetId = (value: string) => {
+    const match = value.trim().match(/\/spreadsheets\/d\/([^/?#]+)/);
+    return match?.[1] ?? (value.trim().match(/^[a-zA-Z0-9_-]{20,}$/)?.[0] ?? "");
+  };
+  const saveSource = async () => {
+    const spreadsheetId = extractSpreadsheetId(sheetUrl);
+    if (!user?.organization_id || !spreadsheetId || !sheetName.trim()) { setSyncMessage("Paste a Google Sheets link (or spreadsheet ID) and the exact tab name."); return; }
+    setSavingSource(true); setSyncMessage("");
+    const { error } = await supabase.from("sacco_cashbook_sync_sources").upsert({ organization_id: user.organization_id, name: "Google Sheets cashbook", spreadsheet_id: spreadsheetId, sheet_name: sheetName.trim(), header_row: 1, column_map: { date: "Date", description: "Description", reference: "Reference", category: "Category", debit: "Debit", credit: "Credit", balance: "Balance", member_name: "Member" }, auto_sync_enabled: true, sync_frequency_minutes: 15 }, { onConflict: "organization_id,spreadsheet_id,sheet_name" });
+    setSavingSource(false);
+    if (error) { setSyncMessage(error.message); return; }
+    setSheetUrl(""); setSyncMessage("Source saved. Select Sync now to bring across new rows."); await loadSources();
+  };
+  const syncSource = async (sourceId: string) => {
+    setSyncingId(sourceId); setSyncMessage("");
+    const { data, error } = await supabase.functions.invoke("sacco-google-sheets-sync", { body: { source_id: sourceId } });
+    setSyncMessage(error?.message ?? data?.error ?? data?.message ?? "Sync finished."); await loadSources(); setSyncingId(null);
+  };
+  // During the parallel-run period, keep the visible cashbook fresh without a clerk
+  // having to press a button. The server function remains idempotent, so a manual
+  // Sync now and this timer can safely overlap.
+  useEffect(() => {
+    if (!canSync || sources.length === 0) return;
+    const runDueSources = () => {
+      const now = Date.now();
+      sources.forEach((source) => {
+        if (!source.auto_sync_enabled || syncingId === source.id) return;
+        const frequency = Math.max(5, Number(source.sync_frequency_minutes || 15)) * 60_000;
+        const lastSync = source.last_synced_at ? Date.parse(source.last_synced_at) : 0;
+        if (!lastSync || now - lastSync >= frequency) void syncSource(source.id);
+      });
+    };
+    runDueSources();
+    const timer = window.setInterval(runDueSources, 60_000);
+    return () => window.clearInterval(timer);
+  }, [canSync, sources, syncingId]);
 
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
 
@@ -88,6 +140,25 @@ export function SaccoCashbookPage({
 
       {cashbookView === "journal" && (
         <>
+          {canSync && (
+            <section className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
+              <div className="flex flex-wrap items-start gap-3">
+                <div className="rounded-lg bg-violet-100 p-2 text-violet-700"><CloudDownload size={18} /></div>
+                <div className="flex-1 min-w-[240px]">
+                  <h2 className="font-semibold text-slate-900">Google Sheets cashbook sync</h2>
+                  <p className="mt-0.5 text-sm text-slate-600">Keep posting in the old cashbook while BOAT imports new lines. Imported rows are never duplicated; later sheet edits are flagged for review instead of silently changing a financial record.</p>
+                </div>
+              </div>
+              <div className="mt-3 grid gap-2 md:grid-cols-[1fr_180px_auto]">
+                <input value={sheetUrl} onChange={(e) => setSheetUrl(e.target.value)} placeholder="Paste Google Sheets link or spreadsheet ID" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" />
+                <input value={sheetName} onChange={(e) => setSheetName(e.target.value)} placeholder="Exact tab name" className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" />
+                <button type="button" onClick={() => void saveSource()} disabled={savingSource} className="app-btn-secondary whitespace-nowrap"><Link2 className="h-4 w-4" />{savingSource ? "Saving…" : "Connect sheet"}</button>
+              </div>
+              <p className="mt-2 text-xs text-slate-500">Expected headers: Date, Description, Reference, Category, Debit, Credit, Balance and Member. While this cashbook is open, connected sources refresh every 15 minutes; the sheet must be shared with BOAT’s Google integration account.</p>
+              {sources.length > 0 && <div className="mt-3 space-y-2">{sources.map((source) => <div key={source.id} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"><div className="min-w-[200px] flex-1"><b>{source.name}</b><span className="ml-2 text-slate-500">{source.sheet_name}</span><span className="block text-xs text-slate-500">{source.last_sync_message || "Not synced yet"}</span></div><span className={`text-xs font-medium ${source.last_sync_status === "success" ? "text-emerald-700" : source.last_sync_status === "failed" ? "text-rose-700" : "text-amber-700"}`}>{source.last_sync_status || "Pending"}</span><button type="button" onClick={() => void syncSource(source.id)} disabled={syncingId === source.id} className="app-btn-primary whitespace-nowrap"><RefreshCw className={`h-4 w-4 ${syncingId === source.id ? "animate-spin" : ""}`} />{syncingId === source.id ? "Syncing…" : "Sync now"}</button></div>)}</div>}
+              {syncMessage && <p className="mt-2 text-sm text-slate-700" role="status">{syncMessage}</p>}
+            </section>
+          )}
           {saccoLoading && <p className="text-sm text-slate-500 animate-pulse">Loading lines…</p>}
           <div className="rounded-xl border border-slate-100 bg-white shadow-sm overflow-hidden">
             <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100 bg-slate-50">
