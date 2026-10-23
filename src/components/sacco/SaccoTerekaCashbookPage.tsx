@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowDown, ArrowUp, ArrowUpDown, Ban, BookOpen, CheckCircle2, Download, Palette, Pencil, Plus, Printer, RefreshCw, SlidersHorizontal, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, Ban, BookOpen, CheckCircle2, CloudDownload, Download, Link2, Palette, Pencil, Plus, Printer, RefreshCw, SlidersHorizontal, X } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useAppContext } from "@/contexts/AppContext";
 import { supabase } from "@/lib/supabase";
@@ -29,7 +29,7 @@ const blank = () => ({ transactionType: "Deposit", date: today(), narration: "",
 const DEFAULT_APPEARANCE: Appearance = { primary_color: "#6d28d9", accent_color: "#8b5cf6", button_radius: 10, show_page_description: true, page_description: "Transaction entry, cashbook register and daily cash summary." };
 
 export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; navigate: (page: string, state?: Record<string, unknown>) => void }) {
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const { members, loans, cashbook, refreshSaccoWorkspace } = useAppContext();
   const { mode, setMode } = useGeneralBusinessMode(user?.id, user?.organization_id);
   const orgId = user?.organization_id;
@@ -45,7 +45,8 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
   const [savingAppearance, setSavingAppearance] = useState(false);
   const [appearanceMessage, setAppearanceMessage] = useState("");
   const roleKey = String(user?.role || "").trim().toLowerCase();
-  const canCustomizeAppearance = Boolean(user?.isSuperAdmin || ["admin", "super_admin"].includes(roleKey));
+  const canCustomizeAppearance = Boolean(isSuperAdmin || user?.isSuperAdmin || ["admin", "super_admin"].includes(roleKey));
+  const canSyncGoogleCashbook = Boolean(isSuperAdmin || user?.isSuperAdmin || ["admin", "manager", "accountant", "super_admin"].includes(roleKey));
   const canControlTransactions = canEditSaccoTransactions(user?.role, { isSuperAdmin: user?.isSuperAdmin });
   const themedButton = { backgroundColor: appearance.primary_color, borderRadius: appearance.button_radius };
 
@@ -124,6 +125,7 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
     </header>
     {appearanceOpen && canCustomizeAppearance && <AppearancePanel appearance={appearance} setAppearance={setAppearance} saving={savingAppearance} message={appearanceMessage} onClose={() => setAppearanceOpen(false)} onSave={() => void saveAppearance()} />}
     <nav className="flex flex-wrap gap-2 rounded-xl border bg-white p-2">{([['entry','Cashbook Entry'],['register','Cashbook Register'],['daily','Daily Summary']] as const).map(([id,label]) => <button key={id} onClick={() => navigate(routes[id])} className={view === id ? "app-btn-primary" : "app-btn-secondary"} style={view === id ? themedButton : { borderRadius: appearance.button_radius }}>{label}</button>)}</nav>
+    {canSyncGoogleCashbook && <GoogleSheetsCashbookSync organizationId={orgId} />}
     {message && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">{message}</div>}
 
     {view === "entry" && <section className="rounded-2xl border bg-white p-5 shadow-sm"><div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
@@ -145,6 +147,35 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
 
     {view === "daily" && <section className="rounded-2xl border bg-white p-5 shadow-sm"><div className="flex flex-wrap items-center justify-between gap-3"><label className="text-sm font-semibold">Summary date<input type="date" value={summaryDate} onChange={(e) => setSummaryDate(e.target.value)} className="ml-3 rounded-lg border px-3 py-2" /></label><button onClick={() => window.print()} className="app-btn-secondary"><Printer className="h-4 w-4" />Print summary</button></div><div className="mt-4 overflow-x-auto rounded-xl border"><table className="w-full min-w-[1050px] text-sm"><thead className="bg-slate-900 text-xs uppercase text-white"><tr><th className="px-3 py-3 text-left">Details</th><th>Date</th><th className="text-right">Airtel Money</th><th className="text-right">MTN MoMo</th><th className="text-right">Bank</th><th className="text-right">Cash In</th><th className="text-right">Cash Out</th><th className="px-3 text-right">Balance</th></tr></thead><tbody><tr className="bg-slate-50 font-semibold"><td className="px-3 py-2">Balance b/f</td><td>{summaryDate}</td><td/><td/><td/><td/><td/><td className="px-3 text-right">{money.format(opening)}</td></tr>{dailyRows.map(r => { running += r.net_amount; return <tr key={r.id} className="border-t"><td className="px-3 py-2"><b>{r.narration}</b><span className="block text-xs text-slate-500">{r.client_name}</span></td><td>{r.transaction_date}</td><ChannelCell show={r.payment_channel === "airtel_money"} n={r.net_amount}/><ChannelCell show={r.payment_channel === "mtn_momo"} n={r.net_amount}/><ChannelCell show={r.payment_channel === "bank"} n={r.net_amount}/><MoneyCell n={r.payment_channel === "cash" ? r.deposit_amount : 0}/><MoneyCell n={r.payment_channel === "cash" ? r.withdraw_amount : 0}/><td className="px-3 py-2 text-right font-bold">{money.format(running)}</td></tr>})}</tbody></table></div><p className="mt-3 text-xs text-slate-500">Unified report: direct cashbook and teller-synced entries are included and grouped by their recorded payment channel ({cashbook.length} system journal lines).</p></section>}
   </div>;
+}
+
+function GoogleSheetsCashbookSync({ organizationId }: { organizationId?: string | null }) {
+  const [sources, setSources] = useState<any[]>([]);
+  const [sheetUrl, setSheetUrl] = useState("");
+  const [sheetName, setSheetName] = useState("Cashbook");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const load = useCallback(async () => {
+    if (!organizationId) return;
+    const { data, error } = await (supabase as any).from("sacco_cashbook_sync_sources").select("*").eq("organization_id", organizationId).order("created_at", { ascending: false });
+    if (!error) setSources(data || []);
+  }, [organizationId]);
+  useEffect(() => { void load(); }, [load]);
+  const spreadsheetId = (value: string) => value.trim().match(/\/spreadsheets\/d\/([^/?#]+)/)?.[1] || (value.trim().match(/^[a-zA-Z0-9_-]{20,}$/)?.[0] || "");
+  const connect = async () => {
+    const id = spreadsheetId(sheetUrl);
+    if (!organizationId || !id || !sheetName.trim()) { setMessage("Paste the Google Sheet link and its exact tab name."); return; }
+    setBusy(true); setMessage("");
+    const { error } = await (supabase as any).from("sacco_cashbook_sync_sources").upsert({ organization_id: organizationId, name: "Google Sheets cashbook", spreadsheet_id: id, sheet_name: sheetName.trim(), header_row: 1, column_map: { date: "Date", description: "Description", reference: "Reference", category: "Category", debit: "Debit", credit: "Credit", balance: "Balance", member_name: "Member" }, auto_sync_enabled: true, sync_frequency_minutes: 15 }, { onConflict: "organization_id,spreadsheet_id,sheet_name" });
+    setBusy(false); if (error) { setMessage(error.message); return; }
+    setSheetUrl(""); setMessage("Google Sheet connected. New rows will be checked every 15 minutes while Cashbook is open."); await load();
+  };
+  const sync = async (sourceId: string) => {
+    setBusy(true); setMessage("");
+    const { data, error } = await (supabase as any).functions.invoke("sacco-google-sheets-sync", { body: { source_id: sourceId } });
+    setBusy(false); setMessage(error?.message || data?.error || data?.message || "Sync complete."); await load();
+  };
+  return <section className="rounded-2xl border border-violet-200 bg-violet-50/60 p-4 shadow-sm"><div className="flex flex-wrap gap-3"><div className="rounded-lg bg-violet-100 p-2 text-violet-700"><CloudDownload className="h-5 w-5" /></div><div className="min-w-[220px] flex-1"><h2 className="font-bold text-slate-900">Google Sheets cashbook sync</h2><p className="mt-1 text-sm text-slate-600">Keep using the old cashbook while BOAT imports its new rows. Imports are duplicate-safe and later sheet edits are flagged for review.</p></div></div><div className="mt-3 grid gap-2 md:grid-cols-[1fr_180px_auto]"><input value={sheetUrl} onChange={e => setSheetUrl(e.target.value)} className="cashbook-input bg-white" placeholder="Paste Google Sheets link" /><input value={sheetName} onChange={e => setSheetName(e.target.value)} className="cashbook-input bg-white" placeholder="Exact tab name" /><button type="button" onClick={() => void connect()} disabled={busy} className="app-btn-secondary"><Link2 className="h-4 w-4" />Connect sheet</button></div><p className="mt-2 text-xs text-slate-500">Expected headers: Date, Description, Reference, Category, Debit, Credit, Balance and Member.</p>{sources.map(source => <div key={source.id} className="mt-3 flex flex-wrap items-center gap-3 rounded-xl border bg-white px-3 py-2 text-sm"><div className="flex-1"><b>{source.name}</b><span className="ml-2 text-slate-500">{source.sheet_name}</span><span className="block text-xs text-slate-500">{source.last_sync_message || "Not synced yet"}</span></div><button type="button" onClick={() => void sync(source.id)} disabled={busy} className="app-btn-primary"><RefreshCw className={`h-4 w-4 ${busy ? "animate-spin" : ""}`} />Sync now</button></div>)}{message && <p role="status" className="mt-2 text-sm text-slate-700">{message}</p>}</section>;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) { return <label className="block text-sm font-semibold text-slate-700">{label}<div className="mt-1">{children}</div></label>; }
