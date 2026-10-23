@@ -18,9 +18,9 @@ export function SaccoCashbookPage({
   cashbookView?: CashbookSacView;
   navigate?: (page: string, state?: Record<string, unknown>) => void;
 }) {
-  const { user } = useAuth();
+  const { user, isSuperAdmin } = useAuth();
   const { cashbook, members, formatCurrency, saccoLoading } = useAppContext();
-  const canSync = Boolean(user?.isSuperAdmin || ["admin", "manager", "accountant", "super_admin"].includes(String(user?.role ?? "").toLowerCase()));
+  const canSync = Boolean(isSuperAdmin || user?.isSuperAdmin || ["admin", "manager", "accountant", "super_admin"].includes(String(user?.role ?? "").toLowerCase()));
   const [sources, setSources] = useState<Array<any>>([]);
   const [sheetUrl, setSheetUrl] = useState("");
   const [sheetName, setSheetName] = useState("Cashbook");
