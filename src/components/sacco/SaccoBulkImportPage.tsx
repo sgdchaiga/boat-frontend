@@ -32,6 +32,7 @@ import {
   planMemberLoansPortfolioImport,
 } from "@/lib/saccoMemberLoansBulkImport";
 import { applyHistoricalCashbookPlans, loadHistoricalImportContext, planHistoricalCashbookRows } from "@/lib/saccoHistoricalCashbookImport";
+import { supabase } from "@/lib/supabase";
 
 const IMPORT_OPTIONS: Array<{ id: SaccoBulkImportKind; label: string; description: string }> = [
   {
@@ -104,6 +105,8 @@ export function SaccoBulkImportPage({
   const [portfolioAsOfDate, setPortfolioAsOfDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [savingsBalanceAsAt, setSavingsBalanceAsAt] = useState(() => new Date().toISOString().slice(0, 10));
   const [cashbookDefaultEffectiveDate, setCashbookDefaultEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [openingJournalDate, setOpeningJournalDate] = useState("2025-12-31");
+  const [postingOpeningJournal, setPostingOpeningJournal] = useState(false);
   const [disbursementFrom, setDisbursementFrom] = useState("");
   const [disbursementTo, setDisbursementTo] = useState("");
 
@@ -126,6 +129,20 @@ export function SaccoBulkImportPage({
     setResultMessage(null);
     setError(null);
     setImportProgress(null);
+  };
+
+  const postSavingsOpeningJournal = async () => {
+    if (!canOperate || postingOpeningJournal) return;
+    if (!parseIsoDateOnly(openingJournalDate)) { setError("Set a valid opening-balance as-at date."); return; }
+    if (!confirm(`Post the member savings opening journal as at ${openingJournalDate}?\n\nDebit 8040 Opening Balance Clearing Account. Credit products 11–14 to 21011, 21012, 21013 and 21014. This is a posted accounting entry.`)) return;
+    setPostingOpeningJournal(true); setError(null); setResultMessage(null);
+    try {
+      const { data, error: rpcError } = await supabase.rpc("post_sacco_savings_opening_balances", { p_as_at_date: openingJournalDate });
+      if (rpcError) throw new Error(rpcError.message);
+      setResultMessage(`Opening savings journal posted for ${openingJournalDate}. Journal ${String(data).slice(0, 8)} is now included in the Balance Sheet.`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not post the opening savings journal.");
+    } finally { setPostingOpeningJournal(false); }
   };
 
   const runPreview = useCallback(async () => {
@@ -493,6 +510,11 @@ export function SaccoBulkImportPage({
               disabled={!canOperate}
               className="max-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
             />
+            <div className="mt-4 border-t border-emerald-100 pt-3">
+              <p className="text-sm font-semibold text-slate-800">Post imported opening balances to the Balance Sheet</p>
+              <p className="mt-1 text-xs text-slate-600">Posts one balanced journal: debit <strong>8040 Opening Balance Clearing</strong>; credit product 11, 12, 13 and 14 balances to <strong>21011, 21012, 21013 and 21014</strong>.</p>
+              <div className="mt-2 flex flex-wrap items-end gap-2"><label className="text-xs font-medium text-slate-700">As-at date<input type="date" value={openingJournalDate} onChange={(e) => setOpeningJournalDate(e.target.value)} disabled={!canOperate || postingOpeningJournal} className="mt-1 block rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm" /></label><button type="button" onClick={() => void postSavingsOpeningJournal()} disabled={!canOperate || postingOpeningJournal} className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-semibold text-white disabled:opacity-50">{postingOpeningJournal ? "Posting…" : "Post opening journal"}</button></div>
+            </div>
           </div>
         )}
 
