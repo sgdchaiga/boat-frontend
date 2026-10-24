@@ -69,11 +69,14 @@ type SaccoBulkImportPageProps = {
   readOnly?: boolean;
   /** When set, hides import-type tiles and fixes the flow (Loans hub shortcuts). */
   lockedKind?: SaccoBulkImportKind;
+  /** Uses Cashbook language and keeps the operator in the Cashbook workflow. */
+  cashbookMode?: boolean;
 };
 
 export function SaccoBulkImportPage({
   readOnly: subscriptionReadOnly = false,
   lockedKind,
+  cashbookMode = false,
 }: SaccoBulkImportPageProps) {
   const { user, isSuperAdmin } = useAuth();
   const { refreshSaccoWorkspace, loanProducts } = useAppContext();
@@ -95,8 +98,12 @@ export function SaccoBulkImportPage({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<SaccoBulkImportPreviewRow[] | null>(null);
+  const [previewFilter, setPreviewFilter] = useState<"errors" | "ok" | "all">("all");
   const [resultMessage, setResultMessage] = useState<string | null>(null);
+  const [importProgress, setImportProgress] = useState<{ completed: number; total: number; imported: number; failed: number } | null>(null);
   const [portfolioAsOfDate, setPortfolioAsOfDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [savingsBalanceAsAt, setSavingsBalanceAsAt] = useState(() => new Date().toISOString().slice(0, 10));
+  const [cashbookDefaultEffectiveDate, setCashbookDefaultEffectiveDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [disbursementFrom, setDisbursementFrom] = useState("");
   const [disbursementTo, setDisbursementTo] = useState("");
 
@@ -115,8 +122,10 @@ export function SaccoBulkImportPage({
 
   const resetPreview = () => {
     setPreview(null);
+    setPreviewFilter("all");
     setResultMessage(null);
     setError(null);
+    setImportProgress(null);
   };
 
   const runPreview = useCallback(async () => {
@@ -135,10 +144,16 @@ export function SaccoBulkImportPage({
       let plannedPreview: SaccoBulkImportPreviewRow[];
 
       if (kind === "historical_cashbook") {
+        if (!parseIsoDateOnly(cashbookDefaultEffectiveDate)) {
+          setError("Set a valid default effective date (YYYY-MM-DD).");
+          setPreview(null);
+          return;
+        }
         const ctx = await loadHistoricalImportContext(orgId);
-        plannedPreview = planHistoricalCashbookRows(ctx, rows);
+        plannedPreview = planHistoricalCashbookRows(ctx, rows, cashbookDefaultEffectiveDate);
         setPreview(plannedPreview);
         const bad = plannedPreview.filter((r) => r.status === "error").length;
+        setPreviewFilter(bad ? "errors" : "ok");
         const ok = plannedPreview.filter((r) => r.status === "ok").length;
         const skip = plannedPreview.filter((r) => r.status === "skip").length;
         if (bad) setError(`${bad} row(s) need attention. Nothing can be posted until errors are fixed.`);
@@ -147,6 +162,7 @@ export function SaccoBulkImportPage({
       } else if (kind === "loan_products") {
         const { merged, preview: pv } = planLoanProductImports(loanProducts, rows);
         plannedPreview = pv;
+        setPreviewFilter(pv.some((r) => r.status === "error") ? "errors" : "ok");
         const bad = pv.filter((r) => r.status === "error").length;
         const ok = pv.filter((r) => r.status === "ok").length;
         const skip = pv.filter((r) => r.status === "skip").length;
@@ -188,6 +204,7 @@ export function SaccoBulkImportPage({
         plannedPreview = pv;
         setPreview(plannedPreview);
         const bad = pv.filter((r) => r.status === "error").length;
+        setPreviewFilter(bad ? "errors" : "ok");
         const ok = pv.filter((r) => r.status === "ok").length;
         if (bad > 0) {
           setError(`${bad} row(s) have errors. Fix the file before import.`);
@@ -200,13 +217,19 @@ export function SaccoBulkImportPage({
           );
         }
       } else {
+        if (kind === "savings_balances" && !parseIsoDateOnly(savingsBalanceAsAt)) {
+          setError("Set a valid balance effective / as-at date (YYYY-MM-DD).");
+          setPreview(null);
+          return;
+        }
         const ctx = await loadSaccoBulkImportContext(orgId);
         const planned =
-          kind === "savings_balances" ? planSavingsBalanceImports(ctx, rows) : planMemberProfileImports(ctx, rows);
+          kind === "savings_balances" ? planSavingsBalanceImports(ctx, rows, savingsBalanceAsAt) : planMemberProfileImports(ctx, rows);
         plannedPreview = planned.preview;
         setPreview(plannedPreview);
         const ok = plannedPreview.filter((r) => r.status === "ok").length;
         const bad = plannedPreview.filter((r) => r.status === "error").length;
+        setPreviewFilter(bad ? "errors" : "ok");
         const skip = plannedPreview.filter((r) => r.status === "skip").length;
         if (bad > 0) {
           setError(`${bad} row(s) have errors. Fix the file or remove those rows before import.`);
@@ -223,7 +246,7 @@ export function SaccoBulkImportPage({
     } finally {
       setLoading(false);
     }
-  }, [orgId, file, kind, loanProducts, portfolioAsOfDate, disbursementFrom, disbursementTo]);
+  }, [orgId, file, kind, loanProducts, portfolioAsOfDate, savingsBalanceAsAt, cashbookDefaultEffectiveDate, disbursementFrom, disbursementTo]);
 
   const runImport = async () => {
     if (!orgId || !file || !canOperate || running) return;
@@ -234,7 +257,7 @@ export function SaccoBulkImportPage({
     }
 
     if (kind === "historical_cashbook") {
-      if (!confirm(`Post ${okCount} historical cashbook transaction(s)?\n\nThis changes member savings/share balances and loan balances. Duplicate source rows are blocked.`)) return;
+      if (!confirm(`Post ${okCount} historical cashbook transaction(s)?\n\nEach file Date is kept as the effective date. Blank Dates use ${cashbookDefaultEffectiveDate}. This changes member savings/share balances and loan balances. Duplicate source rows are blocked.`)) return;
     } else if (kind === "loan_products") {
       if (
         !confirm(
@@ -251,6 +274,8 @@ export function SaccoBulkImportPage({
       ) {
         return;
       }
+    } else if (kind === "savings_balances") {
+      if (!confirm(`Import ${okCount} savings balance row(s) as at ${savingsBalanceAsAt}?\n\nThis is a balance snapshot, not a cash transaction. Existing balances will be replaced.`)) return;
     } else {
       if (
         !confirm(
@@ -264,13 +289,14 @@ export function SaccoBulkImportPage({
     setRunning(true);
     setError(null);
     setResultMessage(null);
+    setImportProgress({ completed: 0, total: okCount, imported: 0, failed: 0 });
     try {
       const { rows } = await parseBulkImportFile(file);
 
       if (kind === "historical_cashbook") {
         const ctx = await loadHistoricalImportContext(orgId);
-        const plans = planHistoricalCashbookRows(ctx, rows);
-        const result = await applyHistoricalCashbookPlans(orgId, plans);
+        const plans = planHistoricalCashbookRows(ctx, rows, cashbookDefaultEffectiveDate);
+        const result = await applyHistoricalCashbookPlans(orgId, plans, setImportProgress);
         await refreshSaccoWorkspace();
         setResultMessage(`Done. Imported ${result.imported} historical transaction(s).`);
         if (result.errors.length) setError(result.errors.slice(0, 10).join("\n"));
@@ -281,6 +307,7 @@ export function SaccoBulkImportPage({
           return;
         }
         const result = await applyLoanProductsImport(orgId, merged);
+        setImportProgress({ completed: okCount, total: okCount, imported: result.updated, failed: result.errors });
         await refreshSaccoWorkspace();
         setResultMessage(
           `Done. Saved ${result.updated} loan product(s) in catalog.` + (result.errors ? ` ${result.errors} failed.` : "")
@@ -296,6 +323,7 @@ export function SaccoBulkImportPage({
         const { plans } = planMemberLoansPortfolioImport(ctx, existingLoans, loanProducts, selectedRows, portfolioAsOfDate);
         const okPlans = plans.filter((p) => preview?.some((r) => r.line === p.line && r.status === "ok"));
         const result = await applyMemberLoansPortfolioPlans(okPlans);
+        setImportProgress({ completed: okCount, total: okCount, imported: result.updated, failed: result.errors });
         await refreshSaccoWorkspace();
         setResultMessage(
           `Done. Applied ${result.updated} loan row(s).` + (result.errors ? ` ${result.errors} failed.` : "")
@@ -303,12 +331,12 @@ export function SaccoBulkImportPage({
         if (result.messages.length) setError(result.messages.slice(0, 5).join("\n"));
       } else if (kind === "savings_balances") {
         const ctx = await loadSaccoBulkImportContext(orgId);
-        const { plans } = planSavingsBalanceImports(ctx, rows);
+        const { plans } = planSavingsBalanceImports(ctx, rows, savingsBalanceAsAt);
         const okPlans = plans.filter((p) => preview?.some((r) => r.line === p.line && r.status === "ok"));
-        const result = await applySavingsBalancePlans(okPlans);
+        const result = await applySavingsBalancePlans(orgId, okPlans, setImportProgress);
         await refreshSaccoWorkspace();
         setResultMessage(
-          `Done. Updated ${result.updated} account(s).` + (result.errors ? ` ${result.errors} failed.` : "")
+          `Done. Updated ${result.updated} account(s) as at ${savingsBalanceAsAt}.` + (result.errors ? ` ${result.errors} failed.` : "")
         );
         if (result.messages.length) setError(result.messages.slice(0, 5).join("\n"));
       } else {
@@ -316,6 +344,7 @@ export function SaccoBulkImportPage({
         const { plans } = planMemberProfileImports(ctx, rows);
         const okPlans = plans.filter((p) => preview?.some((r) => r.line === p.line && r.status === "ok"));
         const result = await applyMemberProfilePlans(okPlans);
+        setImportProgress({ completed: okCount, total: okCount, imported: result.updated, failed: result.errors });
         await refreshSaccoWorkspace();
         setResultMessage(
           `Done. Updated ${result.updated} member(s).` + (result.errors ? ` ${result.errors} failed.` : "")
@@ -340,6 +369,10 @@ export function SaccoBulkImportPage({
 
   const previewOk = preview?.filter((r) => r.status === "ok").length ?? 0;
   const previewErr = preview?.filter((r) => r.status === "error").length ?? 0;
+  // All rows are validated. Keep successful-row DOM bounded, while always
+  // rendering the complete error worklist so operators can fix it quickly.
+  const filteredPreviewRows = preview?.filter((row) => previewFilter === "all" || (previewFilter === "errors" ? row.status === "error" : row.status === "ok")) ?? [];
+  const previewRowsToRender = previewFilter === "errors" ? filteredPreviewRows : filteredPreviewRows.slice(0, 500);
 
   return (
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-6">
@@ -350,7 +383,7 @@ export function SaccoBulkImportPage({
             : lockedKind === "loan_products"
             ? "Loan product bulk import"
             : lockedKind === "member_loans"
-              ? "Member loan portfolio import"
+              ? cashbookMode ? "Loan input & approval" : "Member loan portfolio import"
               : "Bulk import"}
         </h1>
         <PageNotes
@@ -375,7 +408,7 @@ export function SaccoBulkImportPage({
             </p>
           ) : lockedKind === "member_loans" ? (
             <p className="text-sm text-slate-700">
-              <strong>Create:</strong> member_number (or legacy <code className="text-xs">Client Name.</code> ending with the member number), loan_type or loan_code, and principal. The approval register's <code className="text-xs">Date</code>, <code className="text-xs">Period</code>, loan fees and Net Amount are recognized and checked.{" "}
+              <strong>Create:</strong> member_number (or legacy <code className="text-xs">Client Name.</code> ending with the member number), loan_type or loan_code, and principal. The approval register's <code className="text-xs">Date</code>, <code className="text-xs">Period</code>, loan fees and Net Amount are recognized and checked. Set the date range to January before previewing the January upload.{" "}
               <strong>Update later:</strong> same <code className="text-xs">loan_number</code> with only balance (and optional balance_as_at).{" "}
               Match order: loan_number → loan_id → member + loan_type. Empty columns are left unchanged on update. Admin only.
             </p>
@@ -449,6 +482,34 @@ export function SaccoBulkImportPage({
           </div>
         )}
 
+        {kind === "savings_balances" && (
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
+            <label className="block text-sm font-medium text-slate-800 mb-1">Balance effective / as-at date</label>
+            <p className="text-xs text-slate-600 mb-2">Required. This records the cut-off date for every balance in this upload. It is a snapshot date, not a cash transaction date.</p>
+            <input
+              type="date"
+              value={savingsBalanceAsAt}
+              onChange={(e) => { setSavingsBalanceAsAt(e.target.value); resetPreview(); }}
+              disabled={!canOperate}
+              className="max-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            />
+          </div>
+        )}
+
+        {kind === "historical_cashbook" && (
+          <div className="rounded-lg border border-emerald-100 bg-emerald-50/50 p-3">
+            <label className="block text-sm font-medium text-slate-800 mb-1">Default effective date for blank file dates</label>
+            <p className="text-xs text-slate-600 mb-2">Each row's Date remains its effective date. This date is used only when a row has no Date, so older cashbook history is not accidentally moved to one day.</p>
+            <input
+              type="date"
+              value={cashbookDefaultEffectiveDate}
+              onChange={(e) => { setCashbookDefaultEffectiveDate(e.target.value); resetPreview(); }}
+              disabled={!canOperate}
+              className="max-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+            />
+          </div>
+        )}
+
         <p className="text-xs text-slate-500">{selected.description}</p>
 
         <div className="flex flex-wrap gap-2">
@@ -475,6 +536,19 @@ export function SaccoBulkImportPage({
             Download template
           </button>
         </div>
+
+        {importProgress ? (
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3" role="status" aria-live="polite">
+            <div className="flex flex-wrap items-center justify-between gap-2 text-sm font-medium text-emerald-950">
+              <span>{running ? "Importing…" : "Import complete"} {importProgress.completed.toLocaleString()} of {importProgress.total.toLocaleString()} rows</span>
+              <span>{Math.round((importProgress.completed / Math.max(importProgress.total, 1)) * 100)}%</span>
+            </div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-emerald-100">
+              <div className="h-full rounded-full bg-emerald-600 transition-[width] duration-300" style={{ width: `${Math.round((importProgress.completed / Math.max(importProgress.total, 1)) * 100)}%` }} />
+            </div>
+            <p className="mt-2 text-xs text-emerald-900">Posted: {importProgress.imported.toLocaleString()}{importProgress.failed ? ` · failed: ${importProgress.failed.toLocaleString()}` : ""}</p>
+          </div>
+        ) : null}
 
         <div>
           <label className="mb-1.5 block text-sm font-medium text-slate-700">File</label>
@@ -537,7 +611,26 @@ export function SaccoBulkImportPage({
           <div className="border-b border-slate-100 px-4 py-3 flex flex-wrap gap-3 text-sm">
             <span className="text-emerald-700 font-medium">{previewOk} OK</span>
             {previewErr > 0 ? <span className="text-red-700 font-medium">{previewErr} errors</span> : null}
-            <span className="text-slate-500">{preview.length} row(s) in file</span>
+            <span className="text-slate-500">All {preview.length.toLocaleString()} rows validated</span>
+          </div>
+          <div className="border-b border-slate-100 px-4 py-2.5 flex flex-wrap items-center gap-2 bg-slate-50/70">
+            <span className="mr-1 text-xs font-medium text-slate-600">Show</span>
+            {([
+              ["errors", `Errors (${previewErr})`],
+              ["ok", `Ready (${previewOk})`],
+              ["all", `All (${preview.length})`],
+            ] as const).map(([filter, label]) => (
+              <button
+                key={filter}
+                type="button"
+                onClick={() => setPreviewFilter(filter)}
+                className={`rounded-md px-2.5 py-1.5 text-xs font-semibold transition ${previewFilter === filter ? filter === "errors" ? "bg-red-600 text-white" : "bg-slate-800 text-white" : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-100"}`}
+              >
+                {label}
+              </button>
+            ))}
+            {previewFilter !== "errors" && filteredPreviewRows.length > previewRowsToRender.length ? <span className="ml-auto text-xs text-slate-500">Showing first 500; switch to Errors to see every issue.</span> : null}
+            {previewFilter === "errors" && previewErr === 0 ? <span className="text-xs text-emerald-700">No errors — ready to import.</span> : null}
           </div>
           <div className="max-h-96 overflow-y-auto">
             <table className="w-full text-sm">
@@ -549,7 +642,7 @@ export function SaccoBulkImportPage({
                 </tr>
               </thead>
               <tbody>
-                {preview.map((r) => (
+                {previewRowsToRender.map((r) => (
                   <tr key={r.line} className="border-t border-slate-100">
                     <td className="p-2 tabular-nums text-slate-500">{r.line}</td>
                     <td className="p-2">

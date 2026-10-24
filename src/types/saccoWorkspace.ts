@@ -99,6 +99,9 @@ export interface Loan {
 export interface Member {
   id: string;
   name: string;
+  /** Primary SACCO business identifier. Stored as text to preserve leading zeroes and non-numeric member codes. */
+  memberNumber: string;
+  /** @deprecated Compatibility alias for memberNumber. Savings accounts are held separately. */
   accountNumber: string;
   status: "active" | "inactive";
   savingsBalance: number;

@@ -1272,6 +1272,8 @@ function AppContent() {
         return <SaccoBulkImportPage readOnly={access.readOnly} />;
       case SACCOPRO_PAGE.cashbookBulkImport:
         return <SaccoBulkImportPage readOnly={access.readOnly} lockedKind="historical_cashbook" />;
+      case SACCOPRO_PAGE.cashbookLoanImport:
+        return <SaccoBulkImportPage readOnly={access.readOnly} lockedKind="member_loans" cashbookMode />;
       case SACCOPRO_PAGE.loanBulkImport:
         return <SaccoBulkImportPage readOnly={access.readOnly} lockedKind="loan_products" />;
       case SACCOPRO_PAGE.loanPortfolioImport:

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS public.sacco_processing_runs (
   UNIQUE(organization_id,processing_date,run_type)
 );
 ALTER TABLE public.sacco_processing_runs ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sacco_processing_runs_org ON public.sacco_processing_runs;
 CREATE POLICY sacco_processing_runs_org ON public.sacco_processing_runs FOR SELECT TO authenticated USING(organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
 GRANT SELECT ON public.sacco_processing_runs TO authenticated;
 
@@ -22,6 +23,7 @@ CREATE TABLE IF NOT EXISTS public.sacco_loan_daily_accruals (
   created_by uuid REFERENCES public.staff(id), created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(loan_id,accrual_date)
 );
 ALTER TABLE public.sacco_loan_daily_accruals ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sacco_loan_daily_accruals_org ON public.sacco_loan_daily_accruals;
 CREATE POLICY sacco_loan_daily_accruals_org ON public.sacco_loan_daily_accruals FOR SELECT TO authenticated USING(organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
 GRANT SELECT ON public.sacco_loan_daily_accruals TO authenticated;
 

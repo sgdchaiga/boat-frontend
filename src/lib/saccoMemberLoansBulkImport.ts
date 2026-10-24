@@ -746,7 +746,9 @@ export async function applyMemberLoansPortfolioPlans(plans: MemberLoanImportPlan
   let errors = 0;
   const messages: string[] = [];
 
-  await runInChunks(plans, 10, async (p) => {
+  // Independent inserts/updates can be sent concurrently. A bounded batch keeps
+  // an 8,000-row historical portfolio import responsive without overloading the API.
+  await runInChunks(plans, 50, async (p) => {
     try {
       if (p.mode === "insert") {
         await insertLoanRow(p.payload);

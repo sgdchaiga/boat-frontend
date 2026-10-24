@@ -63,21 +63,29 @@ export async function loadHistoricalImportContext(organizationId: string) {
   return { members: (m.data ?? []) as Member[], accounts: (a.data ?? []) as Account[], loans: (l.data ?? []) as Loan[], fingerprints: new Set((imported.data ?? []).map((x) => String(x.fingerprint))) };
 }
 
-export function planHistoricalCashbookRows(ctx: Awaited<ReturnType<typeof loadHistoricalImportContext>>, rows: Raw[]): HistoricalPlan[] {
+/**
+ * The legacy cashbook's Date remains the authoritative effective date. The
+ * optional default only fills a blank Date; it never overwrites a supplied one.
+ */
+export function planHistoricalCashbookRows(
+  ctx: Awaited<ReturnType<typeof loadHistoricalImportContext>>,
+  rows: Raw[],
+  defaultEffectiveDate?: string,
+): HistoricalPlan[] {
   const membersNo = new Map(ctx.members.map(m => [key(m.member_number), m]));
   const membersName = new Map(ctx.members.map(m => [key(m.full_name), m]));
   const accounts = new Map(ctx.accounts.map(a => [key(a.account_number), a]));
   const loans = new Map(ctx.loans.filter(l => l.loan_number).map(l => [key(l.loan_number), l]));
   return rows.map((row, i) => {
     const line = i + 2, sourceId = text(row.id), ref = text(row.voucher_no || row.reference || sourceId);
-    const date = parseHistoricalDate(row.date || row.transaction_date), submitted = parseHistoricalDate(row.date_submitted);
+    const date = parseHistoricalDate(row.date || row.transaction_date || defaultEffectiveDate), submitted = parseHistoricalDate(row.date_submitted);
     const kind = classify(row);
     const deposit = amount(row.deposit_amount), withdrawal = amount(row.withdraw_amount), net = amount(row.net_amount);
     const value = deposit || withdrawal || net;
     const fingerprint = `${sourceId || ref}|${date || ""}|${value.toFixed(2)}`.toLowerCase();
     if (ctx.fingerprints.has(fingerprint)) return { line, status: "skip", summary: `Already imported: ${ref}`, fingerprint };
     if (!sourceId && !ref) return { line, status: "error", summary: "Missing both ID and Voucher_No", fingerprint };
-    if (!date) return { line, status: "error", summary: `Invalid Date “${text(row.date)}” (expected dd/mm/yyyy)`, fingerprint };
+    if (!date) return { line, status: "error", summary: `Invalid Date “${text(row.date)}” (expected dd/mm/yyyy), or set a default effective date`, fingerprint };
     if (!kind) return { line, status: "error", summary: `Could not classify Trx Type “${text(row.trx_type)}”`, fingerprint };
     if (!value) return { line, status: "error", summary: "Deposit, withdrawal and net amounts are all zero/blank", fingerprint };
     // The legacy workbook literally uses punctuation in these headings. XLSX
@@ -99,11 +107,43 @@ export function planHistoricalCashbookRows(ctx: Awaited<ReturnType<typeof loadHi
   });
 }
 
-export async function applyHistoricalCashbookPlans(organizationId: string, plans: HistoricalPlan[]) {
-  let imported = 0; const errors: string[] = [];
-  for (const p of plans.filter(x => x.status === "ok" && x.payload)) {
-    const { error } = await supabase.rpc("import_sacco_historical_cashbook_row", { p_organization_id: organizationId, p_fingerprint: p.fingerprint, p_row: p.payload });
-    if (error) errors.push(`Line ${p.line}: ${error.message}`); else imported++;
+export type ImportProgress = { completed: number; total: number; imported: number; failed: number };
+
+/**
+ * Posts sequentially on the database server in batches. This preserves legacy
+ * cashbook running balances while avoiding one browser/network round trip per row.
+ */
+export async function applyHistoricalCashbookPlans(
+  organizationId: string,
+  plans: HistoricalPlan[],
+  onProgress?: (progress: ImportProgress) => void,
+) {
+  const ready = plans
+    .filter((x): x is HistoricalPlan & { payload: NonNullable<HistoricalPlan["payload"]> } => x.status === "ok" && Boolean(x.payload))
+    .sort((a, b) => a.payload.entry_date.localeCompare(b.payload.entry_date) || a.line - b.line);
+  let imported = 0;
+  const errors: string[] = [];
+  const batchSize = 250;
+
+  for (let start = 0; start < ready.length; start += batchSize) {
+    const batch = ready.slice(start, start + batchSize);
+    const { data, error } = await supabase.rpc("import_sacco_historical_cashbook_batch", {
+      p_organization_id: organizationId,
+      p_rows: batch.map((p) => ({ fingerprint: p.fingerprint, row: p.payload })),
+    });
+    if (error) {
+      // A missing migration must fail safely: do not fall back to a slow partial import.
+      throw new Error(error.message.includes("function")
+        ? "Apply the latest SACCO import migration before importing this file."
+        : error.message);
+    }
+    const results = Array.isArray(data) ? data as Array<{ row_index?: number; imported?: boolean; error?: string | null }> : [];
+    for (let index = 0; index < batch.length; index += 1) {
+      const result = results.find((item) => Number(item.row_index) === index) ?? results[index];
+      if (result?.imported) imported += 1;
+      else if (result?.error) errors.push(`Line ${batch[index].line}: ${result.error}`);
+    }
+    onProgress?.({ completed: Math.min(start + batch.length, ready.length), total: ready.length, imported, failed: errors.length });
   }
   return { imported, errors };
 }

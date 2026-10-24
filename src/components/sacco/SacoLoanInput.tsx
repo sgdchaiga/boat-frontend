@@ -68,7 +68,7 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
     if (!query || selectedMember) return [];
     return memberChoices
       .filter((member) =>
-        `${member.name} ${member.accountNumber} ${member.phone ?? ''}`.toLowerCase().includes(query)
+        `${member.name} ${member.memberNumber} ${member.phone ?? ''}`.toLowerCase().includes(query)
       )
       .slice(0, 8);
   }, [memberChoices, memberSearch, selectedMember]);
@@ -284,7 +284,7 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
                     <div className="flex items-center justify-between gap-3 rounded-lg border border-emerald-300 bg-emerald-50 px-3 py-2.5">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-slate-900">{selectedMember.name}</p>
-                        <p className="text-xs text-slate-600">{selectedMember.accountNumber}{selectedMember.phone ? ` · ${selectedMember.phone}` : ''}</p>
+                        <p className="text-xs text-slate-600">Member No. {selectedMember.memberNumber}{selectedMember.phone ? ` · ${selectedMember.phone}` : ''}</p>
                       </div>
                       <button
                         type="button"
@@ -301,7 +301,7 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
                       <input
                         value={memberSearch}
                         onChange={(event) => setMemberSearch(event.target.value)}
-                        placeholder="Name, account number or phone"
+                        placeholder="Name, member number or phone"
                         autoComplete="off"
                         className={`${SELECT_FIELD} pl-9`}
                       />
@@ -315,7 +315,7 @@ const LoanInput: React.FC<Props> = ({ initialMemberId }) => {
                               className="block w-full rounded-md px-3 py-2 text-left hover:bg-emerald-50"
                             >
                               <span className="block text-sm font-medium text-slate-900">{member.name}</span>
-                              <span className="block text-xs text-slate-500">{member.accountNumber}{member.phone ? ` · ${member.phone}` : ''}</span>
+                              <span className="block text-xs text-slate-500">Member No. {member.memberNumber}{member.phone ? ` · ${member.phone}` : ''}</span>
                             </button>
                           )) : (
                             <p className="px-3 py-3 text-sm text-slate-500">No matching member found.</p>

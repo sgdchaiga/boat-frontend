@@ -169,6 +169,7 @@ export function mapMemberFromRow(row: {
   return {
     id: row.id,
     name: row.full_name,
+    memberNumber: row.member_number,
     accountNumber: row.member_number,
     status: row.is_active ? "active" : "inactive",
     savingsBalance: Number(row.savings_balance ?? 0),

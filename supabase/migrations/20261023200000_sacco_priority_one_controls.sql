@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS public.sacco_financial_period_snapshots (
   UNIQUE(organization_id,reporting_month,snapshot_type)
 );
 ALTER TABLE public.sacco_financial_period_snapshots ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sacco_financial_period_snapshots_org ON public.sacco_financial_period_snapshots;
 CREATE POLICY sacco_financial_period_snapshots_org ON public.sacco_financial_period_snapshots FOR SELECT TO authenticated USING(organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
 GRANT SELECT ON public.sacco_financial_period_snapshots TO authenticated;
 
@@ -36,6 +37,7 @@ CREATE TABLE IF NOT EXISTS public.sacco_fixed_deposit_documents (
   UNIQUE(fixed_deposit_id,document_type,document_number)
 );
 ALTER TABLE public.sacco_fixed_deposit_documents ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS sacco_fd_documents_org ON public.sacco_fixed_deposit_documents;
 CREATE POLICY sacco_fd_documents_org ON public.sacco_fixed_deposit_documents FOR SELECT TO authenticated USING(organization_id=(SELECT organization_id FROM public.staff WHERE id=auth.uid()));
 GRANT SELECT ON public.sacco_fixed_deposit_documents TO authenticated;
 

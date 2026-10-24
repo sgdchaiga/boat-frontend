@@ -13,6 +13,7 @@ import { canEditSaccoTransactions } from "@/lib/saccoTransactionEditAccess";
 type View = "register" | "entry" | "daily";
 type Appearance = { primary_color: string; accent_color: string; button_radius: number; show_page_description: boolean; page_description: string };
 type Gl = { id: string; account_code: string; account_name: string; account_type: string; category: string | null };
+type SavingsAccount = { id: string; sacco_member_id: string; account_number: string; savings_product_code: string; balance: number };
 type Row = {
   id: string; submitted_at: string; transaction_type: string; transaction_date: string; narration: string;
   member_id: string | null; client_name: string | null; gl_account_id: string; gl_account_label?: string;
@@ -25,7 +26,7 @@ type Row = {
 const routes = { register: "sacco_cashbook_register", entry: "sacco_cashbook_entry", daily: "sacco_cashbook_daily" };
 const money = new Intl.NumberFormat("en-UG", { style: "currency", currency: "UGX", maximumFractionDigits: 0 });
 const today = () => new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-const blank = () => ({ transactionType: "Deposit", date: today(), narration: "", memberId: "", glAccountId: "", voucherNo: "", deposit: "", withdraw: "", loanId: "", paymentChannel: "cash" });
+const blank = () => ({ transactionType: "Deposit", date: today(), narration: "", memberId: "", savingsAccountId: "", glAccountId: "", voucherNo: "", deposit: "", withdraw: "", loanId: "", paymentChannel: "cash" });
 const DEFAULT_APPEARANCE: Appearance = { primary_color: "#6d28d9", accent_color: "#8b5cf6", button_radius: 10, show_page_description: true, page_description: "Transaction entry, cashbook register and daily cash summary." };
 
 export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; navigate: (page: string, state?: Record<string, unknown>) => void }) {
@@ -35,6 +36,7 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
   const orgId = user?.organization_id;
   const [rows, setRows] = useState<Row[]>([]);
   const [gls, setGls] = useState<Gl[]>([]);
+  const [savingsAccounts, setSavingsAccounts] = useState<SavingsAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
@@ -55,9 +57,10 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
   const load = useCallback(async () => {
     if (!orgId) return;
     setLoading(true);
-    const [entries, accounts] = await Promise.all([
+    const [entries, accounts, savings] = await Promise.all([
       (supabase as any).from("sacco_cashbook_entries").select("*,gl_accounts(account_code,account_name),creator:staff!created_by(full_name),editor:staff!updated_by(full_name)").eq("organization_id", orgId).order("entry_date", { ascending: false }).limit(2500),
       supabase.from("gl_accounts").select("id,account_code,account_name,account_type,category").eq("organization_id", orgId).eq("is_active", true).order("account_code"),
+      supabase.from("sacco_member_savings_accounts").select("id,sacco_member_id,account_number,savings_product_code,balance").eq("organization_id", orgId).eq("is_active", true).order("account_number"),
     ]);
     if (entries.error) setMessage("Apply the latest SACCO cashbook migration to enable direct entries.");
     else setRows((entries.data || []).map((r: any) => ({ ...r,
@@ -70,6 +73,7 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
       posted_by_name: r.creator?.full_name, edited_by_name: r.editor?.full_name
     })));
     if (!accounts.error) setGls(((accounts.data || []) as Gl[]).filter((a) => isGlAccountRelevantForBusinessType(a, "sacco")));
+    if (!savings.error) setSavingsAccounts((savings.data || []) as SavingsAccount[]);
     setLoading(false);
   }, [orgId]);
   useEffect(() => { void load(); }, [load]);
@@ -89,6 +93,8 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
   };
 
   const member = members.find((m) => m.id === form.memberId);
+  const savingsAccount = savingsAccounts.find((a) => a.id === form.savingsAccountId);
+  const memberSavingsAccounts = savingsAccounts.filter((a) => a.sacco_member_id === form.memberId);
   const memberLoans = loans.filter((l) => !form.memberId || l.memberId === form.memberId);
 
   const save = async () => {
@@ -98,14 +104,14 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
     setSaving(true); setMessage("");
     const loan = loans.find((l) => l.id === form.loanId);
     const transactionType = normalizeSaccoTransactionType(form.transactionType, Number(form.deposit || 0), Number(form.withdraw || 0));
-    const narration = buildSaccoNarration(transactionType, saccoMemberDisplay(member?.name, member?.accountNumber), form.narration);
+    const narration = buildSaccoNarration(transactionType, saccoMemberDisplay(member?.name, member?.memberNumber), form.narration);
     const { error } = await (supabase as any).rpc("post_sacco_cashbook_entry", {
       p_organization_id: orgId, p_transaction_type: transactionType, p_transaction_date: form.date,
       p_narration: narration, p_member_id: form.memberId || null, p_client_name: member?.name || null,
       p_gl_account_id: form.glAccountId, p_voucher_no: form.voucherNo.trim() || null,
       p_deposit_amount: Number(form.deposit || 0), p_withdraw_amount: Number(form.withdraw || 0),
-      p_loan_id: form.loanId || null, p_loan_no: loan?.loanNumber || null, p_account_no: member?.accountNumber || null,
-      p_client_no: member?.accountNumber || null, p_payment_channel: form.paymentChannel,
+      p_loan_id: form.loanId || null, p_loan_no: loan?.loanNumber || null, p_account_no: savingsAccount?.account_number || null,
+      p_client_no: member?.memberNumber || null, p_payment_channel: form.paymentChannel,
     });
     setSaving(false);
     if (error) { setMessage(error.message); return; }
@@ -121,7 +127,7 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
   return <div className="mx-auto max-w-[1500px] space-y-5 p-4 sm:p-6 lg:p-8">
     <header className="flex flex-wrap items-start justify-between gap-4">
       <div><p className="text-xs font-bold uppercase tracking-wider" style={{ color: appearance.primary_color }}>SACCO · Cashbook Workspace</p><h1 className="mt-1 flex items-center gap-2 text-3xl font-bold text-slate-900"><BookOpen style={{ color: appearance.primary_color }} />{view === "entry" ? "Cashbook Entry" : view === "daily" ? "Daily Summary" : "Cashbook Register"}</h1>{appearance.show_page_description && <p className="mt-1 text-sm text-slate-600">{appearance.page_description}</p>}</div>
-      <div className="flex flex-wrap gap-2"><div className="inline-flex rounded-lg border bg-white p-1 text-sm"><button onClick={() => { setMode("modern"); navigate(SACCOPRO_PAGE.dashboard); }} className="rounded-md px-3 py-1.5 font-semibold text-slate-600">Full System</button><button className="px-3 py-1.5 font-semibold text-white" style={themedButton}>Cashbook</button></div><button onClick={() => void load()} className="app-btn-secondary"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />Refresh</button><button onClick={() => navigate(SACCOPRO_PAGE.cashbookBulkImport)} className="app-btn-secondary"><Upload className="h-4 w-4" />Bulk upload</button>{canCustomizeAppearance && <button onClick={() => setAppearanceOpen(open => !open)} className="app-btn-secondary"><Palette className="h-4 w-4" />Appearance</button>}{view !== "entry" && <button onClick={() => navigate(routes.entry)} className="app-btn-primary" style={themedButton}><Plus className="h-4 w-4" />Cashbook entry</button>}</div>
+      <div className="flex flex-wrap gap-2"><div className="inline-flex rounded-lg border bg-white p-1 text-sm"><button onClick={() => { setMode("modern"); navigate(SACCOPRO_PAGE.dashboard); }} className="rounded-md px-3 py-1.5 font-semibold text-slate-600">Full System</button><button className="px-3 py-1.5 font-semibold text-white" style={themedButton}>Cashbook</button></div><button onClick={() => void load()} className="app-btn-secondary"><RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />Refresh</button><button onClick={() => navigate(SACCOPRO_PAGE.cashbookLoanImport)} className="app-btn-secondary"><Upload className="h-4 w-4" />Loan input & approval</button><button onClick={() => navigate(SACCOPRO_PAGE.cashbookBulkImport)} className="app-btn-secondary"><Upload className="h-4 w-4" />Bulk upload</button>{canCustomizeAppearance && <button onClick={() => setAppearanceOpen(open => !open)} className="app-btn-secondary"><Palette className="h-4 w-4" />Appearance</button>}{view !== "entry" && <button onClick={() => navigate(routes.entry)} className="app-btn-primary" style={themedButton}><Plus className="h-4 w-4" />Cashbook entry</button>}</div>
     </header>
     {appearanceOpen && canCustomizeAppearance && <AppearancePanel appearance={appearance} setAppearance={setAppearance} saving={savingAppearance} message={appearanceMessage} onClose={() => setAppearanceOpen(false)} onSave={() => void saveAppearance()} />}
     <nav className="flex flex-wrap gap-2 rounded-xl border bg-white p-2">{([['entry','Cashbook Entry'],['register','Cashbook Register'],['daily','Daily Summary']] as const).map(([id,label]) => <button key={id} onClick={() => navigate(routes[id])} className={view === id ? "app-btn-primary" : "app-btn-secondary"} style={view === id ? themedButton : { borderRadius: appearance.button_radius }}>{label}</button>)}</nav>
@@ -132,13 +138,13 @@ export function SaccoTerekaCashbookPage({ view, navigate }: { view: View; naviga
       <Field label="Trx Type"><select value={form.transactionType} onChange={(e) => setForm(v => ({ ...v, transactionType: e.target.value }))} className="cashbook-input"><option>Deposit</option><option>Withdrawal</option><option>Loan repayment</option><option>Loan disbursement</option><option>Journal</option><option>Balance b/f</option></select></Field>
       <Field label="Date"><input type="date" value={form.date} onChange={(e) => setForm(v => ({ ...v, date: e.target.value }))} className="cashbook-input" /></Field>
       <Field label="Payment channel"><select value={form.paymentChannel} onChange={(e) => setForm(v => ({ ...v, paymentChannel: e.target.value }))} className="cashbook-input"><option value="cash">Cash</option><option value="mtn_momo">MTN MoMo</option><option value="airtel_money">Airtel Money</option><option value="bank">Bank</option></select></Field>
-      <Field label="Client Name"><select value={form.memberId} onChange={(e) => setForm(v => ({ ...v, memberId: e.target.value, loanId: "" }))} className="cashbook-input"><option value="">Non-member / select client</option>{members.map(m => <option key={m.id} value={m.id}>{m.name} · {m.accountNumber}</option>)}</select></Field>
-      <Field label="A/C_NO"><input value={member?.accountNumber || ""} readOnly className="cashbook-input bg-slate-50" /></Field>
-      <Field label="Client NO."><input value={member?.accountNumber || ""} readOnly className="cashbook-input bg-slate-50" /></Field>
+      <Field label="Member / Client Name"><select value={form.memberId} onChange={(e) => setForm(v => ({ ...v, memberId: e.target.value, savingsAccountId: "", loanId: "" }))} className="cashbook-input"><option value="">Non-member / select member</option>{members.map(m => <option key={m.id} value={m.id}>{m.memberNumber} — {m.name}</option>)}</select></Field>
+      <Field label="Savings A/C_NO"><select value={form.savingsAccountId} onChange={(e) => setForm(v => ({ ...v, savingsAccountId: e.target.value }))} disabled={!member} className="cashbook-input disabled:bg-slate-50"><option value="">No savings account selected</option>{memberSavingsAccounts.map(a => <option key={a.id} value={a.id}>{a.account_number} · {a.savings_product_code}</option>)}</select></Field>
+      <Field label="Member NO."><input value={member?.memberNumber || ""} readOnly className="cashbook-input bg-slate-50" /></Field>
       <Field label="GL Account"><select value={form.glAccountId} onChange={(e) => setForm(v => ({ ...v, glAccountId: e.target.value }))} className="cashbook-input"><option value="">Select GL account</option>{gls.map(g => <option key={g.id} value={g.id}>{g.account_code} · {g.account_name}</option>)}</select></Field>
       <Field label="Reference / Voucher No."><input value={form.voucherNo} onChange={(e) => setForm(v => ({ ...v, voucherNo: e.target.value }))} placeholder="Enter receipt or voucher reference" className="cashbook-input" /></Field>
       <Field label="Loan No."><select value={form.loanId} onChange={(e) => setForm(v => ({ ...v, loanId: e.target.value }))} className="cashbook-input"><option value="">No linked loan</option>{memberLoans.map(l => <option key={l.id} value={l.id}>{l.loanNumber || l.id} · {l.memberName}</option>)}</select></Field>
-      <div className="md:col-span-2 lg:col-span-3"><Field label="Additional narration / details"><textarea rows={3} value={form.narration} onChange={(e) => setForm(v => ({ ...v, narration: e.target.value }))} placeholder="Optional extra details; BOAT automatically records what was done and by/to whom." className="cashbook-input" /></Field><p className="mt-1 text-xs text-slate-500">Posting narration: {buildSaccoNarration(form.transactionType, saccoMemberDisplay(member?.name, member?.accountNumber), form.narration)}</p></div>
+      <div className="md:col-span-2 lg:col-span-3"><Field label="Additional narration / details"><textarea rows={3} value={form.narration} onChange={(e) => setForm(v => ({ ...v, narration: e.target.value }))} placeholder="Optional extra details; BOAT automatically records what was done and by/to whom." className="cashbook-input" /></Field><p className="mt-1 text-xs text-slate-500">Posting narration: {buildSaccoNarration(form.transactionType, saccoMemberDisplay(member?.name, member?.memberNumber), form.narration)}</p></div>
       <Field label="Deposit Amount"><input type="number" min="0" value={form.deposit} onChange={(e) => setForm(v => ({ ...v, deposit: e.target.value, withdraw: e.target.value ? "" : v.withdraw }))} className="cashbook-input" /></Field>
       <Field label="Withdraw Amount"><input type="number" min="0" value={form.withdraw} onChange={(e) => setForm(v => ({ ...v, withdraw: e.target.value, deposit: e.target.value ? "" : v.deposit }))} className="cashbook-input" /></Field>
     </div><div className="mt-5 flex justify-end"><button onClick={() => void save()} disabled={saving} className="app-btn-primary" style={themedButton}>{saving ? "Posting…" : "Post Cash Book entry"}</button></div></section>}
@@ -192,10 +198,10 @@ function ChannelCell({ show, n }: { show: boolean; n: number }) { return <td cla
 
 type ColumnId = "submitted" | "type" | "date" | "narration" | "member" | "gl" | "voucher" | "deposit" | "withdraw" | "loan" | "account" | "clientNo" | "net" | "postedBy" | "editedBy";
 const DEFAULT_COLUMNS: ColumnId[] = ["date", "type", "narration", "member", "voucher", "deposit", "withdraw", "loan", "net"];
-const COLUMN_LABELS: Record<ColumnId, string> = { submitted: "Date Submitted", type: "Trx Type", date: "Date", narration: "Narration", member: "Member", gl: "GL Account", voucher: "Reference / Voucher No.", deposit: "Deposit Amount", withdraw: "Withdraw Amount", loan: "Loan No.", account: "A/C_NO", clientNo: "Client NO.", net: "Net Amount", postedBy: "Posted By", editedBy: "Edited By" };
+const COLUMN_LABELS: Record<ColumnId, string> = { submitted: "Date Submitted", type: "Trx Type", date: "Date", narration: "Narration", member: "Member", gl: "GL Account", voucher: "Reference / Voucher No.", deposit: "Deposit Amount", withdraw: "Withdraw Amount", loan: "Loan No.", account: "Savings A/C_NO", clientNo: "Member NO.", net: "Net Amount", postedBy: "Posted By", editedBy: "Edited By" };
 const ALL_COLUMNS = Object.keys(COLUMN_LABELS) as ColumnId[];
 
-function CashbookRegister({ rows, members, loans, loading, preferenceKey, headerColor, orgId, currentUserId, canControl, onChanged, setMessage }: { rows: Row[]; members: Array<{ id: string; name: string; accountNumber?: string }>; loans: Array<{ id: string; loanNumber?: string; memberName: string }>; loading: boolean; preferenceKey: string; headerColor: string; orgId?: string | null; currentUserId?: string | null; canControl: boolean; onChanged: () => Promise<void>; setMessage: (value: string) => void }) {
+function CashbookRegister({ rows, members, loans, loading, preferenceKey, headerColor, orgId, currentUserId, canControl, onChanged, setMessage }: { rows: Row[]; members: Array<{ id: string; name: string; memberNumber: string }>; loans: Array<{ id: string; loanNumber?: string; memberName: string }>; loading: boolean; preferenceKey: string; headerColor: string; orgId?: string | null; currentUserId?: string | null; canControl: boolean; onChanged: () => Promise<void>; setMessage: (value: string) => void }) {
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [memberId, setMemberId] = useState("");
@@ -205,7 +211,7 @@ function CashbookRegister({ rows, members, loans, loading, preferenceKey, header
   const memberById = useMemo(() => new Map(members.map((member) => [member.id, member])), [members]);
   const memberLabel = useCallback((row: Row) => {
     const member = memberById.get(row.member_id || "");
-    return saccoMemberDisplay(row.client_name || member?.name, member?.accountNumber || row.client_no);
+    return saccoMemberDisplay(row.client_name || member?.name, member?.memberNumber || row.client_no);
   }, [memberById]);
   const readColumns = useCallback((): ColumnId[] => {
     try {

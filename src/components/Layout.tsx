@@ -692,6 +692,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: "Member accounts", page: SACCOPRO_PAGE.savingsAccountsList },
           { name: "Member portfolio", page: SACCOPRO_PAGE.clientPortfolio },
           { name: "Member statements", page: SACCOPRO_PAGE.savingsStatements },
+          ...(saccoSystemCashbookNav ? [{ name: "Bulk import", page: SACCOPRO_PAGE.bulkImport }] : []),
         ],
       },
       ...(!saccoIsLoanOfficer
@@ -1497,6 +1498,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Data entry', icon: Plus, children: [
             { name: 'Cashbook entry', page: 'sacco_cashbook_entry' },
             { name: 'Receive / pay money', page: SACCOPRO_PAGE.teller },
+            { name: 'Loan input & approval', page: SACCOPRO_PAGE.cashbookLoanImport },
             { name: 'Loan disbursement', page: SACCOPRO_PAGE.loanDisbursement },
           ] },
           { name: 'Daily summary', icon: BarChart3, page: 'sacco_cashbook_daily' },

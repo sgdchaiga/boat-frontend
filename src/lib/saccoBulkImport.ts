@@ -274,7 +274,8 @@ function resolveMember(
     if (!m) return { error: `Unknown member id ${idRaw}` };
     return { member: m };
   }
-  const num = asText(row.member_number || row.member_no || row.client_no);
+  // Old SACCO sheets commonly use literal punctuation in these headings.
+  const num = asText(row.member_number || row.member_no || row.client_no || row["client_no."] || row.client_number);
   if (!num) return { error: "Provide sacco_member_id or member_number" };
   const m = ctx.membersByNumber.get(num.toLowerCase());
   if (!m) return { error: `No member with number "${num}"` };
@@ -286,7 +287,7 @@ function resolveAccount(
   memberId: string,
   row: Record<string, string>
 ): { account: AccountMini } | { error: string } {
-  const acctNo = asText(row.account_number || row.account_no);
+  const acctNo = asText(row.account_number || row.account_no || row["a/c_no"] || row.a_c_no || row.ac_no);
   if (acctNo) {
     const a = ctx.accountByNumber.get(acctNo.toLowerCase());
     if (!a) return { error: `No savings account "${acctNo}"` };
@@ -324,6 +325,8 @@ export type SavingsBalancePlan = {
   accountNumber: string;
   currentProductCode: string;
   newBalance: number;
+  /** The reporting cut-off for this imported balance, not a cash transaction date. */
+  balanceAsAt: string;
   /** If set and different from current, update savings_product_code (unique per member+product+sub). */
   newProductCode: string | null;
 };
@@ -337,7 +340,8 @@ export type MemberProfilePlan = {
 
 export function planSavingsBalanceImports(
   ctx: SaccoBulkImportContext,
-  rows: Record<string, string>[]
+  rows: Record<string, string>[],
+  defaultBalanceAsAt: string,
 ): { plans: SavingsBalancePlan[]; preview: SaccoBulkImportPreviewRow[] } {
   const plans: SavingsBalancePlan[] = [];
   const preview: SaccoBulkImportPreviewRow[] = [];
@@ -396,12 +400,13 @@ export function planSavingsBalanceImports(
       accountNumber: acct.account_number,
       currentProductCode: acct.savings_product_code,
       newBalance,
+      balanceAsAt: defaultBalanceAsAt,
       newProductCode: productWouldChange && newProd !== null ? newProd : null,
     });
     preview.push({
       line,
       status: "ok",
-      summary: `${memRes.member.member_number}: ${acct.account_number} — ${parts.join("; ")}`,
+      summary: `${memRes.member.member_number}: ${acct.account_number} — ${parts.join("; ")} · as at ${defaultBalanceAsAt}`,
     });
   });
 
@@ -498,27 +503,49 @@ async function runInChunks<T>(items: T[], size: number, fn: (item: T) => Promise
   }
 }
 
-export async function applySavingsBalancePlans(plans: SavingsBalancePlan[]): Promise<SaccoBulkImportResult> {
+export type BulkImportProgress = { completed: number; total: number; imported: number; failed: number };
+
+/**
+ * Uses database-side batches so a large opening-balance file does not require a
+ * separate browser request for every account. Rows were validated before this
+ * stage; the RPC still reports an error per row if the live data changed.
+ */
+export async function applySavingsBalancePlans(
+  organizationId: string,
+  plans: SavingsBalancePlan[],
+  onProgress?: (progress: BulkImportProgress) => void,
+): Promise<SaccoBulkImportResult> {
   let updated = 0;
   let errors = 0;
   const messages: string[] = [];
 
-  await runInChunks(plans, 15, async (p) => {
-    const patch: Record<string, unknown> = {
-      balance: p.newBalance,
-      updated_at: new Date().toISOString(),
-    };
-    if (p.newProductCode !== null) {
-      patch.savings_product_code = p.newProductCode;
-    }
-    const { error } = await sb.from("sacco_member_savings_accounts").update(patch).eq("id", p.accountId);
+  const batchSize = 250;
+  for (let start = 0; start < plans.length; start += batchSize) {
+    const batch = plans.slice(start, start + batchSize);
+    const { data, error } = await sb.rpc("import_sacco_savings_balance_batch", {
+      p_organization_id: organizationId,
+      p_rows: batch.map((p) => ({
+        line: p.line,
+        account_id: p.accountId,
+        new_balance: p.newBalance,
+        balance_as_at: p.balanceAsAt,
+        new_product_code: p.newProductCode,
+      })),
+    });
     if (error) {
-      errors += 1;
-      messages.push(`Line ${p.line}: ${error.message}`);
-    } else {
-      updated += 1;
+      throw new Error(error.message.includes("function")
+        ? "Apply the latest SACCO import migrations before importing balance files."
+        : error.message);
     }
-  });
+    for (const row of (data ?? []) as Array<{ line: number; updated: boolean; error: string | null }>) {
+      if (row.updated) updated += 1;
+      else {
+        errors += 1;
+        messages.push(`Line ${row.line}: ${row.error || "Could not update account"}`);
+      }
+    }
+    onProgress?.({ completed: Math.min(start + batch.length, plans.length), total: plans.length, imported: updated, failed: errors });
+  }
 
   return { updated, skipped: 0, errors, messages };
 }

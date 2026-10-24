@@ -9,6 +9,8 @@ export const SACCOPRO_PAGE = {
   bulkImport: "sacco_bulk_import",
   /** Legacy cashbook upload (CSV/XLSX), with preview and duplicate protection. */
   cashbookBulkImport: "sacco_cashbook_bulk_import",
+  /** Cashbook-mode loan capture and legacy approval-register upload. */
+  cashbookLoanImport: "sacco_cashbook_loan_import",
   /** Loan product CSV (catalog) — Loans hub — admins only in UI. */
   loanBulkImport: "sacco_loan_bulk_import",
   /** Member loan accounts / balances CSV — Loans hub — admins only in UI. */
