@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowRight, BookMarked, CloudDownload, Link2, RefreshCw, Scale } from "lucide-react";
+import { ArrowRight, BookMarked, Download, Link2, RefreshCw, Scale } from "lucide-react";
 import { SaccoReportToolbar } from "@/components/common/SaccoReportToolbar";
 import { downloadCashbookPdf } from "@/lib/saccoReportPdf";
 import { PageNotes } from "@/components/common/PageNotes";
@@ -143,7 +143,7 @@ export function SaccoCashbookPage({
           {canSync && (
             <section className="rounded-xl border border-violet-100 bg-violet-50/40 p-4">
               <div className="flex flex-wrap items-start gap-3">
-                <div className="rounded-lg bg-violet-100 p-2 text-violet-700"><CloudDownload size={18} /></div>
+                <div className="rounded-lg bg-violet-100 p-2 text-violet-700"><Download size={18} /></div>
                 <div className="flex-1 min-w-[240px]">
                   <h2 className="font-semibold text-slate-900">Google Sheets cashbook sync</h2>
                   <p className="mt-0.5 text-sm text-slate-600">Keep posting in the old cashbook while BOAT imports new lines. Imported rows are never duplicated; later sheet edits are flagged for review instead of silently changing a financial record.</p>
