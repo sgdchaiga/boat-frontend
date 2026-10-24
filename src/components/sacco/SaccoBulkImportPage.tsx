@@ -27,6 +27,7 @@ import { fetchLoansForOrganization } from "@/lib/saccoDb";
 import {
   applyMemberLoansPortfolioPlans,
   downloadMemberLoansPortfolioTemplate,
+  getLoanImportDisbursementDate,
   parseIsoDateOnly,
   planMemberLoansPortfolioImport,
 } from "@/lib/saccoMemberLoansBulkImport";
@@ -58,9 +59,9 @@ const IMPORT_OPTIONS: Array<{ id: SaccoBulkImportKind; label: string; descriptio
   },
   {
     id: "member_loans",
-    label: "Member loan accounts (balances)",
+    label: "Loan portfolio & disbursements",
     description:
-      "Create or update member loans. New rows need member_number, loan_type or loan_code, and principal. Updates match by loan_number (best), loan_id, or member + loan_type — only columns you fill in are changed (e.g. loan_number + balance later).",
+      "Create or update member loans, including the legacy loan-approval sheet. It recognizes Date, Client Name., Loan Amount, Loan Type, Code, Period, Loan No., Net Amount, Application/Loan Form, Processing Fee and Insurance.",
   },
 ];
 
@@ -85,6 +86,7 @@ export function SaccoBulkImportPage({
     }) && !subscriptionReadOnly;
 
   const canLoanImport = canBulkImportSaccoLoanProducts(user?.role, { isSuperAdmin: Boolean(isSuperAdmin) }) && !subscriptionReadOnly;
+  const canHistoricalCashbookImport = Boolean(isSuperAdmin || user?.isSuperAdmin || ["admin", "manager", "accountant", "super_admin"].includes(String(user?.role ?? "").toLowerCase())) && !subscriptionReadOnly;
 
   const [kindUnlocked, setKindUnlocked] = useState<SaccoBulkImportKind>("savings_balances");
   const kind = lockedKind ?? kindUnlocked;
@@ -95,14 +97,19 @@ export function SaccoBulkImportPage({
   const [preview, setPreview] = useState<SaccoBulkImportPreviewRow[] | null>(null);
   const [resultMessage, setResultMessage] = useState<string | null>(null);
   const [portfolioAsOfDate, setPortfolioAsOfDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [disbursementFrom, setDisbursementFrom] = useState("");
+  const [disbursementTo, setDisbursementTo] = useState("");
 
   const selected = useMemo(() => IMPORT_OPTIONS.find((o) => o.id === kind) ?? IMPORT_OPTIONS[0], [kind]);
 
-  const canOperate =
-    kind === "loan_products" || kind === "member_loans" ? canLoanImport : canSavingsKinds;
+  const canOperate = kind === "historical_cashbook"
+    ? canHistoricalCashbookImport
+    : kind === "loan_products" || kind === "member_loans" ? canLoanImport : canSavingsKinds;
 
   const restrictionMessage =
-    kind === "loan_products" || kind === "member_loans"
+    kind === "historical_cashbook"
+      ? "This cashbook upload requires Accountant, Manager, Admin, or Super Admin role."
+      : kind === "loan_products" || kind === "member_loans"
       ? "This loan import requires Super Admin or organization Admin role."
       : "Your role cannot run this import. Grant “Savings settings” under Permissions (admin/manager when enabled).";
 
@@ -161,9 +168,23 @@ export function SaccoBulkImportPage({
           setPreview(null);
           return;
         }
+        if (disbursementFrom && disbursementTo && disbursementFrom > disbursementTo) {
+          setError("Disbursement date From cannot be after To.");
+          setPreview(null);
+          return;
+        }
+        const selectedRows = rows.filter((row) => {
+          const date = getLoanImportDisbursementDate(row);
+          return (!disbursementFrom || (date !== null && date >= disbursementFrom)) && (!disbursementTo || (date !== null && date <= disbursementTo));
+        });
+        if (selectedRows.length === 0) {
+          setError("No loan rows fall within the selected disbursement date range.");
+          setPreview(null);
+          return;
+        }
         const ctx = await loadSaccoBulkImportContext(orgId);
         const existingLoans = await fetchLoansForOrganization(orgId);
-        const { preview: pv } = planMemberLoansPortfolioImport(ctx, existingLoans, loanProducts, rows, portfolioAsOfDate);
+        const { preview: pv } = planMemberLoansPortfolioImport(ctx, existingLoans, loanProducts, selectedRows, portfolioAsOfDate);
         plannedPreview = pv;
         setPreview(plannedPreview);
         const bad = pv.filter((r) => r.status === "error").length;
@@ -175,7 +196,7 @@ export function SaccoBulkImportPage({
         } else {
           setError(null);
           setResultMessage(
-            `Ready: ${ok} loan row(s) (default snapshot date ${portfolioAsOfDate}; column balance_as_at overrides per row when set).`
+            `Ready: ${ok} loan row(s)${disbursementFrom || disbursementTo ? ` in ${disbursementFrom || "the beginning"} to ${disbursementTo || "the latest date"}` : ""} (default snapshot date ${portfolioAsOfDate}; column balance_as_at overrides per row when set).`
           );
         }
       } else {
@@ -202,7 +223,7 @@ export function SaccoBulkImportPage({
     } finally {
       setLoading(false);
     }
-  }, [orgId, file, kind, loanProducts, portfolioAsOfDate]);
+  }, [orgId, file, kind, loanProducts, portfolioAsOfDate, disbursementFrom, disbursementTo]);
 
   const runImport = async () => {
     if (!orgId || !file || !canOperate || running) return;
@@ -266,9 +287,13 @@ export function SaccoBulkImportPage({
         );
         if (result.messages.length) setError(result.messages.slice(0, 5).join("\n"));
       } else if (kind === "member_loans") {
+        const selectedRows = rows.filter((row) => {
+          const date = getLoanImportDisbursementDate(row);
+          return (!disbursementFrom || (date !== null && date >= disbursementFrom)) && (!disbursementTo || (date !== null && date <= disbursementTo));
+        });
         const ctx = await loadSaccoBulkImportContext(orgId);
         const existingLoans = await fetchLoansForOrganization(orgId);
-        const { plans } = planMemberLoansPortfolioImport(ctx, existingLoans, loanProducts, rows, portfolioAsOfDate);
+        const { plans } = planMemberLoansPortfolioImport(ctx, existingLoans, loanProducts, selectedRows, portfolioAsOfDate);
         const okPlans = plans.filter((p) => preview?.some((r) => r.line === p.line && r.status === "ok"));
         const result = await applyMemberLoansPortfolioPlans(okPlans);
         await refreshSaccoWorkspace();
@@ -320,7 +345,9 @@ export function SaccoBulkImportPage({
     <div className="p-4 md:p-6 max-w-4xl mx-auto space-y-6">
       <header>
         <h1 className="text-2xl font-bold text-slate-900">
-          {lockedKind === "loan_products"
+          {lockedKind === "historical_cashbook"
+            ? "Cashbook bulk upload"
+            : lockedKind === "loan_products"
             ? "Loan product bulk import"
             : lockedKind === "member_loans"
               ? "Member loan portfolio import"
@@ -328,21 +355,27 @@ export function SaccoBulkImportPage({
         </h1>
         <PageNotes
           ariaLabel={
-            lockedKind === "loan_products"
+            lockedKind === "historical_cashbook"
+              ? "Cashbook upload help"
+              : lockedKind === "loan_products"
               ? "Loan product import help"
               : lockedKind === "member_loans"
                 ? "Member loan import help"
                 : "Bulk import help"
           }
         >
-          {lockedKind === "loan_products" ? (
+          {lockedKind === "historical_cashbook" ? (
+            <p className="text-sm text-slate-700">
+              Upload the legacy Cashbook CSV or Excel file, then review every match before posting. BOAT imports deposits, withdrawals, shares, charges, fees and loan repayments, and prevents duplicate source rows from being posted twice.
+            </p>
+          ) : lockedKind === "loan_products" ? (
             <p className="text-sm text-slate-700">
               Upload CSV or Excel to create or update <strong>loan products</strong> (rates, fees, limits). Each row targets a product
               by <strong>name</strong>; products omitted from the file are unchanged. Super Admin or organization Admin only.
             </p>
           ) : lockedKind === "member_loans" ? (
             <p className="text-sm text-slate-700">
-              <strong>Create:</strong> member_number, loan_type or loan_code, principal (balance optional — defaults to principal).{" "}
+              <strong>Create:</strong> member_number (or legacy <code className="text-xs">Client Name.</code> ending with the member number), loan_type or loan_code, and principal. The approval register's <code className="text-xs">Date</code>, <code className="text-xs">Period</code>, loan fees and Net Amount are recognized and checked.{" "}
               <strong>Update later:</strong> same <code className="text-xs">loan_number</code> with only balance (and optional balance_as_at).{" "}
               Match order: loan_number → loan_id → member + loan_type. Empty columns are left unchanged on update. Admin only.
             </p>
@@ -404,6 +437,15 @@ export function SaccoBulkImportPage({
               disabled={!canOperate}
               className="max-w-[220px] px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
             />
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="text-sm font-medium text-slate-800">Disbursement date from
+                <input type="date" value={disbursementFrom} onChange={(e) => { setDisbursementFrom(e.target.value); resetPreview(); }} disabled={!canOperate} className="mt-1 block w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white" />
+              </label>
+              <label className="text-sm font-medium text-slate-800">Disbursement date to
+                <input type="date" value={disbursementTo} onChange={(e) => { setDisbursementTo(e.target.value); resetPreview(); }} disabled={!canOperate} className="mt-1 block w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-emerald-500 bg-white" />
+              </label>
+            </div>
+            <p className="mt-2 text-xs text-slate-600">Optional. Set both dates to upload only loans disbursed in that period. Rows outside the range are never posted.</p>
           </div>
         )}
 

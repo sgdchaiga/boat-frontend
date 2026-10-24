@@ -33,6 +33,30 @@ function parseNumberCell(v: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Handles ISO, DD/MM/YYYY and the legacy approval-sheet M/D/YYYY convention. */
+export function parseLoanImportDate(value: string): string | null {
+  const raw = value.trim();
+  if (!raw) return null;
+  const iso = parseIsoDateOnly(raw);
+  if (iso) return iso;
+  const parts = raw.match(/^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/);
+  if (!parts) return null;
+  const first = Number(parts[1]);
+  const second = Number(parts[2]);
+  const year = Number(parts[3]);
+  // 1/28/2026 can only be M/D/YYYY. Ambiguous values retain the SACCO's
+  // usual DD/MM/YYYY convention rather than being silently guessed.
+  const month = second > 12 ? first : second;
+  const day = second > 12 ? second : first;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return null;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+export function getLoanImportDisbursementDate(row: Record<string, string>): string | null {
+  return parseLoanImportDate(cell(row, ["disbursement_date", "disburse_date", "date", "loan_date"]));
+}
+
 /** Expects yyyy-mm-dd */
 export function parseIsoDateOnly(s: string): string | null {
   const t = s.trim().slice(0, 10);
@@ -60,13 +84,17 @@ function resolveMember(
     if (!m) return { error: `Unknown member id ${idRaw}` };
     return { member: m };
   }
-  const num = asText(row.member_number || row.member_no || row.client_no);
-  if (!num) {
+  const num = asText(row.member_number || row.member_no || row.client_no || row.client_number);
+  const clientName = asText(row.client_name || row["client_name."] || row.client_name_ || row.member_name || row.name);
+  const embeddedNumber = clientName.match(/\s(\d{1,20})\s*$/)?.[1] ?? "";
+  const resolvedNumber = num || embeddedNumber;
+  if (!resolvedNumber && !clientName) {
     if (optional) return { skip: true };
-    return { error: "Provide member_number or sacco_member_id" };
+    return { error: "Provide member_number, Client NO., or Client Name." };
   }
-  const m = ctx.membersByNumber.get(num.toLowerCase());
-  if (!m) return { error: `No member with number "${num}"` };
+  const normalizedName = clientName.replace(/\s+\d{1,20}\s*$/, "").trim().toLowerCase().replace(/\s+/g, " ");
+  const m = resolvedNumber ? ctx.membersByNumber.get(resolvedNumber.toLowerCase()) : ctx.membersByName.get(normalizedName);
+  if (!m) return { error: resolvedNumber ? `No member with number "${resolvedNumber}"` : `No member named "${clientName}"` };
   return { member: m };
 }
 
@@ -93,11 +121,11 @@ function resolveLoanProduct(
   products: LoanProduct[]
 ): { product: LoanProduct | null; loanTypeName: string } | { error: string } {
   const typeRaw = cell(row, ["loan_type", "loan_product", "product", "product_name"]);
-  const codeRaw = cell(row, ["loan_code", "loan_product_code", "product_code"]);
+  const codeRaw = cell(row, ["loan_code", "loan_product_code", "product_code", "code"]);
 
   if (typeRaw) {
     const product = matchProductByName(typeRaw, products);
-    return { product, loanTypeName: typeRaw.trim() };
+    if (product || !codeRaw) return { product, loanTypeName: typeRaw.trim() };
   }
   if (codeRaw) {
     const product = matchProductByCode(codeRaw, products);
@@ -255,6 +283,11 @@ export function getMemberLoansPortfolioTemplateCsv(): string {
       "",
       "",
     ].join(","),
+    [
+      "Date", "Client Name.", "Loan Amount", "Loan Type", "Code", "Period", "Loan No.",
+      "Net Amount", "Application/Loan Form", "Processing Fee", "Insurance",
+    ].join(","),
+    ["1/28/2026", "Example Member 590", 300000, "Development Loan", "01", 12, "01-01-00001", 282000, 3000, 12000, 3000].join(","),
   ].join("\n");
 }
 
@@ -286,7 +319,7 @@ export function planMemberLoansPortfolioImport(
   rows.forEach((row, idx) => {
     const line = idx + 2;
 
-    const loanNumberRaw = cell(row, ["loan_number", "loan_no", "account_number", "loan_account"]);
+    const loanNumberRaw = cell(row, ["loan_number", "loan_no", "loan_no.", "account_number", "loan_account"]);
     const loanIdHint = cell(row, ["loan_id", "id", "sacco_loan_id"]).replace(/"/g, "").trim();
     const isUpdateHint = Boolean(loanNumberRaw || loanIdHint);
 
@@ -305,6 +338,7 @@ export function planMemberLoansPortfolioImport(
       "loan_code",
       "loan_product_code",
       "product_code",
+      "code",
     ])
       ? resolveLoanProduct(row, loanProducts)
       : null;
@@ -411,7 +445,7 @@ export function planMemberLoansPortfolioImport(
 
       const product = productRes && !("error" in productRes) ? productRes.product : matchProductByName(existing.loanType, loanProducts);
 
-      const termFromRow = parseNumberCell(cell(row, ["term_months", "term", "months"]));
+      const termFromRow = parseNumberCell(cell(row, ["term_months", "term", "months", "period"]));
       const rateFromRow = parseNumberCell(cell(row, ["interest_rate", "annual_rate", "rate"]));
       const basisRaw = cell(row, ["interest_basis", "basis"]).toLowerCase();
 
@@ -428,7 +462,7 @@ export function planMemberLoansPortfolioImport(
         return;
       }
 
-      if (rowHas(row, ["term_months", "term", "months"])) {
+      if (rowHas(row, ["term_months", "term", "months", "period"])) {
         patch.term_months = termMonths;
         fieldCount += 1;
       }
@@ -471,8 +505,8 @@ export function planMemberLoansPortfolioImport(
         fieldCount += 2;
       }
 
-      if (rowHas(row, ["disbursement_date", "disburse_date"])) {
-        const disb = parseIsoDateOnly(cell(row, ["disbursement_date", "disburse_date"]));
+      if (rowHas(row, ["disbursement_date", "disburse_date", "date", "loan_date"])) {
+        const disb = getLoanImportDisbursementDate(row);
         if (!disb) {
           preview.push({ line, status: "error", summary: "Invalid disbursement_date" });
           return;
@@ -562,7 +596,7 @@ export function planMemberLoansPortfolioImport(
       return;
     }
 
-    const termFromRow = parseNumberCell(cell(row, ["term_months", "term", "months"]));
+    const termFromRow = parseNumberCell(cell(row, ["term_months", "term", "months", "period"]));
     const rateFromRow = parseNumberCell(cell(row, ["interest_rate", "annual_rate", "rate"]));
 
     if (!product && (termFromRow === null || rateFromRow === null)) {
@@ -599,8 +633,12 @@ export function planMemberLoansPortfolioImport(
 
     const monthlyPayment = calculateMonthlyPayment(principal!, interestRate, termMonths, interestBasis);
 
-    const disbRaw = cell(row, ["disbursement_date", "disburse_date"]);
-    const disbParsed = disbRaw ? parseIsoDateOnly(disbRaw) : null;
+    const disbRaw = cell(row, ["disbursement_date", "disburse_date", "date", "loan_date"]);
+    const disbParsed = disbRaw ? getLoanImportDisbursementDate(row) : null;
+    if (disbRaw && !disbParsed) {
+      preview.push({ line, status: "error", summary: "Invalid disbursement date (use YYYY-MM-DD, DD/MM/YYYY, or M/D/YYYY)" });
+      return;
+    }
 
     const statRaw = cell(row, ["status"]).trim().toLowerCase().replace(/\s+/g, "_").replace(/-/g, "_");
     let finalStatus: LoanStatus = "disbursed";
@@ -640,6 +678,26 @@ export function planMemberLoansPortfolioImport(
     }
     seenFileKeys.add(fileKey);
 
+    const formFee = parseNumberCell(cell(row, ["application_loan_form", "application/loan_form", "application_form", "loan_form", "form_fee"])) ?? 0;
+    const processingFee = parseNumberCell(cell(row, ["processing_fee", "processing"])) ?? 0;
+    const insuranceFee = parseNumberCell(cell(row, ["insurance", "insurance_fee"])) ?? 0;
+    const netRaw = cell(row, ["net_amount", "net_disbursement"]);
+    const netAmount = netRaw ? parseNumberCell(netRaw) : null;
+    if (formFee < 0 || processingFee < 0 || insuranceFee < 0 || (netRaw && netAmount === null)) {
+      preview.push({ line, status: "error", summary: "Invalid loan fee or net amount" });
+      return;
+    }
+    const totalUpfrontFees = formFee + processingFee + insuranceFee;
+    if (netAmount !== null && Math.abs(netAmount - (principal! - totalUpfrontFees)) > 0.01) {
+      preview.push({ line, status: "error", summary: `Net Amount must equal principal less fees (expected ${(principal! - totalUpfrontFees).toLocaleString()})` });
+      return;
+    }
+    const fees = totalUpfrontFees || netAmount !== null ? {
+      formFee, monitoringFee: 0, processingFee, insuranceFee, applicationFee: 0,
+      totalUpfrontFees, netDisbursement: netAmount ?? principal! - totalUpfrontFees,
+      useAgent: false, agentFeeRate: 0, agentFeeMonthly: 0, agentFeeTotal: 0, totalFees: totalUpfrontFees,
+    } : null;
+
     const payload: Parameters<typeof insertLoanRow>[0] = {
       sacco_member_id: member.id,
       member_name: member.full_name,
@@ -657,7 +715,7 @@ export function planMemberLoansPortfolioImport(
       application_date: applicationDate,
       interest_basis: interestBasis,
       disbursement_date: disbursementDate,
-      fees: null,
+      fees,
       collateral_description: null,
       lc1_chairman_name: null,
       lc1_chairman_phone: null,
@@ -669,7 +727,7 @@ export function planMemberLoansPortfolioImport(
     preview.push({
       line,
       status: "ok",
-      summary: `Insert · ${member.member_number} · ${loanNumberRaw || loanTypeRaw} · principal ${principal!.toLocaleString()} · bal ${insertBalance.toLocaleString()}`,
+      summary: `Insert · ${member.member_number} · ${loanNumberRaw || loanTypeRaw} · principal ${principal!.toLocaleString()}${totalUpfrontFees ? ` · fees ${totalUpfrontFees.toLocaleString()} · net ${(netAmount ?? principal! - totalUpfrontFees).toLocaleString()}` : ""} · bal ${insertBalance.toLocaleString()}`,
     });
   });
 

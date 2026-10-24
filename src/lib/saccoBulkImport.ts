@@ -44,6 +44,8 @@ type AccountMini = {
 export type SaccoBulkImportContext = {
   membersById: Map<string, MemberMini>;
   membersByNumber: Map<string, MemberMini>;
+  /** Exact normalized full-name matching is a safe fallback for legacy loan sheets. */
+  membersByName: Map<string, MemberMini>;
   accountByNumber: Map<string, AccountMini>;
   accountByMemberProduct: Map<string, AccountMini>;
 };
@@ -188,10 +190,12 @@ export async function loadSaccoBulkImportContext(organizationId: string): Promis
 
   const membersById = new Map<string, MemberMini>();
   const membersByNumber = new Map<string, MemberMini>();
+  const membersByName = new Map<string, MemberMini>();
   for (const r of memRes.data ?? []) {
     const m = r as MemberMini;
     membersById.set(m.id, m);
     membersByNumber.set(m.member_number.trim().toLowerCase(), m);
+    membersByName.set(m.full_name.trim().toLowerCase().replace(/\s+/g, " "), m);
   }
 
   const accountByNumber = new Map<string, AccountMini>();
@@ -220,7 +224,7 @@ export async function loadSaccoBulkImportContext(organizationId: string): Promis
     );
   }
 
-  return { membersById, membersByNumber, accountByNumber, accountByMemberProduct };
+  return { membersById, membersByNumber, membersByName, accountByNumber, accountByMemberProduct };
 }
 
 export async function parseBulkImportFile(file: File): Promise<{ headers: string[]; rows: Record<string, string>[] }> {
