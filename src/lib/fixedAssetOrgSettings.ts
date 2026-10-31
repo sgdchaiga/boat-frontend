@@ -6,6 +6,7 @@ export type FixedAssetOrgSettingsRow = {
   auto_depreciation_enabled: boolean;
   auto_depreciation_frequency: AutoDepreciationFrequency;
   auto_depreciation_last_period_end: string | null;
+  capitalization_threshold: number | null;
   updated_at?: string;
 };
 
@@ -21,7 +22,7 @@ export async function fetchFixedAssetOrgSettings(organizationId: string): Promis
 
 export async function upsertFixedAssetOrgSettings(
   organizationId: string,
-  patch: Partial<Pick<FixedAssetOrgSettingsRow, "auto_depreciation_enabled" | "auto_depreciation_frequency" | "auto_depreciation_last_period_end">>
+  patch: Partial<Pick<FixedAssetOrgSettingsRow, "auto_depreciation_enabled" | "auto_depreciation_frequency" | "auto_depreciation_last_period_end" | "capitalization_threshold">>
 ): Promise<void> {
   const existing = await fetchFixedAssetOrgSettings(organizationId);
   const { error } = await supabase.from("fixed_asset_org_settings").upsert(
@@ -33,6 +34,7 @@ export async function upsertFixedAssetOrgSettings(
         patch.auto_depreciation_last_period_end !== undefined
           ? patch.auto_depreciation_last_period_end
           : existing?.auto_depreciation_last_period_end ?? null,
+      capitalization_threshold: patch.capitalization_threshold ?? existing?.capitalization_threshold ?? 1000000,
       updated_at: new Date().toISOString(),
     },
     { onConflict: "organization_id" }

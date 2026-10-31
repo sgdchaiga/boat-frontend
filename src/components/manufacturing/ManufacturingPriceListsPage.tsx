@@ -3,6 +3,7 @@ import { Check, Loader2, Pencil, Plus, Trash2, X } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
+import { SearchableCombobox } from "../common/SearchableCombobox";
 
 // These tables are introduced by the manufacturing price-list migration.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -223,10 +224,7 @@ export function ManufacturingPriceListsPage({ readOnly = false }: { readOnly?: b
       <section className="app-card p-5 space-y-4 overflow-x-auto">
         <h2 className="font-semibold text-slate-900">Price list</h2>
         <div className="grid grid-cols-1 md:grid-cols-5 gap-3 min-w-[760px]">
-          <select className="border border-slate-300 rounded-lg px-3 py-2" value={draft.product_id} onChange={(e) => setDraft({ ...draft, product_id: e.target.value })}>
-            <option value="">Product</option>
-            {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-          </select>
+          <SearchableCombobox value={draft.product_id} onChange={(product_id) => setDraft({ ...draft, product_id })} options={products.map((product) => ({ id: product.id, label: product.name }))} emptyOption={{ label: "Product" }} placeholder="Search product..." inputAriaLabel="Search price-list product" />
           <select className="border border-slate-300 rounded-lg px-3 py-2" value={draft.customer_type_id} onChange={(e) => setDraft({ ...draft, customer_type_id: e.target.value })}>
             <option value="">Customer type</option>
             {types.map((type) => <option key={type.id} value={type.id}>{type.name}</option>)}
@@ -257,9 +255,7 @@ export function ManufacturingPriceListsPage({ readOnly = false }: { readOnly?: b
                   <tr key={row.id} className="border-t border-slate-100">
                     <td className="p-3 font-medium">
                       {editingPriceId === row.id ? (
-                        <select className="w-full border border-slate-300 rounded px-2 py-1" value={editDraft.product_id} onChange={(e) => setEditDraft({ ...editDraft, product_id: e.target.value })}>
-                          {products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}
-                        </select>
+                        <SearchableCombobox value={editDraft.product_id} onChange={(product_id) => setEditDraft({ ...editDraft, product_id })} options={products.map((product) => ({ id: product.id, label: product.name }))} placeholder="Search product..." inputAriaLabel="Search price-list product" />
                       ) : productName(row.product_id)}
                     </td>
                     <td className="p-3">

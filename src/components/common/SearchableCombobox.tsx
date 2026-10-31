@@ -14,6 +14,8 @@ type SearchableComboboxProps = {
   className?: string;
   inputAriaLabel?: string;
   clearable?: boolean;
+  /** Permit values that are not in the option list, while retaining filtered results. */
+  allowCustomValue?: boolean;
 };
 
 export function SearchableCombobox({
@@ -26,6 +28,7 @@ export function SearchableCombobox({
   className = "",
   inputAriaLabel = "Search and select",
   clearable = false,
+  allowCustomValue = false,
 }: SearchableComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -41,7 +44,9 @@ export function SearchableCombobox({
       ? selected.label
       : value === "" && emptyOption
         ? emptyOption.label
-        : "";
+        : allowCustomValue
+          ? value
+          : "";
 
   useEffect(() => {
     if (!open) {
@@ -137,7 +142,7 @@ export function SearchableCombobox({
     // Clear search so the full option list is visible. Seeding with the selected label (or a
     // placeholder like "Saved account missing from chart") filters `includes()` down to one row
     // and makes it impossible to pick another account without manually deleting the field.
-    setSearch("");
+    setSearch(allowCustomValue ? value : "");
   };
 
   const onInputBlur = () => {
@@ -218,6 +223,7 @@ export function SearchableCombobox({
           value={inputDisplay}
           onChange={(e) => {
             setSearch(e.target.value);
+            if (allowCustomValue) onChange(e.target.value);
             setOpen(true);
           }}
           onFocus={onInputFocus}

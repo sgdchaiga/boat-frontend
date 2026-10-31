@@ -21,8 +21,9 @@ import {
 import { fetchFixedAssetOrgSettings, upsertFixedAssetOrgSettings, type FixedAssetOrgSettingsRow } from "@/lib/fixedAssetOrgSettings";
 import { addDays, isPeriodDue, suggestNextPeriodAfter, type AutoDepreciationFrequency } from "@/lib/fixedAssetSchedule";
 import { PageNotes } from "@/components/common/PageNotes";
+import { SearchableCombobox } from "@/components/common/SearchableCombobox";
 
-type Tab = "register" | "categories" | "depreciation" | "lifecycle";
+type Tab = "register" | "categories" | "depreciation" | "lifecycle" | "settings";
 
 type FaCategory = {
   id: string;
@@ -85,6 +86,8 @@ type FaAsset = {
   invoice_reference: string | null;
   purchase_date: string | null;
   cost: number;
+  /** Items below the capitalization threshold stay in the asset register for tracking, but are expensed. */
+  asset_classification?: "fixed_asset" | "small_asset" | null;
   funding_source: string | null;
   status: "draft" | "capitalized" | "disposed";
   depreciation_method: DepreciationMethod;
@@ -121,6 +124,7 @@ const TABS: { id: Tab; label: string; icon: typeof Building2 }[] = [
   { id: "categories", label: "Categories", icon: Layers },
   { id: "depreciation", label: "Depreciation", icon: LineChart },
   { id: "lifecycle", label: "Lifecycle log", icon: History },
+  { id: "settings", label: "Settings", icon: Pencil },
 ];
 
 /** Suggested top-level classes; duplicates (same name per org) are skipped. */
@@ -132,6 +136,20 @@ const COMMON_FA_CATEGORY_NAMES = [
   "Fixtures & fittings",
   "Computer equipment",
 ];
+
+const DEFAULT_FUNDING_SOURCES = [
+  "Cash purchase",
+  "Bank transfer",
+  "Owner / shareholder capital",
+  "Bank loan",
+  "Grant / donor funding",
+  "Lease / hire purchase",
+];
+const CAPITALIZATION_THRESHOLD = 1_000_000;
+
+function assetClassification(cost: number, threshold = CAPITALIZATION_THRESHOLD): "fixed_asset" | "small_asset" {
+  return Number(cost) < threshold ? "small_asset" : "fixed_asset";
+}
 
 function emptyAssetDraft(): Partial<FaAsset> {
   return {
@@ -168,6 +186,11 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
 
   const [assetModal, setAssetModal] = useState<"add" | "edit" | null>(null);
   const [draft, setDraft] = useState<Partial<FaAsset>>(emptyAssetDraft());
+
+  const fundingSourceOptions = useMemo(() => Array.from(new Set([
+    ...DEFAULT_FUNDING_SOURCES,
+    ...assets.map((asset) => asset.funding_source?.trim()).filter((source): source is string => Boolean(source)),
+  ])).sort((a, b) => a.localeCompare(b)).map((source) => ({ id: source, label: source })), [assets]);
   const [editingId, setEditingId] = useState<string | null>(null);
 
   const [catName, setCatName] = useState("");
@@ -194,6 +217,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
   const [orgSchedule, setOrgSchedule] = useState<FixedAssetOrgSettingsRow | null>(null);
   const [scheduleAutoEnabled, setScheduleAutoEnabled] = useState(false);
   const [scheduleFreq, setScheduleFreq] = useState<AutoDepreciationFrequency>("monthly");
+  const [capitalizationThreshold, setCapitalizationThreshold] = useState(CAPITALIZATION_THRESHOLD);
   const [scheduleSaving, setScheduleSaving] = useState(false);
   const [depreciationReminder, setDepreciationReminder] = useState<{
     periodStart: string;
@@ -286,15 +310,18 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
         setOrgSchedule(os);
         setScheduleAutoEnabled(!!os.auto_depreciation_enabled);
         setScheduleFreq(os.auto_depreciation_frequency || "monthly");
+        setCapitalizationThreshold(Number(os.capitalization_threshold) || CAPITALIZATION_THRESHOLD);
       } else {
         setOrgSchedule(null);
         setScheduleAutoEnabled(false);
         setScheduleFreq("monthly");
+        setCapitalizationThreshold(CAPITALIZATION_THRESHOLD);
       }
     } catch {
       setOrgSchedule(null);
       setScheduleAutoEnabled(false);
       setScheduleFreq("monthly");
+      setCapitalizationThreshold(CAPITALIZATION_THRESHOLD);
     }
 
     if (cRes.error) setErr(cRes.error.message);
@@ -379,6 +406,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
       await upsertFixedAssetOrgSettings(orgId, {
         auto_depreciation_enabled: scheduleAutoEnabled,
         auto_depreciation_frequency: scheduleFreq,
+        capitalization_threshold: capitalizationThreshold,
       });
       const os = await fetchFixedAssetOrgSettings(orgId);
       setOrgSchedule(os);
@@ -430,6 +458,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
       invoice_reference: draft.invoice_reference?.trim() || null,
       purchase_date: draft.purchase_date || null,
       cost: Number(draft.cost) || 0,
+      asset_classification: assetClassification(Number(draft.cost) || 0, capitalizationThreshold),
       funding_source: draft.funding_source?.trim() || null,
       status: draft.status || "draft",
       depreciation_method: draft.depreciation_method || "straight_line",
@@ -469,6 +498,10 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
     if (!uid || readOnly) return;
     setErr(null);
     const cost = Number(a.cost) || 0;
+    if (assetClassification(cost, capitalizationThreshold) === "small_asset") {
+      setErr(`This item is below the UGX ${capitalizationThreshold.toLocaleString()} capitalization threshold. Record it through Spend money as an expense; it cannot be capitalized.`);
+      return;
+    }
     if (cost <= 0) {
       setErr("Set a positive cost before capitalization.");
       return;
@@ -1065,6 +1098,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
                   <th className="text-left p-3 font-semibold">Name</th>
                   <th className="text-left p-3 font-semibold">Category</th>
                   <th className="text-right p-3 font-semibold">Cost</th>
+                  <th className="text-left p-3 font-semibold">Treatment</th>
                   <th className="text-right p-3 font-semibold">NBV</th>
                   <th className="text-left p-3 font-semibold">Impairment review</th>
                   <th className="text-left p-3 font-semibold">Status</th>
@@ -1086,6 +1120,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
                       </td>
                       <td className="p-3 text-slate-600">{cat?.name ?? "—"}</td>
                       <td className="p-3 text-right">{a.cost.toFixed(2)}</td>
+                      <td className="p-3 text-xs">{assetClassification(a.cost, capitalizationThreshold) === "small_asset" && a.status !== "capitalized" ? <span className="rounded-full bg-amber-100 px-2 py-1 font-medium text-amber-900">Small asset · expense</span> : <span className="rounded-full bg-emerald-100 px-2 py-1 font-medium text-emerald-900">Fixed asset · capitalize</span>}</td>
                       <td className="p-3 text-right font-medium">{nbv.toFixed(2)}</td>
                       <td className="p-3 text-xs">
                         {!a.impairment_review_due_date ? (
@@ -1098,7 +1133,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
                           a.impairment_review_due_date
                         )}
                       </td>
-                      <td className="p-3 capitalize">{a.status}</td>
+                      <td className="p-3 capitalize">{a.status === "draft" && assetClassification(a.cost, capitalizationThreshold) === "small_asset" ? "expense pending" : a.status}</td>
                       <td className="p-3">
                         <div className="flex flex-wrap gap-1">
                           <button
@@ -1109,7 +1144,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
                           >
                             Edit
                           </button>
-                          {a.status === "draft" && (
+                          {a.status === "draft" && assetClassification(a.cost, capitalizationThreshold) === "fixed_asset" && (
                             <button
                               type="button"
                               className="text-xs px-2 py-1 rounded bg-emerald-700 text-white disabled:opacity-50"
@@ -1119,6 +1154,7 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
                               Capitalize
                             </button>
                           )}
+                          {a.status === "draft" && assetClassification(a.cost, capitalizationThreshold) === "small_asset" && <span className="px-2 py-1 text-xs text-amber-800">Expense in Spend money</span>}
                           {a.status === "capitalized" && (
                             <>
                               <button
@@ -1506,6 +1542,19 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
         </div>
       )}
 
+      {tab === "settings" && (
+        <section className="max-w-xl rounded-xl border border-slate-200 bg-white p-5">
+          <h2 className="text-lg font-semibold text-slate-900">Capitalization policy</h2>
+          <p className="mt-1 text-sm text-slate-600">Items below this amount are tracked as small assets and should be recorded as an expense. Items at or above it can be capitalized and depreciated.</p>
+          <label className="mt-4 block text-sm font-medium text-slate-700">
+            Capitalization threshold (UGX)
+            <input type="number" min="0" step="1" value={capitalizationThreshold} onChange={(e) => setCapitalizationThreshold(Math.max(0, Number(e.target.value) || 0))} disabled={readOnly} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100" />
+          </label>
+          <p className="mt-2 text-xs text-slate-500">Current rule: values below UGX {capitalizationThreshold.toLocaleString()} are expensed; values of UGX {capitalizationThreshold.toLocaleString()} or more are eligible for capitalization.</p>
+          <button type="button" disabled={readOnly || scheduleSaving} onClick={saveScheduleSettings} className="mt-4 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50">{scheduleSaving ? "Saving..." : "Save capitalization policy"}</button>
+        </section>
+      )}
+
       {tab === "lifecycle" && (
         <div className="bg-white border border-slate-200 rounded-xl overflow-x-auto">
           <table className="w-full text-sm">
@@ -1684,13 +1733,18 @@ export function FixedAssetsPage({ readOnly }: { readOnly?: boolean }) {
                   value={draft.cost ?? 0}
                   onChange={(e) => setDraft((d) => ({ ...d, cost: Number(e.target.value) }))}
                 />
+                <span className={`mt-1 block text-[11px] ${assetClassification(Number(draft.cost) || 0, capitalizationThreshold) === "small_asset" ? "text-amber-700" : "text-emerald-700"}`}>{assetClassification(Number(draft.cost) || 0, capitalizationThreshold) === "small_asset" ? `Below UGX ${capitalizationThreshold.toLocaleString()}: tracked as a small asset and expensed (not capitalized).` : `UGX ${capitalizationThreshold.toLocaleString()} or more: eligible for capitalization and depreciation.`}</span>
               </label>
               <label className="block">
                 <span className="text-xs font-medium text-slate-600">Funding source</span>
-                <input
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 mt-1"
+                <SearchableCombobox
                   value={draft.funding_source || ""}
-                  onChange={(e) => setDraft((d) => ({ ...d, funding_source: e.target.value }))}
+                  onChange={(funding_source) => setDraft((d) => ({ ...d, funding_source }))}
+                  options={fundingSourceOptions}
+                  allowCustomValue
+                  placeholder="Select or enter funding source"
+                  inputAriaLabel="Funding source"
+                  className="mt-1"
                 />
               </label>
               <label className="block">

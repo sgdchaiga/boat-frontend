@@ -659,6 +659,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const [filterDateFrom, setFilterDateFrom] = useState("");
   const [filterDateTo, setFilterDateTo] = useState("");
   const [filterVendorId, setFilterVendorId] = useState("");
+  const [filterSearch, setFilterSearch] = useState("");
   /** Filter list to expenses that have at least one line posting to this expense GL */
   const [filterExpenseGlAccountId, setFilterExpenseGlAccountId] = useState("");
   const [page, setPage] = useState(0);
@@ -897,6 +898,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
         if (filterDateFrom) q = q.gte("expense_date", filterDateFrom);
         if (filterDateTo) q = q.lte("expense_date", filterDateTo);
         if (filterVendorId) q = q.eq("vendor_id", filterVendorId);
+        if (filterSearch.trim()) q = q.ilike("description", `%${filterSearch.trim()}%`);
         if (glFilteredExpenseIds && glFilteredExpenseIds.length > 0) {
           q = q.in("id", glFilteredExpenseIds);
         }
@@ -1027,7 +1029,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
     } finally {
       setLoading(false);
     }
-  }, [orgId, isLocalDesktopMode, filterDateFrom, filterDateTo, filterVendorId, filterExpenseGlAccountId, page, pageSize]);
+  }, [orgId, isLocalDesktopMode, filterDateFrom, filterDateTo, filterVendorId, filterSearch, filterExpenseGlAccountId, page, pageSize]);
 
   useEffect(() => {
     void fetchData();
@@ -1042,7 +1044,7 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
 
   useEffect(() => {
     setPage(0);
-  }, [filterDateFrom, filterDateTo, filterVendorId, filterExpenseGlAccountId, pageSize]);
+  }, [filterDateFrom, filterDateTo, filterVendorId, filterSearch, filterExpenseGlAccountId, pageSize]);
 
   useEffect(() => {
     if (simpleExpenseMode) setFilterExpenseGlAccountId("");
@@ -1151,6 +1153,10 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
   const vendorComboboxOptions = useMemo(
     () => vendors.map((v) => ({ id: v.id, label: v.name })),
     [vendors]
+  );
+  const expenseItemOptions = useMemo(
+    () => expenseGlOptions.map((account) => ({ id: account.account_name, label: `${account.account_name}${account.account_code ? ` (${account.account_code})` : ""}` })),
+    [expenseGlOptions]
   );
 
   const grandTotal = useMemo(() => lineTotals.reduce((s, t) => s + t.rowTotal, 0), [lineTotals]);
@@ -1863,12 +1869,17 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
           filterDateFrom && { key: "from", label: `From: ${filterDateFrom}`, onRemove: () => setFilterDateFrom("") },
           filterDateTo && { key: "to", label: `To: ${filterDateTo}`, onRemove: () => setFilterDateTo("") },
           filterVendorId && { key: "vendor", label: `Vendor: ${vendors.find((vendor) => vendor.id === filterVendorId)?.name || "Selected"}`, onRemove: () => setFilterVendorId("") },
+          filterSearch.trim() && { key: "search", label: `Search: ${filterSearch.trim()}`, onRemove: () => setFilterSearch("") },
           filterExpenseGlAccountId && { key: "gl", label: `GL: ${expenseGlOptions.find((account) => account.id === filterExpenseGlAccountId)?.account_name || "Selected"}`, onRemove: () => setFilterExpenseGlAccountId("") },
         ].filter(Boolean) as SchoolFilterChip[])}
-        onClearAll={() => { setFilterDateFrom(""); setFilterDateTo(""); setFilterVendorId(""); setFilterExpenseGlAccountId(""); }}
+        onClearAll={() => { setFilterDateFrom(""); setFilterDateTo(""); setFilterVendorId(""); setFilterSearch(""); setFilterExpenseGlAccountId(""); }}
         resultSummary={<>{totalCount ?? expenses.length} expense{(totalCount ?? expenses.length) === 1 ? "" : "s"}</>}
       >
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <div>
+            <label className="block text-xs font-medium text-slate-600 mb-1">Search spending</label>
+            <input value={filterSearch} onChange={(e) => setFilterSearch(e.target.value)} placeholder="Search item, e.g. electricity" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white min-h-[42px]" aria-label="Search spend money records" />
+          </div>
           <div>
             <label className="block text-xs font-medium text-slate-600 mb-1">Vendor</label>
             <select
@@ -2139,11 +2150,13 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                           <div key={row.key} className="border border-slate-200 rounded-lg p-4 space-y-3 bg-slate-50/40">
                             <div>
                               <label className="block text-xs font-medium text-slate-600 mb-1">What did you spend on?</label>
-                              <input
-                                type="text"
+                              <SearchableCombobox
                                 value={row.item}
-                                onChange={(e) => {
-                                  const v = e.target.value;
+                                allowCustomValue
+                                options={expenseItemOptions}
+                                placeholder="Search or enter an item, e.g. electricity"
+                                inputAriaLabel="Search or enter expense item"
+                                onChange={(v) => {
                                   const patch: Partial<SimpleExpenseLine> = { item: v };
                                    if (!row.typeLocked) {
                                      const g = guessCategoryFromItem(v);
@@ -2155,9 +2168,6 @@ export function ExpensesPage({ onNavigate, pageState }: ExpensesPageProps = {}) 
                                    }
                                   updateSimpleLine(row.key, patch);
                                 }}
-                                onMouseDown={(e) => e.stopPropagation()}
-                                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"
-                                placeholder="e.g. Fuel for generator, staff salaries"
                               />
                             </div>
                             <div className="flex flex-wrap gap-3">

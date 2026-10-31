@@ -19,6 +19,7 @@ import { postStockInFromPurchaseOrderForBill, reverseStockInForBill } from "../.
 import { createJournalForBill, deleteJournalEntryByReference, reverseJournalEntriesByReference } from "../../lib/journal";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { PageNotes } from "../common/PageNotes";
+import { SearchableCombobox } from "../common/SearchableCombobox";
 import { SchoolFilterBar, type SchoolFilterChip } from "../common/SchoolFilterBar";
 import { queueApprovedBillForTreasury } from "../../lib/treasuryWorkflow";
 import { randomUuid } from "../../lib/randomUuid";
@@ -2065,19 +2066,7 @@ export function BillsPage({ highlightBillId, onNavigate, readOnly = false, cashb
                     return (
                       <tr key={item.id} className="border-t border-slate-100">
                         <td className="p-2">
-                          <select
-                            value={item.product_id || ""}
-                            onChange={(e) => selectItemDraftProduct(item.id, e.target.value)}
-                            className="w-full rounded-lg border border-slate-300 px-2 py-1.5"
-                          >
-                            <option value="">Select item</option>
-                            {item.product_id && !productOptions.some((product) => product.id === item.product_id) ? (
-                              <option value={item.product_id}>{item.description} (current)</option>
-                            ) : null}
-                            {productOptions.map((product) => (
-                              <option key={product.id} value={product.id}>{product.name}</option>
-                            ))}
-                          </select>
+                          <SearchableCombobox value={item.product_id || ""} onChange={(productId) => selectItemDraftProduct(item.id, productId)} options={[...(item.product_id && !productOptions.some((product) => product.id === item.product_id) ? [{ id: item.product_id, label: `${item.description} (current)` }] : []), ...productOptions.map((product) => ({ id: product.id, label: product.name }))]} emptyOption={{ label: "Select item" }} placeholder="Search item..." inputAriaLabel="Search bill item" />
                         </td>
                         <td className="p-2">
                           <input

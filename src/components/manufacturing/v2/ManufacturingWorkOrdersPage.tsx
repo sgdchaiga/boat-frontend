@@ -4,6 +4,7 @@ import { ReadOnlyNotice } from "../../common/ReadOnlyNotice";
 import { supabase } from "../../../lib/supabase";
 import { useAuth } from "../../../contexts/AuthContext";
 import { filterByOrganizationId } from "../../../lib/supabaseOrgFilter";
+import { SearchableCombobox } from "../../common/SearchableCombobox";
 
 type BomMaterial = { item_id: string; item_name: string; qty: number; unit: string };
 type BomRow = { id: string; product_id: string; product_name: string; version: string; status: string; output_qty: number; output_unit: string; materials?: BomMaterial[] };
@@ -252,7 +253,7 @@ export function ManufacturingWorkOrdersPage({ readOnly = false }: { readOnly?: b
       </div>
       <div className="bg-white rounded-xl border border-slate-200 p-4">
         <div className="grid grid-cols-1 md:grid-cols-4 gap-2">
-          <label className="text-xs text-slate-600">BOM / finished product<select value={bomId} onChange={(e) => setBomId(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm"><option value="">Select BOM...</option>{boms.map((bom) => <option key={bom.id} value={bom.id}>{bom.product_name} · {bom.version} · {bom.status}</option>)}</select>{selectedBom ? <span className="mt-1 block text-[11px] text-slate-500">Selected recipe: {selectedBom.output_qty} {selectedBom.output_unit} per batch.</span> : <span className="mt-1 block text-[11px] text-slate-500">A BOM is required before a production order can be created.</span>}</label>
+          <label className="text-xs text-slate-600">BOM / finished product<SearchableCombobox value={bomId} onChange={setBomId} options={boms.map((bom) => ({ id: bom.id, label: `${bom.product_name} · ${bom.version} · ${bom.status}` }))} emptyOption={{ label: "Select BOM..." }} placeholder="Search finished product..." inputAriaLabel="Search BOM or finished product" className="mt-1" />{selectedBom ? <span className="mt-1 block text-[11px] text-slate-500">Selected recipe: {selectedBom.output_qty} {selectedBom.output_unit} per batch.</span> : <span className="mt-1 block text-[11px] text-slate-500">A BOM is required before a production order can be created.</span>}</label>
           <label className="text-xs text-slate-600">Planned Quantity<input type="number" min="0" step="0.01" value={plannedQty} onChange={(e) => setPlannedQty(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></label>
           <label className="text-xs text-slate-600">Start Date<input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></label>
           <label className="text-xs text-slate-600">Due Date<input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="mt-1 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" /></label>

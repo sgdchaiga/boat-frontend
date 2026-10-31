@@ -4,6 +4,7 @@ import { supabase } from "../../lib/supabase";
 import { useAuth } from "../../contexts/AuthContext";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
 import { hasUsableBom, preferredBom, validateBom, type ManufacturingBom } from "../../lib/manufacturingBom";
+import { SearchableCombobox } from "../common/SearchableCombobox";
 
 type Product = { id: string; name: string; unit_of_measure?: string | null; manufacturing_item_type?: string | null; active?: boolean };
 const inputClass = "w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-sm disabled:bg-slate-100 disabled:text-slate-500";
@@ -63,11 +64,7 @@ function BomProductRow({ product, boms, materialProducts, readOnly, hidden, onSa
     <td className="p-3">
       {!draft.materials.length && <p className="mb-2 text-xs text-amber-800">No materials set</p>}
       {draft.materials.map((material, index) => <div key={index} className="mb-2 grid grid-cols-[minmax(160px,1fr)_75px_65px_28px] gap-1.5">
-        <select aria-label={`Material ${index + 1} for ${product.name}`} className={inputClass} disabled={locked} value={material.item_id} onChange={(e) => { const p = materialProducts.find((m) => m.id === e.target.value); patch({ materials: draft.materials.map((m, i) => i === index ? { ...m, item_id: e.target.value, item_name: p?.name || "", unit: p?.unit_of_measure || "unit" } : m) }); }}>
-          <option value="">Select material…</option>
-          {!materialProducts.some((m) => m.id === material.item_id) && material.item_id && <option value={material.item_id}>{material.item_name || "Unavailable material"}</option>}
-          {materialProducts.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.unit_of_measure || "unit"} · {p.id.slice(0, 8)}</option>)}
-        </select>
+        <SearchableCombobox value={material.item_id} disabled={locked} onChange={(id) => { const p = materialProducts.find((m) => m.id === id); patch({ materials: draft.materials.map((m, i) => i === index ? { ...m, item_id: id, item_name: p?.name || "", unit: p?.unit_of_measure || "unit" } : m) }); }} options={materialProducts.map((p) => ({ id: p.id, label: `${p.name} · ${p.unit_of_measure || "unit"} · ${p.id.slice(0, 8)}` }))} emptyOption={{ label: "Select material…" }} placeholder="Search material..." inputAriaLabel={`Search material ${index + 1} for ${product.name}`} />
         <input aria-label={`Material ${index + 1} quantity for ${product.name}`} type="number" min="0.001" step="any" className={inputClass} disabled={locked} value={material.qty} onChange={(e) => patch({ materials: draft.materials.map((m, i) => i === index ? { ...m, qty: Number(e.target.value) } : m) })} />
         <input aria-label={`Material ${index + 1} unit for ${product.name}`} className={inputClass} disabled={locked} value={material.unit} onChange={(e) => patch({ materials: draft.materials.map((m, i) => i === index ? { ...m, unit: e.target.value } : m) })} />
         <button type="button" aria-label={`Remove material ${index + 1} for ${product.name}`} disabled={locked} className="text-rose-600 disabled:opacity-40" onClick={() => patch({ materials: draft.materials.filter((_, i) => i !== index) })}><Trash2 className="h-4 w-4" /></button>

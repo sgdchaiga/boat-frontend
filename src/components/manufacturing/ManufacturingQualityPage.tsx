@@ -3,6 +3,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { filterByOrganizationId } from "../../lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "../common/ReadOnlyNotice";
+import { SearchableCombobox } from "../common/SearchableCombobox";
 
 type Product = { id: string; name: string };
 type Lot = { id: string; product_id: string; lot_number: string; status: string };
@@ -149,7 +150,7 @@ export function ManufacturingQualityPage({ readOnly = false }: { readOnly?: bool
     <div><h1 className="text-2xl font-bold text-slate-900">Lots & quality</h1><p className="text-sm text-slate-600">Record batches, inspection evidence and stock release decisions.</p></div>
     {message && <p role="status" className="rounded-lg border bg-slate-50 p-3 text-sm">{message}</p>}
     <section className="rounded-xl border bg-white p-4"><h2 className="font-semibold">Create lot</h2><div className="mt-3 grid gap-2 md:grid-cols-4">
-      <select aria-label="Lot product" value={productId} onChange={(e) => setProductId(e.target.value)} className={input}><option value="">Product...</option>{products.map((product) => <option key={product.id} value={product.id}>{product.name}</option>)}</select>
+      <SearchableCombobox value={productId} onChange={setProductId} options={products.map((product) => ({ id: product.id, label: product.name }))} emptyOption={{ label: "Product..." }} placeholder="Search product..." inputAriaLabel="Search lot product" />
       <input aria-label="Lot number" value={lotNumber} onChange={(e) => setLotNumber(e.target.value)} placeholder="Lot / batch number" className={input}/>
       <input aria-label="Expiry date" type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} className={input}/>
       <button type="button" onClick={() => void createLot()} disabled={readOnly || busy || !productId || !lotNumber.trim()} className="app-btn-primary disabled:opacity-50">Create lot</button>

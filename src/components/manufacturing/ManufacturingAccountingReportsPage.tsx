@@ -349,7 +349,14 @@ export function ManufacturingAccountingReportsPage({ mode }: Props) {
           <h2 className="text-lg font-semibold text-slate-900">Manufacturing Account for {Math.round((Date.parse(toDate) - Date.parse(fromDate)) / 86400000) >= 364 && Math.round((Date.parse(toDate) - Date.parse(fromDate)) / 86400000) <= 365 ? "year" : "period"} ended {new Date(`${toDate}T12:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}</h2>
           <p className="mt-1 text-sm text-slate-500">{user?.organization_name || "Active organisation"} · {fromDate} to {toDate}</p>
           <table className="mt-4 w-full text-sm"><thead><tr className="border-b"><th className="p-3 text-left">Particulars</th><th className="p-3 text-right">UGX</th></tr></thead><tbody>
-            {manufacturingAccountLines(statement).map(line => <tr key={line.label} className={line.strong ? "border-t bg-slate-50 font-semibold" : "border-t border-slate-100"}><td className="p-3">{line.label}</td><td className="p-3 text-right tabular-nums">{line.value === null ? "" : line.value < 0 ? `(${Math.abs(line.value).toLocaleString("en-UG", { maximumFractionDigits: 2 })})` : line.value.toLocaleString("en-UG", { maximumFractionDigits: 2 })}</td></tr>)}
+            {manufacturingAccountLines(statement).map(line => {
+              const drillKey = manufacturingAccountLineDrillKey(line.label);
+              const amount = line.value === null ? "" : line.value < 0 ? `(${Math.abs(line.value).toLocaleString("en-UG", { maximumFractionDigits: 2 })})` : line.value.toLocaleString("en-UG", { maximumFractionDigits: 2 });
+              return <tr key={line.label} className={`${line.strong ? "border-t bg-slate-50 font-semibold" : "border-t border-slate-100"} ${drillKey ? "hover:bg-emerald-50/50" : ""}`}>
+                <td className="p-3">{drillKey ? <button type="button" onClick={() => setDrill(drillKey)} aria-expanded={activeDrill === drillKey} className="inline-flex items-center gap-2 text-left hover:text-emerald-800"><ChevronDown className={`h-4 w-4 text-slate-400 transition ${activeDrill === drillKey ? "rotate-180 text-emerald-700" : ""}`} aria-hidden />{line.label}</button> : line.label}</td>
+                <td className="p-3 text-right tabular-nums">{drillKey ? <button type="button" onClick={() => setDrill(drillKey)} className="hover:text-emerald-800">{amount}</button> : amount}</td>
+              </tr>;
+            })}
           </tbody></table>
           <p className="mt-3 text-xs text-slate-500">Inventory balances and raw-material receipts use the posted ledger. Direct labour and applied overhead use production costing, with net separately posted production expenses added once. Unitemised applied overhead is included in other factory overheads. Zero means no amount was identified in these sources. Other raw-material movements are disclosed separately when present.</p>
         </> : <>
@@ -435,6 +442,18 @@ function mapCostingRow(row: Record<string, unknown>): CostingRow {
     overhead_cost: toNumber(row.overhead_cost),
     production_entry_id: row.production_entry_id == null ? null : String(row.production_entry_id),
   };
+}
+
+/** Map manufacturing-account lines to the existing source-item drill-downs. */
+function manufacturingAccountLineDrillKey(label: string): DrillKey | null {
+  const normalized = label.toLowerCase();
+  if (normalized.includes("opening work in progress")) return "opening_wip";
+  if (normalized.includes("closing work in progress")) return "closing_wip";
+  if (normalized.includes("cost of goods manufactured")) return "cogm";
+  if (normalized.includes("direct labour")) return "labor";
+  if (normalized.includes("factory overhead") || normalized.includes("factory electricity") || normalized.includes("factory rent") || normalized.includes("supervisor") || normalized.includes("factory repairs") || normalized.includes("factory machinery") || normalized.includes("factory insurance") || normalized.includes("indirect materials") || normalized.includes("other factory overhead")) return "overhead";
+  if (normalized.includes("raw materials") || normalized.includes("other direct production") || normalized.includes("prime cost") || normalized.includes("total manufacturing cost")) return "material";
+  return null;
 }
 
 function SummaryCard({ label, value, emphasized = false }: { label: string; value: number; emphasized?: boolean }) {
