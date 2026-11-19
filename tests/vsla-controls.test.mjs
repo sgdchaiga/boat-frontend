@@ -336,3 +336,140 @@ test("v1.2 offline collections remain encrypted, provisional, idempotent, and re
   assert.match(setup, /vsla_v12_designate_offline_device/);
   assert.match(serviceWorker, /url\.pathname\.startsWith\("\/api\/"\)/);
 });
+
+test("phase 4 BOAT Pay inbox keeps provider evidence separate from VSLA settlement", async () => {
+  const [migration, settlement, exceptions, obligations, providerActivation, webhook, collectionAdapter, payoutAdapter, loanPayout, shareoutPayout, workspace, payments, app, layout] = await Promise.all([
+    source("supabase/migrations/20261119260000_vsla_boat_pay_inbox_foundation.sql"),
+    source("supabase/migrations/20261119270000_vsla_boat_pay_settlement_controls.sql"),
+    source("supabase/migrations/20261119280000_vsla_boat_pay_provider_exceptions.sql"),
+    source("supabase/migrations/20261119290000_vsla_boat_pay_obligation_validation.sql"),
+    source("supabase/migrations/20261119300000_boat_pay_provider_activation_controls.sql"),
+    source("supabase/functions/boat-pay-provider-webhook/index.ts"),
+    source("supabase/functions/boat-pay-flutterwave-collection/index.ts"),
+    source("supabase/functions/boat-pay-flutterwave-loan-payout/index.ts"),
+    source("supabase/migrations/20261119310000_vsla_digital_loan_payout_workflow.sql"),
+    source("supabase/migrations/20261119320000_vsla_digital_shareout_payouts.sql"),
+    source("src/components/vsla/VslaV12MeetingWorkspace.tsx"),
+    source("src/components/vsla/VslaV12PaymentsPage.tsx"),
+    source("src/App.tsx"),
+    source("src/components/Layout.tsx"),
+  ]);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.boat_pay_payment_intents/);
+  assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.boat_pay_payment_events/);
+  assert.match(migration, /UNIQUE\(provider,provider_reference\)/);
+  assert.match(migration, /Only trusted payment services can record provider events/);
+  assert.match(migration, /FUNCTION public\.vsla_v12_match_boat_pay_event/);
+  assert.match(migration, /Payment member was not found in this group/);
+  assert.match(migration, /Payment provider, reference, amount, currency, or direction does not match the intent/);
+  assert.match(migration, /matching a payment never posts a VSLA event/);
+  assert.match(settlement, /FUNCTION public\.vsla_v12_settle_boat_pay_receipt/);
+  assert.match(settlement, /A different authorized staff member must settle this independently matched receipt/);
+  assert.match(settlement, /Only matched savings and loan repayment receipts can be settled/);
+  assert.match(settlement, /vsla_v12_receive_savings/);
+  assert.match(settlement, /vsla_v12_receive_loan_repayment/);
+  assert.match(settlement, /i\.purpose IN \('loan_disbursement','expense','shareout_payout'\)/);
+  assert.match(exceptions, /status='reversal_pending'/);
+  assert.match(exceptions, /FUNCTION public\.vsla_v12_resolve_boat_pay_receipt_reversal/);
+  assert.match(exceptions, /A different authorized staff member must resolve a settled payment reversal/);
+  assert.match(exceptions, /vsla_v12_reverse_financial_event/);
+  assert.match(obligations, /uq_boat_pay_active_loan_disbursement/);
+  assert.match(obligations, /Digital loan disbursement must equal one approved loan principal/);
+  assert.match(obligations, /Share-out payout must equal the approved member entitlement/);
+  assert.match(obligations, /Expense payment requires an approved expense event reference/);
+  assert.match(providerActivation, /CREATE TABLE IF NOT EXISTS public\.boat_pay_provider_connections/);
+  assert.match(providerActivation, /Platform administrator access is required/);
+  assert.match(providerActivation, /enabled boolean NOT NULL DEFAULT false/);
+  assert.match(providerActivation, /boat_pay_provider_connections_read/);
+  assert.match(webhook, /provider_not_enabled/);
+  assert.match(webhook, /boat_pay_record_payment_event/);
+  assert.match(webhook, /Provider amount or currency mismatch/);
+  assert.match(collectionAdapter, /flutterwave-mobile-money/);
+  assert.match(collectionAdapter, /Flutterwave is not enabled for BOAT Pay VSLA collections/);
+  assert.match(collectionAdapter, /reconcile the existing provider request instead of sending another prompt/);
+  assert.match(collectionAdapter, /boat_pay_record_payment_event/);
+  assert.match(payoutAdapter, /Flutterwave is not enabled for BOAT Pay VSLA payouts/);
+  assert.match(payoutAdapter, /reconcile the existing provider payout instead of sending another instruction/);
+  assert.match(loanPayout, /approved_pending_payout/);
+  assert.match(loanPayout, /approved_pending_settlement/);
+  assert.match(loanPayout, /FUNCTION public\.vsla_v12_finalize_digital_loan_disbursement/);
+  assert.match(loanPayout, /Resolve approved digital loan payouts before closing the meeting/);
+  assert.match(shareoutPayout, /FUNCTION public\.vsla_v12_finalize_shareout_payout/);
+  assert.match(shareoutPayout, /Resolve all approved share-out payout obligations before closing the cycle/);
+  assert.match(shareoutPayout, /Member has no approved share-out entitlement/);
+  assert.match(workspace, /vsla_v12_request_digital_loan/);
+  assert.match(workspace, /Mobile money after confirmation/);
+  assert.match(payments, /Matching does not by itself post a financial transaction/);
+  assert.match(payments, /No VSLA payment provider has been activated/);
+  assert.match(payments, /vsla_v12_match_boat_pay_event/);
+  assert.match(payments, /vsla_v12_settle_boat_pay_receipt/);
+  assert.match(payments, /Matched receipt settlement/);
+  assert.match(payments, /Provider reversals requiring action/);
+  assert.match(payments, /Payment reconciliation summary/);
+  assert.match(payments, /provider notifications/);
+  assert.match(payments, /Create mobile-money collection request/);
+  assert.match(payments, /boat-pay-flutterwave-collection/);
+  assert.match(payments, /Member phone numbers are supplied only/);
+  assert.match(payments, /Approved digital payouts/);
+  assert.match(payments, /boat-pay-flutterwave-loan-payout/);
+  assert.match(payments, /Finalize payout/);
+  assert.match(payments, /Create share-out payout/);
+  assert.match(payments, /Finalize payout/);
+  assert.match(app, /VslaV12PaymentsPage/);
+  assert.match(layout, /Digital Payments/);
+});
+
+test("phase 5 group health and loan eligibility are explainable and advisory", async () => {
+  const [migration, eligibilityMigration, institutionalMigration, saccoReferral, readiness, health, eligibility, learning, institutional, app, layout, pages] = await Promise.all([
+    source("supabase/migrations/20261119330000_vsla_phase5_group_health.sql"),
+    source("supabase/migrations/20261119340000_vsla_phase5_loan_eligibility.sql"),
+    source("supabase/migrations/20261119350000_vsla_phase5_institutional_access.sql"),
+    source("supabase/migrations/20261119360000_vsla_phase5_sacco_referrals.sql"),
+    source("docs/vsla-v12-phase5-operational-readiness.md"),
+    source("src/components/vsla/VslaV12GroupHealthPage.tsx"),
+    source("src/components/vsla/VslaV12LoanEligibilityPage.tsx"),
+    source("src/components/vsla/VslaLearningCentrePage.tsx"),
+    source("src/components/vsla/VslaInstitutionalOverviewPage.tsx"),
+    source("src/App.tsx"),
+    source("src/components/Layout.tsx"),
+    source("src/lib/vslaPages.ts"),
+  ]);
+  assert.match(migration, /FUNCTION public\.vsla_v12_group_health/);
+  assert.match(migration, /savings_growth/);
+  assert.match(migration, /portfolio_at_risk/);
+  assert.match(migration, /Not calculated: current v1\.2 repayment events/);
+  assert.match(health, /Group health dashboard/);
+  assert.match(health, /Indicator formulas/);
+  assert.match(health, /vsla_v12_group_health/);
+  assert.match(eligibilityMigration, /FUNCTION public\.vsla_v12_assess_loan_eligibility/);
+  assert.match(eligibilityMigration, /'advisory',true/);
+  assert.match(eligibilityMigration, /repayment_performance/);
+  assert.match(eligibility, /Loan eligibility assistant/);
+  assert.match(eligibility, /Advisory only/);
+  assert.match(eligibility, /vsla_v12_assess_loan_eligibility/);
+  assert.match(learning, /VSLA learning centre/);
+  assert.match(learning, /Fraud prevention/);
+  assert.match(learning, /Cash reconciliation/);
+  assert.match(institutionalMigration, /CREATE TABLE IF NOT EXISTS public\.vsla_institutional_authorizations/);
+  assert.match(institutionalMigration, /aggregate_health/);
+  assert.match(institutionalMigration, /FUNCTION public\.vsla_v12_institutional_overview/);
+  assert.match(institutional, /Authorized VSLA programme overview/);
+  assert.match(institutional, /Member records, personal contacts, and transaction detail are excluded/);
+  assert.match(saccoReferral, /CREATE TABLE IF NOT EXISTS public\.vsla_sacco_referrals/);
+  assert.match(saccoReferral, /Platform administrator approval is required for SACCO referrals/);
+  assert.match(saccoReferral, /never an automatic member migration or funds transfer/);
+  assert.match(readiness, /Payment webhook acknowledgement/);
+  assert.match(readiness, /tenant-isolation checks/);
+  assert.match(readiness, /Marketplace boundary/);
+  assert.match(app, /VslaV12GroupHealthPage/);
+  assert.match(app, /VslaV12LoanEligibilityPage/);
+  assert.match(app, /VslaLearningCentrePage/);
+  assert.match(app, /VslaInstitutionalOverviewPage/);
+  assert.match(layout, /Group Health/);
+  assert.match(layout, /Loan Eligibility/);
+  assert.match(layout, /Learning Centre/);
+  assert.match(layout, /Institutional Overview/);
+  assert.match(pages, /groupHealth/);
+  assert.match(pages, /loanEligibility/);
+  assert.match(pages, /learningCentre/);
+  assert.match(pages, /institutionalOverview/);
+});

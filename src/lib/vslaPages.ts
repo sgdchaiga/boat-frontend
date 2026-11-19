@@ -13,6 +13,11 @@ export const VSLA_PAGE = {
   reports: "vsla_reports",
   controls: "vsla_controls",
   setup: "vsla_setup",
+  payments: "vsla_payments",
+  groupHealth: "vsla_group_health",
+  loanEligibility: "vsla_loan_eligibility",
+  learningCentre: "vsla_learning_centre",
+  institutionalOverview: "vsla_institutional_overview",
   memberStatement: "vsla_member_statement",
 } as const;
 

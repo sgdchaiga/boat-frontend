@@ -298,6 +298,11 @@ const VslaMeetingMinutesPage = lazyNamed(() => import('./components/vsla/VslaMee
 const VslaMemberStatementPage = lazyNamed(() => import('./components/vsla/VslaMemberStatementPage'), 'VslaMemberStatementPage');
 const VslaV12SetupPage = lazyNamed(() => import('./components/vsla/VslaV12SetupPage'), 'VslaV12SetupPage');
 const VslaV12FinancialWorkflowGate = lazyNamed(() => import('./components/vsla/VslaV12FinancialWorkflowGate'), 'VslaV12FinancialWorkflowGate');
+const VslaV12PaymentsPage = lazyNamed(() => import('./components/vsla/VslaV12PaymentsPage'), 'VslaV12PaymentsPage');
+const VslaV12GroupHealthPage = lazyNamed(() => import('./components/vsla/VslaV12GroupHealthPage'), 'VslaV12GroupHealthPage');
+const VslaV12LoanEligibilityPage = lazyNamed(() => import('./components/vsla/VslaV12LoanEligibilityPage'), 'VslaV12LoanEligibilityPage');
+const VslaLearningCentrePage = lazyNamed(() => import('./components/vsla/VslaLearningCentrePage'), 'VslaLearningCentrePage');
+const VslaInstitutionalOverviewPage = lazyNamed(() => import('./components/vsla/VslaInstitutionalOverviewPage'), 'VslaInstitutionalOverviewPage');
 const CommunicationsPage = lazyNamed(() => import('./components/communications/CommunicationsPage'), 'CommunicationsPage');
 const AgentHubPage = lazyNamed(() => import('./components/agent/AgentHubPage'), 'AgentHubPage');
 const HotelAssessmentDashboardPage = lazyNamed(() => import('./components/hotel-assessment/HotelAssessmentDashboardPage'), 'HotelAssessmentDashboardPage');
@@ -1442,6 +1447,16 @@ function AppContent() {
         return <VslaControlsPage readOnly={access.readOnly} />;
       case VSLA_PAGE.setup:
         return <VslaV12SetupPage readOnly={access.readOnly} />;
+      case VSLA_PAGE.payments:
+        return <VslaV12PaymentsPage readOnly={access.readOnly} />;
+      case VSLA_PAGE.groupHealth:
+        return <VslaV12GroupHealthPage />;
+      case VSLA_PAGE.loanEligibility:
+        return <VslaV12LoanEligibilityPage />;
+      case VSLA_PAGE.learningCentre:
+        return <VslaLearningCentrePage />;
+      case VSLA_PAGE.institutionalOverview:
+        return <VslaInstitutionalOverviewPage />;
       case VSLA_PAGE.memberStatement:
         return <VslaMemberStatementPage readOnly={access.readOnly} />;
       case SACCOPRO_PAGE.memberApp:
