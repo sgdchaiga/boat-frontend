@@ -1,63 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 
-type AuditLog = { id: string; actor_id: string | null; action: string; entity: string; entity_id: string | null; metadata: Record<string, unknown> | null; created_at: string };
+type AuditLog = { id: string; actor_id: string | null; action: string; entity: string; entity_id: string | null; created_at: string };
+type Member = { id: string; full_name: string; member_number: string | null };
+type RequestRow = { id: string; member_id: string; status: string; created_at: string; subject?: string; details?: string; request_type?: string; payload?: Record<string, unknown> };
 
 export function VslaControlsPage({ readOnly = false }: { readOnly?: boolean }) {
-  const { user, isSuperAdmin } = useAuth();
-  const orgId = user?.organization_id ?? null;
-  const superAdmin = !!isSuperAdmin;
-  const [logs, setLogs] = useState<AuditLog[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    setLoading(true);
-    const { data, error: e } = await filterByOrganizationId(
-      supabase.from("vsla_audit_logs").select("*").order("created_at", { ascending: false }).limit(100),
-      orgId,
-      superAdmin
-    );
-    setLogs((data ?? []) as AuditLog[]);
-    setError(e?.message ?? null);
-    setLoading(false);
-  }, [orgId, superAdmin]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  return (
-    <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
-      {readOnly && <ReadOnlyNotice />}
-      <h1 className="text-2xl font-bold text-slate-900">VSLA Controls & Audit Trail</h1>
-      <p className="text-sm text-slate-600">User role trust controls, transaction logs, and edit restrictions after meeting close.</p>
-      {error && <p className="text-sm text-red-600">{error}</p>}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-slate-50 border-b border-slate-200">
-            <tr>
-              <th className="text-left p-3">When</th>
-              <th className="text-left p-3">Actor</th>
-              <th className="text-left p-3">Action</th>
-              <th className="text-left p-3">Entity</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? <tr><td className="p-4 text-slate-500" colSpan={4}>Loading audit logs...</td></tr> : logs.length === 0 ? <tr><td className="p-4 text-slate-500" colSpan={4}>No audit logs yet.</td></tr> : logs.map((l) => (
-              <tr key={l.id} className="border-b border-slate-100">
-                <td className="p-3">{new Date(l.created_at).toLocaleString()}</td>
-                <td className="p-3">{l.actor_id ? l.actor_id.slice(0, 8) : "-"}</td>
-                <td className="p-3">{l.action}</td>
-                <td className="p-3">{l.entity}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
+  const { user, isSuperAdmin } = useAuth(); const orgId = user?.organization_id ?? null; const superAdmin = !!isSuperAdmin;
+  const [logs, setLogs] = useState<AuditLog[]>([]); const [members, setMembers] = useState<Member[]>([]); const [disputes, setDisputes] = useState<RequestRow[]>([]); const [services, setServices] = useState<RequestRow[]>([]);
+  const [loading, setLoading] = useState(true); const [busy, setBusy] = useState<string | null>(null); const [notes, setNotes] = useState<Record<string, string>>({}); const [error, setError] = useState<string | null>(null);
+  const canResolve = superAdmin || ["admin", "manager", "super_admin"].includes(String(user?.role ?? "").toLowerCase());
+  const load = useCallback(async () => { setLoading(true); const [logsRes, memberRes, disputeRes, serviceRes] = await Promise.all([
+    filterByOrganizationId(supabase.from("vsla_audit_events").select("id,actor_id,action,entity,entity_id,created_at").order("created_at", { ascending: false }).limit(100), orgId, superAdmin), filterByOrganizationId(supabase.from("vsla_members").select("id,full_name,member_number").order("full_name"), orgId, superAdmin),
+    filterByOrganizationId(supabase.from("vsla_member_disputes").select("id,member_id,status,created_at,subject,details").in("status", ["open", "reviewing"]).order("created_at"), orgId, superAdmin), filterByOrganizationId(supabase.from("vsla_member_service_requests").select("id,member_id,status,created_at,request_type,payload").in("status", ["open", "processing"]).order("created_at"), orgId, superAdmin),
+  ]); setLogs((logsRes.data ?? []) as AuditLog[]); setMembers((memberRes.data ?? []) as Member[]); setDisputes((disputeRes.data ?? []) as RequestRow[]); setServices((serviceRes.data ?? []) as RequestRow[]); setError(logsRes.error?.message ?? memberRes.error?.message ?? disputeRes.error?.message ?? serviceRes.error?.message ?? null); setLoading(false); }, [orgId, superAdmin]);
+  useEffect(() => { void load(); }, [load]); const names = useMemo(() => new Map(members.map((m) => [m.id, m.member_number ? `${m.full_name} (${m.member_number})` : m.full_name])), [members]);
+  const decide = async (kind: "dispute" | "service", id: string, resolve: boolean) => { const note = notes[id]?.trim(); if (!note) { setError("Enter a resolution note before deciding this request."); return; } setBusy(id); setError(null); const { error: rpcError } = await supabase.rpc(kind === "dispute" ? "vsla_v12_resolve_member_dispute" : "vsla_v12_resolve_member_service_request", kind === "dispute" ? { p_dispute_id: id, p_resolve: resolve, p_note: note } : { p_request_id: id, p_resolve: resolve, p_note: note }); if (rpcError) setError(rpcError.message); else { setNotes((current) => { const next = { ...current }; delete next[id]; return next; }); await load(); } setBusy(null); };
+  const queue = (kind: "dispute" | "service", rows: RequestRow[]) => <div className="bg-white rounded-xl border border-slate-200 overflow-hidden"><div className="p-4 border-b border-slate-200"><h2 className="font-semibold text-slate-900">{kind === "dispute" ? "Member disputes" : "Member service requests"}</h2><p className="text-xs text-slate-500 mt-1">Read-only submission details. Decisions use a role-gated audit RPC.</p></div>{loading ? <p className="p-4 text-sm text-slate-500">Loading queue...</p> : rows.length === 0 ? <p className="p-4 text-sm text-slate-500">No open requests.</p> : <div className="divide-y divide-slate-100">{rows.map((row) => <div key={row.id} className="p-4 space-y-2"><div className="flex flex-wrap justify-between gap-2"><div><p className="font-medium text-slate-900">{names.get(row.member_id) ?? "Unknown member"}</p><p className="text-xs text-slate-500">{new Date(row.created_at).toLocaleString()} · {row.status}</p></div><span className="rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700">{kind === "dispute" ? row.subject : row.request_type}</span></div><p className="text-sm text-slate-700 whitespace-pre-wrap">{kind === "dispute" ? row.details : JSON.stringify(row.payload ?? {})}</p>{canResolve && !readOnly ? <div className="flex flex-col sm:flex-row gap-2"><input aria-label="Resolution note" value={notes[row.id] ?? ""} onChange={(event) => setNotes((current) => ({ ...current, [row.id]: event.target.value }))} className="flex-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" placeholder="Required resolution note" /><button disabled={busy === row.id} onClick={() => void decide(kind, row.id, true)} className="rounded-lg bg-emerald-700 px-3 py-2 text-sm text-white disabled:opacity-50">Resolve</button><button disabled={busy === row.id} onClick={() => void decide(kind, row.id, false)} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm text-rose-700 disabled:opacity-50">Reject</button></div> : <p className="text-xs text-slate-500">Your staff role can view this queue but cannot decide requests.</p>}</div>)}</div>}</div>;
+  return <div className="p-6 lg:p-8 max-w-7xl mx-auto space-y-6">{readOnly && <ReadOnlyNotice />}<div><h1 className="text-2xl font-bold text-slate-900">VSLA Controls & Audit Trail</h1><p className="text-sm text-slate-600">Role-gated member request decisions, immutable audit records, and financial controls.</p></div>{error && <p role="alert" className="text-sm text-red-600">{error}</p>}<div className="grid xl:grid-cols-2 gap-6">{queue("dispute", disputes)}{queue("service", services)}</div><div className="bg-white rounded-xl border border-slate-200 overflow-hidden"><table className="w-full text-sm"><thead className="bg-slate-50 border-b border-slate-200"><tr><th className="text-left p-3">When</th><th className="text-left p-3">Actor</th><th className="text-left p-3">Action</th><th className="text-left p-3">Entity</th></tr></thead><tbody>{loading ? <tr><td className="p-4 text-slate-500" colSpan={4}>Loading audit logs...</td></tr> : logs.length === 0 ? <tr><td className="p-4 text-slate-500" colSpan={4}>No audit logs yet.</td></tr> : logs.map((l) => <tr key={l.id} className="border-b border-slate-100"><td className="p-3">{new Date(l.created_at).toLocaleString()}</td><td className="p-3">{l.actor_id ? l.actor_id.slice(0, 8) : "-"}</td><td className="p-3">{l.action}</td><td className="p-3">{l.entity}</td></tr>)}</tbody></table></div></div>;
 }

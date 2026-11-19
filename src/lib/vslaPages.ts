@@ -12,6 +12,7 @@ export const VSLA_PAGE = {
   shareOut: "vsla_share_out",
   reports: "vsla_reports",
   controls: "vsla_controls",
+  setup: "vsla_setup",
   memberStatement: "vsla_member_statement",
 } as const;
 

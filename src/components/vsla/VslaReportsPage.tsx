@@ -7,6 +7,7 @@ import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { downloadCsv, downloadXlsx, exportAccountingPdf } from "@/lib/accountingReportExport";
 import { VSLA_PAGE } from "@/lib/vslaPages";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
+import { VslaV12ReportsPage } from "@/components/vsla/VslaV12ReportsPage";
 
 type Cycle = { id: string; name: string; starts_on: string; ends_on: string | null; status: string };
 type Member = { id: string; full_name: string; member_number: string | null };
@@ -36,6 +37,7 @@ export function VslaReportsPage({ readOnly = false, onNavigate }: { readOnly?: b
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [v12, setV12] = useState(false);
   const pageSize = 20;
 
   const load = useCallback(async () => {
@@ -60,6 +62,7 @@ export function VslaReportsPage({ readOnly = false, onNavigate }: { readOnly?: b
     setLoading(false);
   }, [cycleId, orgId, superAdmin]);
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { let live = true; void (async () => { if (!orgId) return; const { data } = await (supabase as any).from("vsla_workflow_settings").select("workflow_version").eq("organization_id", orgId).maybeSingle(); if (live) setV12(data?.workflow_version === "v1_2"); })(); return () => { live = false; }; }, [orgId]);
   useEffect(() => { setPage(1); }, [search, tab, cycleId]);
 
   const today = new Date().toISOString().slice(0, 10);
@@ -87,6 +90,7 @@ export function VslaReportsPage({ readOnly = false, onNavigate }: { readOnly?: b
   const exportRows = () => sections().flatMap((section) => [[section.title], section.head, ...section.body, []]);
   const fileTag = (selectedCycle?.name ?? "cycle").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 
+  if (v12) return <VslaV12ReportsPage />;
   return <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
     {readOnly && <ReadOnlyNotice />}
     <div className="flex flex-col lg:flex-row lg:items-end lg:justify-between gap-3"><div><h1 className="text-2xl font-bold text-slate-900">VSLA Reports</h1><p className="text-sm text-slate-600 mt-1">Loans, savings, attendance, fines and fund activity by cycle.</p></div><label className="text-xs text-slate-600">Reporting Cycle<select value={cycleId} onChange={(event) => setCycleId(event.target.value)} className="mt-1 block w-full sm:min-w-60 rounded-lg border border-slate-300 bg-white px-3 py-2 text-base sm:text-sm"><option value="">No cycles available</option>{cycles.map((cycle) => <option key={cycle.id} value={cycle.id}>{cycle.name} ({cycle.status})</option>)}</select></label></div>

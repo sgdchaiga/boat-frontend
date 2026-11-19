@@ -63,6 +63,7 @@ type SubRow = {
   period_end: string | null;
   subscription_plans: Plan | null;
 };
+type VslaWorkflow = "legacy" | "v1_2";
 
 function plansMatchingBusinessType(plansList: Plan[], businessTypeCode: string): Plan[] {
   const bt = businessTypeCode || "hotel";
@@ -170,6 +171,8 @@ export function PlatformOrganizationsPage() {
   const [latestSub, setLatestSub] = useState<Record<string, SubRow>>({});
   const [plans, setPlans] = useState<Plan[]>([]);
   const [businessTypes, setBusinessTypes] = useState<BusinessTypeRow[]>([]);
+  const [vslaWorkflows, setVslaWorkflows] = useState<Record<string, VslaWorkflow>>({});
+  const [savingVslaWorkflow, setSavingVslaWorkflow] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<"add" | "sub" | "copy" | "renewal_token" | null>(null);
   const [saving, setSaving] = useState(false);
@@ -359,6 +362,19 @@ export function PlatformOrganizationsPage() {
     }
   };
 
+  const setVslaWorkflow = async (organizationId: string, workflowVersion: VslaWorkflow) => {
+    setErr(null);
+    setSavingVslaWorkflow((value) => ({ ...value, [organizationId]: true }));
+    const { error } = await supabase.rpc("set_vsla_workflow_version", {
+      p_organization_id: organizationId,
+      p_workflow_version: workflowVersion,
+      p_reason: `Platform workflow selection: ${workflowVersion}`,
+    });
+    if (error) setErr(error.message);
+    else setVslaWorkflows((value) => ({ ...value, [organizationId]: workflowVersion }));
+    setSavingVslaWorkflow((value) => ({ ...value, [organizationId]: false }));
+  };
+
   const openRenewalToken = (org: Org) => {
     const sub = latestSub[org.id];
     setRenewalOrg(org);
@@ -430,6 +446,11 @@ export function PlatformOrganizationsPage() {
     setLoading(true);
     const { data: o } = await supabase.from("organizations").select("*").order("name");
     setOrgs((o as Org[]) || []);
+
+    const { data: workflowRows } = await (supabase as any)
+      .from("vsla_workflow_settings")
+      .select("organization_id,workflow_version");
+    setVslaWorkflows(Object.fromEntries(((workflowRows ?? []) as Array<{ organization_id: string; workflow_version: VslaWorkflow }>).map((row) => [row.organization_id, row.workflow_version])));
 
     const { data: staffRows } = await supabase.from("staff").select("organization_id");
     const counts: Record<string, number> = {};
@@ -895,6 +916,7 @@ export function PlatformOrganizationsPage() {
                 <th className="text-left p-3 font-semibold text-slate-700">Assessment</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Manufacturing</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Clearing</th>
+                <th className="text-left p-3 font-semibold text-slate-700">VSLA workflow</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Plan</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Status</th>
                 <th className="text-left p-3 font-semibold text-slate-700">Period end</th>
@@ -904,7 +926,7 @@ export function PlatformOrganizationsPage() {
             <tbody>
               {filteredOrgs.length === 0 ? (
                 <tr>
-                  <td colSpan={19} className="p-8 text-center text-slate-600 text-sm">
+                  <td colSpan={20} className="p-8 text-center text-slate-600 text-sm">
                     {orgSearch.trim()
                       ? "No organizations match your search."
                       : "No organizations yet."}
@@ -1147,6 +1169,20 @@ export function PlatformOrganizationsPage() {
                       ) : (
                         <span className="text-xs text-slate-400">N/A</span>
                       )}
+                    </td>
+                    <td className="p-3">
+                      {org.business_type === "vsla" ? (
+                        <select
+                          aria-label={`VSLA workflow for ${org.name}`}
+                          value={vslaWorkflows[org.id] ?? "legacy"}
+                          disabled={!!savingVslaWorkflow[org.id]}
+                          onChange={(event) => void setVslaWorkflow(org.id, event.target.value as VslaWorkflow)}
+                          className="rounded border border-slate-300 bg-white px-2 py-1 text-xs disabled:opacity-50"
+                        >
+                          <option value="legacy">Legacy</option>
+                          <option value="v1_2">v1.2 controlled</option>
+                        </select>
+                      ) : <span className="text-xs text-slate-400">N/A</span>}
                     </td>
                     <td className="p-3 text-slate-600">
                       {sub?.subscription_plans?.name ?? "—"}

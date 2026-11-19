@@ -286,7 +286,7 @@ const SchoolFeesPerformanceReportPage = lazyNamed(() => import('./components/sch
 const VslaDashboardPage = lazyNamed(() => import('./components/vsla/VslaDashboardPage'), 'VslaDashboardPage');
 const VslaMembersPage = lazyNamed(() => import('./components/vsla/VslaMembersPage'), 'VslaMembersPage');
 const VslaSavingsPage = lazyNamed(() => import('./components/vsla/VslaSavingsPage'), 'VslaSavingsPage');
-const VslaMeetingsPage = lazyNamed(() => import('./components/vsla/VslaMeetingsPage'), 'VslaMeetingsPage');
+const VslaMeetingsPage = lazyNamed(() => import('./components/vsla/VslaMeetingWorkflowRouter'), 'VslaMeetingWorkflowRouter');
 const VslaLoansPage = lazyNamed(() => import('./components/vsla/VslaLoansPage'), 'VslaLoansPage');
 const VslaRepaymentsPage = lazyNamed(() => import('./components/vsla/VslaRepaymentsPage'), 'VslaRepaymentsPage');
 const VslaFundsPage = lazyNamed(() => import('./components/vsla/VslaFundsPage'), 'VslaFundsPage');
@@ -296,6 +296,8 @@ const VslaReportsPage = lazyNamed(() => import('./components/vsla/VslaReportsPag
 const VslaControlsPage = lazyNamed(() => import('./components/vsla/VslaControlsPage'), 'VslaControlsPage');
 const VslaMeetingMinutesPage = lazyNamed(() => import('./components/vsla/VslaMeetingMinutesPage'), 'VslaMeetingMinutesPage');
 const VslaMemberStatementPage = lazyNamed(() => import('./components/vsla/VslaMemberStatementPage'), 'VslaMemberStatementPage');
+const VslaV12SetupPage = lazyNamed(() => import('./components/vsla/VslaV12SetupPage'), 'VslaV12SetupPage');
+const VslaV12FinancialWorkflowGate = lazyNamed(() => import('./components/vsla/VslaV12FinancialWorkflowGate'), 'VslaV12FinancialWorkflowGate');
 const CommunicationsPage = lazyNamed(() => import('./components/communications/CommunicationsPage'), 'CommunicationsPage');
 const AgentHubPage = lazyNamed(() => import('./components/agent/AgentHubPage'), 'AgentHubPage');
 const HotelAssessmentDashboardPage = lazyNamed(() => import('./components/hotel-assessment/HotelAssessmentDashboardPage'), 'HotelAssessmentDashboardPage');
@@ -1413,7 +1415,7 @@ function AppContent() {
       case VSLA_PAGE.members:
         return <VslaMembersPage readOnly={access.readOnly} />;
       case VSLA_PAGE.savings:
-        return <VslaSavingsPage readOnly={access.readOnly} />;
+        return <VslaV12FinancialWorkflowGate area="Savings"><VslaSavingsPage readOnly={access.readOnly} /></VslaV12FinancialWorkflowGate>;
       case VSLA_PAGE.meetings:
         return (
           <VslaMeetingsPage
@@ -1425,19 +1427,21 @@ function AppContent() {
       case VSLA_PAGE.meetingMinutes:
         return <VslaMeetingMinutesPage readOnly={access.readOnly} />;
       case VSLA_PAGE.loans:
-        return <VslaLoansPage readOnly={access.readOnly} onNavigate={navigate} />;
+        return <VslaV12FinancialWorkflowGate area="Loans"><VslaLoansPage readOnly={access.readOnly} onNavigate={navigate} /></VslaV12FinancialWorkflowGate>;
       case VSLA_PAGE.repayments:
-        return <VslaRepaymentsPage readOnly={access.readOnly} />;
+        return <VslaV12FinancialWorkflowGate area="Loan repayments"><VslaRepaymentsPage readOnly={access.readOnly} /></VslaV12FinancialWorkflowGate>;
       case VSLA_PAGE.finesSocial:
-        return <VslaFundsPage readOnly={access.readOnly} />;
+        return <VslaV12FinancialWorkflowGate area="Fines and social fund"><VslaFundsPage readOnly={access.readOnly} /></VslaV12FinancialWorkflowGate>;
       case VSLA_PAGE.cashbox:
-        return <VslaCashboxPage readOnly={access.readOnly} />;
+        return <VslaV12FinancialWorkflowGate area="Cashbox"><VslaCashboxPage readOnly={access.readOnly} /></VslaV12FinancialWorkflowGate>;
       case VSLA_PAGE.shareOut:
-        return <VslaShareOutPage readOnly={access.readOnly} />;
+        return <VslaV12FinancialWorkflowGate area="Share-out"><VslaShareOutPage readOnly={access.readOnly} /></VslaV12FinancialWorkflowGate>;
       case VSLA_PAGE.reports:
         return <VslaReportsPage readOnly={access.readOnly} onNavigate={navigate} />;
       case VSLA_PAGE.controls:
         return <VslaControlsPage readOnly={access.readOnly} />;
+      case VSLA_PAGE.setup:
+        return <VslaV12SetupPage readOnly={access.readOnly} />;
       case VSLA_PAGE.memberStatement:
         return <VslaMemberStatementPage readOnly={access.readOnly} />;
       case SACCOPRO_PAGE.memberApp:

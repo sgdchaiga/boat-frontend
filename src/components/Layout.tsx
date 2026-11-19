@@ -1142,6 +1142,7 @@ export function Layout({ children, currentPage, pageState = {}, onNavigate, onBa
           { name: 'Member Statement', page: VSLA_PAGE.memberStatement },
           { name: 'VSLA Reports', page: VSLA_PAGE.reports },
           { name: 'Controls & Audit', page: VSLA_PAGE.controls },
+          { name: 'VSLA Setup', page: VSLA_PAGE.setup },
         ],
       },
       { name: 'Intelligence', icon: Lightbulb, page: 'industry_intelligence' },

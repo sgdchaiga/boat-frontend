@@ -4,6 +4,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { filterByOrganizationId } from "@/lib/supabaseOrgFilter";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
 import { formatVslaMemberLabel } from "@/lib/vslaMemberLabel";
+import { VslaV12ShareOutPage } from "@/components/vsla/VslaV12ShareOutPage";
 
 type ShareAgg = { member_id: string; shares: number; value: number };
 type Member = { id: string; full_name: string; member_number: string | null };
@@ -23,6 +24,7 @@ export function VslaShareOutPage({ readOnly = false }: { readOnly?: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [v12, setV12] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -65,6 +67,7 @@ export function VslaShareOutPage({ readOnly = false }: { readOnly?: boolean }) {
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => { let live = true; void (async () => { if (!orgId) return; const { data } = await (supabase as any).from("vsla_workflow_settings").select("workflow_version").eq("organization_id", orgId).maybeSingle(); if (live) setV12(data?.workflow_version === "v1_2"); })(); return () => { live = false; }; }, [orgId]);
 
   const totalShares = useMemo(() => shares.reduce((sum, row) => sum + row.shares, 0), [shares]);
   const valuePerShare = totalShares > 0 ? fundTotal / totalShares : 0;
@@ -113,6 +116,7 @@ export function VslaShareOutPage({ readOnly = false }: { readOnly?: boolean }) {
     await load();
   };
 
+  if (v12) return <VslaV12ShareOutPage />;
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {readOnly && <ReadOnlyNotice />}
