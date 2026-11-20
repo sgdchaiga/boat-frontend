@@ -136,8 +136,9 @@ test("phase 3 reports and confirmations are accessible and exportable", async ()
 });
 
 test("v1.2 foundation keeps legacy opt-in and protects its financial event ledger", async () => {
-  const [migration, organizations] = await Promise.all([
+  const [migration, platformAdminWorkflowFix, organizations] = await Promise.all([
     source("supabase/migrations/20261119100000_vsla_v12_workflow_and_controls_foundation.sql"),
+    source("supabase/migrations/20261120100000_vsla_workflow_platform_admin_audit.sql"),
     source("src/components/platform/PlatformOrganizationsPage.tsx"),
   ]);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.vsla_workflow_settings/);
@@ -149,6 +150,9 @@ test("v1.2 foundation keeps legacy opt-in and protects its financial event ledge
   assert.match(migration, /REVOKE ALL ON public\.vsla_financial_events FROM authenticated/);
   assert.match(migration, /CREATE TABLE IF NOT EXISTS public\.vsla_audit_events/);
   assert.match(migration, /FUNCTION public\.vsla_v12_post_financial_event/);
+  assert.match(platformAdminWorkflowFix, /changed_by_auth_user_id uuid/);
+  assert.match(platformAdminWorkflowFix, /WHERE s\.id=auth\.uid\(\)/);
+  assert.match(platformAdminWorkflowFix, /v_staff_actor,auth\.uid\(\)/);
   assert.match(organizations, /set_vsla_workflow_version/);
   assert.match(organizations, /v1\.2 controlled/);
   assert.match(organizations, /VSLA financial workflow/);
