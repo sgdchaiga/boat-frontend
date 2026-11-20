@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle2, Wallet } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/contexts/AuthContext";
 import { ReadOnlyNotice } from "@/components/common/ReadOnlyNotice";
+import { VslaV12AttendanceSummary, VslaV12SharePurchaseSummary } from "@/components/vsla/VslaV12MeetingEnhancements";
 import {
   type VslaOfflineCollection,
   clearVslaOfflineMeetingSnapshot,
@@ -22,6 +23,7 @@ type Member = { id: string; full_name: string; member_number: string | null };
 type Loan = { id: string; member_id: string; outstanding_balance: number; status: string };
 type Approval = { id: string; event_id: string; status: string };
 type FinancialEvent = { id: string; event_type: string; amount: number; metadata: { loan_id?: string } | null };
+type SharePurchase = { id: string; member_id: string; amount: number; metadata: { shares?: number; share_value?: number } | null };
 
 export function VslaV12MeetingWorkspace({ readOnly = false }: { readOnly?: boolean }) {
   const { user } = useAuth();
@@ -33,6 +35,7 @@ export function VslaV12MeetingWorkspace({ readOnly = false }: { readOnly?: boole
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [eventsById, setEventsById] = useState<Record<string, FinancialEvent>>({});
   const [attendance, setAttendance] = useState<Record<string, boolean>>({});
+  const [sharePurchases, setSharePurchases] = useState<SharePurchase[]>([]);
   const [memberId, setMemberId] = useState("");
   const [collectionType, setCollectionType] = useState<"savings" | "fine" | "social">("savings");
   const [shares, setShares] = useState("1");
@@ -67,6 +70,7 @@ export function VslaV12MeetingWorkspace({ readOnly = false }: { readOnly?: boole
       setApprovals([]);
       setEventsById({});
       setAttendance({});
+      setSharePurchases([]);
       setReconciliation(null);
       setOfflineSnapshotAt(snapshot.savedAt);
       setError(null);
@@ -98,12 +102,16 @@ export function VslaV12MeetingWorkspace({ readOnly = false }: { readOnly?: boole
       setEventsById(Object.fromEntries(((pendingEvents as FinancialEvent[] | null) ?? []).map((event) => [event.id, event])));
     } else setEventsById({});
     if (openMeeting?.id) {
-      const { data: attendanceRows } = await supabase.from("vsla_meeting_attendance").select("member_id,present").eq("meeting_id", openMeeting.id);
-      setAttendance(Object.fromEntries(((attendanceRows ?? []) as Array<{ member_id: string; present: boolean }>).map((row) => [row.member_id, row.present])));
-      const { data } = await (supabase as any).from("vsla_v12_cash_reconciliations").select("expected_closing_cash,actual_physical_cash,variance,status").eq("meeting_id", openMeeting.id).maybeSingle();
-      setReconciliation((data as Reconciliation | null) ?? null);
+      const [attendanceResult, reconciliationResult, purchaseResult] = await Promise.all([
+        supabase.from("vsla_meeting_attendance").select("member_id,present").eq("meeting_id", openMeeting.id),
+        (supabase as any).from("vsla_v12_cash_reconciliations").select("expected_closing_cash,actual_physical_cash,variance,status").eq("meeting_id", openMeeting.id).maybeSingle(),
+        (supabase as any).from("vsla_financial_events").select("id,member_id,amount,metadata").eq("meeting_id", openMeeting.id).eq("event_type", "savings_received").eq("status", "posted").order("posted_at", { ascending: false }),
+      ]);
+      setAttendance(Object.fromEntries(((attendanceResult.data ?? []) as Array<{ member_id: string; present: boolean }>).map((row) => [row.member_id, row.present])));
+      setReconciliation((reconciliationResult.data as Reconciliation | null) ?? null);
+      setSharePurchases((purchaseResult.data as SharePurchase[] | null) ?? []);
       void saveVslaOfflineMeetingSnapshot({ organizationId: orgId, meeting: { id: openMeeting.id, meeting_date: openMeeting.meeting_date, status: "open" }, members: activeMemberRows, loans: loanRowsForSnapshot });
-    } else { setReconciliation(null); setAttendance({}); void clearVslaOfflineMeetingSnapshot(orgId); }
+    } else { setReconciliation(null); setAttendance({}); setSharePurchases([]); void clearVslaOfflineMeetingSnapshot(orgId); }
   }, [orgId]);
 
   useEffect(() => { void load(); }, [load]);
@@ -271,6 +279,20 @@ export function VslaV12MeetingWorkspace({ readOnly = false }: { readOnly?: boole
     setBusy(false);
   };
 
+  const setAllAttendance = async (present: boolean) => {
+    if (readOnly || !meeting || members.length === 0) return;
+    if (!isOnline) { setError("Attendance recording requires a live server connection."); return; }
+    setBusy(true); setError(null); setMessage(null);
+    const results = await Promise.all(members.map((member) => supabase.rpc("vsla_v12_set_attendance", { p_meeting_id: meeting.id, p_member_id: member.id, p_present: present })));
+    const failed = results.find((result) => result.error)?.error;
+    if (failed) setError(failed.message);
+    else {
+      setAttendance(Object.fromEntries(members.map((member) => [member.id, present])));
+      setMessage(`${members.length} members marked ${present ? "present" : "absent"}.`);
+    }
+    setBusy(false);
+  };
+
   const closeMeeting = async () => {
     if (readOnly || !meeting) return;
     if (!isOnline) { setError("A meeting cannot be closed while offline."); return; }
@@ -287,6 +309,8 @@ export function VslaV12MeetingWorkspace({ readOnly = false }: { readOnly?: boole
     <section className={`rounded-xl border p-4 ${isOnline ? "border-emerald-200 bg-emerald-50" : "border-amber-300 bg-amber-50"}`} aria-live="polite"><p className={`text-sm font-semibold ${isOnline ? "text-emerald-900" : "text-amber-950"}`}>{isOnline ? "Online · server controls active" : "Offline · transactions are provisional"}</p><p className="mt-1 text-sm text-slate-700">{isOnline ? "The server is the source of truth. Any queued transaction will be posted only after server validation." : offlineDeviceDesignated ? "Only routine collections and loan repayments can be queued on this designated meeting device. Do not reconcile cash or close the meeting until they have synced." : "This browser is not designated for offline collections. Reconnect and select it in Group setup before taking offline entries."}</p>{offlineSnapshotAt && !isOnline && <p className="mt-2 text-xs text-amber-900">Using encrypted meeting context saved {new Date(offlineSnapshotAt).toLocaleString()}. Confirm all information after reconnection.</p>}{offlineCollections.length > 0 && <div className="mt-3 space-y-2"><p className="text-sm font-semibold text-slate-900">Offline transaction queue ({offlineCollections.length})</p>{offlineCollections.map((row) => <div key={row.id} className={`rounded-lg bg-white p-3 text-sm ${row.status === "rejected" ? "border border-rose-200" : "border border-amber-200"}`}><p className="font-medium text-slate-900">{members.find((member) => member.id === row.memberId)?.full_name ?? "Member"} · {row.kind === "savings" ? `${row.shares} share${row.shares === 1 ? "" : "s"}` : row.kind === "loan_repayment" ? `Loan repayment ${Number(row.amount ?? 0).toLocaleString()}` : `${row.kind === "fine" ? "Fine" : "Social fund"} ${Number(row.amount ?? 0).toLocaleString()}`}</p><p className={row.status === "rejected" ? "mt-1 text-rose-700" : "mt-1 text-amber-800"}>{row.status === "rejected" ? `Rejected by the server: ${row.rejectionReason ?? "review and re-enter the transaction"}` : "Provisional — awaiting secure sync and server acceptance."}</p>{row.status === "rejected" && <button type="button" onClick={() => void discardRejectedOfflineItem(row.id)} disabled={busy} className="mt-2 rounded border border-rose-300 px-3 py-1.5 text-xs font-semibold text-rose-800 disabled:opacity-50">Remove rejected local record</button>}</div>)}</div>}</section>
     {error && <p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-700">{error}</p>}
     {message && <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-800">{message}</p>}
+    {meeting && <VslaV12AttendanceSummary members={members} attendance={attendance} disabled={readOnly || busy || !isOnline} onSetAll={(present) => void setAllAttendance(present)} />}
+    {meeting && <VslaV12SharePurchaseSummary purchases={sharePurchases} members={members} />}
     {!meeting ? <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold text-slate-900">Start today’s meeting</h2><p className="mt-1 text-sm text-slate-600">Only a chairperson, treasurer, or secretary assigned by Super Admin can open a v1.2 meeting.</p><button type="button" onClick={() => void openMeeting()} disabled={readOnly || busy || !isOnline} className="mt-4 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? "Opening…" : "Open meeting"}</button></section> : <>
       <section className="rounded-xl border border-slate-200 bg-white p-5"><p className="text-sm text-slate-500">Open meeting</p><h2 className="text-xl font-bold text-slate-900">{meeting.meeting_date}</h2><p className="mt-2 text-sm text-slate-600">Receive routine member collections with a reference and server-side duplicate protection.</p><div className="mt-4 grid gap-3 sm:grid-cols-3"><label className="text-sm text-slate-700">Collection<select value={collectionType} onChange={(e) => setCollectionType(e.target.value as typeof collectionType)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="savings">Receive savings</option><option value="fine">Record fine</option><option value="social">Social fund</option></select></label><label className="text-sm text-slate-700 sm:col-span-2">Member<select value={memberId} onChange={(e) => setMemberId(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="">Select member</option>{members.map((member) => <option key={member.id} value={member.id}>{member.full_name}{member.member_number ? ` (${member.member_number})` : ""}</option>)}</select></label>{collectionType === "savings" ? <label className="text-sm text-slate-700">Shares<input type="number" min="1" value={shares} onChange={(e) => setShares(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"/></label> : <label className="text-sm text-slate-700">Amount<input type="number" min="0" value={collectionAmount} onChange={(e) => setCollectionAmount(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"/></label>}</div><button type="button" onClick={() => void receiveCollection()} disabled={readOnly || busy} className="mt-4 rounded-lg bg-emerald-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">{busy ? "Saving…" : collectionType === "savings" ? "Receive savings" : "Record collection"}</button></section>
       <section className="rounded-xl border border-slate-200 bg-white p-5"><h2 className="font-semibold text-slate-900">Loans</h2><div className="mt-3 grid gap-3 sm:grid-cols-4"><label className="text-sm text-slate-700 sm:col-span-2">Member<select value={memberId} onChange={(e) => setMemberId(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="">Select member</option>{members.map((member) => <option key={member.id} value={member.id}>{member.full_name}</option>)}</select></label><label className="text-sm text-slate-700">Principal<input type="number" min="1" value={loanPrincipal} onChange={(e) => setLoanPrincipal(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"/></label><label className="text-sm text-slate-700">Interest %<input type="number" min="0" value={loanRate} onChange={(e) => setLoanRate(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"/></label><label className="text-sm text-slate-700">Meetings<input type="number" min="1" value={loanTerm} onChange={(e) => setLoanTerm(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"/></label><label className="text-sm text-slate-700">Disbursement<select value={loanDisbursementChannel} onChange={(e) => setLoanDisbursementChannel(e.target.value as "cash" | "mobile_money")} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="cash">Cash after approval</option><option value="mobile_money">Mobile money after confirmation</option></select></label></div><p className="mt-3 text-sm text-slate-600">Mobile-money loans are approved first and are not posted as disbursed until a separate provider payout is matched and finalized.</p><button type="button" onClick={() => void requestLoan()} disabled={readOnly || busy} className="mt-4 rounded-lg bg-indigo-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">Request loan approval</button><div className="mt-5 grid gap-3 sm:grid-cols-3"><label className="text-sm text-slate-700 sm:col-span-2">Receive repayment<select value={repayLoanId} onChange={(e) => setRepayLoanId(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"><option value="">Select active loan</option>{loans.filter((loan) => loan.status === "disbursed").map((loan) => <option key={loan.id} value={loan.id}>{members.find((member) => member.id === loan.member_id)?.full_name ?? "Member"} — {Number(loan.outstanding_balance).toLocaleString()}</option>)}</select></label><label className="text-sm text-slate-700">Amount<input type="number" min="1" value={repayAmount} onChange={(e) => setRepayAmount(e.target.value)} className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2"/></label></div><button type="button" onClick={() => void receiveRepayment()} disabled={readOnly || busy} className="mt-3 rounded-lg border border-emerald-700 px-4 py-2 text-sm font-semibold text-emerald-800 disabled:opacity-50">Receive repayment</button></section>

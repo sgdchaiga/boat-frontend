@@ -135,6 +135,26 @@ test("phase 3 reports and confirmations are accessible and exportable", async ()
   assert.doesNotMatch(`${savings}\n${funds}`, /\bconfirm\(/);
 });
 
+test("v1.2 keeps earlier records visible and carries forward share and attendance workflow aids", async () => {
+  const [reports, gate, router, workspace, enhancements] = await Promise.all([
+    source("src/components/vsla/VslaReportsPage.tsx"),
+    source("src/components/vsla/VslaV12FinancialWorkflowGate.tsx"),
+    source("src/components/vsla/VslaMeetingWorkflowRouter.tsx"),
+    source("src/components/vsla/VslaV12MeetingWorkspace.tsx"),
+    source("src/components/vsla/VslaV12MeetingEnhancements.tsx"),
+  ]);
+  assert.match(reports, /Earlier VSLA reports/);
+  assert.match(reports, /not combined into v1\.2 ledger totals/);
+  assert.match(gate, /Historic v1\.1 records remain available below as read-only history/);
+  assert.match(gate, /cloneElement\(children, \{ readOnly: true, historicalView: true \}\)/);
+  assert.match(router, /Earlier meeting history/);
+  assert.match(router, /LegacyVslaMeetingsPage \{\.\.\.props\} readOnly/);
+  assert.match(workspace, /setAllAttendance/);
+  assert.match(workspace, /VslaV12SharePurchaseSummary/);
+  assert.match(enhancements, /All present/);
+  assert.match(enhancements, /Current meeting share purchases/);
+});
+
 test("v1.2 foundation keeps legacy opt-in and protects its financial event ledger", async () => {
   const [migration, platformAdminWorkflowFix, organizations] = await Promise.all([
     source("supabase/migrations/20261119100000_vsla_v12_workflow_and_controls_foundation.sql"),
@@ -203,7 +223,7 @@ test("v1.2 blocks legacy financial writes and legacy posting screens", async () 
   assert.match(migration, /Legacy VSLA financial posting is disabled for v1\.2 organizations/);
   assert.match(migration, /vsla_share_transactions/);
   assert.match(migration, /vsla_cycle_shareout/);
-  assert.match(gate, /Legacy financial posting is locked/);
+  assert.match(gate, /Legacy posting, editing, importing, and deletion remain locked/);
   assert.match(app, /VslaV12FinancialWorkflowGate/);
 });
 

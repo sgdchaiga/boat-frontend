@@ -10,7 +10,7 @@ type ShareAgg = { member_id: string; shares: number; value: number };
 type Member = { id: string; full_name: string; member_number: string | null };
 type Cycle = { id: string; name: string; starts_on: string; status: "active" | "closed" };
 
-export function VslaShareOutPage({ readOnly = false }: { readOnly?: boolean }) {
+export function VslaShareOutPage({ readOnly = false, historicalView = false }: { readOnly?: boolean; historicalView?: boolean }) {
   const { user, isSuperAdmin } = useAuth();
   const orgId = user?.organization_id ?? null;
   const superAdmin = !!isSuperAdmin;
@@ -116,7 +116,7 @@ export function VslaShareOutPage({ readOnly = false }: { readOnly?: boolean }) {
     await load();
   };
 
-  if (v12) return <VslaV12ShareOutPage />;
+  if (v12 && !historicalView) return <VslaV12ShareOutPage />;
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {readOnly && <ReadOnlyNotice />}

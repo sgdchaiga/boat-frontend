@@ -1,0 +1,14 @@
+type Member = { id: string; full_name: string; member_number: string | null };
+type SharePurchase = { id: string; member_id: string; amount: number; metadata: { shares?: number; share_value?: number } | null };
+
+export function VslaV12AttendanceSummary({ members, attendance, disabled, onSetAll }: { members: Member[]; attendance: Record<string, boolean>; disabled: boolean; onSetAll: (present: boolean) => void }) {
+  const marked = Object.keys(attendance).length;
+  const present = Object.values(attendance).filter(Boolean).length;
+  if (members.length === 0) return null;
+  return <section className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"><div><h2 className="font-semibold text-slate-900">Meeting attendance</h2><p className="mt-1 text-sm text-slate-600">Marked: {marked}/{members.length} · Present: {present} · Absent: {marked - present}</p></div><div className="flex gap-2"><button type="button" onClick={() => onSetAll(true)} disabled={disabled} className="rounded-lg border border-emerald-300 bg-white px-3 py-2 text-sm font-medium text-emerald-800 disabled:opacity-50">All present</button><button type="button" onClick={() => onSetAll(false)} disabled={disabled} className="rounded-lg border border-rose-300 bg-white px-3 py-2 text-sm font-medium text-rose-800 disabled:opacity-50">All absent</button></div></div></section>;
+}
+
+export function VslaV12SharePurchaseSummary({ purchases, members }: { purchases: SharePurchase[]; members: Member[] }) {
+  const totals = purchases.reduce((sum, row) => ({ shares: sum.shares + Number(row.metadata?.shares ?? 0), amount: sum.amount + Number(row.amount ?? 0) }), { shares: 0, amount: 0 });
+  return <section className="rounded-xl border border-slate-200 bg-white p-4"><div className="flex flex-wrap items-baseline justify-between gap-2"><div><h2 className="font-semibold text-slate-900">Current meeting share purchases</h2><p className="mt-1 text-sm text-slate-600">Controlled v1.2 purchases recorded in this open meeting.</p></div><p className="text-sm font-medium text-slate-800">{totals.shares} shares · {totals.amount.toLocaleString()}</p></div>{purchases.length === 0 ? <p className="mt-3 text-sm text-slate-500">No v1.2 share purchases recorded in this meeting yet.</p> : <div className="mt-3 overflow-x-auto"><table className="w-full min-w-[440px] text-sm"><thead className="bg-slate-50"><tr><th className="p-2 text-left">Member</th><th className="p-2 text-right">Shares</th><th className="p-2 text-right">Value</th></tr></thead><tbody>{purchases.map((purchase) => <tr key={purchase.id} className="border-t"><td className="p-2">{members.find((member) => member.id === purchase.member_id)?.full_name ?? "Member"}</td><td className="p-2 text-right">{Number(purchase.metadata?.shares ?? 0)}</td><td className="p-2 text-right">{Number(purchase.amount).toLocaleString()}</td></tr>)}</tbody></table></div>}</section>;
+}
