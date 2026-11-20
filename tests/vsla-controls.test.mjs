@@ -151,6 +151,8 @@ test("v1.2 foundation keeps legacy opt-in and protects its financial event ledge
   assert.match(migration, /FUNCTION public\.vsla_v12_post_financial_event/);
   assert.match(organizations, /set_vsla_workflow_version/);
   assert.match(organizations, /v1\.2 controlled/);
+  assert.match(organizations, /VSLA financial workflow/);
+  assert.match(organizations, /separate from the BOAT application release above/);
 });
 
 test("v1.2 restricted actions use independent approval and reversal-only correction", async () => {

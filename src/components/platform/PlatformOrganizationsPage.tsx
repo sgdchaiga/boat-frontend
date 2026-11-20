@@ -235,6 +235,7 @@ export function PlatformOrganizationsPage() {
   const [editEnableManufacturing, setEditEnableManufacturing] = useState(true);
   const [editDesktopDeviceLimit, setEditDesktopDeviceLimit] = useState(1);
   const [editAppVersion, setEditAppVersion] = useState("1.0");
+  const [editVslaWorkflow, setEditVslaWorkflow] = useState<VslaWorkflow>("legacy");
   const [orgSearch, setOrgSearch] = useState(readOrgSearchFromUrl);
   const [clearingBusyByOrgId, setClearingBusyByOrgId] = useState<Record<string, boolean>>({});
   const [renewalOrg, setRenewalOrg] = useState<Org | null>(null);
@@ -693,6 +694,7 @@ export function PlatformOrganizationsPage() {
     setEditEnableManufacturing(org.enable_manufacturing !== false);
     setEditDesktopDeviceLimit(Math.max(1, Number(org.desktop_device_limit ?? 1)));
     setEditAppVersion(org.app_version?.trim() || "1.0");
+    setEditVslaWorkflow(vslaWorkflows[org.id] ?? "legacy");
     setErr(null);
     setModal("sub");
   };
@@ -756,6 +758,19 @@ export function PlatformOrganizationsPage() {
       setSaving(false);
       setErr(orgUpdate.error.message);
       return;
+    }
+    if (editBiz === "vsla" && editVslaWorkflow !== (vslaWorkflows[editOrg.id] ?? "legacy")) {
+      const { error: workflowError } = await supabase.rpc("set_vsla_workflow_version", {
+        p_organization_id: editOrg.id,
+        p_workflow_version: editVslaWorkflow,
+        p_reason: `Platform subscription workflow selection: ${editVslaWorkflow}`,
+      });
+      if (workflowError) {
+        setSaving(false);
+        setErr(`Organization settings were saved, but the VSLA workflow was not changed: ${workflowError.message}`);
+        return;
+      }
+      setVslaWorkflows((value) => ({ ...value, [editOrg.id]: editVslaWorkflow }));
     }
     const setupError = await ensureStandardSetup(editOrg.id, editBiz);
 
@@ -1460,7 +1475,7 @@ export function PlatformOrganizationsPage() {
               value={editDesktopDeviceLimit}
               onChange={(e) => setEditDesktopDeviceLimit(Math.max(1, Number(e.target.value || 1)))}
             />
-            <label className="block text-sm font-medium text-slate-700 mb-1">BOAT application version</label>
+            <label className="block text-sm font-medium text-slate-700 mb-1">BOAT application release</label>
             <select
               className="w-full border border-slate-300 rounded-lg px-3 py-2 mb-1"
               value={editAppVersion}
@@ -1489,6 +1504,22 @@ export function PlatformOrganizationsPage() {
               Current {businessTypes.find((item) => item.code === editBiz)?.name || editBiz} release: v
               {businessTypes.find((item) => item.code === editBiz)?.current_version || "1.1"}. This upgrades only this organization.
             </p>
+            {editBiz === "vsla" && (
+              <div className="mb-4 rounded-lg border border-indigo-200 bg-indigo-50 p-3">
+                <label className="block text-sm font-semibold text-indigo-950 mb-1">VSLA financial workflow</label>
+                <select
+                  className="w-full border border-indigo-300 bg-white rounded-lg px-3 py-2"
+                  value={editVslaWorkflow}
+                  onChange={(e) => setEditVslaWorkflow(e.target.value as VslaWorkflow)}
+                >
+                  <option value="legacy">Legacy v1.0 / v1.1 workflow</option>
+                  <option value="v1_2">v1.2 controlled workflow</option>
+                </select>
+                <p className="mt-2 text-xs text-indigo-900">
+                  Select v1.2 to enable the controlled VSLA meeting, ledger, approvals, and BOAT Pay workflow. This is separate from the BOAT application release above.
+                </p>
+              </div>
+            )}
             <label className="inline-flex items-center gap-2 text-sm text-slate-700 mb-4 cursor-pointer">
               <input
                 type="checkbox"
